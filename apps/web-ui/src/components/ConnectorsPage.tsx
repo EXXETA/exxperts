@@ -15,6 +15,7 @@ import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from "../connector-cata
 import { CONNECTOR_ICONS } from "../connector-icons";
 import { fetchRemoteClientContext, SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
 import { GroupHeader } from "./pane-header";
+import { isServiceUnreachableLine } from "../api";
 
 const APPLY_NOTE = "Config change saved. Rooms pick it up the next time you enter or resume them.";
 
@@ -632,7 +633,7 @@ function ConnectorDirectory({ status, onChanged, onNotice, customFor, onOpenCust
 	);
 }
 
-export function ConnectorsPage() {
+export function ConnectorsPage({ serviceBack }: { /** Counts the page's reconnects after an outage. */ serviceBack?: number }) {
 	const [status, setStatus] = useState<McpConnectorsStatusResponse | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -664,6 +665,12 @@ export function ConnectorsPage() {
 	useEffect(() => {
 		void refresh();
 	}, [refresh]);
+
+	// A line saying the service could not be reached goes once it answers again
+	// after an outage, and the connectors are read again.
+	useEffect(() => {
+		if (isServiceUnreachableLine(error)) void refresh();
+	}, [serviceBack]);
 
 	const servers = status?.servers ?? [];
 	const exxSource = status?.configSources.find((source) => source.path.includes(".exxperts"));

@@ -8,11 +8,11 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { AbsorbRun, AbsorbRunSession, ArchiveRow, MaintenanceWorkerModelStatus, RunBudget, RunDemotion } from "../types";
 import { MarkdownRenderer } from "./Markdown";
 import { fmtMemoryDay, protectedOpenItemsSentence } from "../memory-surface-copy";
-import { modelWaitLine } from "./model-notice";
+import { MemoryWaysOnButtons, modelWaitLine, useMemoryWaysOn } from "./model-notice";
 import { noteLimitLine } from "../memory-save-answer";
 import { TopicMove } from "./topic-move";
 import { MEMORY_CARD_NOTE_MAX_CHARS } from "../../../web-server/src/memory-typed-text";
-import { memoryModelSignInLabel, ABSORB_REREAD_ROW_LABEL, absorbRunSortedRows, absorbRunSortedTitle, absorbRunAllSummarizedSentence, ABSORB_NOTHING_READ_SAVE_TITLE, ABSORB_NOTHING_READ_SENTENCE, absorbRunNothingRead, absorbRunNothingToSave, ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, absorbRunAllSummarized, absorbRunOutageModelName, absorbRunOutageSentence, absorbRunRows, absorbRunWaitingCount, ARCHIVE_EXPLANATION, absorbRunFailedSessionNote, absorbRunGuidanceSummary, absorbRunNotDoneSentence, absorbRunNotesChanged, absorbRunProgressLine, absorbRunReadCount, archiveHeading, archiveLimitSummary, archiveRowTag, archiveTopicGroupSummary, automaticApplyNeedsReviewSentence, changeBesideTag, changeKindLabel, entryFirstLine, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, entryGroupPage, entryKindLabel, entryOriginSentence, filterEntriesByText, groupEntriesByTopic, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, MEMORY_LIMIT_BAR_LABEL, NEW_TOPIC_TAG, showMoreLabel, topicKept, topicLabel } from "../memory-v2-copy";
+import { ABSORB_REREAD_ROW_LABEL, absorbRunSortedRows, absorbRunSortedTitle, absorbRunAllSummarizedSentence, ABSORB_NOTHING_READ_SAVE_TITLE, ABSORB_NOTHING_READ_SENTENCE, absorbRunNothingRead, absorbRunNothingToSave, ABSORB_CHOOSE_MODEL_LABEL, absorbRunAllSummarized, absorbRunOutageModelName, absorbRunOutageSentence, absorbRunPausedSentence, absorbRunRows, absorbRunWaitingCount, ARCHIVE_EXPLANATION, absorbRunFailedSessionNote, absorbRunGuidanceSummary, absorbRunNotDoneSentence, absorbRunNotesChanged, absorbRunProgressLine, absorbRunReadCount, archiveHeading, archiveLimitSummary, archiveRowTag, archiveTopicGroupSummary, automaticApplyNeedsReviewSentence, changeBesideTag, changeKindLabel, entryFirstLine, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, entryGroupPage, entryKindLabel, entryOriginSentence, filterEntriesByText, groupEntriesByTopic, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, MEMORY_LIMIT_BAR_LABEL, NEW_TOPIC_TAG, showMoreLabel, topicKept, topicLabel } from "../memory-v2-copy";
 
 /** The words of a note, editable in place: the textarea holds the text without its bullet marker. */
 /** A card's Move: rejects with the server's refusal; `onLost` shows the lost-answer line while the page finds out. */
@@ -442,6 +442,13 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 	// One notice with the ways out: a run the model stopped answering, or else
 	// a run whose every conversation was kept whole as its summary.
 	const outage = !working && run.stop ? run.stop : null;
+	// Stopped with nothing to save: the card is paused, as Review's is, its sentence and ways on standing alone.
+	const paused = outage !== null && nothingToSave;
+	const ways = useMemoryWaysOn(outage?.cause, outage?.quotaWay, { onTryAgain: onResume, onChooseModel, onSignIn, provider: outage?.model.provider ?? "", gatewayFind: outage?.gatewayFind });
+	const outageName = outage ? absorbRunOutageModelName(outage.model, memoryModel) : "";
+	const outageSentence = !outage ? null : paused
+		? absorbRunPausedSentence(outageName, outage.cause, outage.model.provider, outage.key, outage.unreached, outage.quotaWay, outage.gateway, outage.gatewayFind)
+		: absorbRunOutageSentence(outageName, outage.cause, absorbRunWaitingCount(run), outage.model.provider, outage.key, outage.unreached, outage.quotaWay, outage.gateway, nothingRead, outage.gatewayFind);
 	const allSummarized = !working && !outage && absorbRunAllSummarized(run);
 	const fastPathReasons = fastPathBlockedReasons ?? [];
 	return (
@@ -450,11 +457,12 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 				{working ? (
 					<h2 className="absorb-run-card-working"><span className="spinner" aria-hidden="true" /> {headline ?? absorbRunProgressLine(run)}</h2>
 				) : (
-					<h2>What {roomName} will keep</h2>
+					<h2>{paused ? "Memorize paused." : `What ${roomName} will keep`}</h2>
 				)}
-				<p>{working
-					? "Each conversation is read on its own and turned into notes. The rows below fill in as they are read."
-					: `From ${total} ${total === 1 ? "conversation" : "conversations"}. Read it, keep anything the room should not let go, then save.`}</p>
+				{working
+					? <p>Each conversation is read on its own and turned into notes. The rows below fill in as they are read.</p>
+					: paused ? <p role="status">{outageSentence}</p>
+					: !nothingRead && <p>{total === 0 ? "Read it, keep anything the room should not let go, then save." : `From ${total} ${total === 1 ? "conversation" : "conversations"}. Read it, keep anything the room should not let go, then save.`}</p>}
 			</div>
 			<div className="absorb-review-strip">
 				<div className="absorb-review-status"><span>Conversations</span><strong>{readCount} of {total} read</strong></div>
@@ -462,14 +470,11 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 			</div>
 			{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
 			{run.wait && <p className="checkpoint-read-note" role="status">{modelWaitLine(run.wait)}</p>}
-			{outage && (
+			{outage && !paused && (
 				<div className="memory-action-note absorb-run-stop-note" role="status">
-					<p>{absorbRunOutageSentence(absorbRunOutageModelName(outage.model, memoryModel), outage.cause, absorbRunWaitingCount(run), outage.model.provider, outage.key)}</p>
+					<p>{outageSentence}</p>
 					<div className="absorb-run-note-actions">
-						{onResume && <button className="rs-btn" disabled={busy} onClick={onResume}>{outage.cause === "restarted" ? "Continue" : ABSORB_TRY_AGAIN_LABEL}</button>}
-						{/* A restart says nothing about the model: it answered, so Continue is the one way on. */}
-						{onChooseModel && outage.cause !== "restarted" && <button className="rs-btn" disabled={busy} onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
-						{onSignIn && outage.cause === "signed-out" && <button className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(outage.model.provider)}>{memoryModelSignInLabel(outage.key)}</button>}
+						<MemoryWaysOnButtons ways={ways} cause={outage.cause} credentialKey={outage.key} busy={busy} />
 					</div>
 				</div>
 			)}
@@ -538,8 +543,9 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 						<ul>{guidance.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ul>
 					</section>
 				)}
-				<section className="absorb-proposal-section">
-					<h3>New in memory</h3>
+				{!(paused && rows.length === 0) && <section className="absorb-proposal-section">
+					{/* Rows that all kept nothing are not new in memory. */}
+					{(working || rows.length === 0 || rows.some(({ session }) => (session.changes?.length ?? 0) > 0)) && <h3>New in memory</h3>}
 					{rows.length === 0 ? <p>{nothingRead ? ABSORB_NOTHING_READ_SENTENCE : "Nothing in these conversations changed memory."}</p> : (
 						<div className="absorb-run-change-groups">
 							{rows.map(({ session, line, note }) => {
@@ -578,18 +584,26 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 						</div>
 					)}
 					{failedNote && <p className="memory-action-note">{failedNote}</p>}
-				</section>
+				</section>}
 				{!working && (
 					<ArchiveSection budget={run.budget} demotion={run.demotion} keepIds={keepIds} keepTopics={run.demotion.keepTopics} busy={busy} onToggleKeep={onToggleKeep} onToggleKeepTopic={onToggleKeepTopic} onRaiseBudget={onRaiseBudget} />
 				)}
 			</div>
-			<div className="checkpoint-preview-actions">
-				<button className="rs-btn" disabled={busy} onClick={onCancel} title="Stop this update. Nothing is saved.">Cancel</button>
-				{!working && <button className="rs-btn" disabled={busy} onClick={onBackToAssessment} title="Return to the first read. This update is dropped and nothing is saved.">Back</button>}
-				<button className="rs-btn rs-btn-primary" disabled={busy || working || nothingToSave} onClick={onApprove} title={working ? "Save turns on once every conversation has been read" : nothingToSave ? ABSORB_NOTHING_READ_SAVE_TITLE : overBudget ? "Save this update and leave memory above its budget" : "Save this update to memory"}>
-					{overBudget && !working ? "Save over the budget" : "Save to memory"}
-				</button>
-			</div>
+			{paused && outage ? (
+				// Paused with nothing to save: the sentence above, its ways on in this one row, as on Review's card.
+				<div className="checkpoint-preview-actions">
+					<button className="rs-btn" disabled={busy} onClick={onCancel} title="Stop this update. Nothing is saved.">Cancel</button>
+					<MemoryWaysOnButtons ways={ways} cause={outage.cause} credentialKey={outage.key} row busy={busy} />
+				</div>
+			) : (
+				<div className="checkpoint-preview-actions">
+					<button className="rs-btn" disabled={busy} onClick={onCancel} title="Stop this update. Nothing is saved.">Cancel</button>
+					{!working && <button className="rs-btn" disabled={busy} onClick={onBackToAssessment} title="Return to the first read. This update is dropped and nothing is saved.">Back</button>}
+					<button className="rs-btn rs-btn-primary" disabled={busy || working || nothingToSave} onClick={onApprove} title={working ? "Save turns on once every conversation has been read" : nothingToSave ? ABSORB_NOTHING_READ_SAVE_TITLE : overBudget ? "Save this update and leave memory above its budget" : "Save this update to memory"}>
+						{overBudget && !working ? "Save over the budget" : "Save to memory"}
+					</button>
+				</div>
+			)}
 			{working && <p className="checkpoint-footnote">Nothing is saved until you press Save to memory.</p>}
 		</div>
 	);

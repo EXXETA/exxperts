@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { MarkdownRenderer } from "./Markdown";
 import { canFollowUp, canTransferConsult, consultHasDrift, type ConsultExchange, type ConsultState } from "../consult-stream";
 
@@ -120,7 +120,7 @@ function ConsultAnswer({ state }: { state: ConsultState }) {
 	return (
 		<div className={`consult-answer${halted ? " is-halted" : ""}`}>
 			<div className="md">
-				<MarkdownRenderer renderMermaid={!streaming}>{state.text}</MarkdownRenderer>
+				<MarkdownRenderer answer renderMermaid={!streaming}>{state.text}</MarkdownRenderer>
 			</div>
 			{streaming && <span className="caret" />}
 		</div>
@@ -158,7 +158,7 @@ function ConsultHistory({ exchanges }: { exchanges: ConsultExchange[] }) {
 						</summary>
 						<div className="consult-answer">
 							<div className="md">
-								<MarkdownRenderer>{exchange.answer}</MarkdownRenderer>
+								<MarkdownRenderer answer>{exchange.answer}</MarkdownRenderer>
 							</div>
 						</div>
 					</details>

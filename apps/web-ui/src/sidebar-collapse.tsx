@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { useEscapeKey } from "./components/use-escape-key";
 
 // Sidebar collapse state, shared by the in-header toggles (one per sidebar

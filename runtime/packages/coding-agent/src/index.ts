@@ -19,6 +19,7 @@ export {
 	type PromptOptions,
 	parseSkillBlock,
 	type SessionStats,
+	statusAskedAgainByProvider,
 } from "./core/agent-session.js";
 // Auth and model registry
 export {

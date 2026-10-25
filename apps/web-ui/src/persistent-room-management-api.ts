@@ -1,4 +1,4 @@
-import { redirectToSignInOn401 } from "./api";
+import { apiFetch } from "./api";
 import type { ArchivedPersistentAgentSummary, PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentLifecycleCounts, PersistentAgentPurgeBusyReason, PersistentAgentPurgeResponse, PersistentAgentRenameResponse, PersistentAgentRestoreResponse } from "./types";
 
 const PURGE_BUSY_REASONS: readonly PersistentAgentPurgeBusyReason[] = ["room_lock", "turn_in_flight", "detached_cooking", "specialist_running"];
@@ -30,8 +30,7 @@ async function readJsonOrText(response: Response): Promise<unknown> {
 }
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallbackError?: string): Promise<T> {
-	const response = await fetch(input, init);
-	redirectToSignInOn401(response);
+	const response = await apiFetch(input, init);
 	const payload = await readJsonOrText(response);
 	if (!response.ok) throw new Error(parsePersistentRoomManagementError(payload, fallbackError));
 	return payload as T;
@@ -40,12 +39,11 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallba
 // Not fetchJson: like purge, the archive error carries a machine-readable busy
 // reason — the caller retries briefly on its own just-released room lock.
 export async function archivePersistentRoom(agentId: PersistentAgentId, request: PersistentAgentArchiveRequest): Promise<PersistentAgentArchiveResponse> {
-	const response = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/archive`, {
+	const response = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/archive`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(request),
 	});
-	redirectToSignInOn401(response);
 	const payload = await readJsonOrText(response);
 	if (!response.ok) {
 		const error: PersistentRoomPurgeError = new Error(parsePersistentRoomManagementError(payload, "Failed to delete room."));
@@ -68,12 +66,11 @@ export function restorePersistentRoom(agentId: PersistentAgentId): Promise<Persi
 // caller needs — its own just-released lock is worth a short retry, a room
 // genuinely busy elsewhere is not.
 export async function purgePersistentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse> {
-	const response = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/purge`, {
+	const response = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/purge`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ confirmation }),
 	});
-	redirectToSignInOn401(response);
 	const payload = await readJsonOrText(response);
 	if (!response.ok) {
 		const error: PersistentRoomPurgeError = new Error(parsePersistentRoomManagementError(payload, "Failed to delete room."));

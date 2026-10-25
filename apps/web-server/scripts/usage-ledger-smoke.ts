@@ -33,7 +33,9 @@ try {
 	appendUsage({ ts: now - 10 * day, agent: "room-a", persona: "business", model: "gpt-5.5", input: 300, output: 30, cacheRead: 0, cacheWrite: 0, cost: 0.03 });
 	// Gateway turns on API keys, all recorded at zero. On the legacy gateway: one
 	// that moved tokens on a model nothing prices even today, one that moved
-	// none at all (an aborted turn: nothing to price). On a live gateway whose
+	// none at all (an aborted turn: nothing to price; older builds wrote such
+	// rows, the app no longer does, and the Wallet still reads the ones on
+	// disk). On a live gateway whose
 	// model has a price on file now: a turn from before the price was read. On
 	// a gateway that was removed since: a turn whose model nobody answers for.
 	appendUsage({ ts: now - 2 * day, agent: "room-b", persona: "business", model: "gateway-model", provider: "openai-compatible", authType: "api_key", input: 400, output: 40, cacheRead: 0, cacheWrite: 0, cost: 0 });
@@ -166,6 +168,27 @@ try {
 	assert(csvUnpriced && col(csvUnpriced, "priced_at") === "none" && col(csvUnpriced, "cost_est_usd") === "0", `csv marks the row nothing prices as none, got ${csvUnpriced}`);
 	const csvStored = lines.find((line) => col(line, "model") === "claude-opus-4-8");
 	assert(csvStored && col(csvStored, "priced_at") === "turn" && col(csvStored, "cost_est_usd") === "0.02", `csv keeps a stored cost as the turn's own, got ${csvStored}`);
+
+	// --- the import at the next start writes no row for a call that brought no answer and moved nothing ---
+	// A failed attempt, a stopped one and an empty answer (a proxy's HTML page): the live path writes none,
+	// so the import must not either. A failed call that moved tokens was paid, and is a row.
+	const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } };
+	const failedDir = path.join(agentsRoot, "room-failed", "runtime", "pi-sessions");
+	fs.mkdirSync(failedDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(failedDir, "c_failed.jsonl"),
+		[
+			JSON.stringify({ type: "session", version: 3, id: "s9", timestamp: iso(now - 3 * day), cwd: "/tmp" }),
+			JSON.stringify({ type: "model_change", id: "m9", parentId: null, timestamp: iso(now - 3 * day), provider: "anthropic", modelId: "claude-haiku-5-5" }),
+			JSON.stringify({ id: "f1", parentId: "m9", timestamp: iso(now - 3 * day + 1000), message: { role: "assistant", stopReason: "error", errorMessage: "529 overloaded", content: [], usage: zero } }),
+			JSON.stringify({ id: "f2", parentId: "f1", timestamp: iso(now - 3 * day + 2000), message: { role: "assistant", stopReason: "aborted", content: [], usage: zero } }),
+			JSON.stringify({ id: "f3", parentId: "f2", timestamp: iso(now - 3 * day + 3000), message: { role: "assistant", stopReason: "stop", content: [], usage: zero } }),
+			JSON.stringify({ id: "f4", parentId: "f3", timestamp: iso(now - 3 * day + 4000), message: { role: "assistant", stopReason: "error", errorMessage: "terminated", content: [{ type: "text", text: "Half an" }], usage: { input: 900, output: 4, cacheRead: 0, cacheWrite: 0, cost: { total: 0.003 } } } }),
+		].join("\n") + "\n",
+	);
+	const restarted = importHistoricalSessionUsage(agentsRoot, () => {});
+	const failedRows = loadUsage().filter((row) => row.agent === "room-failed");
+	assert(restarted?.rows === 1 && failedRows.length === 1 && failedRows[0].input === 900, `after a restart, only the paid failed call is a row, got ${restarted?.rows} imported: ${JSON.stringify(failedRows)}`);
 
 	console.log("usage ledger smoke passed");
 } finally {

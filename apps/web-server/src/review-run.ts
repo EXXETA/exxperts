@@ -27,11 +27,12 @@
 import path from "node:path";
 
 import { MEMORY_CARD_NOTE_MAX_CHARS, memoryTextHasWords, memoryTypedText } from "./memory-typed-text.js";
-import { ModelUnreachableError, patienceSpent, WaitLine, type PatienceWait } from "./model-call-causes.js";
+import { classifyModelFailure, failureStatusOf, ModelUnreachableError, patienceSpent, WaitLine, type ModelFailure, type PatienceWait } from "./model-call-causes.js";
+import type { GatewayFind, QuotaWay, Unreached } from "../../web-ui/src/turn-failure-line.js";
 import type { CredentialKey } from "./model-not-offered.js";
 import { recordMemoryUse } from "./memory-use.js";
 import { codeSorter, isUnsorted } from "./memory-placement.js";
-import { hasActiveAbsorbRun, memoryUseForRanking, savedRunRecord, dropRunJournal, readRunJournal, writeRunJournal, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard, type RankedArchiveAppend } from "./absorb-run.js";
+import { absorbRunStopCauseOf, hasActiveAbsorbRun, memoryOutageStop, memoryUseForRanking, savedRunRecord, dropRunJournal, readRunJournal, writeRunJournal, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard, type RankedArchiveAppend } from "./absorb-run.js";
 import { recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
 import {
 	applyUserEdit,
@@ -84,7 +85,6 @@ import {
 	reviewGroupTopic,
 	reviewReplySourceBudget,
 	keepValidReviewOps,
-	type ReviewArchiveRow,
 	type ReviewChange,
 	type ReviewChangeKind,
 	type ReviewConflictPair,
@@ -168,8 +168,9 @@ export interface ReviewRun {
 	 * cannot be reached: the card shows the one notice (Try again, Choose
 	 * another model, Sign in when that is the cause). What finished can be saved.
 	 */
-	/** `key`: a signed-out key connection's key is missing, or saved and refused. */
-	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted"; key?: CredentialKey };
+	/** `key`: a signed-out key connection's key is missing, or saved and refused. `unreached`: not answering because no connection opened, or because the model runs on this computer. `gateway`: the company gateway the model runs through, as AI setup names it. */
+	/** `failing`: the Memory model answered with the same failure twice in a row, so the run stopped asking. */
+	stop?: { kind: "outage" | "restart" | "failing"; model: { provider: string; model: string }; cause: "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "region-or-plan" | "gateway-refused" | "gateway-not-found" | "restarted" | "repeated"; key?: CredentialKey; unreached?: Unreached ; quotaWay?: QuotaWay; gateway?: string; gatewayFind?: GatewayFind };
 	/** A busy Memory model being waited out: the card says when the next try is. */
 	wait?: PatienceWait;
 }
@@ -246,6 +247,17 @@ function truncatedTidySentence(generated: { usage?: { output?: number }; modelMa
 	const ceiling = generated.modelMaxOutputTokens;
 	const numbers = produced ? ` (the model returned ${produced}${ceiling ? ` of a maximum ${ceiling}` : ""} output tokens)` : "";
 	return `The tidy for these notes was cut off at the model's output limit${numbers}.`;
+}
+
+/** A provider refusing the request itself (a 4xx but a timeout, a conflict or a rate limit): the same request would be refused again. */
+function requestRefused(error: unknown): boolean {
+	const status = failureStatusOf(error);
+	return status !== undefined && status >= 400 && status <= 499 && status !== 408 && status !== 409 && status !== 429;
+}
+
+/** Two failures are the same when the shared reading gives them one cause and they carry one status; their words can differ by a request id or a time. */
+function failureSignature(failure: ModelFailure, error: unknown): string {
+	return `${failure.cause}:${"detail" in failure ? failure.detail : ""}:${failureStatusOf(error) ?? ""}`;
 }
 
 let tidyRetryPauseMs = REVIEW_TIDY_RETRY_PAUSE_MS;
@@ -664,6 +676,9 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 	// The Memory model cannot be reached: no further group starts, and the card
 	// shows the one notice. Set by the first group that learns it.
 	let unreachable: ModelUnreachableError | null = null;
+	// Two groups in a row failing the same way: asking on would cost calls for the same answer, so no further group starts.
+	let lastFailure: string | null = null;
+	let repeating = false;
 	// The groups' calls stop with the run, and at once when one learns the model cannot be reached.
 	const groupsStop = new AbortController();
 	slot.controller.signal.addEventListener("abort", () => groupsStop.abort(), { once: true });
@@ -679,8 +694,8 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 	 * A group that failed while the model answers is read again in two halves,
 	 * down to one topic: only a one-topic group that fails is left as it was.
 	 */
-	const leftOrSplit = (group: PlannedGroup, reason: string) => {
-		if (group.topics.length > 1 && !unreachable) {
+	const leftOrSplit = (group: PlannedGroup, reason: string, split = true) => {
+		if (split && group.topics.length > 1 && !unreachable && !repeating) {
 			const half = Math.ceil(group.topics.length / 2);
 			for (const topics of [group.topics.slice(0, half), group.topics.slice(half)]) {
 				planned.push({ index: planned.length + 1, topics, titles: topics.map((topic) => topic.title), label: reviewGroupLabel(topics) });
@@ -693,7 +708,7 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 	};
 
 	const runGroup = async (group: PlannedGroup): Promise<void> => {
-		if (slot.controller.signal.aborted || unreachable) return;
+		if (slot.controller.signal.aborted || unreachable || repeating) return;
 		// The group's notes as they stand NOW: earlier groups may have moved a
 		// note into one of these topics, and the model must address what is there.
 		const readNotes = await serialize(() => {
@@ -772,6 +787,9 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 		let ops: ReviewOp[] = [];
 		let refusals: string[] = [];
 		let failed: string | null = null;
+		// A thrown failure is split only when the group was too large or refused; anything else would fail the same way in halves.
+		let splittable = true;
+		let thrown: string | null = null;
 		// THE RULE, for one group: two calls — the first, and one retry of a reply
 		// the memory refused. A call that never came back at all buys ONE call on
 		// top of that, once per group, after a short pause, with the same prompt.
@@ -793,9 +811,12 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 					break;
 				}
 				failed = REVIEW_TIDY_WORKER_FAILED;
-				if (slot.controller.signal.aborted) break;
-				// A failure the shared patience already waited out gets no second wait here.
-				if (!retriedAfterThrow && !patienceSpent(error)) {
+				if (slot.controller.signal.aborted || repeating) break;
+				const failure = classifyModelFailure(error);
+				splittable = failure.cause === "too-large" || failure.cause === "refused";
+				thrown = failureSignature(failure, error);
+				// A failure the shared patience already waited out gets no second wait here, and a refused request is not sent again as it was.
+				if (!retriedAfterThrow && !patienceSpent(error) && !requestRefused(error) && !splittable) {
 					retriedAfterThrow = true;
 					maxAttempts = 3;
 					failed = null;
@@ -833,9 +854,18 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 
 		if (slot.controller.signal.aborted) return;
 		if (failed || refusals.length > 0) {
-			leftOrSplit(group, failed ?? REVIEW_TIDY_REFUSED_TWICE);
+			const thrownAlone = Boolean(thrown) && failed === REVIEW_TIDY_WORKER_FAILED;
+			if (thrownAlone && !splittable && !repeating) {
+				if (lastFailure === thrown) {
+					repeating = true;
+					groupsStop.abort();
+				}
+				lastFailure = thrown;
+			}
+			leftOrSplit(group, failed ?? REVIEW_TIDY_REFUSED_TWICE, !thrownAlone || splittable);
 			return;
 		}
+		lastFailure = null;
 		await serialize(() => {
 			const applied = applyReviewOps(slot.workingDoc!, ops, { savedDate: slot.savedDate, takenArchiveIds: [...slot.archiveIdsOnDisk, ...slot.tidyArchive.map((append) => append.entry.id)], conflictNotes: conflictContext });
 			slot.workingDoc = applied.doc;
@@ -851,7 +881,7 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 	const worker = async (): Promise<void> => {
 		for (;;) {
 			if (slot.controller.signal.aborted) return;
-			if (unreachable) return;
+			if (unreachable || repeating) return;
 			const group = planned[nextGroup++];
 			if (!group) return;
 			await runGroup(group);
@@ -860,6 +890,12 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 	await Promise.all(Array.from({ length: Math.min(REVIEW_GROUPS_IN_FLIGHT, Math.max(planned.length, 1)) }, worker));
 	await applyChain;
 
+	if (repeating && !unreachable && !slot.controller.signal.aborted) {
+		for (const group of planned) {
+			if (!finished.has(group.index)) run.leftAsIs.push({ topics: group.titles, reason: REVIEW_TIDY_WORKER_FAILED });
+		}
+		run.stop = { kind: "failing", model: { provider: slot.model.provider, model: slot.model.model }, cause: "repeated" };
+	}
 	if (unreachable && !slot.controller.signal.aborted) {
 		// What finished stays and can be saved; the groups not reached are left
 		// as they were, with the reason, and the card shows the one notice.
@@ -867,13 +903,7 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 		for (const group of planned) {
 			if (!finished.has(group.index)) run.leftAsIs.push({ topics: group.titles, reason: REVIEW_TIDY_NOT_REACHED });
 		}
-		const detail = stopped.details.detail;
-		run.stop = {
-			kind: "outage",
-			model: { provider: slot.model.provider, model: slot.model.model },
-			cause: detail === "signed-out" || detail === "quota" || detail === "not-offered" || detail === "not-on-account" ? detail : detail === "still-busy" ? "busy" : "not-answering",
-			...(stopped.details.key ? { key: stopped.details.key } : {}),
-		};
+		run.stop = memoryOutageStop(slot.model, absorbRunStopCauseOf(stopped.details.detail, false), stopped.details);
 	}
 }
 
@@ -1063,7 +1093,9 @@ export function getReviewRun(agentIdRaw: string, runId: string): ReviewRun {
 	return snapshotRun(slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId));
 }
 
+/** A run that is over (cancelled, or failed) is no longer open; one still at work is not ready yet. */
 function requireReady(slot: RunSlot): void {
+	if (slot.run.state === "cancelled" || slot.run.state === "failed") throw reviewRunUnknownError();
 	if (slot.run.state !== "ready") throw productError("This review is not ready to change yet.", "review_run_not_ready", 409);
 }
 
@@ -1139,17 +1171,18 @@ export function setReviewRunBudget(agentIdRaw: string, runId: string, budgetToke
 }
 
 /**
- * Try again, after an outage or a restart stopped the run: the same run tidies
- * the groups not done, on top of the card as the person left it, with the
- * room's Memory model as it is now.
+ * Try again on a card with topics left, whatever left them: the same run tidies
+ * only those topics, on top of the card as the person left it, with the room's
+ * Memory model as it is now.
  */
 export function resumeReviewRun(agentIdRaw: string, runId: string, model: PersistentAgentModelLock, now = new Date(), calls: Partial<Pick<ReviewRunStartInput, "generate" | "resolveModelWindow">> = {}): ReviewRun {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
 	const slot = slotFor(agentId, runId);
-	requireReady(slot);
+	// A run stopped elsewhere is "not ready" here, not gone: the card watches it and says it stopped.
+	if (slot.run.state !== "ready") throw productError("This review is not ready to change yet.", "review_run_not_ready", 409);
 	const run = slot.run;
-	const waiting = run.leftAsIs.filter((row) => row.reason === REVIEW_TIDY_NOT_REACHED || row.reason === REVIEW_TIDY_RESTARTED);
-	if (!run.stop || !slot.postTidyDoc) throw productError("This review has nothing left to tidy.", "review_run_nothing_waiting", 409);
+	const waiting = [...run.leftAsIs];
+	if (waiting.length === 0 || !slot.postTidyDoc) throw productError("This review has nothing left to tidy.", "review_run_nothing_waiting", 409);
 	if (hasActiveAbsorbRun(agentId)) throw productError(REVIEW_ABSORB_ACTIVE_SENTENCE, "review_absorb_active", 409);
 	assertMemoryWriteAllowed(agentId);
 	// Save's staleness check, before any call.
@@ -1159,7 +1192,7 @@ export function resumeReviewRun(agentIdRaw: string, runId: string, model: Persis
 	// A run a restart left behind has no calls of its own: the route hands them in.
 	slot.input = { ...slot.input, ...calls, model };
 	slot.model = model;
-	run.leftAsIs = run.leftAsIs.filter((row) => !waiting.includes(row));
+	run.leftAsIs = [];
 	delete run.stop;
 	run.state = "tidying";
 	slot.workingDoc = cloneDocument(slot.postTidyDoc);
@@ -1206,7 +1239,7 @@ function savedReviewAnswer(agentId: string, runId: string): ReviewRunApprovalRes
 		memoryBudget: { budgetTokens: record.run.budget.budgetTokens, reviewTargetEstimatedTokens: record.run.budget.after, overBudget: record.run.budget.overBudgetAfter },
 		topicsTidied: record.review.topicsTidied,
 		notesChanged: record.review.notesChanged,
-		archivedEntries: archived.length,
+		archivedEntries: archived.filter((row) => row.why !== "superseded").length,
 		archivedForBudget: archived.filter((row) => row.why === "budget").length,
 		rebasedOnto: [],
 		warnings: [],
@@ -1327,7 +1360,8 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 		topicsTidied: new Set(run.changes.map((change) => change.topic)).size,
 		rebasedOnto,
 		notesChanged: run.changes.length,
-		archivedEntries: archiveAppend.length,
+		// A rewritten note's earlier wording is kept, not moved: only notes that left are counted.
+		archivedEntries: archiveAppend.filter((append) => append.why !== "superseded").length,
 		archivedForBudget: archiveAppend.filter((append) => append.why === "budget").length,
 		...(budgetRaisedTo === undefined ? {} : { budgetRaisedTo }),
 		warnings: run.warnings,
@@ -1347,8 +1381,10 @@ export function reviewRunStatus(agentIdRaw: string): ReviewStatusResponse {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
 	const waiting = RUNS.get(agentId) ?? reviveRun(agentId);
 	const doc = loadMemoryDocument(agentId, { migrate: false }).doc;
-	const topics = doc.topics.filter((topic) => topic.entries.length > 0);
-	const notes = topics.reduce((sum, topic) => sum + topic.entries.length, 0);
+	const withNotes = doc.topics.filter((topic) => topic.entries.length > 0);
+	const notes = withNotes.reduce((sum, topic) => sum + topic.entries.length, 0);
+	// The topics a person sees by name: the open-items list is not one of them.
+	const topics = withNotes.filter((topic) => topic.section === "Deep Memory" && topic.entries.some((entry) => entry.id));
 	const budgetTokens = readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens;
 	const tokens = reviewTargetTokens(doc);
 	const overBudget = overMemoryBudget(tokens, budgetTokens);

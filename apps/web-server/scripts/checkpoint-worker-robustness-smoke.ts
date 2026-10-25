@@ -25,17 +25,6 @@ function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
 
-async function expectRejects(fn: () => Promise<unknown>, expected: RegExp, label: string): Promise<Error> {
-	try {
-		await fn();
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		assert(expected.test(message), `${label}: expected ${expected}, got ${message}`);
-		return error as Error;
-	}
-	throw new Error(`${label}: expected error`);
-}
-
 function completeFields(body = "- Durable state delta was preserved."): string {
 	return `TITLE:\nRobustness smoke checkpoint\n\nSESSION_ARC:\nA short synthetic session moved from setup to a durable decision.\n\nBODY:\n${body}\n\nPARKED:\nNone\n`;
 }

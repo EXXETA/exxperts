@@ -4,7 +4,13 @@
 // line, Home lists the rooms A to Z with no sort control, the page never asks
 // for what such a server refuses, a refused start-up read leaves the page
 // usable, and a signed-out person is sent to sign in instead of being told the
-// connection is lost. With sharedServer false every control is there as today.
+// connection is lost. A failed message whose line sends the person to their
+// admin offers no button for that: a gateway's bare 403 shows Choose another
+// model alone there, and Replace key as well on this computer; a gateway's
+// bare 404 handed back before its model list was read tells the person to
+// tell the admin there with no button, and on this computer to check the
+// gateway, with AI setup's button. With
+// sharedServer false every control is there as today.
 // The probe is intercepted in the page, so one ordinary server serves both.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -377,6 +383,65 @@ try {
 			assert(!localLeft, "this computer: the page left instead of saying the connection is lost");
 			pass(`a dropped connection: on a shared server a 401 sends the page to sign in, a signed-in person sees the lost-connection line, and this computer shows the line as today (${Math.round((Date.now() - started) / 1000)}s)`);
 			for (const { opened } of [signedOut, outage, local]) await opened.context.close();
+		}
+
+		// --- A gateway's bare 403, handed back the way the server hands a failed message back ---
+		for (const sharedServer of [true, false]) {
+			let roomSocket: WebSocketRoute | undefined;
+			const { context, page } = await openApp(browser, sharedServer, (ctx) =>
+				ctx.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+					ws.connectToServer();
+					if (ws.url().includes("persistentAgentId=")) roomSocket = ws;
+				}));
+			const where = sharedServer ? "shared" : "this computer";
+			await enterRoom(page, "Beta Room");
+			assert(roomSocket, `${where}: the room's live connection is open`);
+			// A room without a folder: the hint to connect one, never on a shared server, where there is no folder to set.
+			const folderHint = page.locator(".room-workspace-nudge:not(.room-model-notice)");
+			// The hint waits for the room's folder to be read; give it the time it takes on this computer.
+			if (sharedServer) {
+				await page.waitForTimeout(1500);
+				assert((await folderHint.count()) === 0, `${where}: the hint to connect a folder shows`);
+			}
+			else await folderHint.waitFor({ timeout: 10000 });
+			roomSocket.send(JSON.stringify({ type: "prompt_returned", text: "A question for the gateway.", failure: "gateway-refused", model: { provider: "acme-gw", model: "acme-model" } }));
+			const line = page.locator(".failure-line:not(.is-folded)");
+			await line.waitFor({ timeout: 10000 });
+			const shown = (await line.locator(".system-line-text").innerText()).replace(/\s+/g, " ").trim();
+			const buttons = (await line.locator(".failure-actions .rs-btn").allInnerTexts()).map((text) => text.trim()).join("|");
+			if (sharedServer) {
+				assert(shown.endsWith("Your message is back in the box. Tell your admin, or choose another model."), `${where}: the gateway's 403 sends the person to the admin, got ${JSON.stringify(shown)}`);
+				assert(buttons === "Choose another model", `${where}: no button for telling the admin and no Replace key, only Choose another model, got ${JSON.stringify(buttons)}`);
+			} else {
+				assert(shown.endsWith("Your message is back in the box. Replace the gateway's key, or choose another model."), `${where}: the gateway's 403 names the key, its button in place of where it is replaced, got ${JSON.stringify(shown)}`);
+				assert(buttons === "Choose another model|Replace key", `${where}: Replace key and Choose another model, got ${JSON.stringify(buttons)}`);
+				await line.getByRole("button", { name: "Replace key" }).click();
+				await page.locator(".settings-overlay").waitFor({ timeout: 10000 });
+				const activeTab = (await page.locator(".settings-dialog-nav [aria-current='page']").allInnerTexts()).join("|");
+				assert(activeTab.includes("AI setup"), `${where}: Replace key opens Settings at AI setup, got ${JSON.stringify(activeTab)}`);
+				await closeSettings(page);
+			}
+			pass(`${where}: a gateway's bare 403 offers ${buttons.replace("|", " and ")}${sharedServer ? ", never a button for telling the admin, and no hint to connect a folder" : ", and the hint to connect a folder shows"}`);
+			// A gateway's bare 404 handed back before its model list was read: the gateway is checked in AI setup, which on a shared server is the admin's.
+			await page.locator("textarea").first().fill("");
+			roomSocket.send(JSON.stringify({ type: "prompt_returned", text: "A question the gateway cannot find.", failure: "gateway-not-found", model: { provider: "acme-gw", model: "acme-model" } }));
+			await line.locator(".system-line-text", { hasText: "could not find" }).waitFor({ timeout: 10000 });
+			const notFound = (await line.locator(".system-line-text").innerText()).replace(/\s+/g, " ").trim();
+			const notFoundButtons = (await line.locator(".failure-actions .rs-btn").allInnerTexts()).map((text) => text.trim()).join("|");
+			if (sharedServer) {
+				assert(notFound.endsWith("Your message is back in the box. Tell your admin."), `${where}: the gateway's 404 sends the person to the admin, got ${JSON.stringify(notFound)}`);
+				assert(notFoundButtons === "", `${where}: no button for a gateway's 404, got ${JSON.stringify(notFoundButtons)}`);
+			} else {
+				assert(notFound.endsWith("Your message is back in the box. Check the gateway."), `${where}: the gateway's 404 names what to check, its button in place of where, got ${JSON.stringify(notFound)}`);
+				assert(notFoundButtons === "Open AI setup", `${where}: AI setup's button only, got ${JSON.stringify(notFoundButtons)}`);
+				await line.getByRole("button", { name: "Open AI setup" }).click();
+				await page.locator(".settings-overlay").waitFor({ timeout: 10000 });
+				const activeTab = (await page.locator(".settings-dialog-nav [aria-current='page']").allInnerTexts()).join("|");
+				assert(activeTab.includes("AI setup"), `${where}: Open AI setup opens Settings at AI setup, got ${JSON.stringify(activeTab)}`);
+				await closeSettings(page);
+			}
+			pass(`${where}: a gateway's bare 404 ${sharedServer ? "tells the person to tell the admin, with no button" : "names what to check, with AI setup's button"}`);
+			await context.close();
 		}
 
 		// --- sharedServer: false, every control as today ---

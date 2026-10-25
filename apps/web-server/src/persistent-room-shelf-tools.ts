@@ -47,7 +47,7 @@ type ShelfReadInput = Static<typeof shelfReadSchema>;
 type ShelfSearchInput = Static<typeof shelfSearchSchema>;
 
 type ToolResultContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
-type TextToolResult = { content: ToolResultContent[]; details: Record<string, unknown> | undefined };
+type TextToolResult = { content: ToolResultContent[]; details: Record<string, unknown> | undefined; isError?: boolean };
 
 function toolResult(text: string, details?: Record<string, unknown>): TextToolResult {
 	return { content: [{ type: "text", text }], details: details && Object.keys(details).length > 0 ? details : undefined };
@@ -212,7 +212,7 @@ async function executeShelfSearch(roomId: string, options: PersistentRoomShelfSt
 	const targetNames = input.name !== undefined && String(input.name).trim() !== ""
 		? [String(input.name).trim()]
 		: listShelfFiles(roomId, options).map((entry) => entry.name);
-	if (targetNames.length === 0) return toolResult("This room has no files — there is nothing to search.");
+	if (targetNames.length === 0) return { ...toolResult("This room has no files, so there is nothing to search."), isError: true };
 
 	const queryLower = query.toLowerCase();
 	const resultLines: string[] = [];

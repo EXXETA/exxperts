@@ -25,7 +25,7 @@ folder, and a fingerprinted event record is written under
 After pulling a version whose release notes mention a new constitution
 template, when you would rather not wait for each room's next open. Running it
 when nothing changed is safe; rooms already on the current template are skipped
-("already up to date").
+("already at template vN, nothing to do").
 
 ## Steps
 

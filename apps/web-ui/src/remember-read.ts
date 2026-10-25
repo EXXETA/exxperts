@@ -118,9 +118,9 @@ export function rememberRefusedWholeSentence(proposal: { process: { model: { pro
 	return `Saved. ${safetyCheckOwner(proposal.process.model)}'s safety check would not read this conversation, so its memory keeps only the date. The room can still look it up when you ask about it.`;
 }
 
-/** A sentence written for the person: plain words, ending a sentence, with no code, path or status in it. */
+/** A sentence written for the person: plain words, ending a sentence, with no code, path or status in it. The product's name opens one in lower case. */
 export function isPlainProductSentence(message: string): boolean {
-	return /^[A-Z][^{}<>\[\]=]*[.!?]$/.test(message.trim()) && !/\b(?:Error|failed|ENOENT|EACCES|ENOSPC|ECONN\w*|HTTP|status \d+)\b|\(\d{3}\)|\/[\w.-]+\//.test(message);
+	return /^(?:[A-Z]|exxperts\b)[^{}<>\[\]=]*[.!?]$/.test(message.trim()) && !/\b(?:Error|failed|ENOENT|EACCES|ENOSPC|ECONN\w*|HTTP|status \d+)\b|\(\d{3}\)|\/[\w.-]+\//.test(message);
 }
 
 /** The one plain stop for a Remember failure nothing classified (a full disk, an odd provider reply); its detail goes to the console. */
@@ -150,6 +150,14 @@ export const REMEMBER_SAVED_REOPEN_SENTENCE = "Saved. Enter the room again from 
 
 /** A Save that finds the entry saved by another window: the plain outcome, and why this window is on Home. */
 export const REMEMBER_SAVED_ELSEWHERE_SENTENCE = "Already saved in another window. Enter the room again from its card.";
+
+/** A memory file whose structure is broken: saving cannot work until it is repaired, so no Generate again is offered. Null for any other line. */
+export const REMEMBER_DAMAGED_SENTENCE = "This room's memory file is damaged, so Remember cannot save. Nothing was lost.";
+
+export function rememberDamagedSentence(message: string): string | null {
+	// The server's structure checks (persistent-agents.ts, memory-shape.ts); a change there changes this match.
+	return /\bL1b (?:missing mandatory section|topology must be|Recent Context contains (?:duplicate|malformed))/.test(message) ? REMEMBER_DAMAGED_SENTENCE : null;
+}
 
 export function rememberFailureSentence(message: string): string {
 	if (isPlainProductSentence(message)) return message;

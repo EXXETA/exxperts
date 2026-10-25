@@ -5,7 +5,7 @@ Technical guide for working on exxperts from a clone. For user/evaluator setup, 
 ## Repository layout
 
 ```text
-pi-package/          Extensions, skills, product-state path helpers
+pi-package/          Extensions, themes, product-state path helpers
 runtime/             Owned exxperts runtime packages (the Pi fork)
 apps/web-server/     Fastify server: persistent rooms, memory lifecycle, tool policy
 apps/web-ui/         React/Vite web UI
@@ -112,10 +112,11 @@ isolated, tool-less sessions (`persistent-agent-worker-runtime.ts`)
 on the room's Memory model (`room-models.ts`), drawn from the models
 each provider approves (`persistent-agent-ai-profiles.ts`).
 
-**CLI sessions** use the runtime's resource loader: context files such
-as a repo-root `AGENTS.md` are auto-loaded, and extensions in
-`pi-package/extensions/*` register tools, gated by the
-permissions/content-policy extensions.
+**CLI sessions** open a room: the launcher runs the runtime with
+`--no-context-files` (no `AGENTS.md` or `CLAUDE.md`) and loads only the
+six room extensions in `ROOM_EXTENSIONS`
+(`bin/lib/exxcode-launcher.cjs`), gated by permissions and
+content-policy.
 
 ### Room tool boundary
 
@@ -142,8 +143,6 @@ Current product/app state lives under `~/.exxperts/app/`, including:
 - `web-search.json` and `searxng/`
 
 Embedded runtime provider/auth/model/session state lives under `~/.exxperts/agent/`, including provider/model registry files and local runtime auth state where applicable.
-
-Older alpha/prototype builds used `~/.exxeta/` for product/app state. Treat that as legacy data only if it exists; do not describe it as the current default storage root.
 
 ## Packaging notes
 

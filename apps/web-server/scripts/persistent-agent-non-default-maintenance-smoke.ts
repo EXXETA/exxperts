@@ -12,7 +12,6 @@ const {
 	createPersistentAgentFromScaffoldInput,
 	getAbsorbAvailability,
 } = await import("../src/persistent-agents.js");
-const { ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
 const { approveAbsorbRun, getAbsorbRun, startAbsorbRun } = await import("../src/absorb-run.js");
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -127,7 +126,7 @@ try {
 	const controlBaseline = snapshot(controlRoot);
 
 	const created = createPersistentAgentFromScaffoldInput({
-		displayName: "Wolfgang MR10b.2 Smoke",
+		displayName: "Maintenance Smoke Room",
 		userName: "Synthetic User",
 		preferredUserAddress: "Synthetic User",
 	});

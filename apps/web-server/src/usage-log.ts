@@ -40,8 +40,24 @@ export interface UsageRow {
 const USAGE_DIR = productAppStateRoot();
 const USAGE_FILE = productAppStatePath("usage.jsonl");
 
-export function usageFilePath(): string {
-	return USAGE_FILE;
+/** A call that moved no tokens and cost nothing. A failed or stopped one was no turn, so it writes no row. */
+export function usageMovedNothing(usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number }): boolean {
+	return !usage.input && !usage.output && !usage.cacheRead && !usage.cacheWrite && !usage.cost;
+}
+
+type AssistantCall = { stopReason?: string; content?: unknown; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } };
+
+/** A finished answer with nothing in it: no text, no tool call and no output tokens, such as a proxy's HTML page sent with status 200. */
+export function emptyAnswer(message: AssistantCall): boolean {
+	if (message.stopReason !== "stop" || message.usage?.output) return false;
+	const parts = Array.isArray(message.content) ? message.content : [];
+	return !parts.some((part: any) => part?.type === "toolCall" || (part?.type === "text" && String(part.text ?? "").trim()));
+}
+
+/** A call that brought no answer (failed, stopped or empty) and moved nothing: no row, live or when the start-up import reads the session files. */
+export function answerlessCallMovedNothing(message: AssistantCall): boolean {
+	const u = message.usage;
+	return !!u && (message.stopReason === "error" || message.stopReason === "aborted" || emptyAnswer(message)) && usageMovedNothing({ input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite, cost: u.cost?.total });
 }
 
 export function appendUsage(row: UsageRow, warn?: (message: string) => void): void {

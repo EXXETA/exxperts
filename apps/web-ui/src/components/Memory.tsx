@@ -43,6 +43,7 @@ import { plainMemoryText } from "../memory-v2-copy";
 import { MarkdownRenderer } from "./Markdown";
 import { MemoryChangeFold } from "./memory-change-fold";
 import { MemoryGrowthChart, type GrowthPoint } from "./memory-growth-chart";
+import { shownRoomName } from "../../../web-server/src/room-name";
 
 // The cross-room reading of memory, from /api/memory (read-only). This page
 // says what each room remembers and how full its memory is, in the same words
@@ -50,6 +51,11 @@ import { MemoryGrowthChart, type GrowthPoint } from "./memory-growth-chart";
 // room's own limit line are one measurement, taken server-side of the context
 // render. Nothing on this page writes: editing a note, and taking a save back,
 // belong beside the notes themselves in Room settings.
+
+/** Rooms named only with invisible characters read "Unnamed room" here too. */
+function withShownName<T extends { id: string; displayName: string }>(room: T): T {
+	return { ...room, displayName: shownRoomName(room.displayName) || room.id };
+}
 
 interface Payoff {
 	turns: number;
@@ -466,7 +472,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 			.then((r) => (r.ok ? r.json() : null))
 			.then((d) => {
 				if (cancelled || !d) return;
-				setDigest(d);
+				setDigest(Array.isArray(d.rooms) ? { ...d, rooms: d.rooms.map(withShownName) } : d);
 				try { localStorage.setItem(LAST_VISIT_KEY, String(Date.now())); } catch { /* ignore */ }
 			})
 			.catch(() => {});
@@ -480,7 +486,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 		const load = () =>
 			apiFetch("/api/memory/overview")
 				.then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad status"))))
-				.then((d) => { if (!cancelled) { setData(d); setLoadError(false); } })
+				.then((d) => { if (!cancelled) { setData(Array.isArray(d?.rooms) ? { ...d, rooms: d.rooms.map(withShownName) } : d); setLoadError(false); } })
 				.catch(() => { if (!cancelled) setLoadError(true); });
 		load();
 		const id = setInterval(load, 8000);
@@ -493,7 +499,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 		let cancelled = false;
 		apiFetch(`/api/memory/rooms/${encodeURIComponent(selected)}`)
 			.then((r) => (r.ok ? r.json() : null))
-			.then((d) => { if (!cancelled) setDetail(d); })
+			.then((d) => { if (!cancelled) setDetail(d ? withShownName(d) : d); })
 			.catch(() => {});
 		return () => { cancelled = true; };
 	}, [selected]);

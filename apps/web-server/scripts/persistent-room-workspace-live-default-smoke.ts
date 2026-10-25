@@ -25,6 +25,7 @@ const {
 } = await import("../src/persistent-agents.js");
 const {
 	assertPersistentRoomWorkspaceDefaultMutable,
+	persistentRoomSettingsNotAppliedFrame,
 	createPersistentRoomCapabilityPolicy,
 	createPersistentRoomDefaultCapabilityPolicy,
 	deletePersistentRoomDefaultCapabilityPolicy,
@@ -216,8 +217,22 @@ try {
 
 	// The one boundary the live model keeps: a turn in flight refuses the
 	// mutation and finishes under the rules it started with.
-	expectMutationRefused({ inFlight: true, cancelling: false }, /active turn in flight/, "running turn should refuse workspace-default mutation");
-	expectMutationRefused({ inFlight: true, cancelling: true }, /cancelling turn in flight/, "cancelling turn should refuse workspace-default mutation");
+	expectMutationRefused({ inFlight: true, cancelling: false }, /^The room is answering right now\. Save again when it has finished; nothing was changed\.$/, "running turn should refuse workspace-default mutation");
+	expectMutationRefused({ inFlight: true, cancelling: true }, /^The room is answering right now\. Save again when it has finished; nothing was changed\.$/, "cancelling turn should refuse workspace-default mutation");
+	try {
+		assertPersistentRoomWorkspaceDefaultMutable({ inFlight: true, cancelling: false }, "Clear");
+		throw new Error("clear during a running turn should be refused");
+	} catch (error) {
+		assert((error as Error).message === "The room is answering right now. Clear again when it has finished; nothing was changed.", `clear during a running turn: got ${(error as Error).message}`);
+	}
+	// A next message the room could not rebuild for: one plain line, the raw text only in details.
+	const rawFailure = new Error("EACCES: permission denied, open '/home/someone/.exxperts/app/personalized-agents/room/L1a.md'");
+	const notApplied = persistentRoomSettingsNotAppliedFrame(rawFailure, false, true);
+	assert(notApplied.message === "The room could not apply its new settings, so your message was not sent. Nothing was lost. Try again; if it repeats, restart exxperts.", `the plain line, got ${notApplied.message}`);
+	assert(notApplied.code === "room_settings_not_applied" && notApplied.details === rawFailure.message, "the raw text goes to details");
+	assert(!notApplied.message.includes("EACCES") && !notApplied.message.includes("L1a.md"), "the line carries none of the raw text");
+	assert(persistentRoomSettingsNotAppliedFrame(rawFailure, true, false).message.endsWith("Try again in a moment; if it repeats, tell your admin."), "on a shared server the line ends with the admin");
+	assert(!("details" in persistentRoomSettingsNotAppliedFrame(rawFailure, false, false)), "a page that may not get paths gets no details");
 	assertPersistentRoomWorkspaceDefaultMutable({ inFlight: false, cancelling: false });
 	assertPersistentRoomWorkspaceDefaultMutable(null);
 

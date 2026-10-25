@@ -300,6 +300,10 @@ try {
 	assert(sentFrames.some((frame) => frame?.kind === "confirm" && frame?.title === questionTitle), "the confirm should have reached the client while it was still watching");
 	uiContext.detach(detachMessage);
 	assert(await expectRejection(pendingConfirm, "pending confirm") === detachMessage, "the pending confirm should reject with the detach message");
+	// An answer that arrives after the question ended (a page coming back to an old card) records nothing.
+	const askedId = sentFrames.find((frame) => frame?.kind === "confirm" && frame?.title === questionTitle)?.id;
+	uiContext.resolveResponse(askedId, true);
+	assert(declineLog.titles().length === 1 && !sentFrames.some((frame) => frame?.type === "ui_response"), "a late answer to an ended question is ignored");
 	// The same dialog firing again after the detach must not stack notes.
 	await expectRejection(uiContext.confirm(questionTitle, "The report file already exists."), "repeated confirm");
 	await expectRejection(uiContext.select(questionTitle, ["yes", "no"]), "repeated select");
@@ -332,6 +336,29 @@ try {
 	assert((declineNotes[0] as any).text === `While you were away, a question came up and was answered with a safe default: ${questionTitle}`, `the decline note should name the question plainly, got ${JSON.stringify(declineNotes[0])}`);
 	assert(!String((declineNotes[0] as any).text).includes("—"), "user-facing notes must not use em-dashes");
 	console.log("ok: an auto-declined confirm in a detached turn leaves exactly one honest note in the persisted thread");
+	// A command waiting for approval says it did not run, not that it was "answered".
+	const commandLog = createPersistentRoomAutoDeclinedQuestionLog();
+	commandLog.note({ title: "Run this command?" });
+	const commandNotes = commandLog.appendItems([], "detached-declined-command-turn") as any[];
+	assert(commandNotes.length === 1 && commandNotes[0].text === "While you were away, the room asked to run a command. It did not run, because nobody was there to approve it.", `a command nobody approved says it did not run, got ${JSON.stringify(commandNotes)}`);
+	console.log("ok: a command nobody was there to approve says it did not run");
+	const handOffLog = createPersistentRoomAutoDeclinedQuestionLog();
+	handOffLog.note({ title: "Have a specialist create an SVG chart?" });
+	const handOffNotes = handOffLog.appendItems([], "detached-declined-handoff-turn") as any[];
+	assert(handOffNotes.length === 1 && handOffNotes[0].text === "While you were away, the room asked to hand work to a specialist. It did not, because nobody was there to approve it.", `a hand-off nobody approved says it did not happen, got ${JSON.stringify(handOffNotes)}`);
+	console.log("ok: a hand-off nobody was there to approve says it did not happen");
+	// A question whose card the turn kept already shows, on that card, that it ended: the note does not say it again.
+	const shownLog = createPersistentRoomAutoDeclinedQuestionLog();
+	shownLog.note({ title: "Run this command?" });
+	shownLog.note({ title: "Have a specialist create an SVG chart?" });
+	const card = (id: string, title: string, done?: string) => ({ kind: "approval", id, requestId: `r-${id}`, uiKind: "confirm", title, ...(done ? { done } : {}) });
+	const notesOf = (items: unknown[]) => (items as any[]).filter((item) => item?.kind === "system").map((item) => item.text);
+	const keptCard = shownLog.appendItems([{ kind: "user", id: "shown-user", text: "Remove the old report." }, card("shown-card", "Run this command?"), { kind: "assistant", id: "shown-answer", text: "Done." }], "detached-declined-shown-turn");
+	assert(JSON.stringify(notesOf(keptCard)) === JSON.stringify(["While you were away, the room asked to hand work to a specialist. It did not, because nobody was there to approve it."]), `a question whose card the turn kept gets no second note, got ${JSON.stringify(notesOf(keptCard))}`);
+	// A card from an earlier turn, or one answered before the person left, does not stand for this question.
+	const otherCards = shownLog.appendItems([card("old-card", "Run this command?"), { kind: "user", id: "later-user", text: "Again." }, card("answered-card", "Run this command?", "Yes")], "detached-declined-later-turn");
+	assert(notesOf(otherCards).length === 2, `an earlier turn's card or an answered one keeps the note, got ${JSON.stringify(notesOf(otherCards))}`);
+	console.log("ok: a question whose card the turn kept is said once, on the card");
 
 	// -----------------------------------------------------------------------
 	// 5. The headless background context tells the same story.

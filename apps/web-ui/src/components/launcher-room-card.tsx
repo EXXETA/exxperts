@@ -2,6 +2,7 @@ import { useState, type HTMLAttributes } from "react";
 import { NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } from "../memory-surface-copy";
 import { canonicalModelName } from "../model-names";
 import type { PersistentAgentId, PersistentAgentStatus, WebChatModelOption } from "../types";
+import { shownRoomName } from "../../../web-server/src/room-name";
 
 export type LauncherRoomThread = {
 	state: "live" | "standby";
@@ -84,7 +85,7 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 	const rememberedSessions = status?.recentContext?.fullEntries ?? 0;
 	const sessionBlockCap = status?.recentContext?.blockCap ?? 20;
 	const entryBlocked = status?.status === "needs_absorb" && rememberedSessions >= sessionBlockCap && (state === "needs_absorb" || (hasStandbyThread && !openConversationHasTurns));
-	const label = status?.displayName || thread?.displayName || status?.id || "Room";
+	const label = shownRoomName(status?.displayName || thread?.displayName) || status?.id || "Room";
 	const memory = status?.memoryStatus;
 	const memoryLevel = memory?.recentContextLevel ?? "unknown";
 	const memoryHardCap = memory?.recentContextHardCap;
@@ -153,7 +154,6 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 	const purgeNote = "This room is being deleted.";
 	const canEnter = !!status && (state === "ready" || (state === "needs_absorb" && !entryBlocked)) && !preparedBoundaryThread && !!conversationModel && !lockedElsewhere && !purging;
 	const maintainReadyState = !!status && (status.status === "ready" || status.status === "needs_absorb");
-	const nothingToMaintainYet = nothingToMaintain(status?.memoryStatus);
 	const canMaintain = roomCanMaintain(status, purging);
 	// Disabled tooltips name the actual blocker and the way out; "resting" is
 	// not a state shown anywhere else on the card.

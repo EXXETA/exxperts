@@ -32,7 +32,6 @@ import {
 	topicChangeSummary,
 	WHAT_CHANGED_LABEL,
 	type MemoryHistoryRow,
-	type NoteChangeCounts,
 	type NoteChangeKind,
 } from "../memory-surface-copy";
 

@@ -68,6 +68,8 @@ export interface PersistentRoomCapabilityPolicyView {
 		basename: string;
 		pathHash: PersistentRoomPathHash;
 		source: string;
+		/** The folder's full path as the person chose it; only in a view for a page on this computer. */
+		path?: string;
 	}>;
 	workspaceAccessMode: PersistentRoomWorkspaceAccessMode;
 	modes: { read: boolean; write: boolean };
@@ -82,6 +84,7 @@ export interface PersistentRoomCapabilityPolicyView {
 
 export type PersistentRoomWorkspaceRootValidationErrorCode =
 	| "missing_root"
+	| "root_not_absolute"
 	| "root_not_found"
 	| "root_not_directory"
 	| "forbidden_root"
@@ -392,7 +395,7 @@ function validateRequiredWorkspaceRoot(root: string): string {
 	if (!trimmed) {
 		throw new PersistentRoomWorkspacePolicyError({
 			code: "missing_root",
-			message: "Workspace root is required.",
+			message: "Choose a folder for this room.",
 		});
 	}
 	return trimmed;
@@ -576,7 +579,7 @@ export function missingPersistentRoomWorkspaceRootWarnings(policy: PersistentRoo
 	for (const root of policy.roots) {
 		if (fs.existsSync(root.realpath) || fs.existsSync(root.path)) continue;
 		// Label only — full paths stay redacted on every UI surface.
-		warnings.push(`The saved workspace folder "${root.displayLabel || root.basename}" was not found on this machine. Choose the folder again to restore workspace tools.`);
+		warnings.push(`The saved workspace folder "${root.displayLabel || root.basename}" was not found on this computer. Pick it again in Edit workspace, or another folder, to give the room its tools back.`);
 	}
 	return warnings;
 }
@@ -605,6 +608,14 @@ export function resolvePersistentRoomCapabilityPolicy(agentIdRaw: string, conver
 	return { policy: null, source: "none" };
 }
 
+// The words a person reads for a folder rooms may not work in, by what the folder is.
+function forbiddenRootRefusal(kind: PersistentRoomForbiddenRootKind, holdsIt: boolean): string {
+	const what = kind === "repo-root" ? "the exxperts app itself" : "exxperts' own data";
+	return holdsIt
+		? `This folder contains ${what}, so a room can't work in it. Choose a project folder instead, such as one in Documents.`
+		: `This folder is ${what}, which rooms never open. Choose another folder.`;
+}
+
 function assertAllowedWorkspaceRoot(input: {
 	rootPath: string;
 	rootRealpath: string;
@@ -616,7 +627,7 @@ function assertAllowedWorkspaceRoot(input: {
 		if (workspaceCandidates.some((candidate) => forbiddenCandidates.includes(candidate))) {
 			throw new PersistentRoomWorkspacePolicyError({
 				code: "forbidden_root",
-				message: `Workspace root is blocked by policy (${forbiddenRoot.kind}). Choose a different folder.`,
+				message: forbiddenRootRefusal(forbiddenRoot.kind, false),
 				forbiddenRoot: redactedDeniedRoot(forbiddenRoot),
 			});
 		}
@@ -626,7 +637,7 @@ function assertAllowedWorkspaceRoot(input: {
 		if (workspaceCandidates.some((workspace) => forbiddenCandidates.some((forbidden) => sameOrDescendant(workspace, forbidden)))) {
 			throw new PersistentRoomWorkspacePolicyError({
 				code: "under_forbidden_root",
-				message: `Workspace root is inside a blocked policy area (${forbiddenRoot.kind}). Choose a different folder.`,
+				message: forbiddenRootRefusal(forbiddenRoot.kind, false),
 				forbiddenRoot: redactedDeniedRoot(forbiddenRoot),
 			});
 		}
@@ -636,21 +647,44 @@ function assertAllowedWorkspaceRoot(input: {
 		if (workspaceCandidates.some((workspace) => forbiddenCandidates.some((forbidden) => strictAncestor(workspace, forbidden)))) {
 			throw new PersistentRoomWorkspacePolicyError({
 				code: "ancestor_of_forbidden_root",
-				message: `Workspace root contains a blocked policy area (${forbiddenRoot.kind}). Choose a narrower folder.`,
+				message: forbiddenRootRefusal(forbiddenRoot.kind, true),
 				forbiddenRoot: redactedDeniedRoot(forbiddenRoot),
 			});
 		}
 	}
 }
 
+// Windows' "Copy as path" wraps the path in double quotes.
+function unquotedWorkspaceRoot(root: string): string {
+	const trimmed = String(root ?? "").trim();
+	const quoted = trimmed.length >= 2 && (trimmed[0] === '"' || trimmed[0] === "'") && trimmed[trimmed.length - 1] === trimmed[0];
+	return quoted ? trimmed.slice(1, -1).trim() : trimmed;
+}
+
+const FULL_PATH_EXAMPLE = process.platform === "win32" ? "C:\\Users\\you\\Projects" : process.platform === "darwin" ? "/Users/you/Projects" : "/home/you/projects";
+
+/** A folder named from the top: on Windows a drive letter or a network share,
+ * since "\Projects" alone lands on whatever drive the app runs from. */
+export function isFullWorkspacePath(input: string, platform: NodeJS.Platform = process.platform): boolean {
+	if (platform === "win32") return /^[A-Za-z]:[\\/]/.test(input) || /^[\\/]{2}[^\\/]/.test(input);
+	return path.posix.isAbsolute(input);
+}
+
 export function validatePersistentRoomWorkspaceRoot(root: string, context: PersistentRoomWorkspaceValidationContext): PersistentRoomWorkspaceRootGrant {
-	const requestedRoot = validateRequiredWorkspaceRoot(root);
+	const requestedRoot = validateRequiredWorkspaceRoot(unquotedWorkspaceRoot(root));
+	// A relative path would be read from the app's own folder, not the person's.
+	if (!isFullWorkspacePath(expandWorkspaceRootInput(requestedRoot))) {
+		throw new PersistentRoomWorkspacePolicyError({
+			code: "root_not_absolute",
+			message: `Use the folder's full path, for example ${FULL_PATH_EXAMPLE}.`,
+		});
+	}
 	const resolvedPath = canonicalAbsolutePath(requestedRoot);
 	const rootRealpath = existingRealpath(resolvedPath);
 	if (!rootRealpath) {
 		throw new PersistentRoomWorkspacePolicyError({
 			code: "root_not_found",
-			message: "Workspace root was not found.",
+			message: "There is no folder at that path. Check it and save again.",
 		});
 	}
 	let stats: fs.Stats;
@@ -659,13 +693,13 @@ export function validatePersistentRoomWorkspaceRoot(root: string, context: Persi
 	} catch {
 		throw new PersistentRoomWorkspacePolicyError({
 			code: "root_not_found",
-			message: "Workspace root was not found.",
+			message: "There is no folder at that path. Check it and save again.",
 		});
 	}
 	if (!stats.isDirectory()) {
 		throw new PersistentRoomWorkspacePolicyError({
 			code: "root_not_directory",
-			message: "Workspace root must be a directory.",
+			message: "That is a file, not a folder. Choose the folder it is in.",
 		});
 	}
 	const forbiddenRoots = normalizeForbiddenRoots(context.forbiddenRoots ?? defaultPersistentRoomForbiddenRoots(context));
@@ -750,7 +784,10 @@ export function updatePersistentRoomCapabilityPolicyWorkspaceSettings(policy: Pe
 	};
 }
 
-export function persistentRoomCapabilityPolicyView(policy: PersistentRoomCapabilityPolicy): PersistentRoomCapabilityPolicyView {
+/** The view the page and the tools read. It names each folder without its
+ * path unless `withPaths` is set, which the server does only for a page on
+ * this computer: a remote device or a shared server never gets the path. */
+export function persistentRoomCapabilityPolicyView(policy: PersistentRoomCapabilityPolicy, options: { withPaths?: boolean } = {}): PersistentRoomCapabilityPolicyView {
 	const workspaceAccessMode = policy.workspaceAccessMode ?? PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE;
 	const workspaceToolNames = persistentRoomWorkspaceToolNamesForPolicy(policy);
 	const writeEnabled = persistentRoomWorkspaceWriterToolsEnabled(workspaceToolNames);
@@ -768,6 +805,7 @@ export function persistentRoomCapabilityPolicyView(policy: PersistentRoomCapabil
 			basename: root.basename,
 			pathHash: root.pathHash,
 			source: root.source,
+			...(options.withPaths ? { path: root.path } : {}),
 		})),
 		modes: { read: policy.modes.read, write: writeEnabled },
 		allowedToolNames: workspaceToolNames,
@@ -895,14 +933,21 @@ export function persistentRoomCapabilityPoliciesShareContent(a: PersistentRoomCa
 
 /** The one boundary a live workspace-default mutation still respects: a turn
  * actually in flight finishes under the rules it started with. */
-export function assertPersistentRoomWorkspaceDefaultMutable(activeThread: { inFlight: boolean; cancelling: boolean } | null | undefined): void {
+export function assertPersistentRoomWorkspaceDefaultMutable(activeThread: { inFlight: boolean; cancelling: boolean } | null | undefined, action: "Save" | "Clear" = "Save"): void {
 	if (!activeThread?.inFlight) return;
-	const error = new Error(activeThread.cancelling
-		? "Workspace default cannot change while the room has a cancelling turn in flight. Wait for it to finish, then try again."
-		: "Workspace default cannot change while the room has an active turn in flight. Wait for it to finish, then try again.");
+	const error = new Error(`The room is answering right now. ${action} again when it has finished; nothing was changed.`);
 	(error as any).statusCode = 409;
 	(error as any).code = "active_turn_in_flight";
 	throw error;
+}
+
+/** The line for a next message the room could not rebuild for after a settings
+ * change. The raw text can name a full path, so it goes only to details, and
+ * only when `withDetails` says the page is on this computer. */
+export function persistentRoomSettingsNotAppliedFrame(error: unknown, sharedServer: boolean, withDetails: boolean): { code: "room_settings_not_applied"; message: string; details?: string } {
+	const next = sharedServer ? "Try again in a moment; if it repeats, tell your admin." : "Try again; if it repeats, restart exxperts.";
+	const message = `The room could not apply its new settings, so your message was not sent. Nothing was lost. ${next}`;
+	return withDetails ? { code: "room_settings_not_applied", message, details: error instanceof Error ? error.message : String(error) } : { code: "room_settings_not_applied", message };
 }
 
 /** Live-workspace healing for threads born under the old snapshot regime: a

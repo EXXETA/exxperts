@@ -116,7 +116,10 @@ export class IsolatedPersistentAgentWorkerTurnError extends Error {
 	readonly reason: "timed-out" | "stalled" | undefined;
 	/** What the turn used before it failed: a failed call is paid for too. */
 	usage: IsolatedPersistentAgentWorkerResult["usage"];
-	constructor(workerLabel: string, stopReason: "error" | "aborted", providerMessage: string | undefined, extra: { reason?: "timed-out" | "stalled"; usage?: IsolatedPersistentAgentWorkerResult["usage"] } = {}) {
+	/** The failed call's HTTP status and the provider's error type, when the runtime kept them. */
+	readonly errorStatus: number | undefined;
+	readonly errorType: string | undefined;
+	constructor(workerLabel: string, stopReason: "error" | "aborted", providerMessage: string | undefined, extra: { reason?: "timed-out" | "stalled"; usage?: IsolatedPersistentAgentWorkerResult["usage"]; errorStatus?: number; errorType?: string } = {}) {
 		const detail = providerMessage?.trim() || undefined;
 		super(stopReason === "aborted"
 			? `${workerLabel} was aborted before it answered${detail ? `: ${detail}` : ""}`
@@ -127,6 +130,8 @@ export class IsolatedPersistentAgentWorkerTurnError extends Error {
 		this.providerMessage = detail;
 		this.reason = extra.reason;
 		this.usage = extra.usage;
+		this.errorStatus = extra.errorStatus;
+		this.errorType = extra.errorType;
 	}
 }
 
@@ -145,9 +150,11 @@ export function isolatedPersistentAgentWorkerFailure(input: {
 	stopReason: string | undefined;
 	errorMessage: string | undefined;
 	emptyTextError: string;
+	errorStatus?: number;
+	errorType?: string;
 }): Error | undefined {
 	if (input.stopReason === "error" || input.stopReason === "aborted") {
-		return new IsolatedPersistentAgentWorkerTurnError(input.workerLabel, input.stopReason, input.errorMessage);
+		return new IsolatedPersistentAgentWorkerTurnError(input.workerLabel, input.stopReason, input.errorMessage, { errorStatus: input.errorStatus, errorType: input.errorType });
 	}
 	// How the turn stopped rides along: a reply the thinking spent reads "length" in the diagnostics record.
 	if (!input.text.trim()) return Object.assign(new Error(input.emptyTextError), { stopReason: input.stopReason });
@@ -222,6 +229,8 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	let usage: IsolatedPersistentAgentWorkerResult["usage"];
 	let stopReason: string | undefined;
 	let errorMessage: string | undefined;
+	let errorStatus: number | undefined;
+	let errorType: string | undefined;
 	let truncated = false;
 	let timedOut = false;
 	let stalled = false;
@@ -272,6 +281,9 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 			if (typeof event.message.errorMessage === "string" && event.message.errorMessage.trim()) {
 				errorMessage = event.message.errorMessage.trim();
 			}
+			// The status and error type ride beside the words, so a failure whose words name nothing can still be read.
+			if (typeof event.message.errorStatus === "number") errorStatus = event.message.errorStatus;
+			if (typeof event.message.errorType === "string") errorType = event.message.errorType;
 			const partText = textFromMessageParts(event.message.content);
 			if (partText) text = [text, partText].filter(Boolean).join("\n\n");
 			const messageUsage = workerUsageFromMessageUsage(event.message.usage);
@@ -333,7 +345,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		}
 	}
 
-	const failure = isolatedPersistentAgentWorkerFailure({ workerLabel, text, stopReason, errorMessage, emptyTextError: input.emptyTextError });
+	const failure = isolatedPersistentAgentWorkerFailure({ workerLabel, text, stopReason, errorMessage, errorStatus, errorType, emptyTextError: input.emptyTextError });
 	if (failure) {
 		(failure as Error & { usage?: unknown }).usage = usage;
 		throw failure;

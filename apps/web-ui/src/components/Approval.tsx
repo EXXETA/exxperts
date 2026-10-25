@@ -1,6 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { approvalPreviewFromItem, type ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem } from "../types";
+import { commandDeclined } from "../step-lines";
+import { handOffApprovalSubject, PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../../../web-server/src/room-approval-titles";
 
 type ApprovalItem = Extract<ChatItem, { kind: "approval" }>;
 
@@ -83,6 +85,46 @@ export function confirmApprovalLabels(item: ApprovalItem): { approve: string; de
 	return fenced ? { approve: "Approve", decline: "Decline" } : { approve: "Yes", decline: "No" };
 }
 
+/**
+ * The items as the room shows them: a card whose question was not asked on
+ * this connection has ended (the server declines every open question when the
+ * page leaves), so it shows its question only, with no buttons; the step it
+ * asked for says what happened.
+ */
+export function withUnansweredApprovals(items: ChatItem[], live: ReadonlySet<string>): ChatItem[] {
+	if (!items.some((item) => item.kind === "approval" && !item.done && !live.has(item.requestId))) return items;
+	return items.map((item) => (item.kind === "approval" && !item.done && !live.has(item.requestId) ? { ...item, unanswered: true } : item));
+}
+
+/** A card's answer that said no: "No", "Decline", "Cancel". */
+function declinedAnswer(done: string | undefined): boolean {
+	return typeof done === "string" && /^(no\b|cancel|decline)/i.test(done);
+}
+
+/**
+ * The declined commands whose card already says so ("You declined this
+ * command."), by step id. The items do not link a step to its card, so in each
+ * turn the declined command steps and the declined command cards pair up in
+ * order; a declined step with no such card left says it when opened.
+ */
+export function declinesSaidOnCards(items: ChatItem[]): ReadonlySet<string> {
+	const said = new Set<string>();
+	let steps: string[] = [];
+	let cards = 0;
+	const endTurn = () => {
+		for (const id of steps.slice(0, cards)) said.add(id);
+		steps = [];
+		cards = 0;
+	};
+	for (const item of items) {
+		if (item.kind === "user") endTurn();
+		else if (item.kind === "tool" && item.name === "bash" && item.status === "error" && commandDeclined(item.result)) steps.push(item.id);
+		else if (item.kind === "approval" && item.title === PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE && declinedAnswer(item.done)) cards++;
+	}
+	endTurn();
+	return said;
+}
+
 function ApprovalImpl({ item, onResolve, onPreview, keyboardHint = false }: Props) {
 	const [text, setText] = useState("");
 	const [detailsOpen, setDetailsOpen] = useState(false);
@@ -92,8 +134,8 @@ function ApprovalImpl({ item, onResolve, onPreview, keyboardHint = false }: Prop
 	const fenced = !item.done && !preview ? (splitFencedBrief(item.message) ?? splitFencedBrief(item.detail)) : null;
 
 	useEffect(() => {
-		if (preview) onPreview?.(preview);
-	}, [item.requestId, preview, onPreview]);
+		if (preview && !item.unanswered) onPreview?.(preview);
+	}, [item.requestId, item.unanswered, preview, onPreview]);
 
 	// A pending card offers its Approve button to the keyboard — but it must
 	// never steal focus from someone typing: a grabbed focus would turn their
@@ -102,7 +144,7 @@ function ApprovalImpl({ item, onResolve, onPreview, keyboardHint = false }: Prop
 	// draft still means someone is mid-thought). Once per card, on mount.
 	const approveRef = useRef<HTMLButtonElement | null>(null);
 	useEffect(() => {
-		if (item.done) return;
+		if (item.done || item.unanswered) return;
 		const btn = approveRef.current;
 		if (!btn) return;
 		const active = document.activeElement;
@@ -115,14 +157,30 @@ function ApprovalImpl({ item, onResolve, onPreview, keyboardHint = false }: Prop
 		btn.focus();
 	}, [item.requestId]);
 
+	if (item.unanswered) {
+		return (
+			<div className="approval-row">
+				<div className="approval-resolved-line approval-unanswered">
+					<span className="approval-resolved-title">{item.title}</span>
+				</div>
+			</div>
+		);
+	}
+
 	if (item.done) {
 		// Resolved approvals fold to one quiet line: the decision is chat
 		// history, not a live card. The verdict comes from the resolution label
 		// ("Yes"/"No"/an option/"Submitted"); an unmapped label falls back to
 		// naming the choice, never hides it.
 		const done = item.done;
-		const declined = /^(no\b|cancel|decline)/i.test(done);
-		const verdict = /^(yes\b|approve)/i.test(done)
+		const declined = declinedAnswer(done);
+		const approved = /^(yes\b|approve)/i.test(done);
+		// The command and hand-off cards ask a question; their line states the answer instead of repeating it.
+		const handOff = handOffApprovalSubject(item.title ?? "");
+		const commandLine = !(approved || declined) ? null
+			: item.title === PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE ? (approved ? "You approved this command." : "You declined this command.")
+				: handOff !== null ? `You ${approved ? "approved" : "declined"} the specialist task: ${handOff}.` : null;
+		const verdict = approved
 			? "You approved:"
 			: declined
 				? "You declined:"
@@ -133,8 +191,8 @@ function ApprovalImpl({ item, onResolve, onPreview, keyboardHint = false }: Prop
 			<div className="approval-row">
 				<div className="approval-resolved-line">
 					<span className="approval-resolved-mark" aria-hidden="true">{declined ? "✕" : "✓"}</span>
-					<span className="approval-resolved-verdict">{verdict}</span>
-					<span className="approval-resolved-title">{item.title}</span>
+					<span className="approval-resolved-verdict">{commandLine ?? verdict}</span>
+					{!commandLine && <span className="approval-resolved-title">{item.title}</span>}
 				</div>
 			</div>
 		);

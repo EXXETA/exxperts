@@ -12,7 +12,8 @@
 // 401): the next turn fails on it, and the room shows the same one notice
 // instead of the raw error, and once the person signs in again the next send
 // runs on the new sign-in, in the same room,
-// with the message back in the composer to send again after signing in.
+// with the message back in the composer to send again after signing in, and
+// the failed message no longer in what the model reads, so it is asked once.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -68,7 +69,7 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 }
 
 const CLAUDE = { provider: "fake-claude", model: "claude-fake" };
-const requests: Array<{ model: string }> = [];
+const requests: Array<{ model: string; userTexts: string[] }> = [];
 // The one key the OpenAI-style provider takes; changing it retires the stored one.
 let acceptedGptKey = "synthetic-gpt";
 
@@ -87,7 +88,8 @@ const providers = http.createServer((req, res) => {
 			res.end(JSON.stringify({ error: { message: "Incorrect API key provided", type: "invalid_request_error", code: "invalid_api_key" } }));
 			return;
 		}
-		requests.push({ model: String(body.model) });
+		const userTexts = (Array.isArray(body.messages) ? body.messages : []).filter((message: any) => message?.role === "user").map((message: any) => typeof message.content === "string" ? message.content : JSON.stringify(message.content));
+		requests.push({ model: String(body.model), userTexts });
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		const text = `Answer from ${body.model}.`;
 		if (String(req.url ?? "").includes("/messages")) {
@@ -245,6 +247,8 @@ try {
 		await composer.press("Enter");
 		await page.getByText("Answer from gpt-fake.").nth(1).waitFor({ timeout: 20000 });
 		assert(requests.length === requestsBefore + 1, "the message was answered on the new sign-in");
+		const askedAgain = requests[requests.length - 1]!.userTexts.filter((text) => text.includes("Still there?")).length;
+		assert(askedAgain === 1, `the failed message left the conversation, so the model is asked it once, got ${askedAgain} times`);
 		await banner.waitFor({ state: "detached", timeout: 10000 });
 		console.log("  ok  after the sign-in the next send answers on it, in the same room, and the notice is gone");
 		await ctx.close();

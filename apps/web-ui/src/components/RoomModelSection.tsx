@@ -54,6 +54,10 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 	const remoteClient = useRemoteClientContext();
 	const readOnly = remoteClient.remote && remoteClient.capability !== "full";
 	const [providers, setProviders] = useState<RoomModelProviderView[]>([]);
+	// A failed read of the models to offer says why, with a way to ask again;
+	// the pickers wait meanwhile, since an empty list would say no provider is signed in.
+	const [providersError, setProvidersError] = useState<string | null>(null);
+	const [providersAsk, setProvidersAsk] = useState(0);
 	const [models, setModels] = useState<RoomModelsView | null>(status.models ?? null);
 	const [saving, setSaving] = useState<RoomModelTask | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -62,9 +66,13 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 
 	useEffect(() => {
 		let cancelled = false;
-		fetchRoomModelProviders().then((list) => { if (!cancelled) setProviders(list); }, () => {});
+		fetchRoomModelProviders().then((list) => {
+			if (cancelled) return;
+			setProviders(list);
+			setProvidersError(null);
+		}, (e) => { if (!cancelled) setProvidersError((e as Error).message); });
 		return () => { cancelled = true; };
-	}, []);
+	}, [providersAsk]);
 	useEffect(() => {
 		if (status.models) setModels(status.models);
 	}, [status.models]);
@@ -134,7 +142,7 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 						task={task}
 						value={shown}
 						inherited={inherited}
-						disabled={readOnly || saving !== null || !models}
+						disabled={readOnly || saving !== null || !models || providersError !== null}
 						ariaLabel={`${label} model`}
 						unpickable={tooSmall}
 						unpickableLine={TOO_SMALL_LINE}
@@ -164,6 +172,12 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 						</>
 					)}
 					{switchError && <p className="room-model-error" role="alert">{switchError}</p>}
+				</div>
+			)}
+			{providersError && (
+				<div className="room-model-error" role="alert">
+					{providersError}{" "}
+					<button className="rs-btn" type="button" onClick={() => setProvidersAsk((ask) => ask + 1)}>Try again</button>
 				</div>
 			)}
 			{error && <p className="room-model-error" role="alert">{error}</p>}

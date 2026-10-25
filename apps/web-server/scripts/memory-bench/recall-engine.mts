@@ -2532,7 +2532,7 @@ export function accuracyCell(cell: ForgettingCell): string {
 // which is the number this bench exists for. A real model goes in the same
 // place and is measured against the same ceiling.
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 

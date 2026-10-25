@@ -4,8 +4,8 @@
 // of the smoke file name; any match includes the smoke. N smokes run at once,
 // the slowest of the last run first; N defaults to half the machine's cores,
 // at most 6, and --jobs 1 runs them one after another in name order. Each
-// smoke has its own temp HOME and asks the system for free ports, so they do
-// not collide.
+// smoke has its own temp HOME and USERPROFILE and asks the system for free
+// ports, so they do not collide.
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -90,11 +90,39 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 	});
 }
 
+// Playwright finds its browsers under the home on macOS and Linux (on Windows
+// under LOCALAPPDATA), so the smokes' own homes would hide the installed ones.
+const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH
+	?? (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Caches", "ms-playwright")
+		: process.platform === "linux" ? path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "ms-playwright")
+		: undefined);
+
+// The installed fd and rg live under the real home too; they are only read.
+const realToolsDir = path.join(process.env.EXXPERTS_STATE_HOME || os.homedir(), ".exxperts", "agent", "bin");
+const bundledToolsDir = process.env.EXXETA_BUNDLED_TOOLS_DIR || (fs.existsSync(realToolsDir) ? realToolsDir : undefined);
+
+// A smoke that sets no home, or HOME without USERPROFILE (the home on
+// Windows), still never writes into the real one. The data-folder settings
+// that win over the home go too, as in smokeHomeEnv
+// (apps/web-server/scripts/smoke-server-process.ts). A smoke that reads the
+// real rooms, read-only, finds them under SMOKE_LOGIN_HOME.
+function smokeEnv(home) {
+	const env = { ...process.env, HOME: home, USERPROFILE: home, SMOKE_LOGIN_HOME: os.homedir() };
+	if (browsersPath) env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+	if (bundledToolsDir) env.EXXETA_BUNDLED_TOOLS_DIR = bundledToolsDir;
+	delete env.EXXPERTS_DATA_DIR;
+	delete env.EXXPERTS_STATE_HOME;
+	delete env.EXXPERTS_CODING_AGENT_DIR;
+	return env;
+}
+
 function runSmoke(name) {
 	return new Promise((resolve) => {
 		const startedAt = Date.now();
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-smoke-home-"));
 		const child = spawn(process.execPath, ["--import", tsxLoader, path.join(smokeDir, name)], {
 			cwd: repoRoot,
+			env: smokeEnv(home),
 			stdio: ["ignore", "pipe", "pipe"],
 			...(process.platform === "win32" ? {} : { detached: true }),
 		});
@@ -111,6 +139,8 @@ function runSmoke(name) {
 		child.on("close", (code) => {
 			runningSmokes.delete(child);
 			clearTimeout(timer);
+			// A file still held open on Windows only leaves the folder behind.
+			try { fs.rmSync(home, { recursive: true, force: true, maxRetries: 3 }); } catch {}
 			resolve({ name, code: timedOut ? 1 : (code ?? 1), output, seconds: (Date.now() - startedAt) / 1000 });
 		});
 	});
@@ -152,9 +182,22 @@ function portTakenFailure(result) {
 // A smoke that could not exercise part of itself (no browser installed, say)
 // still passes, but the run must say so next to its "ok" instead of hiding it.
 // Only the smoke's own notice counts ("... smoke skipped ...", "smoke passed
-// (... SKIPPED ...)"); an assertion that merely mentions skipping does not.
+// (... SKIPPED ...)", a line that starts "SKIPPED:"); an assertion that merely
+// mentions skipping does not.
 function skipLines(output) {
-	return output.split("\n").map((line) => line.trim()).filter((line) => /\bsmoke\b.*\bskipped\b/i.test(line));
+	return output.split("\n").map((line) => line.trim()).filter((line) => /\bsmoke\b.*\bskipped\b/i.test(line) || line.startsWith("SKIPPED:"));
+}
+
+// A part that only another system can run (its reason says "only Windows" or
+// "macOS only") is no gap in this run: that system's CI job runs it. It is
+// still listed under its smoke, but only the other skips count as SKIPPED,
+// which the GitHub sync's check refuses (scripts/check-public-copy.mjs).
+const ONLY_ON = [
+	{ platform: "win32", words: /\bonly (?:on )?Windows\b|\(Windows only\)/i },
+	{ platform: "darwin", words: /\bonly (?:on )?macOS\b|\(macOS only\)/i },
+];
+function forAnotherSystem(line) {
+	return ONLY_ON.some((rule) => rule.platform !== process.platform && rule.words.test(line));
 }
 
 // The whole output of a failed try goes to a file in the system's temp
@@ -199,7 +242,7 @@ async function runAndReport(name) {
 	}
 	if (result.code !== 0) result.savedTo = saveOutput(name, "failed", result.output);
 	const skips = result.code === 0 ? skipLines(result.output) : [];
-	const verdict = result.code === 0 ? `ok (${result.seconds.toFixed(1)}s)${skips.map((line) => `\n      SKIP: ${line}`).join("")}` : `FAIL (${result.seconds.toFixed(1)}s)`;
+	const verdict = result.code === 0 ? `ok (${result.seconds.toFixed(1)}s)${skips.map((line) => `\n      ${forAnotherSystem(line) ? "NOT HERE" : "SKIP"}: ${line}`).join("")}` : `FAIL (${result.seconds.toFixed(1)}s)`;
 	console.log(jobs === 1 ? verdict : `  ${name} … ${note}${verdict}`);
 	// Printed at once as well as in the summary: a run cut off by a CI time
 	// limit still shows why the smoke failed.
@@ -220,7 +263,8 @@ saveTimings(timings, results);
 
 const failed = results.filter((result) => result.code !== 0);
 const total = results.reduce((sum, result) => sum + result.seconds, 0);
-const skipped = results.filter((result) => result.code === 0 && skipLines(result.output).length > 0);
+const skipped = results.filter((result) => result.code === 0 && skipLines(result.output).some((line) => !forAnotherSystem(line)));
+const elsewhere = results.filter((result) => result.code === 0 && skipLines(result.output).some(forAnotherSystem));
 const retried = results.filter((result) => result.retried);
 // The summary line keeps its exact form: the GitHub sync accepts a SMOKES
 // stamp only as "N/N passed in Ns" (scripts/sync-github.mjs). The time on the
@@ -228,6 +272,7 @@ const retried = results.filter((result) => result.retried);
 console.log(`\n${results.length - failed.length}/${results.length} passed in ${Math.round(total)}s`);
 if (jobs > 1) console.log(`${Math.round((Date.now() - startedAt) / 1000)}s on the clock, ${jobs} at a time`);
 if (skipped.length > 0) console.log(`${skipped.length} passed with parts SKIPPED: ${skipped.map((result) => result.name).join(", ")}`);
+if (elsewhere.length > 0) console.log(`${elsewhere.length} passed with parts only another system runs: ${elsewhere.map((result) => result.name).join(", ")}`);
 if (retried.length > 0) console.log(`${retried.length} retried once (reasons above): ${retried.map((result) => result.name).join(", ")}`);
 for (const result of failed) console.log(failureTail(result));
 process.exit(failed.length === 0 ? 0 : 1);

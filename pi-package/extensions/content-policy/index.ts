@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
 import { productAppStatePath } from "../../product-state-paths.js";
+import { contentPolicyBlockReason, RULE_WORDS } from "./words.js";
 
 interface RuleConfig {
 	id?: string;
@@ -110,26 +111,26 @@ const DEFAULT_RULES: Rule[] = [
 	// Block secret-bearing .env files but allow common documentation templates
 	// such as .env.example, .env.sample, .env.template, and .env.dist; a word
 	// character before the dot (process.env, os.environ) is code, not a file.
-	{ id: "dot-env", pattern: /(?<![A-Za-z0-9_])\.env(?!\.(?:example|sample|template|dist)\b)(?:$|["'\\/.,}\]\w-])/i, reason: "blocked .env access" },
-	{ id: "pem-file", pattern: /\.pem(?:$|["'\\/.,}\]])/i, reason: "blocked PEM private-key/certificate file access" },
-	{ id: "id-rsa", pattern: /id_rsa(?:$|["'\\/.,}\]\w-])/i, reason: "blocked SSH private-key access" },
+	{ id: "dot-env", pattern: /(?<![A-Za-z0-9_])\.env(?!\.(?:example|sample|template|dist)\b)(?:$|["'\\/.,}\]\w-])/i, reason: RULE_WORDS["dot-env"].reason },
+	{ id: "pem-file", pattern: /\.pem(?:$|["'\\/.,}\]])/i, reason: RULE_WORDS["pem-file"].reason },
+	{ id: "id-rsa", pattern: /id_rsa(?:$|["'\\/.,}\]\w-])/i, reason: RULE_WORDS["id-rsa"].reason },
 	{
 		id: "password-assignment",
 		pattern: labelValuePattern(/\bpassword\b/, BARE_PASSWORD_VALUE),
 		accept: acceptPasswordValue,
-		reason: "blocked password assignment/value pattern",
+		reason: RULE_WORDS["password-assignment"].reason,
 	},
 	{
 		id: "secret-label-value",
 		pattern: labelValuePattern(SECRET_LABEL, BARE_TOKEN_VALUE),
 		accept: acceptSecretLabelValue,
-		reason: "blocked API key/token-looking argument",
+		reason: RULE_WORDS["secret-label-value"].reason,
 	},
-	{ id: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/, reason: "blocked OpenAI-style API key" },
-	{ id: "github-token", pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{30,}\b/i, reason: "blocked GitHub token-looking value" },
-	{ id: "slack-token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/i, reason: "blocked Slack token-looking value" },
-	{ id: "aws-access-key", pattern: /\bAKIA[0-9A-Z]{16}\b/, reason: "blocked AWS access-key-looking value" },
-	{ id: "jwt-token", pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, reason: "blocked JWT/token-looking value" },
+	{ id: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/, reason: RULE_WORDS["openai-key"].reason },
+	{ id: "github-token", pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{30,}\b/i, reason: RULE_WORDS["github-token"].reason },
+	{ id: "slack-token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/i, reason: RULE_WORDS["slack-token"].reason },
+	{ id: "aws-access-key", pattern: /\bAKIA[0-9A-Z]{16}\b/, reason: RULE_WORDS["aws-access-key"].reason },
+	{ id: "jwt-token", pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, reason: RULE_WORDS["jwt-token"].reason },
 ];
 
 function expandHome(filePath: string): string {
@@ -202,6 +203,17 @@ export function scanArguments(args: unknown, rules: Rule[]): MatchResult | null 
 	return null;
 }
 
+// The arguments that carry text a tool would write, as opposed to a path, a name or a command.
+const TEXT_ARGUMENTS = new Set(["content", "text", "newText", "oldText", "new_text", "old_text", "edits"]);
+
+/** Whether the rule matched only in the text a tool would write, so the person's line can say so. */
+export function matchedOnlyInText(args: unknown, rule: Rule): boolean {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+	const entries = Object.entries(args as Record<string, unknown>);
+	if (!entries.some(([key]) => TEXT_ARGUMENTS.has(key))) return false;
+	return !scanArguments(Object.fromEntries(entries.filter(([key]) => !TEXT_ARGUMENTS.has(key))), [rule]);
+}
+
 // The log keeps which tool a rule stopped, when and where, never the
 // arguments' text: they may quote a person's conversation or a secret. A log
 // written before this rule had a preview of them, removed once here.
@@ -264,8 +276,7 @@ export default function (pi: ExtensionAPI) {
 			reason: match.rule.reason,
 		});
 
-		const reason = `Content policy blocked tool '${event.toolName}': ${match.rule.reason}. Do not retry with equivalent file/path/token access; explain the constraint to the user and ask for a safe alternative.`;
-		if (ctx.hasUI) ctx.ui.notify(reason, "warning");
-		return { block: true, reason };
+		// The reason is for the model; the page shows the person one plain line on the step's card (words.ts).
+		return { block: true, reason: contentPolicyBlockReason(event.toolName, match.rule.reason, matchedOnlyInText(input, match.rule)) };
 	});
 }

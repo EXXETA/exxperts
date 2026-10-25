@@ -70,22 +70,6 @@ type DeckSpecDesign = {
 	density?: "low" | "medium" | "high";
 };
 
-export type PptxInspectionSlide = {
-	index: number;
-	slideId?: string;
-	entry?: string;
-	text?: string;
-	speakerNotes?: string;
-	styleHints?: { fonts?: string[]; colors?: string[] };
-};
-
-export type PptxInspectionDetails = {
-	metadata?: { relativePath?: string; path?: string };
-	slideCount?: number;
-	slides?: PptxInspectionSlide[];
-	warnings?: string[];
-};
-
 export type DeckStyleProfile = {
 	sourceType: "pptx" | "html";
 	sourceLabel: string;

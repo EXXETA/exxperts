@@ -101,17 +101,6 @@ async function saveOneSession(agentId: string, threadId: string, approvedIndex: 
 	return writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date("2026-06-14T13:00:00.000Z"), { runtimeCwd: tempCwd });
 }
 
-async function expectRejects(fn: () => Promise<unknown>, expected: RegExp, label: string): Promise<Error> {
-	try {
-		await fn();
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		assert(expected.test(message), `${label}: expected ${expected}, got ${message}`);
-		return error as Error;
-	}
-	throw new Error(`${label}: expected rejection`);
-}
-
 try {
 	assert(RECENT_CONTEXT_BLOCK_CAP === 20, `the block cap should be 20, got ${RECENT_CONTEXT_BLOCK_CAP}`);
 

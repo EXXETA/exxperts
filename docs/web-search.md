@@ -19,8 +19,8 @@ be spending your money on a choice you never made, so an API-key connection
 behaves like any other provider: it keeps the built-in search below, and the
 switch above does not apply to it.
 
-**Turning it off.** **Settings → Web search** has one switch, *Use provider
-search where available*. Unticking it stops the app asking either provider to
+**Turning it off.** **Settings → Web search** has one switch, *Provider search
+where available*. Unticking it stops the app asking either provider to
 search, and every room falls back to the built-in search below. That is the
 setting for deployments that need every search to happen on their own
 infrastructure. It takes effect from the next message, with no restart, in

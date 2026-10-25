@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { symlinkOrSkip } from "./smoke-server-process.js";
 
 // The room pane's ONE outcome table (apps/web-ui/src/room-instructions-outcome.ts)
 // says what the room does after Save, the Save of an empty box (a removal on the
@@ -54,7 +55,13 @@ try {
 	const roomFile = persistentRoomInstructionsPath(agentId);
 	const globalFile = globalInstructionsPath();
 	const actions = ["save", "saveEmpty", "on", "off"] as const;
-	for (const roomBefore of ["text", "absent", "folder", "link"] as FileState[]) {
+	const roomStates: FileState[] = ["text", "absent", "folder"];
+	const linkProbe = path.join(tempHome, "link-probe.md");
+	if (symlinkOrSkip(path.join(tempHome, "no-such-target.md"), linkProbe, "global-instructions-pane-copy-smoke", "the dangling link rows")) {
+		fs.unlinkSync(linkProbe);
+		roomStates.push("link");
+	}
+	for (const roomBefore of roomStates) {
 		for (const globalState of ["absent", "text", "folder"] as FileState[]) {
 			for (const switchBefore of [true, false]) {
 				for (const action of actions) {

@@ -607,7 +607,8 @@ export function parseAbsorbAssessment(raw: string): { fields: AbsorbAssessmentFi
 			activeItems: extractLabeledBullets(changes, "Active Items", STABLE_MEMORY_CHANGE_LABELS),
 			recentContext: extractLabeledBullets(changes, "Recent Context", STABLE_MEMORY_CHANGE_LABELS)[0] ?? "All entries are expected to be cleared after approval.",
 		},
-		needsJudgment: extractBullets(judgment),
+		// "None" is no question, as Review reads it.
+		needsJudgment: extractBullets(judgment).filter((item) => !/^none\.?$/i.test(item.trim())),
 	};
 	const warnings: string[] = [];
 	if (fields.whatToRemember.length === 0) warnings.push("assessment missing What to remember bullets");

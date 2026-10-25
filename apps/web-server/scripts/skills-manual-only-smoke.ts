@@ -21,7 +21,6 @@ const library = new Map<string, { manifest: string; body: string; description: s
 	["grill-me", { manifest: MANIFEST_MANUAL, body: "Grill relentlessly.", description: "Grill the plan", disableModelInvocation: true }],
 ]);
 
-const { sha256 } = await import("../src/skills-store.js");
 const { enablePersistentRoomSkill } = await import("../src/persistent-room-skill-settings.js");
 const agentId = "manual-only-smoke-room";
 // Enablement pins sha256(manifest) server-side (the fingerprint resolver is the

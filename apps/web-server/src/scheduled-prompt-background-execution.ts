@@ -20,6 +20,7 @@ import {
 import { executePersistentRoomBackgroundPrompt } from "./persistent-room-background-execution.js";
 import { recordPersistentAgentUnseenLandedAnswer } from "./persistent-agents.js";
 import { appendUsageOnce, resolveUsageAuthType } from "./usage-log.js";
+import { SERVER_STOPPED_REASON, serverStopping } from "./server-stop.js";
 import {
 	inspectScheduledPromptBackgroundRunIdempotency,
 	mergeScheduledPromptBackgroundRunArtifacts,
@@ -392,8 +393,19 @@ async function executeClaimedRun(input: {
 	} catch (error) {
 		const message = `Scheduled prompt background execution failed: ${safeErrorMessage(error)}`;
 		let updated: BackgroundRunRecord;
+		// A run a server stop ended is cancelled, its lease cleared, so it is not run again.
+		const stoppedByServer = (error as { code?: unknown } | null)?.code === SERVER_STOPPED_REASON;
 		try {
-			updated = terminalUpdate({
+			updated = stoppedByServer ? terminalUpdate({
+				run,
+				token: input.token,
+				status: "cancelled",
+				reason: SERVER_STOPPED_REASON,
+				message: "Scheduled prompt background run stopped when the server stopped.",
+				target: run.target ?? target,
+				...(run.artifacts ? { artifacts: run.artifacts } : {}),
+				now: new Date(),
+			}) : terminalUpdate({
 				run,
 				token: input.token,
 				status: "failed",
@@ -442,6 +454,8 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 
 	for (const candidate of claimable) {
 		if (processed.length >= limit) break;
+		// A stopping server claims no further run; the ones left stay queued.
+		if (serverStopping()) break;
 		const roomId = candidate.scope.kind === "persistent-room" ? candidate.scope.roomId : null;
 		if (roomId && processedRooms.has(roomId)) {
 			skipped.push({ runId: candidate.runId, reason: "room_already_processed_this_tick" });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useEscapeKey } from "./use-escape-key";
 
 /**
@@ -27,10 +27,16 @@ export interface ConfirmDialogOptions {
 	danger?: boolean;
 	/** A third answer, a plain button between the secondary and the primary. */
 	alternateLabel?: string;
+	/** While `line` gives a reason, the primary answer is greyed and the reason shows under the
+	 * buttons; `watch` calls back whenever the reason may have changed, and returns its undo. */
+	hold?: { line: () => string | null; watch: (changed: () => void) => () => void };
 }
 
 /** Which answer a question got: the primary, the alternate, or cancel. */
 export type ConfirmChoice = "confirm" | "alternate" | "cancel";
+
+const noHoldWatch = () => () => {};
+const noHoldLine = () => null;
 
 type PendingConfirm = ConfirmDialogOptions & { id: number; resolve: (choice: ConfirmChoice) => void };
 
@@ -79,28 +85,31 @@ export function ConfirmDialogView({ options, onSettle }: { options: ConfirmDialo
 	const primaryRef = useRef<HTMLButtonElement | null>(null);
 	const secondaryRef = useRef<HTMLButtonElement | null>(null);
 	const alternateRef = useRef<HTMLButtonElement | null>(null);
+	const holdLine = useSyncExternalStore(options.hold?.watch ?? noHoldWatch, options.hold?.line ?? noHoldLine);
+	const holdLineId = useId();
 	// Topmost layer on the shared Escape stack: one Escape answers this
 	// question and leaves the surface that asked it open.
 	useEscapeKey(() => onSettle("cancel"), true);
 	// Whatever had focus (the Forget button, a field) gets it back afterwards.
 	useEffect(() => {
 		const returnTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-		(options.danger ? secondaryRef : primaryRef).current?.focus();
+		(options.danger || options.hold?.line() ? secondaryRef : primaryRef).current?.focus();
 		return () => { if (returnTo && returnTo.isConnected) returnTo.focus(); };
 	}, []);
 	function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
 		if (e.key === "Enter") {
 			// A focused Cancel or alternate keeps its native meaning; everywhere
-			// else Enter is the primary answer.
+			// else Enter is the primary answer, unless it is held.
 			if (document.activeElement === secondaryRef.current || document.activeElement === alternateRef.current) return;
 			e.preventDefault();
 			e.stopPropagation();
-			onSettle("confirm");
+			if (holdLine === null) onSettle("confirm");
 			return;
 		}
 		if (e.key !== "Tab") return;
 		const first = secondaryRef.current;
-		const last = primaryRef.current;
+		// A greyed primary takes no focus, so the cycle ends on the button before it.
+		const last = holdLine === null ? primaryRef.current : alternateRef.current ?? secondaryRef.current;
 		if (!first || !last) return;
 		if (!cardRef.current?.contains(document.activeElement)) {
 			e.preventDefault();
@@ -128,8 +137,9 @@ export function ConfirmDialogView({ options, onSettle }: { options: ConfirmDialo
 				<div className="checkpoint-preview-actions">
 					<button ref={secondaryRef} type="button" className="rs-btn" onClick={() => onSettle("cancel")}>{options.cancelLabel ?? "Cancel"}</button>
 					{options.alternateLabel && <button ref={alternateRef} type="button" className="rs-btn" onClick={() => onSettle("alternate")}>{options.alternateLabel}</button>}
-					<button ref={primaryRef} type="button" className={`rs-btn rs-btn-primary${options.danger ? " rs-btn-danger" : ""}`} onClick={() => onSettle("confirm")}>{options.confirmLabel}</button>
+					<button ref={primaryRef} type="button" className={`rs-btn rs-btn-primary${options.danger ? " rs-btn-danger" : ""}`} disabled={holdLine !== null} aria-describedby={holdLine !== null ? holdLineId : undefined} onClick={() => onSettle("confirm")}>{options.confirmLabel}</button>
 				</div>
+				{holdLine && <p id={holdLineId} className="confirm-dialog-hold" role="status">{holdLine}</p>}
 			</section>
 		</div>
 	);

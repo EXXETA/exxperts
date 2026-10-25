@@ -141,8 +141,8 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		const headers = await captureHeaders(createModel("openrouter", "https://openrouter.ai/api/v1"));
 
 		expect(headers?.["HTTP-Referer"]).toBe("https://exxeta.com/exxperts");
-		expect(headers?.["X-OpenRouter-Title"]).toBe("pi");
-		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("exxperts");
+		expect(headers).not.toHaveProperty("X-OpenRouter-Categories");
 	});
 
 	it("does not add attribution headers when telemetry is disabled", async () => {
@@ -159,8 +159,8 @@ describe("createAgentSession OpenRouter attribution headers", () => {
 		const headers = await captureHeaders(createModel("custom-openrouter", "https://openrouter.ai/api/v1"));
 
 		expect(headers?.["HTTP-Referer"]).toBe("https://exxeta.com/exxperts");
-		expect(headers?.["X-OpenRouter-Title"]).toBe("pi");
-		expect(headers?.["X-OpenRouter-Categories"]).toBe("cli-agent");
+		expect(headers?.["X-OpenRouter-Title"]).toBe("exxperts");
+		expect(headers).not.toHaveProperty("X-OpenRouter-Categories");
 	});
 
 	it("lets provider and request headers override the defaults", async () => {

@@ -11,6 +11,7 @@ import path from "node:path";
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-shelf-migration-home-"));
 const tempAgentsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-shelf-migration-root-"));
 process.env.HOME = tempHome;
+process.env.USERPROFILE = tempHome;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
 const { createTaskLedgerRecord, finalizeTaskLedgerRecord, appendTaskLedgerExport, listTaskLedgerRecords } = await import("../src/persistent-room-task-ledger.js");

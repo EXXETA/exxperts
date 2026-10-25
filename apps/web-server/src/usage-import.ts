@@ -15,7 +15,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { appendUsage, loadUsage } from "./usage-log.js";
+import { answerlessCallMovedNothing, appendUsage, loadUsage } from "./usage-log.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
 
 interface ImportSummary {
@@ -82,7 +82,7 @@ export function importHistoricalSessionUsage(agentsRoot: string, warn: (message:
 				}
 				const message = entry?.message;
 				const usage = message?.usage;
-				if (message?.role !== "assistant" || !usage) continue;
+				if (message?.role !== "assistant" || !usage || answerlessCallMovedNothing(message)) continue;
 				const input = usage.input ?? 0;
 				const output = usage.output ?? 0;
 				const cacheRead = usage.cacheRead ?? 0;

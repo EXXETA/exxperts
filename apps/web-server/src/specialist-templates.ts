@@ -14,6 +14,7 @@ import {
 	MAX_SCOPED_HTML_ARTIFACT_BYTES,
 	MAX_SCOPED_MD_ARTIFACT_BYTES,
 } from "../../../pi-package/extensions/artifacts/index.js";
+import { SPECIALIST_TEMPLATE_LABELS } from "./specialist-template-labels.js";
 
 /** The only tools a specialist template may grant (visuals contract §2/§3). */
 export const SPECIALIST_GRANTABLE_TOOL_NAMES = new Set<string>([
@@ -90,7 +91,7 @@ export interface SpecialistTemplate {
 const TEMPLATES: SpecialistTemplate[] = [
 	{
 		id: "diagram-svg",
-		label: "Diagram",
+		label: SPECIALIST_TEMPLATE_LABELS["diagram-svg"],
 		// v2: constraint wording moved out
 		// of promptIntro into the profile-derived block; write-time SVG validation
 		// now enforces what the old intro only asked for.
@@ -107,7 +108,7 @@ const TEMPLATES: SpecialistTemplate[] = [
 	},
 	{
 		id: "chart-html",
-		label: "Chart",
+		label: SPECIALIST_TEMPLATE_LABELS["chart-html"],
 		// v2: constraint wording single-sourced into the profile-derived block.
 		version: 2,
 		outputExtensions: [".html"],
@@ -123,7 +124,7 @@ const TEMPLATES: SpecialistTemplate[] = [
 	},
 	{
 		id: "deck",
-		label: "Slide deck",
+		label: SPECIALIST_TEMPLATE_LABELS["deck"],
 		// v2: free model-authored HTML replaced
 		// the deterministic DeckSpecV1 generator — its {title,keyMessage,bullets}
 		// schema could not express real slide layouts (card grids, chips, accent
@@ -150,7 +151,7 @@ const TEMPLATES: SpecialistTemplate[] = [
 	},
 	{
 		id: "document-html",
-		label: "Document",
+		label: SPECIALIST_TEMPLATE_LABELS["document-html"],
 		// v2: constraint wording single-sourced into the profile block; the old intro's data:-URI invitation
 		// contradicted the write validator.
 		version: 2,

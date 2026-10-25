@@ -85,10 +85,6 @@ describe("GitHub Copilot OAuth device flow", () => {
 				});
 			}
 
-			if (url.includes("/models/") && url.endsWith("/policy")) {
-				return new Response("", { status: 200 });
-			}
-
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
@@ -126,6 +122,56 @@ describe("GitHub Copilot OAuth device flow", () => {
 			startTime.getTime() + 12000,
 			startTime.getTime() + 26000,
 		]);
+	});
+
+	it("only reads during sign-in: no model policy is changed in the person's account", async () => {
+		vi.useFakeTimers();
+		const requestedUrls: string[] = [];
+		const progress: string[] = [];
+
+		const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+			const url = getUrl(input);
+			requestedUrls.push(url);
+
+			if (url.endsWith("/login/device/code")) {
+				return jsonResponse({
+					device_code: "device-code",
+					user_code: "ABCD-EFGH",
+					verification_uri: "https://github.com/login/device",
+					interval: 5,
+					expires_in: 900,
+				});
+			}
+
+			if (url.endsWith("/login/oauth/access_token")) {
+				return jsonResponse({ access_token: "ghu_fake_refresh_token" });
+			}
+
+			if (url.includes("/copilot_internal/v2/token")) {
+				return jsonResponse({
+					token: "tid=fake;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;",
+					expires_at: 9999999999,
+				});
+			}
+
+			return new Response("", { status: 200 });
+		});
+
+		vi.stubGlobal("fetch", fetchMock);
+
+		const loginPromise = loginGitHubCopilot({
+			onAuth: () => {},
+			onPrompt: async () => "",
+			onProgress: (message) => progress.push(message),
+		});
+
+		await vi.advanceTimersByTimeAsync(6000);
+		const credentials = await loginPromise;
+
+		expect(credentials.refresh).toBe("ghu_fake_refresh_token");
+		expect(credentials.access).toBe("tid=fake;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com;");
+		expect(requestedUrls.filter((url) => url.includes("/policy"))).toEqual([]);
+		expect(progress).toEqual([]);
 	});
 
 	it("uses the remaining lifetime for a final poll before timing out after repeated slow_down responses", async () => {

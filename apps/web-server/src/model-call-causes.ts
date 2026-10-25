@@ -23,13 +23,19 @@
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
 import { modelNotOnAccount, modelNotOnAccountSentence, notOnAccountWhy, type NotOnAccountWayOut } from "./model-not-on-account.js";
 import { isSignInFailure } from "../../web-ui/src/sign-in-failure.js";
-import { anthropicKeyNeedsWorkspace, credentialGoneOf, credentialGoneWhy, modelNotOffered, signInFailed, type CredentialKey } from "./model-not-offered.js";
+import { GATEWAY_REFUSED_CAUSE, gatewayNotFoundLine, gatewayRefusedWayOn, namedContextLimit, quotaCause, quotaWayOn, REGION_OR_PLAN_CAUSE, unreachedCause, unreachedWayOn, type GatewayFind, type QuotaWay, type RetryFailure, type TurnFailure, type Unreached } from "../../web-ui/src/turn-failure-line.js";
+import { readOpenAiCompatibleGateways } from "./openai-compatible-gateways.js";
+import { gatewayModelFind } from "./gateway-model-find.js";
+import { statusAskedAgainByProvider } from "@exxeta/exxperts-runtime";
+import { isSharedServer } from "./server-hooks.js";
+import { anthropicKeyNeedsWorkspace, credentialGoneOf, credentialGoneWhy, credentialGoneWords, modelNotOffered, signInFailed, type CredentialKey } from "./model-not-offered.js";
+import { providerOnThisComputer } from "./openai-compatible-gateway-catalog.js";
 import { IsolatedPersistentAgentWorkerTurnError } from "./persistent-agent-worker-runtime.js";
 import { catalogModelNames, createRoomModelCatalog, providerSignsIn, roomModelUnavailableSentence, type RoomModelRefusalOf } from "./room-models.js";
 
 export type OutageClass = "rate-limit" | "quota" | "too-many-requests" | "overload";
 export type BusyDetail = "rate-limit" | "too-many-requests" | "overload" | "server-error" | "connection" | "stalled" | "timed-out";
-export type UnreachableDetail = "signed-out" | "quota" | "not-offered" | "not-on-account" | "not-answering" | "still-busy";
+export type UnreachableDetail = "signed-out" | "quota" | "not-offered" | "not-on-account" | "region-or-plan" | "gateway-refused" | "gateway-not-found" | "not-answering" | "still-busy";
 
 export type ModelFailure =
 	| { cause: "busy"; detail: BusyDetail; waitMs?: number }
@@ -53,10 +59,15 @@ export function outageClassOf(message: string): OutageClass | undefined {
 	// (Bedrock) and "Request was throttled" (Azure) are rate limits too.
 	if (/\brate[ _-]?limit\w*|\bthrottl\w*/i.test(message)) return "rate-limit";
 	// A spent plan, credit or budget too: ChatGPT's usage limit, Anthropic's credit balance, a gateway's budget.
-	if (/\b(?:insufficient_)?quota(?:_[a-z]+)?\b|\bresource[ _]exhausted\b|\busage[ _]limit\b|\bcredit balance is too low\b|\bbudget\b[^.!]{0,60}\bexceeded\b|\bexceeded[ _]?budget\b|\bbudget_exceeded\b/i.test(message)) return "quota";
+	if (/\b(?:insufficient_)?quota(?:_[a-z]+)?\b|\bresource[ _]exhausted\b|\busage[ _]limit\b|\bcredit balance is too low\b|\bbudget\b[^.!]{0,60}\bexceeded\b|\bexceeded[ _]?budget\b|\bbudget_exceeded\b|\bcredit balance (?:is )?exhausted\b|\bspend limit reached\b|\bdaily free allocation\b/i.test(message)) return "quota";
 	if (/\b429\b|\btoo[ _]many[ _]requests\b/i.test(message)) return "too-many-requests";
 	if (/\boverload(?:ed)?(?:_error)?\b|\b529\b/i.test(message)) return "overload";
 	return undefined;
+}
+
+/** A plan, credit or budget that is spent, in each provider's own words (OpenAI's spend limits, Workers AI's daily allocation): waiting does not bring it back. */
+function spentCredit(message: string): boolean {
+	return /\binsufficient_quota\b|\bplan and billing\b|\busage[ _]limit|\bcredit balance is too low\b|\bbudget\b[^.!]{0,60}\bexceeded\b|\bexceeded[ _]?budget\b|\bbudget_exceeded\b|\bcredit balance (?:is )?exhausted\b|\bspend limit reached\b|\bdaily free allocation\b/i.test(message);
 }
 
 /**
@@ -110,7 +121,7 @@ export const RATE_LIMIT_PAUSE_DEFAULT_MS = 30_000;
  * milliseconds, or undefined when it names none.
  */
 export function providerNamedWaitMs(message: string): number | undefined {
-	const phrase = /\b(?:try again|retry)\s+(?:in|after)\s+(?:(\d+(?:\.\d+)?)\s*m(?:in(?:ute)?s?)?(?![a-z])\s*)?(?:(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?)\b)?/i.exec(message);
+	const phrase = /\b(?:try again|retry)\s+(?:in|after)\s+(?:~\s*|about\s+)?(?:(\d+(?:\.\d+)?)\s*m(?:in(?:ute)?s?)?(?![a-z])\s*)?(?:(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?)\b)?/i.exec(message);
 	if (phrase && (phrase[1] || phrase[2])) {
 		const minutes = Number(phrase[1] ?? 0);
 		const rest = Number(phrase[2] ?? 0);
@@ -147,7 +158,8 @@ export function requestTooLarge(message: string): boolean {
 		|| /\bContext Window Error\b/i.test(message) // Bedrock's exception, as LiteLLM passes it on
 		|| /\bexceed context limit\b/i.test(message) // "input length and `max_tokens` exceed context limit"
 		|| /\bexceeds the maximum number of tokens\b/i.test(message)
-		|| /\binput is too long\b|\binput tokens? exceeds?\b/i.test(message); // Bedrock, and the Responses API
+		|| /\binput is too long\b|\binput tokens? exceeds?\b/i.test(message) // Bedrock, and the Responses API
+		|| /\btoo large for model with \d+ maximum context length\b/i.test(message); // Mistral
 }
 
 /**
@@ -172,6 +184,74 @@ export function failureWords(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** A failed call's HTTP status and the provider's error type, as the runtime keeps them beside the words of a failed message, and the API it was made through. */
+export interface FailureCodes {
+	errorStatus?: number;
+	errorType?: string;
+	api?: string;
+}
+
+/** The codes a failed message or a failure carries; a saved message from before they were kept has none. */
+export function failureCodesOf(failed: unknown): FailureCodes {
+	if (!failed || typeof failed !== "object") return {};
+	const { errorStatus, errorType, api } = failed as { errorStatus?: unknown; errorType?: unknown; api?: unknown };
+	return {
+		...(typeof errorStatus === "number" && Number.isInteger(errorStatus) && errorStatus >= 400 && errorStatus <= 599 ? { errorStatus } : {}),
+		...(typeof errorType === "string" && /^[A-Za-z][\w.-]{0,63}$/.test(errorType) ? { errorType } : {}),
+		...(typeof api === "string" && /^[A-Za-z][\w.-]{0,63}$/.test(api) ? { api } : {}),
+	};
+}
+
+/**
+ * The HTTP status a failure carries (the runtime's errorStatus, a client's
+ * status or statusCode), else the one its words name: "400 …", "Error: 400 …",
+ * "status 400", "status code 400", "HTTP 403", "HTTP/1.1 503", "error (400): …".
+ * Review and the log line both read it. Undefined when there is none.
+ */
+export function failureStatusOf(error: unknown): number | undefined {
+	const carried = failureCodesOf(error).errorStatus ?? (error as { status?: unknown } | null)?.status ?? (error as { statusCode?: unknown } | null)?.statusCode;
+	if (typeof carried === "number" && Number.isInteger(carried) && carried >= 400 && carried <= 599) return carried;
+	const named = /^\s*(?:\w*Error: )?([45]\d\d)\b|\b(?:status(?:[ _]?code)?|http(?:\/[\d.]+)?)\s*[:=]?\s*([45]\d\d)\b|\(([45]\d\d)\)/i.exec(failureWords(error));
+	const status = named?.[1] ?? named?.[2] ?? named?.[3];
+	return status ? Number(status) : undefined;
+}
+
+/** A failed message's words as an error that carries its codes, for the one reading. */
+export function failedMessageError(words: string, codes: FailureCodes = {}): Error {
+	return Object.assign(new Error(words), failureCodesOf(codes));
+}
+
+/** A 403 or a permission error: the provider refused this request (a region it does not serve, a plan without the model), not the key. */
+function refusedForRegionOrPlan(words: string): boolean {
+	// Gemini's region refusals come as a 400: "User location is not supported", "free tier is not available in your country".
+	return /\bpermission_error\b|\bunsupported_country_region_territory\b|\bcountry, region,? or territory not supported\b|\buser location is not supported\b|\bnot available in your country\b|^\s*403\b|\b(?:status(?:[ _]?code)?|http(?:\/[\d.]+)?|error[ _]code)\s*[:=]?\s*403\b/i.test(words);
+}
+
+/** A 403 that names no reason: only its status, with no permission or region words. */
+function bare403(words: string): boolean {
+	return !/\bpermission_error\b|\bunsupported_country_region_territory\b|\bcountry, region,? or territory\b|\bregion\b/i.test(words);
+}
+
+/**
+ * What a status says when the words name nothing: only the statuses that
+ * mean the same for every provider. A 403 reads as the 403 rule above. A
+ * 404 from a gateway (a company's, or a model server on this computer) is
+ * almost always a wrong address or model name, not a model withdrawn.
+ */
+function statusFailure(status: number | undefined, words: string, provider: string | undefined, named: number | undefined): ModelFailure | undefined {
+	switch (status) {
+		case 401: return { cause: "unreachable", detail: "signed-out" };
+		case 402: return { cause: "unreachable", detail: "quota" };
+		case 403: return { cause: "unreachable", detail: provider && bare403(words) && gatewayProvider(provider) ? "gateway-refused" : "region-or-plan" };
+		case 404: return { cause: "unreachable", detail: provider && gatewayProvider(provider) ? "gateway-not-found" : "not-offered" };
+		case 413: return { cause: "too-large" };
+		case 429: return named === undefined ? { cause: "busy", detail: "too-many-requests" } : { cause: "busy", detail: "too-many-requests", waitMs: named };
+		case 500: case 502: case 503: case 504: return { cause: "busy", detail: "server-error" };
+		case 529: return { cause: "busy", detail: "overload" };
+		default: return undefined;
+	}
+}
+
 /**
  * The ONE reading of a failed call. Order matters: the request-too-large
  * words before the rate-limit words (a per-minute "request too large" also
@@ -179,7 +259,7 @@ export function failureWords(error: unknown): string {
  * text could also mention, the busy words before sign-in (a rate limit may
  * name its credential), and sign-in before quota.
  */
-export function classifyModelFailure(error: unknown, options: { signal?: AbortSignal } = {}): ModelFailure {
+export function classifyModelFailure(error: unknown, options: { signal?: AbortSignal; provider?: string } = {}): ModelFailure {
 	if (options.signal?.aborted) return { cause: "cancelled" };
 	const code = typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : undefined;
 	if (error instanceof ModelUnreachableError) return { cause: "unreachable", detail: error.details.detail };
@@ -203,12 +283,20 @@ export function classifyModelFailure(error: unknown, options: { signal?: AbortSi
 	if (modelNotOffered(words)) return { cause: "unreachable", detail: "not-offered" };
 	// A key made outside a workspace: refused on every call, so a credential cause with its own words, never "signed out".
 	if (/^No API key found for/i.test(words) || anthropicKeyNeedsWorkspace(words) || signInFailed(words)) return { cause: "unreachable", detail: "signed-out" };
+	// A company gateway answers a key it does not accept with a bare 403 too (behind API Gateway, Kong or Apigee).
+	if (refusedForRegionOrPlan(words)) return { cause: "unreachable", detail: options.provider && bare403(words) && gatewayProvider(options.provider) ? "gateway-refused" : "region-or-plan" };
 	// Gemini says "quota" for its per-minute limit too, and then names the
-	// wait; a quota that is really spent names none, or hours.
-	if (outage === "quota") return named === undefined || named > QUOTA_SPENT_WAIT_MS ? { cause: "unreachable", detail: "quota" } : { cause: "busy", detail: "rate-limit", waitMs: named };
+	// wait; Google's own per-minute 429 says "resource exhausted (check quota)"
+	// and names none. Only the spent-credit words, or a wait of hours, are spent.
+	if (outage === "quota") {
+		// A plan's usage limit is spent however soon it resets; a per-minute quota with a short wait is busy.
+		if (named !== undefined && named <= QUOTA_SPENT_WAIT_MS && !/\busage[ _]limit/i.test(words)) return { cause: "busy", detail: "rate-limit", waitMs: named };
+		return named !== undefined || spentCredit(words) ? { cause: "unreachable", detail: "quota" } : { cause: "busy", detail: "rate-limit" };
+	}
 	const blip = blipClassOf(words);
 	if (blip) return { cause: "busy", detail: blip };
-	return { cause: "other" };
+	// Words that name nothing known: the status, where the call kept one.
+	return statusFailure(failureCodesOf(error).errorStatus, words, options.provider, named) ?? { cause: "other" };
 }
 
 /**
@@ -249,6 +337,12 @@ export interface ModelUnreachableDetails {
 	busy?: BusyDetail;
 	/** Signed out on a key connection: its key is missing, or saved and refused. */
 	key?: CredentialKey;
+	/** Out of quota: who can lift it, with a sign-in plan's reset when the provider named it. */
+	quotaWay?: QuotaWay;
+	/** Not answering because no connection opened, or because the model runs on this computer. */
+	unreached?: Unreached;
+	/** A gateway's bare "not found": what its model list said. */
+	gatewayFind?: GatewayFind;
 }
 
 /**
@@ -258,6 +352,8 @@ export interface ModelUnreachableDetails {
  * the service refusing the saved key. Undefined for a sign-in.
  */
 export function credentialKeyOf(detail: UnreachableDetail, provider: string, last?: unknown): CredentialKey | undefined {
+	// The gateway may not accept its saved key: the key's button is one way on.
+	if (detail === "gateway-refused") return "refused";
 	if (detail !== "signed-out" || providerSignsIn(provider)) return undefined;
 	if (last === undefined || (last as { code?: unknown })?.code === "provider_signed_out") return "missing";
 	const words = failureWords(last);
@@ -266,13 +362,157 @@ export function credentialKeyOf(detail: UnreachableDetail, provider: string, las
 }
 
 /**
- * A key connection's state when a chat turn on it failed for its credential,
- * read with the page's own matcher, which leaves out a 403 or a permission
- * error on purpose; undefined for a sign-in or any other failure.
+ * A credential a chat turn failed for, read with the page's own matcher,
+ * which leaves out a 403 or a permission error on purpose: a key
+ * connection's state, or "signed-out" for a sign-in; undefined for any other
+ * failure.
  */
-export function failedTurnKey(provider: string, words: string): CredentialKey | undefined {
-	if (!provider || !(isSignInFailure(words) || anthropicKeyNeedsWorkspace(words))) return undefined;
-	return credentialKeyOf("signed-out", provider, new Error(words));
+export function failedTurnCredential(provider: string, words: string, codes: FailureCodes = {}): CredentialKey | "signed-out" | undefined {
+	if (!provider || !(isSignInFailure(words) || anthropicKeyNeedsWorkspace(words) || turnFailureOf(words, false, provider, false, codes) === "signed-out")) return undefined;
+	return credentialKeyOf("signed-out", provider, new Error(words)) ?? "signed-out";
+}
+
+/** A key connection's state when a chat turn on it failed for its credential; undefined for a sign-in or any other failure. */
+export function failedTurnKey(provider: string, words: string, codes: FailureCodes = {}): CredentialKey | undefined {
+	const credential = failedTurnCredential(provider, words, codes);
+	return credential === "signed-out" ? undefined : credential;
+}
+
+const BUSY_MODEL: ReadonlySet<BusyDetail> = new Set(["rate-limit", "too-many-requests", "overload"]);
+
+/** A message's content holds some answer text: the model was reached and had begun. */
+export function answerStarted(content: unknown): boolean {
+	return Array.isArray(content) && content.some((part) => (part as { type?: unknown })?.type === "text" && typeof (part as { text?: unknown }).text === "string" && (part as { text: string }).text.trim() !== "");
+}
+
+/**
+ * A failed chat turn's cause, for the room's plain line: "still busy" only
+ * when the runtime really asked again, or the provider's own client asked a
+ * 429 again, since the line says "after several tries".
+ * `answerStarted`: the failed message already holds part of an answer, so the
+ * model was reached: anything but a refusal reads as cut off. `codes`: the
+ * failed message's status, error type and API, read where the words name nothing.
+ */
+export function turnFailureOf(words: string, retried: boolean, provider: string, answerStarted = false, codes: FailureCodes = {}): TurnFailure {
+	// More than the model reads at once (the providers' phrases, or a limit they name) is a size problem whatever else the words say, so it is read first.
+	if (/context(?:[ _-]?window| length)|too many tokens|maximum context|prompt is too long|exceeds? (?:the )?(?:model'?s? )?(?:context|token|input)/i.test(words.trim().slice(0, 300)) || namedContextLimit(words) !== undefined) return "overflow";
+	const failure = classifyModelFailure(failedMessageError(words, codes), { provider });
+	// A refusal can come after part of an answer: it is still a refusal, never "cut off".
+	if (failure.cause === "refused") return "refused";
+	if (answerStarted) return "cut-off";
+	// OpenAI's per-minute ceiling: this one request is larger than the account takes in a minute, so waiting never helps.
+	if (failure.cause === "too-large" && /\brequest too large for\b/i.test(words)) return "too-large";
+	if (failure.cause === "unreachable" && failure.detail === "quota") return "quota";
+	if (failure.cause === "unreachable" && failure.detail === "region-or-plan") return "region-or-plan";
+	if (failure.cause === "unreachable" && failure.detail === "gateway-refused") return "gateway-refused";
+	if (failure.cause === "unreachable" && failure.detail === "gateway-not-found") return "gateway-not-found";
+	if (failure.cause === "busy" && failure.detail === "connection") return providerOnThisComputer(provider) ? "local-connection" : "connection";
+	// A 429 the provider's own client already asked again was tried several times too, though the runtime does not ask it again.
+	const askedAgain = retried || (codes.errorStatus === 429 && statusAskedAgainByProvider(codes.api, 429));
+	if (askedAgain && failure.cause === "busy" && BUSY_MODEL.has(failure.detail)) return "still-busy";
+	// The page reads a sign-in and a model no longer offered from the words; one only the status said is named for it.
+	if (failure.cause === "unreachable" && (failure.detail === "signed-out" || failure.detail === "not-offered") && codes.errorStatus !== undefined && classifyModelFailure(new Error(words), { provider }).cause === "other") return failure.detail;
+	return "other";
+}
+
+/**
+ * Why the room could not shorten a conversation, from the runtime's
+ * compaction error, read with the one reader. A size problem (the summary
+ * call too large, a summary cut at the model's output limit, or the runtime's
+ * own refusal) has no `failure`; any other cause is the chat's cause for it,
+ * as after the runtime's tries. `words`: the provider's words for Details,
+ * without the runtime's prefixes; none where the runtime said it.
+ */
+export function compactionFailureOf(errorMessage: string, provider: string): { failure?: TurnFailure; words?: string; summaryCut: boolean } {
+	const words = errorMessage.replace(/^(?:Context overflow recovery|Auto-compaction) failed: (?:(?:Turn prefix )?[Ss]ummarization failed: )?/, "");
+	const summaryCut = /\bhit the token cap\b/.test(words);
+	const cause = classifyModelFailure(failedMessageError(words), { provider }).cause;
+	if (summaryCut || cause === "other" || cause === "cancelled") return { summaryCut };
+	if (cause === "too-large") return { words, summaryCut };
+	return { failure: turnFailureOf(words, true, provider), words, summaryCut };
+}
+
+/** Why the runtime is asking again, for the note it shows meanwhile; never "busy" for a spent quota. */
+export function retryFailureOf(words: string, codes: FailureCodes = {}): RetryFailure {
+	const failure = classifyModelFailure(failedMessageError(words, codes));
+	if (failure.cause === "busy" && BUSY_MODEL.has(failure.detail)) return "busy";
+	if (failure.cause === "busy" && failure.detail === "connection") return "connection";
+	return "provider-error";
+}
+
+export interface ProviderFailureLogFields {
+	cause: string;
+	status?: number;
+	errorType?: string;
+	requestId?: string;
+}
+
+/**
+ * What a failed provider call's log line holds: its cause, the HTTP status,
+ * and the provider's error type and request id when the failure kept them or
+ * its words carry them.
+ * Codes only, never the words, so a key a provider echoes back cannot reach
+ * the log. Undefined for a call that was cancelled. `provider`: the call's,
+ * so a gateway's bare 403 is logged as the chat reads it.
+ */
+export function providerFailureLogFields(error: unknown, provider?: string): ProviderFailureLogFields | undefined {
+	const failure = classifyModelFailure(error, { provider });
+	if (failure.cause === "cancelled") return undefined;
+	const words = failureWords(error);
+	const codes = failureCodesOf(error);
+	const status = failureStatusOf(error);
+	const errorType = codes.errorType ?? /"error"\s*:\s*\{[^{}]*?"type"\s*:\s*"([A-Za-z][\w.-]{0,63})"/.exec(words)?.[1];
+	const requestId = /"request_id"\s*:\s*"([\w-]{1,128})"/.exec(words)?.[1];
+	return {
+		cause: "detail" in failure ? `${failure.cause}:${failure.detail}` : failure.cause,
+		...(status !== undefined ? { status } : {}),
+		...(errorType ? { errorType } : {}),
+		...(requestId ? { requestId } : {}),
+	};
+}
+
+/**
+ * Providers whose saved key the service refused at the last call, or whose
+ * sign-in the last call found gone, so AI setup does not call them ready.
+ * Kept by this process only: after a restart the next call tells again.
+ */
+const keyRefusals = new Map<string, KeyRefusal>();
+
+/** Why the last call failed for the saved credential: the key itself, a key made outside a workspace, or a sign-in gone (expired, revoked, or its refresh refused). */
+export type KeyRefusal = "refused" | "no-workspace" | "signed-out";
+
+/** When each provider's key was last saved or removed, or its sign-in made or ended. */
+const keySavedAt = new Map<string, number>();
+
+/**
+ * What a call said about its provider's credential: a key refused (or outside
+ * a workspace), a sign-in gone, answered, or nothing either way. A refusal of
+ * a call that started before the key was last saved, or the sign-in last
+ * made, is about the credential before, and is not kept.
+ */
+export function noteKeyOutcome(provider: string, outcome: CredentialKey | "signed-out" | "answered" | undefined, callStartedAt?: number): void {
+	if (outcome === "answered") keyRefusals.delete(provider);
+	else if ((outcome === "refused" || outcome === "no-workspace" || outcome === "signed-out") && (callStartedAt ?? Infinity) >= (keySavedAt.get(provider) ?? 0)) keyRefusals.set(provider, outcome);
+}
+
+/** A key saved again or removed, or a sign-in made or ended: the last refusal was about the credential before. */
+export function forgetKeyRefusal(provider: string): void {
+	keyRefusals.delete(provider);
+	keySavedAt.set(provider, Date.now());
+}
+
+export function keyRefusalOf(provider: string): KeyRefusal | undefined {
+	return keyRefusals.get(provider);
+}
+
+/** The profile's words for a refused key or a sign-in gone, with the room's own cause: only ours, never the provider's text, which can hold part of the key. */
+export function keyRefusedSetupSentence(refusal: KeyRefusal): string {
+	// A shared server has no sign-ins: AI setup never shows one there.
+	if (refusal === "signed-out") return `Signed out at the last try. ${credentialGoneWords("signed-out").again} to continue.`;
+	// On a shared server only the admin can replace the key: AI setup is locked there.
+	const wayOn = isSharedServer() ? "Tell your admin." : "Replace the key to continue.";
+	if (refusal === "no-workspace") return `Not accepted at the last try: this key isn't tied to a workspace. ${wayOn}`;
+	return `Not accepted at the last try. ${wayOn}`;
 }
 
 /**
@@ -280,13 +520,25 @@ export function failedTurnKey(provider: string, words: string): CredentialKey | 
  * the app shows it everywhere, whether the caller passed a label or a bare
  * model lock.
  */
-export function modelUnreachableSentence(detail: UnreachableDetail, model: ModelNoticeModel, key?: CredentialKey): string {
+export function modelUnreachableSentence(detail: UnreachableDetail, model: ModelNoticeModel, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gatewayFind?: GatewayFind): string {
 	const name = rememberSentenceModelName(model);
+	if (detail === "not-answering" && unreached) return `${name} ${unreachedCause(unreached)}. Nothing was lost. ${unreachedWayOn(unreached, isSharedServer())}`;
 	switch (detail) {
 		case "signed-out": return `${name} ${credentialGoneWhy(credentialGoneOf(key))}. Nothing was lost.`;
-		case "quota": return `${name} has reached its usage limit. Nothing was lost.`;
+		case "quota": {
+			const way = quotaWay ?? quotaWayOf(model.provider);
+			// A plan's reset ahead is a time of day: the page words it from the details' quotaWay, in the person's own zone and clock, never the server's.
+			const wayOn = quotaWayOn(way.kind === "sign-in" && Date.parse(way.resetsAt ?? "") > Date.now() ? { kind: "sign-in", provider: way.provider } : way);
+			return `${name} ${quotaCause(way)}. Nothing was lost.${wayOn ? ` ${wayOn}` : ""}`;
+		}
 		case "not-offered": return `${name} is no longer offered. Nothing was lost.`;
 		case "not-on-account": return `${name} ${notOnAccountWhy(model.provider)}. Nothing was lost.`;
+		case "region-or-plan": return `${name} ${REGION_OR_PLAN_CAUSE}. Nothing was lost.`;
+		case "gateway-refused": return `${name} ${GATEWAY_REFUSED_CAUSE}. Nothing was lost.${isSharedServer() ? ` ${gatewayRefusedWayOn(true)}.` : ""}`;
+		case "gateway-not-found": {
+			const line = gatewayNotFoundLine(providerNameOf(model.provider), name, gatewayFind, isSharedServer());
+			return `${line.cause} Nothing was lost. ${line.wayOn}`;
+		}
 		case "still-busy": return `${name} is still busy after several tries. Nothing was lost.`;
 		case "not-answering": return `${name} isn't answering right now. Nothing was lost.`;
 	}
@@ -304,11 +556,13 @@ export class ModelUnreachableError extends Error {
 	readonly details: ModelUnreachableDetails;
 	/** The failure that ended the patience, for the log only. */
 	readonly last: unknown;
-	constructor(detail: UnreachableDetail, model: ModelNoticeModel, last?: unknown, busy?: BusyDetail) {
+	constructor(detail: UnreachableDetail, model: ModelNoticeModel, last?: unknown, busy?: BusyDetail, gatewayFind?: GatewayFind) {
 		const key = credentialKeyOf(detail, model.provider, last);
-		super(modelUnreachableSentence(detail, model, key));
+		const unreached = detail !== "not-answering" ? undefined : providerOnThisComputer(model.provider) ? "local-connection" : last !== undefined && connectionNeverOpened(failureWords(last)) ? "connection" : undefined;
+		const quotaWay = detail === "quota" ? quotaWayOf(model.provider, last === undefined ? undefined : failureWords(last)) : undefined;
+		super(modelUnreachableSentence(detail, model, key, unreached, quotaWay, gatewayFind));
 		this.name = "ModelUnreachableError";
-		this.details = { cause: "unreachable", detail, provider: model.provider, model: model.model, ...(model.label ? { label: model.label } : {}), ...(busy ? { busy } : {}), ...(key ? { key } : {}) };
+		this.details = { cause: "unreachable", detail, provider: model.provider, model: model.model, ...(model.label ? { label: model.label } : {}), ...(busy ? { busy } : {}), ...(key ? { key } : {}), ...(unreached ? { unreached } : {}) , ...(quotaWay ? { quotaWay } : {}), ...(gatewayFind ? { gatewayFind } : {}) };
 		this.last = last;
 	}
 }
@@ -335,6 +589,46 @@ export interface PatienceWait {
 	nextTryAt: string;
 	/** Set when an earlier wait of this call already said the model is busy. */
 	again?: true;
+	/** For a server error: the provider as AI setup names it, since the problem is on its side. */
+	provider?: string;
+}
+
+/** Who can lift a provider's spent usage limit or credit, for the lines' way on; a sign-in's plan with its reset, when the provider's words name it. */
+export function quotaWayOf(provider: string, words?: string): QuotaWay {
+	if (isSharedServer()) return { kind: "shared" };
+	if (provider === "anthropic-api-key") return { kind: "claude-key" };
+	const name = providerNameOf(provider);
+	if (providerSignsIn(provider)) {
+		const resetMs = words ? providerNamedWaitMs(words) : undefined;
+		// "~0 min" is a reset already behind, not an unknown one.
+		return { kind: "sign-in", provider: name, ...(resetMs !== undefined ? { resetsAt: new Date(Date.now() + resetMs).toISOString() } : {}) };
+	}
+	return { kind: gatewayProvider(provider) ? "gateway" : "key", provider: name };
+}
+
+/** A company gateway the person saved in AI setup. */
+function gatewayProvider(provider: string): boolean {
+	try {
+		return readOpenAiCompatibleGateways().gateways.some((entry) => entry.providerId === provider);
+	} catch {
+		return false;
+	}
+}
+
+/** A company gateway's name as AI setup shows it, for a line that names it; undefined for a provider that is no gateway, or a gateway the catalog has no name for. */
+export function gatewayNameOf(provider: string): string | undefined {
+	if (!gatewayProvider(provider)) return undefined;
+	const name = providerNameOf(provider);
+	return name && name !== provider ? name : undefined;
+}
+
+/** The provider as AI setup names it: a gateway by its label, a built-in provider by its profile's. */
+export function providerNameOf(provider: string): string {
+	try {
+		return catalogModelNames(createRoomModelCatalog()).provider(provider);
+	} catch {
+		return provider;
+	}
 }
 
 export interface PatienceOptions {
@@ -463,6 +757,11 @@ function retriesAllowed(budget: PatienceBudget): number {
 	return PATIENCE_WAITS_MS.length;
 }
 
+/** Unreachable, as the notice says it; a gateway's bare "not found" first takes one look at its model list, shared with the chat's, to say which way on is real. */
+export async function unreachableError(detail: UnreachableDetail, model: ModelNoticeModel, last?: unknown): Promise<ModelUnreachableError> {
+	return new ModelUnreachableError(detail, model, last, undefined, detail === "gateway-not-found" ? await gatewayModelFind(model.provider, model.model) : undefined);
+}
+
 /**
  * Runs one call to the Memory model with the shared patience:
  *   - busy is waited out: five more tries in all for a rate limit, too many
@@ -485,20 +784,25 @@ export async function callWithPatience<T>(call: () => Promise<T>, options: Patie
 	const now = options.now ?? (() => new Date());
 	const retries = new Map<PatienceBudget, number>();
 	let calls = 0;
+	let callStartedAt = 0;
 	let waited = false;
 	let busySaid = false;
 	for (;;) {
 		try {
 			calls += 1;
+			callStartedAt = Date.now();
 			const result = await call();
 			if (waited) options.onWait?.(null);
+			noteKeyOutcome(options.model.provider, "answered");
 			return result;
 		} catch (error) {
-			const failure = classifyModelFailure(error, { signal: options.signal });
+			const failure = classifyModelFailure(error, { signal: options.signal, provider: options.model.provider });
 			if (failure.cause === "unreachable") {
 				if (waited) options.onWait?.(null);
-				if (error instanceof ModelUnreachableError) throw error;
-				throw new ModelUnreachableError(failure.detail, options.model, error);
+				const unreachable = error instanceof ModelUnreachableError ? error : await unreachableError(failure.detail, options.model, error);
+				// A gateway's bare 403 may be the model, not the key: the card offers the key's button, AI setup keeps the key unmarked.
+				if (unreachable.details.detail !== "gateway-refused") noteKeyOutcome(options.model.provider, unreachable.details.key ?? (unreachable.details.detail === "signed-out" ? "signed-out" : undefined), callStartedAt);
+				throw unreachable;
 			}
 			if (failure.cause !== "busy") {
 				if (waited) options.onWait?.(null);
@@ -524,8 +828,13 @@ export async function callWithPatience<T>(call: () => Promise<T>, options: Patie
 				} catch (probeError) {
 					options.onWait?.(null);
 					if (options.signal?.aborted) throw error;
-					const probeFailure = classifyModelFailure(probeError);
-					if (probeFailure.cause === "unreachable") throw new ModelUnreachableError(probeFailure.detail, options.model, probeError);
+					const probeFailure = classifyModelFailure(probeError, { provider: options.model.provider });
+					if (probeFailure.cause === "unreachable") {
+						const unreachable = await unreachableError(probeFailure.detail, options.model, probeError);
+						// Cancelled while the gateway's list was read: the cancel wins.
+						if (options.signal?.aborted) throw error;
+						throw unreachable;
+					}
 					// Only a probe the provider answered, busy (a rate limit, too many requests, an overload, a server error), reached the model:
 					// waited out as busy. One that timed out, went silent or dropped did not answer.
 					if (probeFailure.cause !== "busy" || !PROVIDER_ANSWERED_BUSY.has(probeFailure.detail) || connectionNeverOpened(failureWords(probeError))) throw new ModelUnreachableError("not-answering", options.model, error, failure.detail);
@@ -545,7 +854,7 @@ export async function callWithPatience<T>(call: () => Promise<T>, options: Patie
 				retries.set(budget, used + 1);
 				const ms = busyWaitMs(failure, used);
 				waited = true;
-				options.onWait?.({ cause: "busy", detail: failure.detail, attempt: calls + 1, nextTryAt: new Date(now().getTime() + ms).toISOString(), ...(busySaid ? { again: true as const } : {}) });
+				options.onWait?.({ cause: "busy", detail: failure.detail, attempt: calls + 1, nextTryAt: new Date(now().getTime() + ms).toISOString(), ...(busySaid ? { again: true as const } : {}), ...(failure.detail === "server-error" ? { provider: providerNameOf(options.model.provider) } : {}) });
 				if (budget === "busy" && failure.detail !== "connection") busySaid = true;
 				await sleep(ms, options.signal);
 				if (options.signal?.aborted) {
@@ -566,8 +875,13 @@ export async function callWithPatience<T>(call: () => Promise<T>, options: Patie
 				await options.probe(options.signal);
 			} catch (probeError) {
 				if (options.signal?.aborted) throw error;
-				const probeFailure = classifyModelFailure(probeError);
-				if (probeFailure.cause === "unreachable") throw new ModelUnreachableError(probeFailure.detail, options.model, probeError);
+				const probeFailure = classifyModelFailure(probeError, { provider: options.model.provider });
+				if (probeFailure.cause === "unreachable") {
+					const unreachable = await unreachableError(probeFailure.detail, options.model, probeError);
+					// Cancelled while the gateway's list was read: the cancel wins.
+					if (options.signal?.aborted) throw error;
+					throw unreachable;
+				}
 				answered = false;
 			}
 			if (!answered) throw new ModelUnreachableError("not-answering", options.model, error, failure.detail);

@@ -17,7 +17,6 @@ fs.writeFileSync(path.join(smokeAppDir, "persistent-agent-ai-profile.json"), JSO
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
 const {
-	createPersistentAgentFromScaffoldInput,
 	buildPersistentAgentBootContext,
 	assertPersistentAgentBootPromptFitsWindow,
 	createPersistentAgentInstance,

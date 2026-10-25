@@ -42,6 +42,11 @@ export function fetchRemoteClientContext(): Promise<RemoteClientContext> {
 	return cached;
 }
 
+/** The probe's answer once it has come; null before, for code outside a component. */
+export function knownRemoteClientContext(): RemoteClientContext | null {
+	return known;
+}
+
 /**
  * Whether a control that only works on this computer is shown: not on a
  * remote device, and not on a shared server. Every such control asks here,

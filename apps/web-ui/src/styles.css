@@ -135,6 +135,7 @@
 	--success: var(--exx-success);
 	--warning: var(--exx-warning);
 	--error: var(--exx-danger-strong);
+	--danger: var(--error);
 	--user-bubble: var(--exx-surface-inset);
 	--user-fg: var(--exx-text-soft);
 	--code-bg: var(--exx-surface-inset);
@@ -228,6 +229,7 @@
 	--success: var(--exx-success);
 	--warning: var(--exx-warning);
 	--error: var(--exx-danger-strong);
+	--danger: var(--error);
 	--user-bubble: var(--exx-ink);
 	--user-fg: var(--exx-paper-soft);
 	--code-bg: var(--exx-surface-inset);
@@ -1923,7 +1925,6 @@ strong, b { font-weight: 700; }
 }
 .workspaces-root-title span,
 .workspaces-redaction-note,
-.workspaces-warnings,
 .workspaces-success,
 .workspaces-error {
 	color: var(--muted);
@@ -1935,11 +1936,30 @@ strong, b { font-weight: 700; }
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
 }
-/* The folder row of the workspace editor: the typed path shrinks before the
-   buttons beside it do. */
-.workspace-folder-controls {
-	flex: 0 1 auto;
+/* The folder row of the workspace editor: the box takes the row's width on
+   its own line under Folder and its sentence, so a long path shows as much as
+   the pane allows; the buttons sit at its end, and a line about the folder
+   sits under the box and its buttons, as wide as they are together. */
+.settings-row:has(> .workspace-folder-field) {
+	flex-wrap: wrap;
+	row-gap: 10px;
+}
+.workspace-folder-field {
+	flex: 1 0 100%;
 	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.workspace-folder-controls {
+	min-width: 0;
+}
+/* The line takes the width of the box and buttons, never widens them. */
+.workspace-folder-line {
+	width: 0;
+	min-width: 100%;
+	text-wrap: pretty;
+	overflow-wrap: anywhere;
 }
 .workspace-folder-path-input {
 	flex: 1 1 220px;
@@ -1951,6 +1971,32 @@ strong, b { font-weight: 700; }
 	color: var(--warning);
 	font-size: 12px;
 	font-weight: 600;
+}
+/* The workspace pane's buttons, with the line about them right under them:
+   a wait in the muted colour, a refusal in red. The line wraps at the
+   buttons' width instead of widening the header. */
+.workspace-buttons {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 6px;
+}
+.workspace-buttons-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.workspace-buttons-line {
+	width: 0;
+	min-width: 100%;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+	text-align: right;
+	text-wrap: balance;
+}
+.workspace-buttons-refusal {
+	color: var(--error);
 }
 .workspaces-tool-switch {
 	appearance: none;
@@ -1991,9 +2037,6 @@ strong, b { font-weight: 700; }
 .workspaces-tool-switch:disabled {
 	cursor: wait;
 	opacity: 0.65;
-}
-.workspaces-warnings {
-	padding-left: 18px;
 }
 .workspaces-success { color: #6bc77a; }
 .workspaces-error { color: var(--error); }
@@ -3273,6 +3316,24 @@ strong, b { font-weight: 700; }
 	color: var(--fg-soft);
 	margin: 0;
 	line-height: 1.55;
+}
+/* Why the question's primary answer is greyed, under the buttons. */
+.maintain-confirm-card .confirm-dialog-hold {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+	text-align: right;
+	text-wrap: balance;
+}
+/* On a phone the primary answer is the top button, so the reason goes
+   right above it. */
+@media (max-width: 760px) {
+	.confirm-dialog-three .checkpoint-preview-actions:has(+ .confirm-dialog-hold) {
+		order: 1;
+	}
+	.maintain-confirm-card .confirm-dialog-hold {
+		text-align: left;
+	}
 }
 /* The header's text and button line up with the 900px column the cards use,
  * instead of hugging the window edge while the cards sit in the middle. */
@@ -5158,14 +5219,16 @@ strong, b { font-weight: 700; }
 
 /* Compact one-line tool chip (Claude-Code style). Used for every tool. */
 .tool-chip {
-	max-width: 760px;
+	min-width: 0;
+	max-width: min(760px, 100%);
 	border: 1px solid color-mix(in srgb, var(--border-soft) 62%, transparent);
 	border-radius: 7px;
 	background: transparent;
 	font-size: 12px;
 	transition: background 0.14s ease, border-color 0.14s ease;
 }
-.tool-chip > summary {
+.tool-chip > summary,
+.tool-chip > .chip-head {
 	list-style: none;
 	cursor: pointer;
 	display: flex;
@@ -5176,6 +5239,7 @@ strong, b { font-weight: 700; }
 	font-family: var(--exx-font-mono);
 	line-height: 1.35;
 }
+.tool-chip > .chip-head { cursor: default; }
 .tool-chip > summary::-webkit-details-marker { display: none; }
 .tool-chip > summary::marker { content: ""; }
 .tool-chip > summary:focus-visible {
@@ -5183,9 +5247,11 @@ strong, b { font-weight: 700; }
 	outline-offset: 2px;
 	border-radius: 5px;
 }
-.tool-chip > summary .icon { color: var(--muted); width: 11px; flex: none; text-align: center; }
-.tool-chip > summary .name { color: var(--fg-soft); font-weight: 650; }
-.tool-chip > summary .summary {
+.tool-chip > summary .icon, .tool-chip > .chip-head .icon { color: var(--muted); width: 11px; flex: none; text-align: center; }
+.tool-chip > summary .name, .tool-chip > .chip-head .name { color: var(--fg-soft); font-weight: 650; }
+.tool-chip > summary .sep, .tool-chip > .chip-head .sep { color: var(--muted); flex: none; }
+.tool-chip > summary .summary,
+.tool-chip > .chip-head .summary {
 	color: var(--muted);
 	white-space: nowrap;
 	overflow: hidden;
@@ -5223,6 +5289,7 @@ strong, b { font-weight: 700; }
 	background: color-mix(in srgb, var(--error) 8%, transparent);
 }
 .tool-chip.error > summary .icon, .tool-chip.error > summary .name { color: var(--error); }
+.tool-chip.error > .chip-head .icon, .tool-chip.error > .chip-head .name { color: var(--error); }
 /* Stopped is quieter than failed, because nothing went wrong: somebody pressed
    Stop and this call never got to finish. Muted like a resting chip, with no
    spinner and no alarm colour. */
@@ -5232,6 +5299,17 @@ strong, b { font-weight: 700; }
 }
 .tool-chip.stopped > summary .icon,
 .tool-chip.stopped > summary .name { color: var(--dim); }
+/* A refusal: the app's rules, the room's settings or the person kept the step
+   from running. Calm, in the muted ink with its own mark, so it reads apart
+   from a step that ran and failed. */
+.tool-chip.refused {
+	border-color: var(--border-soft);
+	background: transparent;
+}
+.tool-chip.refused > summary .icon,
+.tool-chip.refused > summary .name,
+.tool-chip.refused > .chip-head .icon,
+.tool-chip.refused > .chip-head .name { color: var(--muted); }
 .tool-chip[open] {
 	border-color: var(--border-soft);
 	background: var(--bg);
@@ -5240,13 +5318,14 @@ strong, b { font-weight: 700; }
 
 .tool-chip .chip-body { padding: 8px 11px 10px; display: flex; flex-direction: column; gap: 8px; }
 .tool-chip .chip-empty { color: var(--dim); font-family: var(--exx-font-mono); font-size: 12px; }
+.tool-chip .chip-line { color: var(--fg); font-family: var(--exx-font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-chip .chip-result { display: flex; flex-direction: column; gap: 3px; }
 .tool-chip .chip-result .label {
 	font-size: 10px;
 	font-weight: 700;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
-	color: var(--dim);
+	color: var(--muted);
 }
 /* Bundled tool runs: consecutive web_search / fetch_url calls collapse into
    one .tool-chip line (so resting/running/error/open visuals are inherited);
@@ -5256,7 +5335,7 @@ strong, b { font-weight: 700; }
 .tool-bundle .bundle-body { padding: 4px 8px 8px; display: flex; flex-direction: column; }
 .tool-bundle .bundle-body .tool-chip { max-width: none; }
 .tool-bundle .bundle-body .tool-chip + .tool-chip { border-top: 1px solid color-mix(in srgb, var(--border-soft) 45%, transparent); }
-.tool-chip > summary .chip-provider { margin-left: auto; flex: none; color: var(--dim); font-size: 11px; }
+.tool-chip > summary .chip-running-for { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; }
 
 .tool-chip pre {
 	margin: 0;
@@ -5279,7 +5358,11 @@ strong, b { font-weight: 700; }
 	padding: 10px 12px;
 	border: 1px solid var(--border-soft);
 	border-radius: 6px;
+	overflow-wrap: anywhere;
 }
+/* A long word (a path, a link, a hash) wraps inside the box, as in the plain
+   result; a table keeps its own sideways scroll. */
+.md-result table { overflow-wrap: normal; }
 .raw-result {
 	margin: 6px 0 0;
 	padding: 8px 10px;
@@ -5309,6 +5392,12 @@ strong, b { font-weight: 700; }
 .md h4 { font-size: 1em; }
 .md ul, .md ol { margin: 0.4em 0; padding-left: 1.4em; }
 .md li { margin: 0.15em 0; }
+/* In a bulleted list a task item's box is its marker; a numbered one keeps its number. */
+.md ul > .task-list-item { list-style: none; }
+.md .task-list-item input[type="checkbox"] { margin: 0 0.4em 0 0; vertical-align: middle; }
+.md ul > .task-list-item input[type="checkbox"] { margin-left: -1.2em; }
+/* Text for screen readers only, such as the footnotes heading. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .md code {
 	font-family: var(--exx-font-mono);
 	font-size: 0.92em;
@@ -5362,7 +5451,18 @@ strong, b { font-weight: 700; }
 	border-left: 2px solid var(--border);
 	color: var(--fg-soft);
 }
-.md table { border-collapse: collapse; margin: 0.6em 0; }
+/* A wide table scrolls inside its frame instead of pushing the conversation
+   sideways; a band above the table marks the side that hides columns, in both
+   themes, since a table's own background would cover a shadow (Markdown.tsx). */
+.md .md-table-frame { position: relative; margin: 0.6em 0; }
+.md .md-table-scroll { max-width: 100%; overflow-x: auto; }
+.md .md-table-frame::before,
+.md .md-table-frame::after { content: ""; position: absolute; top: 0; bottom: 0; width: 24px; pointer-events: none; opacity: 0; }
+.md .md-table-frame::before { left: 0; background: linear-gradient(to right, color-mix(in srgb, var(--fg) 36%, transparent), transparent); }
+.md .md-table-frame::after { right: 0; background: linear-gradient(to left, color-mix(in srgb, var(--fg) 36%, transparent), transparent); }
+.md .md-table-frame[data-more-left]::before,
+.md .md-table-frame[data-more-right]::after { opacity: 1; }
+.md table { border-collapse: collapse; margin: 0; }
 .md th, .md td { border: 1px solid var(--border-soft); padding: 4px 8px; }
 .md th { background: transparent; font-weight: 700; }
 .md hr { border: 0; border-top: 1px solid var(--border-soft); margin: 1em 0; }
@@ -5780,10 +5880,10 @@ strong, b { font-weight: 700; }
 /* Same specificity as `.assistant-markdown pre` above, stated after it, so the
    block joins its header strip here too. */
 .assistant-markdown .code-block > pre { margin: 0; border-top: none; border-top-left-radius: 0; border-top-right-radius: 0; }
+.assistant-markdown .md-table-frame { margin: 0.8em 0; }
 .assistant-markdown table {
 	width: 100%;
-	max-width: 100%;
-	margin: 0.8em 0;
+	margin: 0;
 	border: 1px solid var(--border-soft);
 	border-radius: 8px;
 	border-collapse: separate;
@@ -5832,7 +5932,131 @@ strong, b { font-weight: 700; }
 	font-size: 12px;
 	text-align: center;
 }
-.system-line.error { color: var(--error); }
+
+/* A failed message: a row on the answers' left edge, never centred. The
+   newest is drawn in full; an older one folds to its cause, in grey. */
+.system-line.failure-line {
+	display: grid;
+	grid-template-columns: 18px minmax(0, 672px);
+	column-gap: 10px;
+	align-items: start;
+	text-align: left;
+	color: var(--fg-soft);
+	font-size: 14px;
+	line-height: 1.5;
+}
+.failure-mark {
+	width: 18px;
+	height: 18px;
+	margin-top: 1px;
+	border-radius: 50%;
+	background: var(--error);
+	color: var(--bg);
+	font: 700 12px/18px system-ui, sans-serif;
+	text-align: center;
+	flex-shrink: 0;
+}
+.failure-mark::before { content: "!"; }
+.failure-body { min-width: 0; }
+.failure-cause {
+	margin: 0;
+	font-weight: 600;
+	color: var(--fg);
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+.failure-next {
+	margin: 1px 0 0;
+	color: var(--fg-soft);
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+.failure-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+}
+.failure-actions .rs-btn {
+	min-height: 0;
+	padding: 5px 12px;
+	font-size: 13px;
+}
+.failure-actions .rs-btn + .failure-details-toggle { margin-left: 8px; }
+.failure-details-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 0;
+	border: 0;
+	background: none;
+	font: inherit;
+	font-size: 13px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.failure-details-toggle::after {
+	content: "";
+	width: 6px;
+	height: 6px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+}
+.failure-details-toggle[aria-expanded="true"]::after {
+	transform: rotate(45deg);
+	margin-top: -3px;
+}
+.failure-details-toggle:hover,
+.failure-details-toggle:focus-visible { color: var(--fg); }
+.failure-said {
+	margin: 8px 0 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: var(--bg-2);
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--fg-soft);
+	overflow-wrap: anywhere;
+}
+.failure-said[hidden] { display: none; }
+.failure-said-from {
+	display: block;
+	margin-bottom: 3px;
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.failure-said-words { display: block; }
+.failure-line.is-folded {
+	font-size: 13px;
+	color: var(--muted);
+}
+.failure-line.is-folded .failure-mark {
+	width: 15px;
+	height: 15px;
+	margin: 2px 0 0 1px;
+	border: 1.5px solid var(--muted);
+	background: transparent;
+	color: var(--muted);
+	font-size: 10px;
+	line-height: 12px;
+}
+.failure-line.is-folded .failure-body {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 10px;
+}
+.failure-line.is-folded .failure-cause {
+	font-weight: 400;
+	color: var(--muted);
+}
+.failure-line.is-folded .failure-details-toggle { font-size: 12.5px; }
+.failure-line.is-folded .failure-said { flex-basis: 100%; }
 
 .thinking-row {
 	width: min(var(--chat-rail-width), 100%);
@@ -7513,6 +7737,8 @@ strong, b { font-weight: 700; }
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* A question that ended with nobody there to answer it: only the question, greyed; its step says what happened. */
+.approval-unanswered .approval-resolved-title { color: var(--muted); }
 .approval-head { display: flex; align-items: baseline; gap: 12px; }
 .approval-tag {
 	font-family: "Bandeins Strange", "Sen", sans-serif;
@@ -8500,6 +8726,35 @@ label.settings-row {
 	font-size: 13px;
 	white-space: nowrap;
 }
+/* A long folder name ends with "…" inside the pane, with the whole name in
+   its title; the access tag stays in view. */
+.settings-row-value.workspace-folder-value {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 50%;
+}
+/* The line beside the name wraps before a name that fits is cut, and its
+   last line keeps more than one word. */
+.settings-row:has(> .workspace-folder-value) > .settings-row-main {
+	flex-basis: 0;
+}
+.settings-row:has(> .workspace-folder-value) > .settings-row-main > .settings-row-sub {
+	text-wrap: pretty;
+}
+/* A folder name with no spaces wraps inside the Folder row's column instead
+   of running past it. */
+.settings-row:has(> .workspace-folder-value) > .settings-row-main > .settings-row-sub,
+.settings-row:has(> .workspace-folder-field) > .settings-row-main > .settings-row-sub {
+	overflow-wrap: anywhere;
+}
+.workspace-folder-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.workspace-folder-value .settings-row-tag {
+	flex-shrink: 0;
+}
 /* A long subline (a directory blurb) held to two lines; the full text is
    in its title. */
 .settings-row-clamp {
@@ -8574,7 +8829,7 @@ label.settings-row {
 .settings-dialog .memory-entry-text {
 	font-size: 14px;
 }
-.settings-dialog :is(.ai-profile-sub, .ai-setup-copy, .cli-note, .remote-fold summary, .remote-master-footnote, .room-instructions-count, .memory-entry-meta, .memory-topic-count, .memory-history-row, .workspaces-warnings, .workspaces-success, .workspaces-error, .room-schedules-summary, .room-schedules-job-meta) {
+.settings-dialog :is(.ai-profile-sub, .ai-setup-copy, .cli-note, .remote-fold summary, .remote-master-footnote, .room-instructions-count, .memory-entry-meta, .memory-topic-count, .memory-history-row, .workspaces-success, .workspaces-error, .room-schedules-summary, .room-schedules-job-meta) {
 	font-size: 13px;
 	line-height: 1.45;
 }
@@ -10238,6 +10493,13 @@ label.settings-row {
 	display: flex;
 	align-items: center;
 	gap: 12px;
+}
+.room-workspace-nudge-text { text-wrap: pretty; }
+/* A notice that stops the room on its key or sign-in: the failure lines' mark before its sentence. */
+.room-workspace-nudge-text.with-failure-mark {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
 }
 
 /* Consult MR-4 — the DelegationCard family: the docked consult card and the
@@ -13549,16 +13811,14 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 		flex: 1 1 220px;
 	}
 	/* Rows keep one line where they can: the label column shrinks before a
-	   value or a control does. The budget slider and the folder field take
-	   their own line. */
+	   value or a control does. The budget slider takes its own line. */
 	.settings-row-main {
 		flex-basis: 0;
 	}
 	.settings-row-tag {
 		white-space: nowrap;
 	}
-	.memory-budget-row,
-	.settings-row:has(> .workspace-folder-controls) {
+	.memory-budget-row {
 		flex-wrap: wrap;
 	}
 	/* A wide control (a long button, a segmented choice) goes under the text,
@@ -13569,9 +13829,21 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 		align-items: flex-start;
 		gap: 10px;
 	}
-	.memory-budget-control,
-	.workspace-folder-controls {
+	.memory-budget-control {
 		flex: 1 0 100%;
+	}
+	/* A typed folder adds Keep saved folder: the buttons go under the box
+	   instead of past the pane's edge. */
+	.workspace-folder-controls {
+		flex-wrap: wrap;
+	}
+	/* On a narrow screen the buttons can wrap under the title, to the left,
+	   so the line about them starts at the left too. */
+	.workspace-buttons {
+		align-items: flex-start;
+	}
+	.workspace-buttons-line {
+		text-align: left;
 	}
 	.settings-dialog-back {
 		display: inline-flex;

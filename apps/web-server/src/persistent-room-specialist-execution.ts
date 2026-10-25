@@ -40,7 +40,7 @@ import {
 	SPECIALIST_TASK_CAPS,
 	type SpecialistTemplate,
 } from "./specialist-templates.js";
-import { notOfferedLine, notOnAccountLine } from "./model-call-causes.js";
+import { failedMessageError, failureCodesOf, notOfferedLine, notOnAccountLine, type FailureCodes } from "./model-call-causes.js";
 import { createHeadlessUiContext } from "./persistent-room-background-execution.js";
 
 type RuntimeModel = NonNullable<CreateAgentSessionOptions["model"]>;
@@ -473,6 +473,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 	let text = "";
 	let usage: SpecialistWorkerResult["usage"];
 	let errorMessage: string | undefined;
+	let errorCodes: FailureCodes = {};
 	try {
 		await created.session.bindExtensions({ uiContext: createHeadlessUiContext("specialist sessions cannot answer interactive UI requests") });
 
@@ -493,6 +494,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 			}
 			if (event?.type !== "message_end" || event?.message?.role !== "assistant") return;
 			if (typeof event.message.errorMessage === "string" && event.message.errorMessage.trim()) errorMessage = event.message.errorMessage.trim();
+			if (event.message.stopReason === "error") errorCodes = failureCodesOf(event.message);
 			const partText = textFromMessageParts(event.message.content);
 			if (partText) text = [text, partText].filter(Boolean).join("\n\n");
 			const messageUsage = specialistUsageFromMessageUsage(event.message.usage);
@@ -531,7 +533,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 	if (!text.trim()) {
 		// The provider refusing the model for this account, or no longer serving it: the task's line says so plainly, pointing to the
 		// room's Memory model it runs on; its words ride along for the log.
-		const refused = errorMessage ? notOnAccountLine(new Error(errorMessage), input.modelLock, "room-memory") ?? notOfferedLine(new Error(errorMessage), input.modelLock, "room") : undefined;
+		const refused = errorMessage ? notOnAccountLine(new Error(errorMessage), input.modelLock, "room-memory") ?? notOfferedLine(failedMessageError(errorMessage, errorCodes), input.modelLock, "room") : undefined;
 		if (refused) throw Object.assign(new Error(refused), { providerMessage: errorMessage });
 		throw new Error(`${workerLabel} produced no result text`);
 	}

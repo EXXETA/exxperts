@@ -80,7 +80,6 @@ try {
 	const artifacts = await import("../src/scheduled-prompt-background-artifacts.js");
 	const {
 		inspectScheduledPromptBackgroundRunIdempotency,
-		scheduledPromptBackgroundRunArtifactPaths,
 		scheduledPromptBackgroundRunHasInputArtifact,
 		scheduledPromptBackgroundRunHasOutputArtifact,
 	} = artifacts;

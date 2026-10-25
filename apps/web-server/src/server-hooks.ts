@@ -47,6 +47,9 @@ export type ServerHooks = {
 	// answer, given the server's own answer as base; it may add to the answer
 	// and set the reply's headers, and what it returns is the answer.
 	clientContext?: (req: FastifyRequest, reply: FastifyReply, base: Readonly<Record<string, unknown>>) => Record<string, unknown>;
+	// How long a stop waits for running work, in seconds, asked when a stop
+	// begins (server-stop.ts); without it, or when it gives nothing, two seconds.
+	stopWaitSeconds?: () => number | undefined;
 };
 
 let registered: Readonly<ServerHooks> | null = null;

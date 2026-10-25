@@ -341,6 +341,16 @@ export function readGatewayProviderBaseUrl(providerId: string, modelsPath = getM
 	return provider.baseUrl;
 }
 
+/** A provider whose address in models.json is on this computer, such as a local model's app (Ollama or LM Studio). */
+export function providerOnThisComputer(providerId: string, modelsPath = getModelsPath()): boolean {
+	try {
+		const host = new URL(readGatewayProviderBaseUrl(providerId, modelsPath)).hostname;
+		return host === "localhost" || host === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(host);
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Every provider key the catalog holds. Read straight from the file rather than
  * from the registry's model list, because a provider someone configured with no

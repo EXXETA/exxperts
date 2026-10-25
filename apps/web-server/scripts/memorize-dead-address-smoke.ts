@@ -4,7 +4,8 @@
 // stop on the notice then, never after the six minutes a busy model gets.
 // The calls a screen waits on as one request (Memorize's and Review's first
 // reads) publish the same wait on the room's status route while they wait.
-// Offline: the provider's address is a closed port.
+// The address is on this computer, so every notice names the app running the
+// model. Offline: the provider's address is a closed port.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -102,6 +103,8 @@ try {
 			if (run.stop) {
 				const seconds = (Date.now() - startedAt) / 1000;
 				assert(run.stop.kind === "outage" && run.stop.cause === "not-answering", `${kind}: the run stops on the notice, got ${JSON.stringify(run.stop)}`);
+				// The address is on this computer, so the notice names the app running the model.
+				assert(run.stop.unreached === "local-connection", `${kind}: the stop says the model on this computer could not be reached, got ${JSON.stringify(run.stop)}`);
 				assert(sawUnreached && !sawBusy, `${kind}: the wait was said as can't reach, never as busy (unreached ${sawUnreached}, busy ${sawBusy})`);
 				assert(seconds >= 12 && seconds < 45, `${kind}: the notice comes after about 15 s, got ${seconds} s`);
 				console.log(`  ok  ${kind}: a dead address says the wait at once and reaches the notice in ${Math.round(seconds)} s`);
@@ -125,9 +128,10 @@ try {
 		}
 		const result = await read;
 		assert(seen?.cause === "unreached" && typeof seen.nextTryAt === "string", `${kind}: the first read's wait shows on the room's status, got ${JSON.stringify(seen)}`);
-		// Review's read ends in the notice; Memorize's never fails and answers with its first read missing.
-		const ended = kind === "review" ? result.status === 503 && result.body?.code === "model_unreachable" : result.status === 200 && Boolean(result.body?.firstReadMissing);
+		// Both reads end in the notice, so the screen offers its ways out instead of a missing first read.
+		const ended = result.status === 503 && result.body?.code === "model_unreachable";
 		assert(ended && Date.now() - startedAt >= 12_000, `${kind}: the first read ends after the wait, got ${result.status} ${JSON.stringify(result.body).slice(0, 300)}`);
+		assert(result.body?.error === "Claude Fake could not be reached on this computer. Nothing was lost. Check that the app running it is open, then try again.", `${kind}: the Memory model notice names the app running it, got ${JSON.stringify(result.body?.error)}`);
 		const after = await api(`/api/persistent-agents/${agentId}/${kind}/status`);
 		assert(!after.body?.wait, `${kind}: the wait is gone once the read ended, got ${JSON.stringify(after.body?.wait)}`);
 		console.log(`  ok  ${kind}: the first read's wait is said on the room's status while the request is open`);

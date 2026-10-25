@@ -34,6 +34,7 @@ const DEFAULT_MAX_CHARS = 15_000;
 const HARD_MAX_CHARS = 50_000;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB raw download cap
 const MAX_REDIRECTS = 5;
+const SITE_FAILED_EXCERPT_CHARS = 2_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 // Below this many characters of extracted text we treat the static HTML as
@@ -653,8 +654,17 @@ export default function (pi: ExtensionAPI) {
 
 			const isHtml = outcome.contentType.includes("html") || /^\s*<(?:!doctype|html)/i.test(outcome.body);
 
+			// A site that answers 4xx or 5xx gave no page: the room and the model both see a failure.
+			// The model keeps a short part of what the site said, which often names where the page went.
+			const siteFailed = (status: number, said: string) => ({
+				content: [{ type: "text", text: `Couldn't read page: the site answered ${[status, outcome.statusText].filter(Boolean).join(" ")}.${said.trim() ? `\n\nWhat the site sent back:\n\n${said.trim().slice(0, SITE_FAILED_EXCERPT_CHARS)}${said.trim().length > SITE_FAILED_EXCERPT_CHARS ? "…" : ""}` : ""}` }],
+				details: { url, finalUrl: outcome.finalUrl, status, contentType: outcome.contentType },
+				isError: true,
+			});
+
 			// Non-HTML textual payloads (JSON, plain text, XML, CSV) pass through as-is.
 			if (!isHtml) {
+				if (outcome.status >= 400) return siteFailed(outcome.status, outcome.body);
 				if (looksGarbled(outcome.body)) {
 					return {
 						content: [{ type: "text", text: `Cannot read "${outcome.finalUrl}" — ${GARBLED_EXPLANATION}` }],
@@ -713,6 +723,8 @@ export default function (pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
+
+			if (outcome.status >= 400 && !renderedWithBrowser) return siteFailed(outcome.status, extracted.markdown);
 
 			// The page needed the browser fallback but Chromium is not installed:
 			// tell the user how to enable it instead of silently returning a shell.

@@ -7,15 +7,6 @@ export function logMaintenanceWarnings(warnings: string[]): void {
 	for (const warning of warnings) if (!/no memory has been written/i.test(warning)) console.info(`[maintenance] ${warning}`);
 }
 
-export function sectionLabel(section: string): string {
-	switch (section) {
-		case "Recent Context": return "Recent Sessions";
-		case "What to remember": return "What should be preserved";
-		case "What to forget": return "What can be cleared from recent sessions";
-		default: return section;
-	}
-}
-
 // Matches only the server's actual concurrent-change messages; bare substrings
 // like "stale" or "source" would misclassify unrelated transient errors.
 export function isStaleMaintenanceMessage(message: string): boolean {

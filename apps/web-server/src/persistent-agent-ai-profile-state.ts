@@ -163,14 +163,6 @@ function writeProfileStateFile(payload: Record<string, unknown>): void {
 	fs.renameSync(tmpPath, PERSISTENT_AGENT_AI_PROFILE_FILE);
 }
 
-export function getActivePersistentAgentAiProfileId(): PersistentAgentAiProfileId {
-	return readPersistentAgentAiProfileState().profileId;
-}
-
-export function getActivePersistentAgentAiProfile(): PersistentAgentAiProfile {
-	return readPersistentAgentAiProfileState().profile;
-}
-
 export function writePersistentAgentAiProfileState(profileId: PersistentAgentAiProfileId): PersistentAgentAiProfileState {
 	// Resolve before writing: an unknown id must throw without persisting.
 	const profile = getPersistentAgentAiProfile(profileId);

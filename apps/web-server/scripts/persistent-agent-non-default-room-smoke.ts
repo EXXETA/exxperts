@@ -53,10 +53,15 @@ function assertNoControlRuntimeWrites(controlRoot: string): void {
 	assert(controlThreadFiles.length === 0, "selected room operations must not write control room thread files");
 }
 
+// The room folders on disk: a listing or a room's lifecycle creates none that was not asked for.
+function roomFolders(): string[] {
+	return fs.readdirSync(tempAgentsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+}
+
 try {
 	const initiallyListed = listPersistentAgents();
 	assert(Array.isArray(initiallyListed) && initiallyListed.length === 0, "fresh empty agents root should list no rooms");
-	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "fresh listing must not create borja-coordinator");
+	assert(roomFolders().length === 0, `a fresh listing creates no room folder, got ${JSON.stringify(roomFolders())}`);
 
 	const control = createPersistentAgentFromScaffoldInput({
 		displayName: "Control Smoke Room",
@@ -70,16 +75,16 @@ try {
 	assertNoControlRuntimeWrites(controlRoot);
 
 	const created = createPersistentAgentFromScaffoldInput({
-		displayName: "Wolfgang MR10 Smoke",
+		displayName: "Selected Smoke Room",
 		userName: "Smoke User",
 		preferredUserAddress: "Smoke User",
 	});
 	const agentId = created.agent.agentId;
 	assert(agentId !== controlAgentId, "created room must be distinct from control room");
-	assert(agentId !== "borja-coordinator", "created room must not use borja-coordinator");
+	assert(agentId === "selected-smoke-room", `the created room's id comes from the name asked for, got ${agentId}`);
 	assert(created.status.status === "ready", "created selected room should be ready");
 	assert(created.status.id === agentId, "created status id should match generated room id");
-	assert(created.status.displayName === "Wolfgang MR10 Smoke", "created status should preserve display name");
+	assert(created.status.displayName === "Selected Smoke Room", "created status should preserve display name");
 
 	const roomRoot = path.join(tempAgentsRoot, agentId);
 	assert(created.status.root === roomRoot, "created status root should point at selected room root");
@@ -91,9 +96,9 @@ try {
 	const listedIds = listed.map((status: any) => status.id);
 	assert(listedIds.includes(controlAgentId), "list should include control room");
 	assert(listedIds.includes(agentId), "list should include created selected room");
-	assert(!listedIds.includes("borja-coordinator"), "list should not inject borja-coordinator");
+	assert(JSON.stringify([...listedIds].sort()) === JSON.stringify([controlAgentId, agentId].sort()), `the list holds the rooms made and no other, got ${JSON.stringify(listedIds)}`);
 	const listedRoom = listed.find((status: any) => status.id === agentId);
-	assert(listedRoom?.displayName === "Wolfgang MR10 Smoke", "list should expose display name for selected room");
+	assert(listedRoom?.displayName === "Selected Smoke Room", "list should expose display name for selected room");
 
 	const status = getPersistentAgentStatus(agentId);
 	assert(status.exists === true && status.status === "ready", "status should find created selected room");
@@ -158,7 +163,7 @@ try {
 
 	assert(readText(path.join(controlRoot, "agent.json")) === controlAgentBefore, "selected room lifecycle must not modify control agent.json");
 	assert(readText(path.join(controlRoot, "L1b", "current.md")) === controlL1bBefore, "selected room lifecycle must not modify control L1b");
-	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "selected room lifecycle must not create borja-coordinator");
+	assert(JSON.stringify(roomFolders()) === JSON.stringify([controlAgentId, agentId].sort()), `only the rooms asked for have folders, got ${JSON.stringify(roomFolders())}`);
 
 	fs.rmSync(tempAgentsRoot, { recursive: true, force: true });
 	fs.rmSync(tempHome, { recursive: true, force: true });

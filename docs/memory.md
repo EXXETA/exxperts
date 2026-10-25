@@ -85,9 +85,9 @@ Gschwendtner invoices, and how much was it?"
 The note in front of the room says nothing about a day or an amount,
 and its instructions tell it to look before it says it does not know.
 It searches its memory for "Gschwendtner invoices paid". While it does,
-the chat shows a chip, **Reading archived notes**, with the words it
-looked for under it; when the rows are in, the chip reads **Read
-archived notes**. Nothing is written or restored by that read.
+the chat shows a chip, **Searching memory**, with the words it looked
+for under it; when the rows are in, the chip reads **Searched
+memory**. Nothing is written or restored by that read.
 
 What comes back is a short list of rows, ten at most unless the room
 asks for more, never more than twenty-five, grouped by where they were
@@ -195,8 +195,8 @@ raised.
 
 Room settings → **Memory** shows the room's notes by topic with a search
 box. You can add, edit, move, pin and delete notes by hand; deleting
-sends a note to the archive, where you can **Restore** it or **Delete
-for good**. Editing stays open while the room is open in a chat; only a
+sends a note to the archive, where you can **Restore** it or
+**Delete** it for good. Editing stays open while the room is open in a chat; only a
 running answer blocks it. Every hand edit is recorded in History like
 any other change.
 
@@ -297,49 +297,55 @@ there is no chat-side forget yet.
 ## How well it works, measured
 
 A room answers as well as a model that has the whole history in view,
-with about a fifth of the tokens per question.
+with under a quarter of the tokens per question.
 
 That was measured on LongMemEval-S, a public benchmark of long chat
 histories, on a fixed sample of 50 questions (seed 1). Every question
-comes with a history of its own, about 48 conversations and 115,000
-tokens. For the room, the conversations are Remembered and Memorized
-in the order they were said, and the question is asked in a fresh
-conversation. For the comparison, the whole history is pasted into the
-prompt with the question after it, and there is no memory at all.
-Claude Sonnet 5 answers, runs Memorize and judges, on the benchmark's
-own judging templates.
+comes with a history of its own, about 48 conversations. For the room,
+the conversations are Remembered and Memorized in the order they were
+said, a Memorize after every seven, and the question is asked in a
+fresh conversation. Each Memorize starts with the room's own first
+read, as in the app. For the comparison, the whole history is pasted
+into the prompt with the question after it, and there is no memory at
+all. Claude Sonnet 5 answers, Remembers, runs Memorize and judges, on
+the benchmark's own judging templates.
 
 | | Room memory | Full history in the prompt |
 | --- | --- | --- |
-| Correct of 50 | 43 | 41 |
-| Tokens per question | about 33,000 | about 168,000 |
-| Tokens to build the memory, once per history | about 1.15M | none |
-| Cost per question | about 6 cents | about 42 cents |
-| Cost to build the memory, once per history | about 3.23 dollars, about 7 cents per conversation | nothing |
+| Correct of 50 | 47 | 41 |
+| Tokens per question | about 38,000 | about 168,000 |
+| Tokens to build the memory, once per history | about 1.22M | none |
+| Cost per question | about 12 cents | about 42 cents |
+| Cost to build the memory, once per history | about 3.43 dollars, about 7 cents per conversation | nothing |
 
-43 against 41 correct on 50 questions, which at this sample size is a
-tie. The two cost rows are in dollars at API prices; someone on a
-subscription pays no per-token price.
+47 against 41 correct on 50 questions. At this sample size the
+difference is within chance, so the room is not shown to be better.
+The two cost rows are in dollars at API list prices, computed from the
+token counts the provider reported; someone on a subscription pays no
+per-token price.
 
 By type of question, room memory first and the full history second:
 
 - a fact the user said once: 9 of 9 and 9 of 9
 - a fact the assistant said once: 9 of 9 and 9 of 9
 - temporal reasoning: 8 of 8 and 7 of 8
-- across many sessions: 7 of 8 and 6 of 8
-- knowledge updates: 6 of 8 and 6 of 8
-- personal preferences: 4 of 8 and 4 of 8
+- across many sessions: 8 of 8 and 6 of 8
+- knowledge updates: 7 of 8 and 6 of 8
+- personal preferences: 6 of 8 and 4 of 8
 
 **A projection, not a measurement.** Each history was asked one
 question. Multiplying that one question, the two approaches cost the
-same after about 9 questions to one history. This assumes that every
+same after about 12 questions to one history. This assumes that every
 question costs the same and that nothing is cached between questions;
 questions asked minutes apart would make the full-history side cheaper.
 
 The limits of this result:
 
 - It is 50 questions. A difference under about 7 questions is within
-  chance.
+  chance, so 47 against 41 is not shown to be better.
+- The room was measured in October, on development code between
+  0.14.2 and 0.14.3. The full history was measured in September, on
+  the same model and the same 50 questions.
 - The sample was also the one used during development, so a fresh
   sample is the clean confirmation.
 - The same model answers and judges.
@@ -347,7 +353,7 @@ The limits of this result:
   everything, not project work.
 - It was measured with Memorize on Claude Sonnet 5. Claude's
   recommended memory model is Opus 5.5, which was not measured.
-- Personal preferences are weak with and without memory, because a
+- Personal preferences are the weakest type with and without memory. A
   Memorize is tuned for how work is done, not for personal taste.
 
 A history that outgrows the model's window cannot be pasted in at all.

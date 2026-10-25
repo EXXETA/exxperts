@@ -1,9 +1,7 @@
-import { redirectToSignInOn401 } from "./api";
+import { apiFetch } from "./api";
 import type {
-	PersistentRoomWorkspaceClearResponse,
 	PersistentRoomWorkspaceDefaultInput,
 	PersistentRoomWorkspaceDefaultResponse,
-	PersistentRoomWorkspacePolicyResponse,
 	SystemChooseFolderResponse,
 } from "./types";
 
@@ -29,36 +27,22 @@ async function readJsonOrText(response: Response): Promise<unknown> {
 }
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallbackError?: string): Promise<T> {
-	const response = await fetch(input, init);
-	redirectToSignInOn401(response);
+	const response = await apiFetch(input, init);
 	const payload = await readJsonOrText(response);
-	if (!response.ok) throw new Error(parsePersistentRoomWorkspaceError(payload, fallbackError));
+	if (!response.ok) {
+		// The server's code travels with its words, so the pane can show a refusal by what it is about.
+		const code = payload && typeof payload === "object" ? (payload as { code?: unknown }).code : undefined;
+		throw Object.assign(new Error(parsePersistentRoomWorkspaceError(payload, fallbackError)), typeof code === "string" ? { code } : {});
+	}
 	return payload as T;
-}
-
-function workspacePolicyUrl(agentId: string, conversationId: string): string {
-	const params = new URLSearchParams({ conversationId });
-	return `/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-policy?${params.toString()}`;
 }
 
 function workspaceDefaultUrl(agentId: string): string {
 	return `/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-default`;
 }
 
-export async function fetchPersistentRoomWorkspacePolicy(agentId: string, conversationId: string): Promise<PersistentRoomWorkspacePolicyResponse> {
-	return fetchJson<PersistentRoomWorkspacePolicyResponse>(workspacePolicyUrl(agentId, conversationId), undefined, "Failed to load workspace policy.");
-}
-
-export async function clearPersistentRoomWorkspacePolicy(agentId: string, conversationId: string): Promise<PersistentRoomWorkspaceClearResponse> {
-	return fetchJson<PersistentRoomWorkspaceClearResponse>(
-		workspacePolicyUrl(agentId, conversationId),
-		{ method: "DELETE" },
-		"Failed to disconnect workspace."
-	);
-}
-
 export async function fetchPersistentRoomWorkspaceDefault(agentId: string): Promise<PersistentRoomWorkspaceDefaultResponse> {
-	return fetchJson<PersistentRoomWorkspaceDefaultResponse>(workspaceDefaultUrl(agentId), undefined, "Failed to load workspace default.");
+	return fetchJson<PersistentRoomWorkspaceDefaultResponse>(workspaceDefaultUrl(agentId), undefined, "Couldn't load this room's workspace.");
 }
 
 export async function savePersistentRoomWorkspaceDefault(agentId: string, input: PersistentRoomWorkspaceDefaultInput): Promise<PersistentRoomWorkspaceDefaultResponse> {
@@ -75,7 +59,7 @@ export async function savePersistentRoomWorkspaceDefault(agentId: string, input:
 				bashEnabled: input.bashEnabled,
 			}),
 		},
-		"Failed to save workspace default."
+		"Couldn't save the workspace. Try again."
 	);
 }
 
@@ -83,7 +67,7 @@ export async function clearPersistentRoomWorkspaceDefault(agentId: string): Prom
 	return fetchJson<PersistentRoomWorkspaceDefaultResponse>(
 		workspaceDefaultUrl(agentId),
 		{ method: "DELETE" },
-		"Failed to clear workspace default."
+		"Couldn't clear the workspace. Try again."
 	);
 }
 

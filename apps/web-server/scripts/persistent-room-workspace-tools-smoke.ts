@@ -256,7 +256,7 @@ try {
 		assert(lookaround.details?.engine === "walk", "lookaround pattern should fall back to the walk engine");
 		assert(toolOutput(lookaround).includes("docs/plan.md:1:"), "lookaround pattern should still match via automatic fallback");
 	} else {
-		console.log("ripgrep binary not present; skipping ripgrep-engine grep assertions (smokes never download)");
+		console.log("SKIPPED: the ripgrep-engine grep cases (ripgrep is not installed here, and smokes never download it)");
 	}
 	const previousDisableRipgrep = process.env.EXXETA_BOUNDED_GREP_DISABLE_RIPGREP;
 	process.env.EXXETA_BOUNDED_GREP_DISABLE_RIPGREP = "1";

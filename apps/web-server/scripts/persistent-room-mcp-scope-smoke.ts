@@ -60,6 +60,36 @@ const betaRecorder = recorder();
 const fooRecorder = recorder();
 const fooBarRecorder = recorder();
 
+// A connector that needs a sign-in: /mcp answers 401, and the OAuth discovery
+// and client registration the adapter does next are answered here. No sign-in
+// ever completes: there is no /authorize or /token.
+function signInConnector(): { server: http.Server; hits: () => number; url: () => string } {
+	let count = 0;
+	const origin = () => `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const json = (res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => res.writeHead(status, { "content-type": "application/json", ...headers }).end(JSON.stringify(body));
+	const server = http.createServer((req, res) => {
+		count += 1;
+		const url = new URL(req.url ?? "/", origin());
+		let raw = "";
+		req.on("data", (chunk) => { raw += chunk; });
+		req.on("end", () => {
+			if (url.pathname === "/mcp") return json(res, 401, { error: "unauthorized" }, { "www-authenticate": `Bearer resource_metadata="${origin()}/.well-known/oauth-protected-resource/mcp"` });
+			if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) return json(res, 200, { resource: `${origin()}/mcp`, authorization_servers: [origin()], bearer_methods_supported: ["header"] });
+			if (url.pathname.startsWith("/.well-known/oauth-authorization-server") || url.pathname.startsWith("/.well-known/openid-configuration")) {
+				return json(res, 200, { issuer: origin(), authorization_endpoint: `${origin()}/authorize`, token_endpoint: `${origin()}/token`, registration_endpoint: `${origin()}/register`, response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"] });
+			}
+			if (req.method === "POST" && url.pathname === "/register") {
+				let asked: { redirect_uris?: string[] } = {};
+				try { asked = JSON.parse(raw); } catch {}
+				return json(res, 201, { client_id: "smoke-connector-client", client_id_issued_at: Math.floor(Date.now() / 1000), redirect_uris: asked.redirect_uris ?? [], token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] });
+			}
+			json(res, 404, { error: "not_found" });
+		});
+	});
+	return { server, hits: () => count, url: () => `${origin()}/mcp` };
+}
+const signInRecorder = signInConnector();
+
 // Minimal ExtensionAPI stand-in: captures tools/commands/handlers the way the
 // runtime would hold them.
 interface FakePi {
@@ -108,11 +138,11 @@ async function shutdownSession(pi: FakePi): Promise<void> {
 	for (const handler of pi.handlers.get("session_shutdown") ?? []) await handler({}, fakeCtx);
 }
 
-async function callMcp(pi: FakePi, params: Record<string, unknown>): Promise<{ text: string; details: any }> {
+async function callMcp(pi: FakePi, params: Record<string, unknown>): Promise<{ text: string; details: any; isError: boolean }> {
 	const tool = pi.tools.get("mcp");
 	assert(tool, "the mcp proxy tool must be registered");
 	const result = await tool.execute("smoke-call", params, undefined, undefined, fakeCtx);
-	return { text: String(result?.content?.[0]?.text ?? ""), details: result?.details ?? {} };
+	return { text: String(result?.content?.[0]?.text ?? ""), details: result?.details ?? {}, isError: result?.isError === true };
 }
 
 const roomId = "mcp-scope-smoke-room";
@@ -239,6 +269,12 @@ try {
 	// SEE: describing a tool owned only by an ungranted connector refuses.
 	const describe = await callMcp(pi, { describe: "beta_fetch_page" });
 	assert(describe.details.error === "connector_not_enabled", "describe of an ungranted connector's tool must refuse");
+	assert(describe.isError, "a refused describe carries the error flag");
+	// The adapter's own refusals (a tool nobody has) carry the error flag too, so the card and the model read a failure.
+	const unknown = await callMcp(pi, { describe: "create_issue" });
+	assert(unknown.details.error === "tool_not_found" && unknown.isError, `describing a tool nobody has is a failure, got ${JSON.stringify({ error: unknown.details.error, isError: unknown.isError })}`);
+	const ok = await callMcp(pi, { server: "alpha" });
+	assert(!ok.isError, "a list that worked carries no error flag");
 
 	// CALL: nothing above ever touched either server.
 	assert(alphaRecorder.hits() === 0 && betaRecorder.hits() === 0, "read-only modes must not open connections");
@@ -464,6 +500,36 @@ try {
 	// Restore the alpha/beta world for anything below.
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: servers }, null, 2));
 
+	// ── A connector that needs a sign-in ─────────────────────────────────────
+	// The adapter reports it as a failed connection (it meets the refusal while
+	// setting the connection up); the room reads it as the sign-in it is: on a
+	// connect, on a call right after it, and on a first call with the tools
+	// cached from an earlier sign-in.
+	await new Promise<void>((resolve) => signInRecorder.server.listen(0, "127.0.0.1", resolve));
+	const signInServers = { ...servers, exxdocs: { url: signInRecorder.url() } };
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: signInServers }, null, 2));
+	const signInRoomId = "mcp-scope-smoke-sign-in-room";
+	writePersistentRoomMcpSettings(signInRoomId, ["exxdocs"]);
+	const signInOutcome = (result: { text: string; details: any; isError: boolean }) => JSON.stringify({ error: result.details.error, server: result.details.server, isError: result.isError, text: result.text.slice(0, 120) });
+	const piSignIn = makeFakePi();
+	await createRoomScopedMcpExtension(signInRoomId)(piSignIn);
+	await startSession(piSignIn);
+	const signInConnect = await callMcp(piSignIn, { connect: "exxdocs" });
+	assert(signInRecorder.hits() > 0, "the connect must really reach the connector");
+	assert(signInConnect.details.error === "auth_required" && signInConnect.details.server === "exxdocs" && signInConnect.isError, `a connect to a connector that needs a sign-in reads as the sign-in, got ${signInOutcome(signInConnect)}`);
+	const signInCallAfter = await callMcp(piSignIn, { tool: "exxdocs_search", server: "exxdocs", args: JSON.stringify({ query: "export" }) });
+	assert(signInCallAfter.details.error === "auth_required" && signInCallAfter.isError, `a call right after it reads as the sign-in too, got ${signInOutcome(signInCallAfter)}`);
+	await shutdownSession(piSignIn);
+	const signInCache = { version: 1, servers: { exxdocs: { configHash: cacheMod.computeServerHash(signInServers.exxdocs), cachedAt: Date.now(), resources: [], tools: [{ name: "search", description: "exxdocs' search" }] } } };
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(signInCache, null, 2));
+	const piSignInCached = makeFakePi();
+	await createRoomScopedMcpExtension(signInRoomId)(piSignInCached);
+	await startSession(piSignInCached);
+	const signInFirstCall = await callMcp(piSignInCached, { tool: "exxdocs_search", server: "exxdocs", args: JSON.stringify({ query: "export" }) });
+	assert(signInFirstCall.details.error === "auth_required" && signInFirstCall.isError, `a first call with the tools cached reads as the sign-in, got ${signInOutcome(signInFirstCall)}`);
+	await shutdownSession(piSignInCached);
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: servers }, null, 2));
+
 	// ── Specialists: the template floor cannot even grant the mcp tool ───────
 	const { assertSpecialistTemplateTools } = await import("../src/specialist-templates.js");
 	let specialistRefused = false;
@@ -486,4 +552,5 @@ try {
 	betaRecorder.server.close();
 	fooRecorder.server.close();
 	fooBarRecorder.server.close();
+	signInRecorder.server.close();
 }

@@ -7,6 +7,7 @@ import { FileGroupList, groupFilesByFolder } from "./file-groups";
 import { MarkdownRenderer } from "./Markdown";
 import { RsInfo } from "./rs-info";
 import { PaneHeader } from "./pane-header";
+import { useRemoteClientContext } from "../remote-client-context";
 
 /** A skill's problem in plain words, under its description; null when it works. */
 function skillProblemLine(state: PersistentRoomEnabledSkillStatus): string | null {
@@ -16,10 +17,19 @@ function skillProblemLine(state: PersistentRoomEnabledSkillStatus): string | nul
 	return null;
 }
 
-/** The files line's state: allowed, off, or allowed before and changed since. */
-function runFilesLine(executeState: PersistentRoomEnabledSkillStatus["executeState"], count: number): string {
+/** The files line's state: allowed, off, or allowed before and changed since. Files run
+ * only through Bash, so an allowed skill in a room with Bash off says so. */
+function runFilesLine(executeState: PersistentRoomEnabledSkillStatus["executeState"], count: number, terminalOn: boolean | null, sharedServer: boolean): string {
 	const one = count === 1;
-	if (executeState === "approved") return one ? "Allowed: the room may run its file as it is now." : `Allowed: the room may run its ${count} files as they are now.`;
+	if (executeState === "approved" && sharedServer) return one ? "Allowed. On a shared server, its file never runs." : `Allowed. On a shared server, its ${count} files never run.`;
+	if (executeState === "approved" && terminalOn === false) {
+		return one
+			? "Allowed. Its file runs only while this room's Bash is on; turn it on under Workspace."
+			: `Allowed. Its ${count} files run only while this room's Bash is on; turn it on under Workspace.`;
+	}
+	// While the room's Bash is not known, say only what is true either way.
+	if (executeState === "approved" && terminalOn === null) return one ? "Allowed. Its file runs only while this room's Bash is on." : `Allowed. Its ${count} files run only while this room's Bash is on.`;
+	if (executeState === "approved") return one ? "Allowed. The room may run its file as it is now." : `Allowed. The room may run its ${count} files as they are now.`;
 	if (executeState === "drifted") {
 		return one
 			? "Its file changed since you allowed it, so it does not run. Turn this on to allow it as it is now."
@@ -37,7 +47,8 @@ function runFilesLine(executeState: PersistentRoomEnabledSkillStatus["executeSta
  * re-enabled after review. The resident-cost line keeps the
  * ~100-tokens-per-skill index price visible.
  */
-export function RoomSkillsSection({ status, onOpenSkillsLibrary, onPausedCount }: { status: PersistentAgentStatus; onOpenSkillsLibrary?: () => void; onPausedCount?: (count: number) => void }) {
+export function RoomSkillsSection({ status, terminalOn = null, onOpenSkillsLibrary, onPausedCount }: { status: PersistentAgentStatus; terminalOn?: boolean | null; onOpenSkillsLibrary?: () => void; onPausedCount?: (count: number) => void }) {
+	const sharedServer = useRemoteClientContext().sharedServer;
 	const [library, setLibrary] = useState<SkillListItem[] | null>(null);
 	const [enabled, setEnabled] = useState<PersistentRoomEnabledSkillStatus[] | null>(null);
 	// The settings nav counts the paused skills; it hears each change here,
@@ -223,7 +234,7 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary, onPausedCount }
 												<div className="settings-row-main">
 													<span className="room-skill-files-label">Run its files</span>
 													<span className={`settings-row-sub${state.executeState === "drifted" ? " room-skill-problem" : ""}`}>
-														{runFilesLine(state.executeState, bundledFiles.length)}{" "}
+														{runFilesLine(state.executeState, bundledFiles.length, terminalOn, sharedServer)}{" "}
 														<button
 															type="button"
 															className="rs-text-btn"

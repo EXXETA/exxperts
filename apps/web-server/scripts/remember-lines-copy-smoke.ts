@@ -151,7 +151,8 @@ try {
 		const at = lines[0]!.replace(/^.* at (.+)\.$/, "$1");
 		assert(/\d/.test(at) && lines.every((line) => line.endsWith(` at ${at}.`)), `each names the time of the next try, got ${JSON.stringify(lines)}`);
 		const local = new Date(nextTryAt);
-		assert(at === `${String(local.getHours()).padStart(2, "0")}:${String(local.getMinutes()).padStart(2, "0")}`, `the next try is said on the app's 24-hour clock, got ${at}`);
+		const [hour, minute] = [local.getHours(), String(local.getMinutes()).padStart(2, "0")];
+		assert(at === `${String(hour).padStart(2, "0")}:${minute}` || at === `${hour % 12 || 12}:${minute} ${hour < 12 ? "AM" : "PM"}`, `the next try is said on the person's own clock, 24-hour or 12-hour, got ${at}`);
 		assert(lines[0]!.startsWith("The Memory model is busy. Trying again at") && lines[1]!.startsWith("Still busy. Trying again at") && lines[2]!.startsWith("The answer stopped coming. Asking again at"), `the words change with the try and the cause, got ${JSON.stringify(lines)}`);
 		// A dropped connection (a blip after the probe answered, or a socket that dropped mid-call) says so, never busy.
 		const dropped = [notice.modelWaitLine({ cause: "busy", detail: "connection", attempt: 2, nextTryAt }), notice.modelWaitLine({ cause: "busy", detail: "connection", attempt: 3, nextTryAt })];
@@ -165,6 +166,38 @@ try {
 		const html = (detail: string) => renderToStaticMarkup(createElement(notice.ModelNoticePanel, { notice: { detail, sentence: "The notice." } as any, onTryAgain: () => {}, onChooseModel: () => {} }));
 		assert(!html("too-small").includes("Try again") && html("too-small").includes("Choose another model"), "too small: Choose another model only");
 		assert(html("not-answering").includes("Try again"), "not answering: Try again stays");
+	});
+
+	check("signed out, no longer offered or out of quota: no Try again, which is sure to fail; the way that works comes first", () => {
+		const buttons = (detail: string) => [...renderToStaticMarkup(createElement(notice.ModelNoticePanel, { notice: { detail, sentence: "The notice.", provider: "anthropic" } as any, onTryAgain: () => {}, onChooseModel: () => {}, onSignIn: () => {} })).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+		for (const detail of ["quota", "not-offered"]) assert(buttons(detail).join("|") === "Choose another model", `${detail}: Choose another model only, got ${buttons(detail).join("|")}`);
+		const signedOut = buttons("signed-out");
+		assert(signedOut.length === 2 && signedOut[1] === "Choose another model" && !signedOut.includes("Try again"), `signed out: the sign-in way first, then Choose another model, got ${signedOut.join("|")}`);
+		assert(buttons("not-answering").join("|") === "Try again|Choose another model" && buttons("still-busy").join("|") === "Try again|Choose another model", "a model that may answer later keeps Try again first");
+	});
+
+	check("Remember on a damaged memory file says so, and offers no Generate again that would meet it again", () => {
+		const damaged = "This room's memory file is damaged, so Remember cannot save. Nothing was lost.";
+		const said = (client as any).rememberDamagedSentence;
+		for (const message of ["L1b missing mandatory section: Chronos", "L1b missing mandatory section(s): Deep Memory, Recent Context", "L1b Recent Context contains duplicate id(s): RC-0001", "L1b topology must be exactly: Chronos, Deep Memory, Active Items, Recent Context"]) {
+			assert(said?.(message) === damaged, `damaged memory reads plainly, got ${said?.(message)}`);
+		}
+		assert(said?.("Remember stopped because another conversation is open now. Open Remember again.") === null, "other lines pass through");
+		assert(!/Generate again/.test(damaged), "no Generate again in the line, so the dialog offers none");
+		assert((client as any).REMEMBER_DAMAGED_SENTENCE === damaged && app.includes("{error !== REMEMBER_DAMAGED_SENTENCE && <button className=\"rs-btn rs-btn-primary\" disabled={itemCount === 0} onClick={onGenerate}>"), "nor a Generate memory proposal, which meets the same damaged file: Close is the way out");
+		const format = app.slice(app.indexOf("function formatRememberError("), app.indexOf("const ROOM_TURN_WAIT_LINE"));
+		assert(format.indexOf("rememberDamagedSentence(message)") > -1 && format.indexOf("rememberDamagedSentence(message)") < format.indexOf("formatMaintenanceRequestError(message)"), "the dialog reads the damaged line before any other");
+	});
+
+	check("Remember after the Memory model changed: Generate again leads and Save goes, as for a changed conversation", () => {
+		assert(app.includes("const mustGenerateAgain = generateAgain && /changed after Remember read it|The Memory model changed after this entry was written/.test(approvalError ?? \"\");"), "the model-changed refusal hides Save");
+		assert(/changed after this entry was written/.test(pa.REMEMBER_MEMORY_MODEL_CHANGED_MESSAGE), "it matches the server's own sentence");
+	});
+
+	check("Generate again asks before it replaces the person's edits", () => {
+		const generate = app.slice(app.indexOf("async function generateCheckpointProposal()"), app.indexOf("setCheckpointEdits(null);", app.indexOf("async function generateCheckpointProposal()")));
+		assert(generate.includes('title: "Generate again replaces your edits."') && generate.includes('confirmLabel: "Generate again"'), "a confirm before the edits go");
+		assert(/checkpointProposal && checkpointEdits\?\.key === checkpointEditsKey\(checkpointProposal\) && !sameCheckpointFields\(checkpointEdits\.fields, checkpointFieldsOf\(checkpointProposal\)\)/.test(generate), "only when there are edits");
 	});
 
 	check("a read-only device closes the Remember dialog, never sends a Cancel or a Discard it may not send", () => {

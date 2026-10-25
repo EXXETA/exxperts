@@ -32,7 +32,7 @@ token it reads or writes lands inside the profile.
 
 ## Using it
 
-**Settings → Profiles** shows the loaded profile, a *Create a new profile*
+**Settings → Profiles** shows the loaded profile, a *New profile*
 row, and, once other profiles exist, the list of profiles on this computer.
 
 - **Create** makes an empty profile. Loading it for the first time is a fresh

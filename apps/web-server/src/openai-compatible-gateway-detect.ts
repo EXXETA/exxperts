@@ -194,9 +194,12 @@ function refusalReason(raw: string, key: string): string | undefined {
 	return chars.length > REFUSAL_REASON_MAX_CHARS ? `${chars.slice(0, REFUSAL_REASON_MAX_CHARS - 1).join("")}…` : line;
 }
 
-async function fetchJsonWithTimeout(url: string, key: string): Promise<{ ok: true; payload: unknown } | ProbeFailure> {
+async function fetchJsonWithTimeout(url: string, key: string, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<{ ok: true; payload: unknown } | ProbeFailure> {
 	const abort = new AbortController();
-	const timeout = setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS);
+	const timeout = setTimeout(() => abort.abort(), options.timeoutMs ?? PROBE_TIMEOUT_MS);
+	const stop = () => abort.abort();
+	options.signal?.addEventListener("abort", stop, { once: true });
+	if (options.signal?.aborted) abort.abort();
 	try {
 		// The bearer goes to the address the person typed and nowhere else. A
 		// followed redirect would carry it to whatever the first hop points at,
@@ -216,7 +219,27 @@ async function fetchJsonWithTimeout(url: string, key: string): Promise<{ ok: tru
 		return { ok: false, message: abort.signal.aborted ? "timed out" : (error as Error).message, timedOut: abort.signal.aborted };
 	} finally {
 		clearTimeout(timeout);
+		options.signal?.removeEventListener("abort", stop);
 	}
+}
+
+/** A /models payload's rows: OpenAI's `data` list, or a bare list; null for anything else. */
+function modelRowsOf(payload: unknown): unknown[] | null {
+	return isObject(payload) && Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : null;
+}
+
+/**
+ * The ids a saved gateway lists, read from /models alone, for a quick look
+ * after one of its calls failed: the ids, or the status it answered instead
+ * (none when it never answered, or answered something that is no list). The
+ * gateway's own words are never kept.
+ */
+export async function listGatewayModelIds(baseUrl: string, key: string, options: { timeoutMs: number; signal?: AbortSignal }): Promise<{ ids: ReadonlySet<string> } | { status?: number }> {
+	const listed = await fetchJsonWithTimeout(`${normalizeGatewayBaseUrl(baseUrl)}/models`, key, options);
+	if (!listed.ok) return listed.status === undefined ? {} : { status: listed.status };
+	const rows = modelRowsOf(listed.payload);
+	if (!rows) return {};
+	return { ids: new Set(rows.flatMap((row) => (isObject(row) && typeof row.id === "string" && row.id.trim() ? [row.id.trim()] : []))) };
 }
 
 /**
@@ -403,7 +426,7 @@ export async function discoverGatewayModels(baseUrl: string, key: string): Promi
 		throw new GatewayDiscoveryError(`Could not reach ${root}/models: ${listed.message}`);
 	}
 	const payload = listed.payload;
-	const rows = isObject(payload) && Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : null;
+	const rows = modelRowsOf(payload);
 	if (!rows) throw new GatewayDiscoveryError("The gateway response is not an OpenAI-style model list; check the base URL.");
 
 	const detections = new Map<string, GatewayModelDetection>();

@@ -1,7 +1,8 @@
 // The Memorize first read and its discussion are kept with the room until the
 // run starts: a reload comes back to them with no new first read, and two tabs
 // asking at once share one first read. A changed memory or Memory model reads
-// again. Offline: the first read is a counted fake.
+// again. A closed request never ends a read; only Cancel does. Offline: the
+// first read is a counted fake.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -86,6 +87,94 @@ try {
 	keep.clearKeptDiscussion(room, "review");
 	await keep.firstReadOnce(room, { provider: "openai-codex", model: "gpt-6.1-sol" }, "fp-2", reviewRead, { kind: "review" });
 	assert(Number(reviewReads) === 3, "Review's run start clears its own");
+
+	// A read for another Memory model never joins one still in flight for the old model.
+	keep.clearKeptDiscussion(room);
+	let releaseOld!: () => void;
+	const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+	const forModel = (label: string, gate?: Promise<void>) => async () => {
+		reads += 1;
+		await gate;
+		return { assessmentMarkdown: label, source: { l1bFingerprint: { value: "fp-3" }, generatedAt: "2026-10-10T12:00:00.000Z" } } as any;
+	};
+	const beforeSwitch = reads;
+	const oldRead = keep.firstReadOnce(room, MODEL, "fp-3", forModel("old model's read", oldGate));
+	const newReading = keep.firstReadOnce(room, { provider: "openai-codex", model: "gpt-6.1-sol" }, "fp-3", forModel("new model's read"));
+	releaseOld();
+	const [, newRead] = await Promise.all([oldRead, newReading]);
+	assert(Number(reads) === beforeSwitch + 2 && newRead.assessmentMarkdown === "new model's read", `another model reads on its own, got ${reads - beforeSwitch} reads and "${newRead.assessmentMarkdown}"`);
+
+	// A request that closed (a reload, a dropped connection, a proxy's idle
+	// limit) never ends the read: the next ask joins it, and the model is asked once.
+	keep.clearKeptDiscussion(room);
+	const aborted: string[] = [];
+	let releaseSlow!: () => void;
+	const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+	const slow = (label: string) => (signal: AbortSignal) => new Promise<any>((resolve, reject) => {
+		reads += 1;
+		signal.addEventListener("abort", () => { aborted.push(label); reject(new Error("aborted")); }, { once: true });
+		void slowGate.then(() => resolve({ assessmentMarkdown: label, source: { l1bFingerprint: { value: "fp-4" } }, process: { model: MODEL } }));
+	});
+	const beforeReload = reads;
+	const closed = new AbortController();
+	const beforeTheReload = keep.firstReadOnce(room, MODEL, "fp-4", slow("the read before the reload") as any, { signal: closed.signal, ask: "tab-a" } as any).catch(() => "ended");
+	closed.abort();
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	const afterTheReload = keep.firstReadOnce(room, MODEL, "fp-4", slow("a second read") as any, { ask: "tab-a-reloaded" } as any).catch((error: Error) => ({ assessmentMarkdown: `failed: ${error.message}` }));
+	releaseSlow();
+	const rejoined = await afterTheReload;
+	await beforeTheReload;
+	assert(aborted.length === 0 && Number(reads) === beforeReload + 1 && rejoined.assessmentMarkdown === "the read before the reload", `a closed request never ends the read: the next ask joins it, got ${reads - beforeReload} reads, aborted ${JSON.stringify(aborted)} and "${rejoined.assessmentMarkdown}"`);
+	const keptAfterClose = await keep.firstReadOnce(room, MODEL, "fp-4", read("fp-4"));
+	assert(Number(reads) === beforeReload + 1 && keptAfterClose.assessmentMarkdown === "the read before the reload", `the read a closed request left is kept for the next ask, got "${keptAfterClose.assessmentMarkdown}"`);
+
+	// Only an explicit Cancel ends a read: one tab's Cancel ends its own wait at
+	// once and keeps the read for the tab still waiting; the last Cancel aborts it.
+	keep.clearKeptDiscussion(room);
+	const cancelledReads: string[] = [];
+	const endless = (signal: AbortSignal) => new Promise<any>((_resolve, reject) => {
+		reads += 1;
+		signal.addEventListener("abort", () => { cancelledReads.push("aborted"); reject(new Error("aborted")); }, { once: true });
+	});
+	const beforeCancel = reads;
+	const tabA = keep.firstReadOnce(room, MODEL, "fp-5", endless as any, { ask: "tab-a" }).then(() => "answered", () => "cancelled");
+	const tabB = keep.firstReadOnce(room, MODEL, "fp-5", endless as any, { ask: "tab-b" }).then(() => "answered", () => "cancelled");
+	assert(keep.cancelFirstRead(room, "memorize", "tab-a"), "a Cancel finds the ask it names");
+	assert(await tabA === "cancelled" && cancelledReads.length === 0, `one tab's Cancel ends its own wait and keeps the read for the other, got ${JSON.stringify(cancelledReads)}`);
+	// Another room's or kind's Cancel with the same id touches nothing here.
+	assert(!keep.cancelFirstRead(`${room}-elsewhere`, "memorize", "tab-b") && !keep.cancelFirstRead(room, "review", "tab-b") && cancelledReads.length === 0, "a Cancel only reaches its own room's ask");
+	keep.cancelFirstRead(room, "memorize", "tab-b");
+	assert(await tabB === "cancelled" && Number(cancelledReads.length) === 1 && Number(reads) === beforeCancel + 1, `the last Cancel aborts the read, got ${JSON.stringify(cancelledReads)} after ${reads - beforeCancel} reads`);
+	await keep.firstReadOnce(room, MODEL, "fp-5", read("fp-5"));
+	assert(Number(reads) === beforeCancel + 2, `an ask after the Cancel reads afresh, got ${reads - beforeCancel}`);
+	// A Cancel that arrives before its own ask: the ask then starts no read.
+	keep.clearKeptDiscussion(room);
+	const beforeEarly = reads;
+	keep.cancelFirstRead(room, "memorize", "tab-c");
+	const early = await keep.firstReadOnce(room, MODEL, "fp-5", read("fp-5"), { ask: "tab-c" }).then(() => "answered", () => "cancelled");
+	assert(early === "cancelled" && Number(reads) === beforeEarly, `an ask cancelled before it arrived starts no read, got ${early} after ${reads - beforeEarly} reads`);
+	assert(keep.firstReadAsk({ ask: "a_lq3x9_k2j4h8" }) === "a_lq3x9_k2j4h8" && keep.firstReadAsk({ ask: "../room" }) === undefined && keep.firstReadAsk({ ask: "x".repeat(101) }) === undefined && keep.firstReadAsk({}) === undefined, "only a short plain id names an ask");
+
+	// A page whose request was cut asks again under the same id. Its cut request
+	// closing late never takes the new request off the read, so another tab's
+	// Cancel keeps the read for it; the page's own Cancel of that id ends it.
+	keep.clearKeptDiscussion(room);
+	const cutEnds: string[] = [];
+	const cutRead = (signal: AbortSignal) => new Promise<any>((_resolve, reject) => {
+		reads += 1;
+		signal.addEventListener("abort", () => { cutEnds.push("aborted"); reject(new Error("aborted")); }, { once: true });
+	});
+	const beforeCut = reads;
+	const cutRequest = new AbortController();
+	const cutAsk = keep.firstReadOnce(room, MODEL, "fp-6", cutRead as any, { ask: "tab-d", signal: cutRequest.signal }).then(() => "answered", () => "ended");
+	const askedAgain = keep.firstReadOnce(room, MODEL, "fp-6", cutRead as any, { ask: "tab-d" }).then(() => "answered", () => "ended");
+	const otherTab = keep.firstReadOnce(room, MODEL, "fp-6", cutRead as any, { ask: "tab-e" }).then(() => "answered", () => "ended");
+	cutRequest.abort();
+	keep.cancelFirstRead(room, "memorize", "tab-e");
+	assert(await otherTab === "ended", "the other tab's Cancel ends its own wait");
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	assert(cutEnds.length === 0 && Number(reads) === beforeCut + 1, `the page that asked again under its id still waits, so the read goes on, got ${JSON.stringify(cutEnds)} after ${reads - beforeCut} reads`);
+	assert(keep.cancelFirstRead(room, "memorize", "tab-d") && await askedAgain === "ended" && await cutAsk === "ended" && Number(cutEnds.length) === 1, `the page's Cancel of its id ends the read it joined again, got ${JSON.stringify(cutEnds)}`);
 	console.log("memorize discussion keep smoke passed");
 } finally {
 	fs.rmSync(room, { recursive: true, force: true });

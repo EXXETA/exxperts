@@ -86,7 +86,6 @@ function toolResult(input: { id: string; name: string; chars?: number; isError?:
 // exactly as the agent loop appends them. Each turn takes several tool steps, so
 // a policy that mistook assistant messages for turns would age results from the
 // turn it is still working on.
-const STEPS_PER_TURN = 5;
 function buildConversation(turns: number): { messages: Msg[]; ids: Record<string, string> } {
 	// Reset so that two conversations of the same shape produce the same ids:
 	// several checks below compare one conversation's bytes against another's.

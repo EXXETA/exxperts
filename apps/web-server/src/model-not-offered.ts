@@ -11,11 +11,12 @@
  */
 
 /**
- * The model is gone: not in the registry, the provider no longer serves it, or this key has no access to it.
+ * The model is gone: not in the registry, or the provider no longer serves it.
  * A model's id may hold dots ("gpt-6.1-sol", "claude-opus-4.6"): a dot inside a word does not end the sentence.
- * OpenAI's own words, "The model `gpt-6.1-sol` does not exist or you do not have access to it.", match whatever the id holds;
- * the same words about anything but a model (a project, a file) do not. A 404 counts only when "model" follows it
- * before a slash: a URL's path ("/v1/model/info") never carries it.
+ * "The model `gpt-6.1-sol` does not exist." matches whatever the id holds; the same words about anything but a model
+ * (a project, a file) do not. OpenAI's words for a model this key cannot use match too, but every caller reads them
+ * first as not available on the account (model-not-on-account.ts), true whether or not the model is retired.
+ * A 404 counts only when "model" follows it before a slash: a URL's path ("/v1/model/info") never carries it.
  */
 export function modelNotOffered(message: string): boolean {
 	return /\b(?:does not|doesn't|has no) (?:have )?access to (?:this |the )?model\b|\bmodel not found\b|\bmodel_not_found\b|\bno longer offered\b|\bmodel\b(?:[^.]|\.(?=[\w-])){0,120}\bdoes not exist\b|\bnot_found_error\b(?:[^.]|\.(?=[\w-])){0,120}\bmodel\b|\b404\b(?:[^./]|\.(?=[\w-])){0,120}\bmodel\b/i.test(message);
@@ -41,15 +42,16 @@ export function credentialGoneOf(key: CredentialKey | undefined): CredentialGone
 /**
  * A missing or rejected sign-in, at the call or in the registry before it.
  * Pure, like the rest of this module, so the web page reads failures with the
- * same words. A 401 or 403 counts only as a status (opening the message, or
- * beside "status", "HTTP" or "error code"): inside other words it is a count,
- * as in a rate limit's "Requested 401". Words that only name an API key do not
+ * same words. A 401 counts only as a status (opening the message, or beside
+ * "status", "HTTP" or "error code"): inside other words it is a count, as in a
+ * rate limit's "Requested 401". A 403 or a permission error is the request
+ * refused (a region, a plan), not the credential. Words that only name an API key do not
  * count (Anthropic's workspace 400 says "This API key is not scoped ..."):
  * only the known phrases of a refused or missing credential do, the runtime's
  * own two among them.
  */
 export function signInFailed(message: string): boolean {
-	return /\bNo API key for provider: |\bAuthentication failed for "[^"]+"\. Credentials may have expired\b|authentication_error|permission_error|unauthori[sz]ed|^\s*40[13]\b|\b(?:status(?:[ _]?code)?|http(?:\/[\d.]+)?|error[ _]code)\s*[:=]?\s*40[13]\b|\binvalid[ _-]?(?:x-)?api[ _-]?key\b|\bincorrect api key\b|\bapi key (?:is )?(?:invalid|not valid|expired|revoked)\b|\bmissing (?:an? )?api key\b|\bfailed to refresh oauth token\b|\btoken refresh (?:request )?failed\b|token (?:has |is )?(?:expired|invalid|revoked)|invalid[_ ]token|\binvalid credentials?\b|not (?:logged|signed) in|\bprovider not connected\b|\bsigned out\b/i.test(message);
+	return /\bNo API key for provider: |\bAuthentication failed for "[^"]+"\. Credentials may have expired\b|authentication_error|unauthori[sz]ed|^\s*401\b|\b(?:status(?:[ _]?code)?|http(?:\/[\d.]+)?|error[ _]code)\s*[:=]?\s*401\b|\binvalid[ _-]?(?:x-)?api[ _-]?key\b|\bincorrect api key\b|\bapi key (?:is )?(?:invalid|not valid|expired|revoked)\b|\bmissing (?:an? )?api key\b|\bfailed to refresh oauth token\b|\btoken refresh (?:request )?failed\b|token (?:has |is )?(?:expired|invalid|revoked)|invalid[_ ]token|\binvalid credentials?\b|not (?:logged|signed) in|\bprovider not connected\b|\bsigned out\b/i.test(message);
 }
 
 /** Anthropic's words for a key outside any workspace: "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header ...". */

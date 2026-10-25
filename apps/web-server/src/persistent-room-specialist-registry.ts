@@ -133,6 +133,28 @@ export function abortAllSpecialistTasks(roomId: string): number {
 	return aborted;
 }
 
+/** Running tasks across every room: what a server stop waits for. */
+export function runningSpecialistCountInAllRooms(): number {
+	let count = 0;
+	for (const room of rooms.values()) count += room.tasks.size;
+	return count;
+}
+
+/**
+ * Abort every running task of every room, at a server stop. Not marked
+ * stopped by the person: the task ends with "The task was cancelled.".
+ */
+export function abortSpecialistTasksInAllRooms(): number {
+	let aborted = 0;
+	for (const room of rooms.values()) {
+		for (const entry of room.tasks.values()) {
+			entry.abortController.abort();
+			aborted += 1;
+		}
+	}
+	return aborted;
+}
+
 /** Forget's stop: every running task started from the conversation is aborted, and its result is to be thrown away. */
 export function abortConversationSpecialistTasks(roomId: string, conversationId: string): number {
 	let aborted = 0;

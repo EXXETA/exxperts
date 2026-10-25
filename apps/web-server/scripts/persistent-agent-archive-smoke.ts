@@ -68,6 +68,11 @@ async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promis
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
+// The room folders on disk: a listing or a retired route creates none that was not asked for.
+function roomFolders(): string[] {
+	return fs.readdirSync(tempAgentsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+}
+
 async function listAgentIds(): Promise<string[]> {
 	const listed = await requestJson("/api/persistent-agents");
 	assert(listed.status === 200, `list should succeed, got ${listed.status}: ${JSON.stringify(listed.body)}`);
@@ -98,7 +103,7 @@ try {
 
 	let listedIds = await listAgentIds();
 	assert(listedIds.length === 0, "fresh empty agents root should list no rooms");
-	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "fresh listing must not create borja-coordinator");
+	assert(roomFolders().length === 0, `a fresh listing creates no room folder, got ${JSON.stringify(roomFolders())}`);
 
 	const created = await requestJson("/api/persistent-agents", {
 		method: "POST",
@@ -182,9 +187,10 @@ try {
 	});
 	assert(archiveAgain.status === 409, `already archived room should return 409, got ${archiveAgain.status}: ${JSON.stringify(archiveAgain.body)}`);
 
-	const missingScaffold = await requestJson(`/api/persistent-agents/borja-coordinator/scaffold`, { method: "POST" });
+	const foldersBeforeScaffold = roomFolders();
+	const missingScaffold = await requestJson(`/api/persistent-agents/never-made-room/scaffold`, { method: "POST" });
 	assert(missingScaffold.status === 404, `retired default scaffold route should 404, got ${missingScaffold.status}: ${JSON.stringify(missingScaffold.body)}`);
-	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "retired scaffold route must not create borja-coordinator");
+	assert(JSON.stringify(roomFolders()) === JSON.stringify(foldersBeforeScaffold), `the retired scaffold route creates no room folder, got ${JSON.stringify(roomFolders())}`);
 
 	const recreated = await requestJson("/api/persistent-agents", {
 		method: "POST",
@@ -202,7 +208,7 @@ try {
 	assert(!listedIds.includes(agentId), "archived original id must remain hidden after recreation");
 	assert(fs.existsSync(path.join(tempAgentsRoot, agentId, "agent.json")), "archived original folder should remain on disk");
 	assert(fs.existsSync(path.join(tempAgentsRoot, recreatedId, "agent.json")), "recreated suffixed room folder should exist separately");
-	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "archive smoke must not create borja-coordinator");
+	assert(JSON.stringify(roomFolders()) === JSON.stringify([agentId, recreatedId].sort()), `only the rooms asked for have folders, got ${JSON.stringify(roomFolders())}`);
 
 	// Active room names are unique: a second active room under the recreated
 	// name is refused, and restoring the archived original — whose name the

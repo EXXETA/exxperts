@@ -28,6 +28,7 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
+import { providerErrorFields } from "../utils/provider-error-fields.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
@@ -97,6 +98,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			Object.assign(output, providerErrorFields(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

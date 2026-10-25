@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, symlinkOrSkip, type AuthedFetchInit } from "./smoke-server-process.js";
 
 // Pins the in-app move of the exxperts home (Settings → Profiles → Move):
 //
@@ -149,14 +149,15 @@ const unit = path.join(tempRoot, "unit");
 		assert(!fs.existsSync(path.join(home, ".exxperts", "demo")), "the refused alias must not have been created inside the family");
 	}
 	const link = path.join(unit, "alias-link");
-	fs.symlinkSync(path.join(home, ".exxperts"), link, "dir");
 	let failure: Error | null = null;
-	try {
-		stateProfiles.planHomeMove(home, path.join(link, "inside"));
-	} catch (error) {
-		failure = error as Error;
+	if (symlinkOrSkip(path.join(home, ".exxperts"), link, "state-home-move-smoke", "the linked target case", "dir")) {
+		try {
+			stateProfiles.planHomeMove(home, path.join(link, "inside"));
+		} catch (error) {
+			failure = error as Error;
+		}
+		assert(failure !== null && /part of what would move/.test(failure.message), `a symlinked target that lands in the family must be refused, got ${failure?.message}`);
 	}
-	assert(failure !== null && /part of what would move/.test(failure.message), `a symlinked target that lands in the family must be refused, got ${failure?.message}`);
 	// The other direction: a folder that would swallow the family is no home.
 	failure = null;
 	try {
@@ -197,15 +198,16 @@ const unit = path.join(tempRoot, "unit");
 	const realTree = path.join(unit, "linked-real-tree");
 	fs.mkdirSync(path.join(realTree, "app"), { recursive: true });
 	fs.mkdirSync(home, { recursive: true });
-	fs.symlinkSync(realTree, path.join(home, ".exxperts"), "dir");
-	assert(stateProfiles.listStateFamily(home).includes(".exxperts"), "a linked state tree is still a family member: a plan that cannot see it would move nothing and point the home at an empty folder");
-	let failure: Error | null = null;
-	try {
-		stateProfiles.planHomeMove(home, path.join(unit, "linked-target"));
-	} catch (error) {
-		failure = error as Error;
+	if (symlinkOrSkip(realTree, path.join(home, ".exxperts"), "state-home-move-smoke", "the linked home case", "dir")) {
+		assert(stateProfiles.listStateFamily(home).includes(".exxperts"), "a linked state tree is still a family member: a plan that cannot see it would move nothing and point the home at an empty folder");
+		let failure: Error | null = null;
+		try {
+			stateProfiles.planHomeMove(home, path.join(unit, "linked-target"));
+		} catch (error) {
+			failure = error as Error;
+		}
+		assert(failure !== null && /symbolic link/.test(failure.message), `a linked family member must refuse the move with an explanation, got ${failure?.message}`);
 	}
-	assert(failure !== null && /symbolic link/.test(failure.message), `a linked family member must refuse the move with an explanation, got ${failure?.message}`);
 }
 
 // 3. A pointer naming a missing folder fails loudly instead of falling back.

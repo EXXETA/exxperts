@@ -15,6 +15,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { providerErrorFields } from "../utils/provider-error-fields.js";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
 const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]);
@@ -120,6 +121,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			Object.assign(output, providerErrorFields(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

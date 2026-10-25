@@ -68,7 +68,7 @@ assert.equal(handoffResult, undefined, "start_handoff context mentioning .env is
 const filesystemResult = await toolCallHandler!({ toolName: "read", input: { path: ".env" } }, ctx);
 assert.equal(filesystemResult?.block, true, "real filesystem/action tool arguments mentioning .env are still blocked");
 assert.match(filesystemResult?.reason, /blocked \.env access/);
-assert.match(notification || "", /blocked \.env access/);
+assert.equal(notification, undefined, "the reason is the model's; the page shows the person its own line on the step's card");
 
 // The log keeps the tool, the rule, the time and the folder, never the arguments' text.
 const rows = fs.readFileSync(logPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));

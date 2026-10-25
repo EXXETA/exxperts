@@ -45,7 +45,7 @@ The dependencies in this class today:
 
 | Dependency | Used for | If its binary is missing |
 | --- | --- | --- |
-| `esbuild` | transpiling the TypeScript sources at run time | the app does not start |
+| `esbuild` (through `tsx`) | transpiling the CLI's TypeScript helpers at run time (opening and creating a room) | the CLI cannot open or create a room; the web app runs the bundled server and still starts |
 | `@mariozechner/clipboard` | clipboard access | clipboard actions degrade |
 | `@napi-rs/canvas` | rendering images and PDF pages for visual reading | every vision read refuses with "image rendering is unavailable on this system" |
 

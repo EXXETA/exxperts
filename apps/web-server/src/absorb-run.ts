@@ -26,8 +26,10 @@ import { pageFailureKey, readPageFailures, writePageFailures } from "./absorb-pa
 import { buildPlacementPrompt, buildSortPrompt, codeSorter, isUnsorted, placeByCode, readPlacement, readSort, SORT_BATCH, topicNamed, topicView } from "./memory-placement.js";
 import { MEMORY_CARD_NOTE_MAX_CHARS, memoryTextHasWords, memoryTopicName, memoryTopicNameProblem, topicNameSentence, memoryTypedText } from "./memory-typed-text.js";
 import { withHighLevelLines } from "./remember-two-stage.js";
-import { classifyModelFailure, ModelUnreachableError, WaitLine, type PatienceWait, type UnreachableDetail } from "./model-call-causes.js";
+import { classifyModelFailure, gatewayNameOf, ModelUnreachableError, quotaWayOf, unreachableError, WaitLine, type PatienceWait, type UnreachableDetail } from "./model-call-causes.js";
 import type { CredentialKey } from "./model-not-offered.js";
+import { providerOnThisComputer } from "./openai-compatible-gateway-catalog.js";
+import type { GatewayFind, QuotaWay, Unreached } from "../../web-ui/src/turn-failure-line.js";
 import { connectionDropped, foldPages, outageClassOf, prunePageFailureState, type PageDeps, type PageEnding, type PageFailureCode, type PageRead, type PageRetryAsk, type PageTrace, type PagesOutcome } from "./absorb-run-pages.js";
 import { rereadModelKey, rereadPage, rereadTriedOn, selectRereads, withTried, type RereadPage } from "./absorb-reread.js";
 import { fileSessionAsSummary, pagePieces } from "./absorb-summary.js";
@@ -218,8 +220,10 @@ export interface AbsorbRun {
 	/**
 	 * An outage stop (the Memory model could not be reached) or a restart stop; the card offers resume, and for an outage another model.
 	 * `key`: on a signed-out key connection, the key is missing, saved and refused, or an Anthropic key made outside a workspace.
+	 * `unreached`: a model not answering because no connection opened, or because it runs on this computer.
+	 * `gateway`: the company gateway the model runs through, as AI setup names it.
 	 */
-	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: AbsorbRunStopCause; key?: CredentialKey };
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: AbsorbRunStopCause; key?: CredentialKey; unreached?: Unreached; quotaWay?: QuotaWay; gateway?: string; gatewayFind?: GatewayFind };
 	/** A busy Memory model being waited out: the card says when the next try is. Absent otherwise. */
 	wait?: PatienceWait;
 }
@@ -251,10 +255,17 @@ export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
 }
 
 /** Why the run stopped: the probe went unanswered, the provider stayed busy past the shared patience, a cause the notice names, or a server restart. */
-export type AbsorbRunStopCause = "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted";
+export type AbsorbRunStopCause = "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "region-or-plan" | "gateway-refused" | "gateway-not-found" | "restarted";
+
+/** The outage stop of a Memorize or a Review run, as both cards read it. A model on this computer that is not answering says so even when only the probe found it silent. */
+export function memoryOutageStop(model: { provider: string; model: string }, cause: AbsorbRunStopCause, { key, unreached, quotaWay, gatewayFind }: { key?: CredentialKey; unreached?: Unreached; quotaWay?: QuotaWay; gatewayFind?: GatewayFind }): NonNullable<AbsorbRun["stop"]> {
+	const where = unreached ?? (cause === "not-answering" && providerOnThisComputer(model.provider) ? "local-connection" : undefined);
+	const gateway = gatewayNameOf(model.provider);
+	return { kind: "outage", model: { provider: model.provider, model: model.model }, cause, ...(key ? { key } : {}), ...(where ? { unreached: where } : {}), ...(cause === "quota" ? { quotaWay: quotaWay ?? quotaWayOf(model.provider) } : {}), ...(gateway ? { gateway } : {}), ...(gatewayFind ? { gatewayFind } : {}) };
+}
 
 export function absorbRunStopCauseOf(unreachable: UnreachableDetail | undefined, busy: boolean): AbsorbRunStopCause {
-	if (unreachable === "signed-out" || unreachable === "quota" || unreachable === "not-offered" || unreachable === "not-on-account") return unreachable;
+	if (unreachable === "signed-out" || unreachable === "quota" || unreachable === "not-offered" || unreachable === "not-on-account" || unreachable === "region-or-plan" || unreachable === "gateway-refused" || unreachable === "gateway-not-found") return unreachable;
 	if (unreachable === "still-busy" || busy) return "busy";
 	return "not-answering";
 }
@@ -732,7 +743,7 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 		// The model cannot be reached: the run stops as a page outage stops it, with nothing read.
 		slot.workingDoc = doc;
 		slot.nextEntryNumber = doc.nextEntryNumber;
-		run.stop = { kind: "outage", model: { provider: input.model.provider, model: input.model.model }, cause: absorbRunStopCauseOf(sorted.unreachable.details.detail, false), ...(sorted.unreachable.details.key ? { key: sorted.unreachable.details.key } : {}) };
+		run.stop = memoryOutageStop(input.model, absorbRunStopCauseOf(sorted.unreachable.details.detail, false), sorted.unreachable.details);
 		settleRun(slot, nowFn);
 		return;
 	}
@@ -889,8 +900,8 @@ async function probeMemoryModel(slot: RunSlot): Promise<boolean> {
 		await diagnostics.generate(ABSORB_PROBE_PROMPT, input.model);
 		return true;
 	} catch (error) {
-		const failure = classifyModelFailure(error);
-		if (failure.cause === "unreachable" && failure.detail !== "still-busy") throw new ModelUnreachableError(failure.detail, input.model, error);
+		const failure = classifyModelFailure(error, { provider: input.model.provider });
+		if (failure.cause === "unreachable" && failure.detail !== "still-busy") throw await unreachableError(failure.detail, input.model, error);
 		return false;
 	}
 }
@@ -898,10 +909,10 @@ async function probeMemoryModel(slot: RunSlot): Promise<boolean> {
 /** A failed ladder or sort call, read as the main loop reads one: refused and timed-out say so, and a request too large is the call's own; otherwise the probe decides, and no answer is an outage, thrown. */
 async function ladderFailure(slot: RunSlot, error: unknown): Promise<"refused" | "timed-out" | "own"> {
 	if (error instanceof ModelUnreachableError || slot.controller.signal.aborted) throw error;
-	const failure = classifyModelFailure(error);
+	const failure = classifyModelFailure(error, { provider: slot.input.model.provider });
 	if (failure.cause === "refused") return "refused";
 	if (failure.cause === "too-large") return "own";
-	if (failure.cause === "unreachable") throw new ModelUnreachableError(failure.detail, slot.input.model, error);
+	if (failure.cause === "unreachable") throw await unreachableError(failure.detail, slot.input.model, error);
 	// A rate limit, too many requests or an overload is an outage, as in the main loop; a dropped connection asks the probe.
 	if (outageClassOf(foldFailureMessage(error))) throw new ModelUnreachableError("still-busy", slot.input.model, error);
 	if (foldFailureCode(error) === "timed-out") return "timed-out";
@@ -1353,7 +1364,7 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 	}
 	run.progress.current = undefined;
 	delete run.wait;
-	if (outcome.stoppedForOutage) run.stop = { kind: "outage", model: { provider: input.model.provider, model: input.model.model }, cause: absorbRunStopCauseOf(outcome.unreachable, !!outcome.outageClass), ...(outcome.unreachableKey ? { key: outcome.unreachableKey } : {}) };
+	if (outcome.stoppedForOutage) run.stop = memoryOutageStop(input.model, absorbRunStopCauseOf(outcome.unreachable, !!outcome.outageClass), { key: outcome.unreachableKey, unreached: outcome.unreached, quotaWay: outcome.quotaWay, gatewayFind: outcome.gatewayFind });
 	return outcome;
 }
 
@@ -1703,12 +1714,6 @@ function requireReady(slot: RunSlot): void {
 	if (slot.run.state !== "ready") throw productError("This memory update is not ready to change yet.", "absorb_run_not_ready", 409);
 }
 
-/** The keep body: `{ keepIds?, keepTopics? }`, a missing field leaving that set as it was; a bare list means keepIds. Unknown ids and topics are dropped. */
-export interface AbsorbRunKeepRequest {
-	keepIds?: string[];
-	keepTopics?: string[];
-}
-
 export function parseRunKeepRequest(raw: unknown, rows: Iterable<{ id: string; section: MemorySection; topic: string }>, current: { keepIds: string[]; keepTopics: string[] }, code: string): { keepIds: string[]; keepTopics: string[] } {
 	const body: { keepIds?: unknown; keepTopics?: unknown } = Array.isArray(raw) ? { keepIds: raw } : raw && typeof raw === "object" ? (raw as { keepIds?: unknown; keepTopics?: unknown }) : {};
 	if (body.keepIds !== undefined && !Array.isArray(body.keepIds)) throw productError("keepIds must be a list of entry ids.", code);
@@ -1843,7 +1848,7 @@ export function resumeAbsorbRun(agentIdRaw: string, runId: string, model: Absorb
 		// A stop at the one-time sort left its notes in Unsorted: they are sorted first.
 		const sorted = await sortUnsorted(slot, slot.workingDoc!);
 		slot.workingDoc = sorted.doc;
-		if (sorted.unreachable) run.stop = { kind: "outage", model: { provider: model.provider, model: model.model }, cause: absorbRunStopCauseOf(sorted.unreachable.details.detail, false), ...(sorted.unreachable.details.key ? { key: sorted.unreachable.details.key } : {}) };
+		if (sorted.unreachable) run.stop = memoryOutageStop(model, absorbRunStopCauseOf(sorted.unreachable.details.detail, false), sorted.unreachable.details);
 		else await foldWaitingPages(slot, nowFn);
 		delete slot.keptForFolds;
 		// A pin a fold made itself, because the conversation asked, stays; the folds-only pins come off.

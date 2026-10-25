@@ -11,7 +11,6 @@ import {
 } from "./openai-compatible-gateways.js";
 
 export type BuiltInPersistentAgentAiProfileId = "chatgpt-codex" | "anthropic";
-export type LocalPersistentAgentAiProfileId = "openai-compatible";
 // Widened to string: besides the built-in profiles, users can save any number of
 // OpenAI-compatible gateways (each its own profile) and create custom
 // per-provider profiles ("custom-<providerId>"); membership is validated at
@@ -20,13 +19,6 @@ export type PersistentAgentAiProfileId = string;
 
 export { OPENAI_COMPATIBLE_AI_PROFILE_FILE, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID };
 export const SCHEDULED_ROOM_MODEL_POLICY_KEY = "scheduledRoom" as const;
-
-export type PersistentAgentAiProcess =
-	| "persistentRoom"
-	| typeof SCHEDULED_ROOM_MODEL_POLICY_KEY
-	| "checkpoint"
-	| "absorb"
-	| "structuralReview";
 
 export type PersistentAgentModelLock = {
 	provider: string;
@@ -118,10 +110,6 @@ function cloneModelLock(model: PersistentAgentModelLock): PersistentAgentModelLo
 	return { provider: model.provider, model: model.model };
 }
 
-export function persistentAgentModelLockKey(model: PersistentAgentModelLock): string {
-	return `${model.provider}/${model.model}`;
-}
-
 export function persistentAgentModelLocksEqual(a: PersistentAgentModelLock, b: PersistentAgentModelLock): boolean {
 	return a.provider === b.provider && a.model === b.model;
 }
@@ -209,10 +197,6 @@ export function getPersistentAgentAiProfile(profileId: PersistentAgentAiProfileI
 	const couldBeGateway = profileId === OPENAI_COMPATIBLE_AI_PROFILE_ID || profileId.startsWith(GATEWAY_PROVIDER_ID_PREFIX);
 	if (couldBeGateway && gatewayRead.errors.length > 0) throw new Error(gatewayRead.errors[0]);
 	throw new Error(`unknown persistent-agent AI profile: ${profileId}`);
-}
-
-export function getDefaultPersistentAgentAiProfile(): PersistentAgentAiProfile {
-	return getPersistentAgentAiProfile(DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID);
 }
 
 export function getPersistentRoomModelLocks(profileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID): PersistentAgentModelLock[] {

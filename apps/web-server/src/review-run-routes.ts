@@ -129,8 +129,8 @@ export function registerReviewRunRoutes(app: FastifyInstance, deps: ReviewRunRou
 		}
 	});
 
-	// Try again after an outage or a restart: the same run tidies the groups not
-	// done, with the room's Memory model as it is now.
+	// Try again on a card with topics left: the same run tidies only those, with
+	// the room's Memory model as it is now.
 	app.post("/api/persistent-agents/:id/review/runs/:runId/resume", async (req, reply) => {
 		try {
 			const id = roomId(req);

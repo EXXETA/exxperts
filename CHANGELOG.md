@@ -2,6 +2,30 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.14.5 (2026-10-26)
+
+- Failures: When a model can't answer, the room says why in one plain line, with a button for what
+  to do next. The provider's own words sit under Show details.
+- Failures: If an answer fails before it shows anything, your message isn't lost: it goes back into
+  the box or stays above. Try again never sends it twice.
+- Limits: A used-up plan or credit stops at once, and a ChatGPT sign-in's rate limit says the model
+  is still busy after several tries. Failed calls that cost nothing no longer count on the Wallet.
+- Sign-in: AI setup shows a Claude or ChatGPT sign-in that a call found expired as signed out, and
+  marks a key the provider refused.
+- GitHub Copilot: Signing in no longer turns on models in your GitHub settings.
+- Gateways: When a gateway can't find a model, the line can say if it's gone, the address is wrong
+  or the gateway can't run it.
+- App: When the app can't reach its own service, it says so plainly.
+- Memory: Review, Memorize and Remember say plainly what happened and what to do next.
+- Chat: Answers keep paths, maths and line breaks as written. Most failed tool steps say plainly
+  why, and an answer that ran while you were away keeps its tool steps.
+- Rooms: The window title names the room, and on this computer Room settings shows its folder's
+  full path. Folder messages now say what to do.
+- Failures: When there is too much for the model to read, the room says what: your message, the
+  conversation, the room's memory or a setting in AI setup.
+- Security: The desktop app's engine, its built-in Node and several libraries are updated for
+  published security fixes.
+
 ## 0.14.4 (2026-10-19)
 
 - Models: Claude also works with an API key from console.anthropic.com, beside the Claude sign-in.

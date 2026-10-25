@@ -23,6 +23,7 @@ export function formatFriendlyRunReason(run: Pick<PersistentRoomBackgroundRunVie
 		case "schedule_disabled": return "Schedule was disabled before it ran.";
 		case "completed": return "Completed.";
 		case "already_completed": return "Already completed; no duplicate execution was performed.";
+		case "server_stopped": return "Stopped when exxperts stopped.";
 		default: break;
 	}
 	// The server's own text names engine parts and ids: never shown.

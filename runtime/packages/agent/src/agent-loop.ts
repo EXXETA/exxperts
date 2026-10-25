@@ -654,7 +654,8 @@ async function executePreparedToolCall(
 		);
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
-		return { result, isError: false };
+		// A tool may report its own failure without throwing; that flag reaches the model and the page.
+		return { result, isError: (result as { isError?: unknown }).isError === true };
 	} catch (error) {
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);

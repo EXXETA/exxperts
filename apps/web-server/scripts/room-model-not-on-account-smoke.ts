@@ -5,11 +5,13 @@
 // smoke fakes that backend locally and proves, under a synthetic ChatGPT
 // sign-in, that each place says so plainly with the way out and never shows
 // the provider's words:
-// - the matcher takes only that wording, never a 400 about a parameter or a
-//   model at capacity;
+// - the matcher takes only that wording, and an API key's words for a model
+//   it has no access to, never a 400 about a parameter or a model at capacity;
 // - the runtime reads the words out of a `detail` body, and asks only once;
-// - a chat turn shows the one line with Choose another model in Room
-//   settings, Model;
+// - a chat turn shows the one line, the cause, then that the message is
+//   back in the box, then Choose another model in Room settings, Model, which
+//   the line's button takes the place of; the next message no longer
+//   carries it;
 // - Remember, Memorize and Review end in the shared notice, which names the
 //   model and the account and says nothing was lost; nothing is written to
 //   memory, nothing goes to Unsorted, and the conversation still waits;
@@ -19,8 +21,8 @@
 //   same, with the way out that fits: the room's Memory model, the consulted
 //   or asked room's Memory model, or AI setup's default for several rooms;
 // - a model the provider no longer serves (a 404 in OpenAI's own words,
-//   "The model `gpt-6.1-sol` does not exist or you do not have access to
-//   it.", the dotted id inside) gives those three the sentence a Memory model
+//   "The model `gpt-6.1-sol` does not exist.", the dotted id inside) gives
+//   those three the sentence a Memory model
 //   no longer offered gets before any call, Remember, Memorize and Review
 //   the shared notice, and a chat turn the line the room's model row says,
 //   never the provider's words.
@@ -80,12 +82,11 @@ const LINE = "GPT-6.1 Sol isn't available on your ChatGPT account. Choose anothe
 const roomLine = (room: string) => `GPT-6.1 Sol isn't available on your ChatGPT account. Choose another Memory model in ${room}'s Room settings, Model.`;
 const MEMORY_LINE = "GPT-6.1 Sol isn't available on your ChatGPT account. Choose another Memory model in Room settings, Model.";
 const DEFAULTS_LINE = "GPT-6.1 Sol isn't available on your ChatGPT account. Choose another default in Settings, AI setup.";
-const GONE_WORDS = "The model `gpt-6.1-sol` does not exist or you do not have access to it.";
+const GONE_WORDS = "The model `gpt-6.1-sol` does not exist.";
 const GONE_NOTICE = "GPT-6.1 Sol is no longer offered. Nothing was lost.";
 const GONE_ROOM_LINE = "This room's memory model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Choose another Memory model in Room settings, Model.";
 const goneLine = (room: string) => `The memory model of ${room}, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Choose another Memory model in its Room settings, Model.`;
-const GONE_RAW = /does not exist or you do not have access/i;
-const GONE_CHAT_LINE = "This room's model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Choose another model in Room settings, Model.";
+const GONE_RAW = /does not exist/i;
 const GONE_DEFAULTS_LINE = "The default memory model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Choose another default in Settings, AI setup.";
 
 // The ChatGPT backend, as far as this refusal goes: every request is refused
@@ -95,10 +96,14 @@ const GONE_DEFAULTS_LINE = "The default memory model, GPT-6.1 Sol on ChatGPT Plu
 // 404 in OpenAI's words, in either body shape.
 let shape: "detail" | "error" | "gone" | "gone-detail" = "detail";
 let requests = 0;
+// What each request carried, to see a refused message leave the conversation.
+const requestBodies: string[] = [];
 const backend = http.createServer((req, res) => {
-	req.resume();
+	let raw = "";
+	req.on("data", (chunk) => { raw += chunk; });
 	req.on("end", () => {
 		requests += 1;
+		requestBodies.push(raw);
 		const body = shape === "detail"
 			? { detail: WORDS }
 			: shape === "gone"
@@ -151,7 +156,6 @@ try {
 			"Unsupported value: 'reasoning.effort' does not support 'minimal' with the 'gpt-6.1-sol' model.",
 			"reasoning.effort 'xhigh' is not supported for this model",
 			"Selected model is at capacity. Please try a different model.",
-			"The model `gpt-9` does not exist or you do not have access to it.",
 			"400 Bad Request",
 		];
 		for (const words of positives) {
@@ -164,11 +168,17 @@ try {
 			const failure = causes.classifyModelFailure(new Error(words));
 			assert(!(failure.cause === "unreachable" && failure.detail === "not-on-account"), `${JSON.stringify(words)} is not read as not on the account, got ${JSON.stringify(failure)}`);
 		}
-		// The runtime keeps its own copy of the words, to answer this refusal once: the two must agree.
+		// An API key without access to a model reads the same: not available, never "no longer offered".
+		for (const words of ["404 The model `gpt-scripted` does not exist or you do not have access to it.", "403 Project `proj_scripted` does not have access to model `gpt-scripted`"]) {
+			const failure = causes.classifyModelFailure(new Error(words));
+			assert(modelNotOnAccount(words) && failure.cause === "unreachable" && failure.detail === "not-on-account", `${JSON.stringify(words)} reads as not on the account, got ${JSON.stringify(failure)}`);
+		}
+		assert(causes.modelUnreachableSentence("not-on-account", { provider: "openai", model: "gpt-scripted", label: "GPT Scripted" }) === "GPT Scripted isn't available on your account. Nothing was lost.", "the notice says the model is not available, never no longer offered");
+		// The runtime keeps its own copy of ChatGPT's words, to answer this refusal once: the two must agree.
 		const { codexModelNotOnAccount } = await import("@exxeta/exxperts-ai");
 		for (const words of [...positives, ...negatives]) assert(codexModelNotOnAccount(words) === modelNotOnAccount(words), `the runtime's copy of the words agrees on ${JSON.stringify(words)}`);
 		assert(causes.modelUnreachableSentence("not-on-account", SOL) === NOTICE, `the notice's sentence, got ${JSON.stringify(causes.modelUnreachableSentence("not-on-account", SOL))}`);
-		pass("the matcher takes only ChatGPT's words for a model not on the account, in either body shape");
+		pass("the matcher takes ChatGPT's words for a model not on the account, in either body shape, and an API key's words for a model it cannot use");
 	});
 
 	await new Promise<void>((resolve) => backend.listen(0, "127.0.0.1", resolve));
@@ -216,7 +226,7 @@ try {
 		seed.appendMessage({ role: "assistant", content: [{ type: "text", text: "Earlier answer." }], api: "openai-codex-responses", provider: SOL.provider, model: SOL.model, usage, stopReason: "stop", timestamp: Date.now() } as any);
 		return agentId;
 	}
-	const chatRoom = roomOnSol("Chat On Sol", "c_chat_on_sol");
+	roomOnSol("Chat On Sol", "c_chat_on_sol");
 	const rememberRoom = roomOnSol("Remember On Sol", "c_remember_on_sol");
 	const memorizeRoom = roomOnSol("Memorize On Sol", "c_memorize_on_sol");
 	const reviewRoom = roomOnSol("Review On Sol", "c_review_on_sol");
@@ -344,7 +354,7 @@ try {
 		}, "the Memorize run stops", 120_000);
 		assert(run.stop.kind === "outage" && run.stop.cause === "not-on-account", `the Memorize run stops on the notice, got ${JSON.stringify(run.stop)}`);
 		const memorizeSentence = absorbRunOutageSentence(absorbRunOutageModelName(run.stop.model, null), run.stop.cause, 1, run.stop.model.provider);
-		assert(/^Memorize paused because GPT-6\.1 Sol \(.+\) isn't available on your ChatGPT account\. 1 conversation is still waiting\.$/.test(memorizeSentence), `the run's notice names the model and the account, got ${JSON.stringify(memorizeSentence)}`);
+		assert(/^Memorize paused because GPT-6\.1 Sol isn't available on your ChatGPT account\. 1 conversation is still waiting\.$/.test(memorizeSentence), `the run's notice names the model and the account, got ${JSON.stringify(memorizeSentence)}`);
 		assert(memoryOf(memorizeRoom) === memorizeBefore, "the page still waits and nothing went to Unsorted");
 		for (const body of ["gone", "gone-detail"] as const) {
 			shape = body;
@@ -359,7 +369,7 @@ try {
 			}, "the Memorize run stops", 120_000);
 			assert(goneRun.stop.kind === "outage" && goneRun.stop.cause === "not-offered", `Memorize on a model no longer served (${body}) stops on the notice, got ${JSON.stringify(goneRun.stop)}`);
 			const goneSentence = absorbRunOutageSentence(absorbRunOutageModelName(goneRun.stop.model, null), goneRun.stop.cause, 1, goneRun.stop.model.provider);
-			assert(/^Memorize paused because GPT-6\.1 Sol \(.+\) is no longer offered\. 1 conversation is still waiting\.$/.test(goneSentence), `the run's notice says the model is no longer offered, got ${JSON.stringify(goneSentence)}`);
+			assert(/^Memorize paused because GPT-6\.1 Sol is no longer offered\. 1 conversation is still waiting\.$/.test(goneSentence), `the run's notice says the model is no longer offered, got ${JSON.stringify(goneSentence)}`);
 			assert(memoryOf(room) === goneBefore, "the page still waits and nothing went to Unsorted");
 		}
 		pass("Memorize stops on the notice, not on the account or no longer offered; the page still waits and nothing goes to Unsorted");
@@ -435,7 +445,8 @@ try {
 	// --- A chat turn -------------------------------------------------------------------------
 	// The room's chat: send one message, and the line the turn ends in must be
 	// `line`, with `raw` (the provider's words) nowhere on the page, only in the console.
-	async function chatTurnEndsIn(browser: Awaited<ReturnType<typeof chromium.launch>>, room: string, line: string, raw: RegExp): Promise<void> {
+	// `line` is what the newest failure line shows; `saved`, the line the conversation keeps.
+	async function chatTurnEndsIn(browser: Awaited<ReturnType<typeof chromium.launch>>, room: string, line: string, saved: string, raw: RegExp): Promise<void> {
 		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		try {
 			const ui = await ctx.newPage();
@@ -452,13 +463,31 @@ try {
 			const requestsBefore = requests;
 			await composer.fill("Still there?");
 			await composer.press("Enter");
-			await ui.getByText(line, { exact: true }).waitFor({ timeout: 60000 }).catch(async () => {
-				throw new Error(`${room}: the line ${JSON.stringify(line)} never showed; the page says ${JSON.stringify((await ui.locator("body").innerText()).slice(-600))}`);
+			const newestLine = async () => (await ui.locator(".failure-line:not(.is-folded) .system-line-text").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim()).at(-1);
+			await waitUntil(async () => (await newestLine()) === line, `${room}: the line ${JSON.stringify(line)} shows`, 60000).catch(async () => {
+				throw new Error(`${room}: the line ${JSON.stringify(line)} never showed; the newest line says ${JSON.stringify(await newestLine())} and the page ${JSON.stringify((await ui.locator("body").innerText()).slice(-600))}`);
+			});
+			assert((await ui.locator(".failure-line:not(.is-folded) .failure-actions .rs-btn").allInnerTexts()).join("|") === "Choose another model", `${room}: the line's one way on is its button, got ${JSON.stringify(await ui.locator(".failure-line:not(.is-folded) .failure-actions .rs-btn").allInnerTexts())}`);
+			const roomId = room.toLowerCase().replace(/\s+/g, "-");
+			const savedLine = async () => {
+				const threadId = String((await api(`/api/persistent-agents/${roomId}/status`)).body?.activeThread?.threadId ?? "");
+				const thread = (await api(`/api/persistent-agents/${roomId}/threads/${encodeURIComponent(threadId)}`)).body;
+				const items: any[] = thread?.thread?.items ?? thread?.items ?? [];
+				return items.filter((item) => item?.kind === "system" && item?.level === "error").at(-1)?.text;
+			};
+			await waitUntil(async () => (await savedLine()) === saved, `${room}: the conversation keeps the line in one order, the cause, where the message is, then the way on`, 10000).catch(async () => {
+				throw new Error(`${room}: the conversation keeps ${JSON.stringify(await savedLine())}, not ${JSON.stringify(saved)}`);
 			});
 			assert(requests > requestsBefore, `${room}: the turn reached the backend`);
 			assert(!raw.test(await ui.locator("body").innerText()), `${room}: the provider's words are nowhere on the page`);
 			assert(consoleLines.some((consoleLine) => raw.test(consoleLine)), `${room}: the provider's words go to the console`);
-			assert((await ui.getByText("Still there?").count()) >= 1 && (await ui.getByText("Earlier answer.").count()) === 1, `${room}: the message sent and the earlier turn are kept`);
+			assert((await composer.inputValue()) === "Still there?" && (await ui.getByText("Earlier answer.").count()) === 1, `${room}: the message is back in the box and the earlier turn is kept, got ${JSON.stringify(await composer.inputValue())}`);
+			await waitUntil(async () => (await api(`/api/persistent-agents/${room.toLowerCase().replace(/\s+/g, "-")}/status`)).body?.activeThread?.inFlight === false, `${room}: the failed turn settled`);
+			const bodiesBefore = requestBodies.length;
+			await composer.fill("Another question.");
+			await composer.press("Enter");
+			await waitUntil(() => requestBodies.slice(bodiesBefore).some((body) => body.includes("Another question.")), `${room}: the next message reached the backend`);
+			assert(!requestBodies.slice(bodiesBefore).some((body) => body.includes("Still there?")), `${room}: the next message no longer carries the refused one`);
 		} finally {
 			await ctx.close();
 		}
@@ -475,7 +504,7 @@ try {
 		shape = "detail";
 		const browser = await chromium.launch();
 		try {
-			await chatTurnEndsIn(browser, "Chat On Sol", LINE, RAW);
+			await chatTurnEndsIn(browser, "Chat On Sol", "GPT-6.1 Sol isn't available on your ChatGPT account. Your message is back in the box.", "GPT-6.1 Sol isn't available on your ChatGPT account. Your message is back in the box. Choose another model in Room settings, Model.", RAW);
 			pass("a chat turn shows the one line with the way out, never the provider's words");
 		} finally {
 			await browser.close();
@@ -491,7 +520,7 @@ try {
 		try {
 			for (const body of ["gone", "gone-detail"] as const) {
 				shape = body;
-				await chatTurnEndsIn(browser, chatGoneRooms[body], GONE_CHAT_LINE, GONE_RAW);
+				await chatTurnEndsIn(browser, chatGoneRooms[body], "This room's model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Your message is back in the box.", "This room's model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Your message is back in the box. Choose another model in Room settings, Model.", GONE_RAW);
 			}
 			pass("a chat turn on a model no longer offered says so with the way out, never the provider's words, in either body shape");
 		} finally {

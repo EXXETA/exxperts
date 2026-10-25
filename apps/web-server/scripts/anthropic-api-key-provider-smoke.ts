@@ -19,10 +19,15 @@
 // - the key room's turn goes out with the key, the sign-in room's with the
 //   sign-in, each to the model its room chose;
 // - a Memory call on the key asks for the same per-kind cache as on the
-//   sign-in: Remember's call goes out with no cache marker;
+//   sign-in: Remember's call, Memorize's and Review's first reads, their
+//   discussion turns and sign-offs, and Review's tidy go out with no cache
+//   marker, each recorded under its kind;
 // - adding and removing the key never changes either room's choice;
 // - removing the key leaves the sign-in, and the usage page names the key's
-//   turns "Claude API key", apart from the Claude plan.
+//   turns "Claude API key", apart from the Claude plan;
+// - a failed call that moved no tokens writes no usage row, and every failed
+//   call (a turn, a Memory call, the key check) leaves one log line of codes,
+//   never the provider's words.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -72,7 +77,7 @@ const requests: Request[] = [];
 let keyCheck: "ok" | "refused" | "no-workspace" | "down" = "ok";
 const keyChecks: Array<string | undefined> = [];
 // How the endpoint answers a turn: with text, or with the 400 Anthropic gives a key made outside a workspace.
-let turnAnswer: "text" | "no-workspace" | "region" = "text";
+let turnAnswer: "text" | "no-workspace" | "region" | "odd" = "text";
 
 function sse(res: http.ServerResponse, event: string, payload: unknown): void {
 	res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
@@ -85,7 +90,7 @@ const endpoint = http.createServer((req, res) => {
 		if (req.method === "GET" && req.url?.startsWith("/v1/models")) {
 			keyChecks.push(req.headers["x-api-key"] as string | undefined);
 			if (keyCheck === "down") { req.socket.destroy(); return; }
-			if (keyCheck === "refused") { res.writeHead(401, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } })); return; }
+			if (keyCheck === "refused") { res.writeHead(401, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" }, request_id: "req_smoke_key_check" })); return; }
 			if (keyCheck === "no-workspace") { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace." } })); return; }
 			res.writeHead(200, { "content-type": "application/json" });
 			res.end(JSON.stringify({ data: [{ type: "model", id: "claude-haiku-5-5" }], has_more: false }));
@@ -93,7 +98,8 @@ const endpoint = http.createServer((req, res) => {
 		}
 		const body = JSON.parse(raw || "{}");
 		requests.push({ model: String(body.model), apiKey: req.headers["x-api-key"] as string | undefined, authorization: req.headers.authorization, raw });
-		if (turnAnswer === "region") { res.writeHead(403, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "permission_error", message: "Country, region, or territory not supported" } })); return; }
+		if (turnAnswer === "region") { res.writeHead(403, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "permission_error", message: "Country, region, or territory not supported" }, request_id: "req_smoke_region" })); return; }
+		if (turnAnswer === "odd") { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "messages.0.content: text content blocks must be non-empty" }, request_id: "req_smoke_odd" })); return; }
 		if (turnAnswer === "no-workspace") { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace." } })); return; }
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		const text = raw.includes("Checkpoint Compression Constitution") ? "TITLE:\nKey\n\nSESSION_ARC:\nA key.\n\nBODY:\n- A key.\n\nPARKED:\nNone\n" : `Answer from ${body.model}.`;
@@ -164,6 +170,17 @@ try {
 	const keyRoom = newRoom("Key Room");
 	roomModels.writeRoomModels(signInRoom, { conversation: ON_SIGN_IN });
 	roomModels.writeRoomModels(keyRoom, { conversation: ON_SIGN_IN });
+	// A room with notes to review and one conversation waiting to be memorized.
+	const memoryRoom = newRoom("Memory Room");
+	roomModels.writeRoomModels(memoryRoom, { conversation: ON_SIGN_IN });
+	{
+		const l1bPath = path.join(agentsRoot, memoryRoom, "L1b", "current.md");
+		let text = fs.readFileSync(l1bPath, "utf-8");
+		const active = /^##\s+Active Items\s*$/m.exec(text)!;
+		text = `${text.slice(0, active.index)}### Renewals\n\n<!-- e: id=m-0201 kind=fact saved=2026-09-01 -->\n- The Nordwind contract renews in May.\n\n${text.slice(active.index)}`;
+		const recent = /^##\s+Recent Context\s*$/m.exec(text)!;
+		fs.writeFileSync(l1bPath, `${text.slice(0, recent.index + recent[0].length)}\n\n### RC-0001 | CLOSED | 2026-09-09 | The renewal call\n\n**Session arc:** We went through the renewals.\n\n**Body:**\n- The Nordwind renewal is in May.\n\n**Parked:**\nNone\n`, "utf-8");
+	}
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
@@ -277,6 +294,59 @@ try {
 	await api(`/api/persistent-agents/${keyRoom}/checkpoint/cancel`, { method: "POST", body: JSON.stringify({ conversationId: "c_key_0001" }) });
 	pass("a Memory call on the key keeps its kind's cache setting: Remember asks for no prompt cache");
 
+	// Memorize's first read, Review's first read and Review's tidy on the key: no prompt cache, each under its own kind.
+	assert((await api(`/api/persistent-agents/${memoryRoom}/models`, { method: "PUT", body: JSON.stringify({ memory: ON_KEY }) })).status === 200, "the memory room's Memory model is a key model");
+	const memoryCalls = async <T,>(label: string, call: () => Promise<T>): Promise<T> => {
+		const before = requests.length;
+		const result = await call();
+		await waitUntil(() => requests.length > before, `${label} reaches the endpoint`);
+		const sent = requests.slice(before);
+		assert(sent.every((request) => request.apiKey === SYNTHETIC_KEY && request.model === ON_KEY.model), `${label} runs on the key`);
+		assert(sent.every((request) => !request.raw.includes("cache_control")), `${label} on the key asks for no prompt cache`);
+		return result;
+	};
+	const memorizeRead = await memoryCalls("Memorize's first read", () => api(`/api/persistent-agents/${memoryRoom}/absorb/assess`, { method: "POST", body: "{}" }));
+	const reviewRead = await memoryCalls("Review's first read", () => api(`/api/persistent-agents/${memoryRoom}/review/assess`, { method: "POST", body: "{}" }));
+	const firstReadRows = fs.readFileSync(path.join(appDir, "usage.jsonl"), "utf-8").trim().split("\n").length;
+	// Discuss first, in both: each turn and the sign-off is a discussion call, recorded as one, never as a first read.
+	const memorizeTalk = { source: { l1bFingerprint: memorizeRead.body?.source?.l1bFingerprint }, assessmentMarkdown: memorizeRead.body?.assessmentMarkdown };
+	const reviewTalk = { assessmentMarkdown: reviewRead.body?.assessmentMarkdown };
+	const turnSent: string[] = [];
+	for (const said of ["Keep the renewal notes short.", "Leave the Nordwind note as it is."]) {
+		const turn = await memoryCalls("Review's discussion turn", () => api(`/api/persistent-agents/${memoryRoom}/review/discuss`, { method: "POST", body: JSON.stringify({ ...reviewTalk, messages: [{ role: "user", content: said }] }) }));
+		assert(turn.status === 200, `Review's discussion turn answers, got ${turn.status} ${JSON.stringify(turn.body)}`);
+		turnSent.push(requests[requests.length - 1]!.raw);
+	}
+	assert((await memoryCalls("Review's sign-off", () => api(`/api/persistent-agents/${memoryRoom}/review/discuss/signoff`, { method: "POST", body: JSON.stringify({ ...reviewTalk, messages: [{ role: "user", content: "Keep the renewal notes short." }, { role: "assistant", content: "Noted." }] }) }))).status === 200, "Review's sign-off answers");
+	assert((await memoryCalls("Memorize's discussion turn", () => api(`/api/persistent-agents/${memoryRoom}/absorb/discuss`, { method: "POST", body: JSON.stringify({ ...memorizeTalk, messages: [], userMessage: "Keep the renewal date." }) }))).status === 200, "Memorize's discussion turn answers");
+	assert((await memoryCalls("Memorize's sign-off", () => api(`/api/persistent-agents/${memoryRoom}/absorb/discuss/signoff`, { method: "POST", body: JSON.stringify({ ...memorizeTalk, messages: [{ role: "user", content: "Keep the renewal date." }, { role: "assistant", content: "Noted." }] }) }))).status === 200, "Memorize's sign-off answers");
+	const discussionKinds = fs.readFileSync(path.join(appDir, "usage.jsonl"), "utf-8").trim().split("\n").slice(firstReadRows).map((line) => JSON.parse(line)).filter((row) => row.agent === memoryRoom).map((row) => row.callKind);
+	assert(discussionKinds.length === 5 && discussionKinds.every((kind) => kind === "discussion"), `two Review turns, Memorize's turn and both sign-offs are recorded as discussion calls, got ${JSON.stringify(discussionKinds)}`);
+	// Why a discussion turn asks for no cache: two turns' prompts part before the room's notes (the trigger time and the token budget come first), so a cache written on one turn is never read on the next. If this fails, the cache may now pay: measure it again.
+	const systemOf = (raw: string) => String(JSON.parse(raw).system?.map((block: { text?: string }) => block.text ?? "").join("\n") ?? "");
+	const [firstTurn, secondTurn] = turnSent.map(systemOf);
+	let same = 0;
+	while (same < firstTurn.length && firstTurn[same] === secondTurn[same]) same++;
+	assert(same < firstTurn.indexOf("## Material: This Room's Notes"), "two discussion turns part before the room's notes, so no cache could be read back");
+	let tidyRun = "";
+	await memoryCalls("Review's tidy", async () => {
+		const started = await api(`/api/persistent-agents/${memoryRoom}/review/runs`, { method: "POST", body: JSON.stringify({ depth: "wording", topics: ["Renewals"] }) });
+		assert(started.status === 202, `the tidy starts, got ${started.status} ${JSON.stringify(started.body)}`);
+		tidyRun = String(started.body.runId);
+		await waitUntil(async () => (await api(`/api/persistent-agents/${memoryRoom}/review/runs/${tidyRun}`)).body?.state === "ready", "the tidy ends");
+	});
+	await api(`/api/persistent-agents/${memoryRoom}/review/runs/${tidyRun}/cancel`, { method: "POST", body: "{}" });
+	const memoryKinds = fs.readFileSync(path.join(appDir, "usage.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.agent === memoryRoom).map((row) => row.callKind);
+	assert(memoryKinds.includes("first-read") && memoryKinds.includes("review-tidy") && memoryKinds.every(Boolean), `every memory call of the room is recorded under its kind, got ${JSON.stringify(memoryKinds)}`);
+	pass("Memorize's and Review's first reads, discussion turns and sign-offs, and Review's tidy on the key ask for no prompt cache, each under its kind");
+
+	// A Memory call the provider refuses as a bad request (no credential words), for its log line and usage row below.
+	turnAnswer = "odd";
+	const oddBefore = requests.length;
+	const failedRemember = await api(`/api/persistent-agents/${keyRoom}/checkpoint/propose`, { method: "POST", body: JSON.stringify({ conversationId: "c_key_0001", density: "standard" }) });
+	turnAnswer = "text";
+	assert(failedRemember.status >= 400 && requests.slice(oddBefore).some((request) => request.raw.includes("Checkpoint Compression Constitution")), `the Remember call reaches the endpoint and fails, got ${failedRemember.status} ${JSON.stringify(failedRemember.body)}`);
+
 	// A turn refused because the key is outside a workspace says so on its failing frame.
 	turnAnswer = "no-workspace";
 	const failedFrames: any[] = [];
@@ -297,6 +367,21 @@ try {
 
 	// Usage names the key's turns apart from the Claude plan.
 	const usageRows = fs.readFileSync(path.join(appDir, "usage.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+	const zeroKeyRows = usageRows.filter((row) => row.provider === KEY_PROVIDER && !row.input && !row.output && !row.cacheRead && !row.cacheWrite && !row.cost);
+	assert(zeroKeyRows.length === 0, `a failed turn or Memory call that moved no tokens writes no usage row, got ${JSON.stringify(zeroKeyRows)}`);
+	pass("failed calls that moved no tokens write no usage row");
+
+	// One log line per failed call, codes only.
+	const logLines = serverOutput.join("").split("\n").flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
+	const failedCalls = logLines.filter((line) => line.msg === "provider call failed");
+	const chatFailures = failedCalls.filter((line) => line.callKind === "chat" && line.room === keyRoom && line.provider === KEY_PROVIDER && line.model === ON_KEY.model);
+	assert(chatFailures.length === 2, `each failed turn leaves one log line, got ${JSON.stringify(failedCalls)}`);
+	assert(chatFailures.some((line) => line.status === 400 && line.errorType === "invalid_request_error" && line.cause === "unreachable:signed-out"), `the workspace 400 is logged with its status, type and cause, got ${JSON.stringify(chatFailures)}`);
+	assert(chatFailures.some((line) => line.status === 403 && line.errorType === "permission_error" && line.requestId === "req_smoke_region"), `the 403 is logged with its status, type and request id, got ${JSON.stringify(chatFailures)}`);
+	assert(failedCalls.some((line) => line.callKind === "remember-single" && line.room === keyRoom && line.status === 400 && line.requestId === "req_smoke_odd" && line.cause === "other"), `a failed Memory call leaves its log line, got ${JSON.stringify(failedCalls)}`);
+	assert(failedCalls.some((line) => line.callKind === "key-check" && line.provider === KEY_PROVIDER && line.status === 401 && line.errorType === "authentication_error" && line.requestId === "req_smoke_key_check"), `a refused key check leaves its log line, got ${JSON.stringify(failedCalls)}`);
+	assert(!failedCalls.some((line) => /Country, region|scoped to a workspace|invalid x-api-key/.test(JSON.stringify(line))), `the log lines hold codes, never the provider's words, got ${JSON.stringify(failedCalls)}`);
+	pass("every failed call leaves one log line of codes: the room, the call, the provider, the model, the status, the cause, the error type and the request id");
 	const keyRow = usageRows.find((row) => row.provider === KEY_PROVIDER);
 	const planRow = usageRows.find((row) => row.provider === "anthropic");
 	assert(keyRow && keyRow.authType === "api_key" && planRow && planRow.authType === "oauth", `the ledger tells the key's turn from the plan's, got ${JSON.stringify(usageRows.map((row) => [row.provider, row.authType]))}`);

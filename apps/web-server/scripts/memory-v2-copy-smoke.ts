@@ -165,6 +165,10 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const folded = (overrides: Partial<AbsorbRunSession> = {}): AbsorbRunSession => session({ summary: { added: 2, updated: 1, superseded: 0, closed: 0 }, ...overrides });
 	const clean = (overrides: Partial<AbsorbRun> = {}): AbsorbRun => run({ sessions: [folded()], ...overrides });
 	assert(absorbRunFastPathBlockers(clean()).length === 0, "a clean run needs no second look");
+	// A run the Memory model or a restart stopped is never saved on its own: the person sees why and the ways on.
+	const absorbStop = { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "not-answering" } as const;
+	assert(absorbRunFastPathBlockers(clean({ stop: absorbStop } as any)).join("|") === "the Memory model stopped before it finished", `a stopped Memorize waits for a person (got: ${absorbRunFastPathBlockers(clean({ stop: absorbStop } as any)).join("|")})`);
+	assert(absorbRunFastPathBlockers(clean({ stop: { ...absorbStop, kind: "restart", cause: "restarted" } } as any)).join("|") === "the app restarted before it finished", "a restarted Memorize waits for a person");
 	assert(absorbRunFastPathBlockers(clean({ warnings: ["proposal missing Section-level change log"] })).length === 0, "an engine warning never blocks");
 	assert(absorbRunFastPathBlockers(clean({ warnings: ["no memory has been written"] })).length === 0, "the status line the server always sends is not a warning");
 	assert(absorbRunFastPathBlockers(clean({ demotion: demotion([row({ phase: "before" })]) }))[0] === "1 note would move to the archive to stay within the budget", "a note leaving, before or after the read, falls to the card");
@@ -408,7 +412,12 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	// Deleting an archived note is true about what stays: earlier versions in the memory's history still hold it.
 	const entriesSource = read("components/room-memory-entries.tsx");
 	assert(entriesSource.includes('"Delete this archived note?"') && entriesSource.includes('"It leaves the archive and cannot be brought back. Earlier versions in this memory\'s history still show it."') && entriesSource.includes('const DELETE_ARCHIVED_NOTE_LABEL = "Delete";') && !/for good|or undone/.test(entriesSource), "the archive delete says what it does and what stays");
-	assert(read("App.tsx").includes("Your discussion is kept; it comes back when you open Memorize again, unless your memory or its Memory model changes first.") && read("App.tsx").includes("Your discussion is kept; it comes back when you open Review again, unless your memory or its Memory model changes first."), "leaving a discussion says it is kept, as it is");
+	// Leaving a discussion says it is kept, as it is; one on a missing first read is never kept, so its confirm says so.
+	const words = await import("../../web-ui/src/memory-v2-copy.js") as any;
+	assert(words.discussionKeptSentence?.("Review", true) === "With no first read, your discussion is not kept: it does not come back when you open Review again." && words.discussionKeptSentence?.("Memorize", true) === "With no first read, your discussion is not kept: it does not come back when you open Memorize again.", "a discussion on a missing first read is not promised back");
+	assert(words.discussionKeptSentence("Memorize", false) === "Your discussion is kept; it comes back when you open Memorize again, unless your memory or its Memory model changes first." && words.discussionKeptSentence("Review", false) === "Your discussion is kept; it comes back when you open Review again, unless your memory or its Memory model changes first.", "leaving a discussion says it is kept, as it is");
+	const appText = read("App.tsx");
+	assert((appText.match(/body: discussionKeptSentence\("Review", Boolean\(reviewWorkflow\.assessment\?\.firstReadMissing\)\)/g) ?? []).length === 2 && (appText.match(/body: discussionKeptSentence\("Memorize", Boolean\(absorbWorkflow\.assessment\?\.firstReadMissing\)\)/g) ?? []).length === 2 && !appText.includes("Your discussion is kept;"), "the Leave and Back confirms on both screens say it from the first read they stand on");
 }
 
 // 10f. A note the sort placed and the same run then read again into notes is
@@ -506,12 +515,15 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const first = overLimitFirstRead({ reviewTargetTokens: 51_600, budgetTokens: 20_000, entriesOverBudget: 584 });
 	assert(first.headline === "Memory is 258% full.", `the headline is the percentage the rest of the product uses (got: ${first.headline})`);
 	assert(first.sentence === "Memorizing now moves about 584 of the least recently touched notes to the archive. You can also:", `the sentence says what happens and hands over (got: ${first.sentence})`);
-	assert(first.raise.target === 52_000 && first.raise.label === "Raise the budget to 52k to keep everything that is there now", `the raise is the room's memory rounded up (got: ${JSON.stringify(first.raise)})`);
+	assert(first.raise?.target === 52_000 && first.raise.label === "Raise the budget to 52k to keep everything that is there now", `the raise is the room's memory rounded up (got: ${JSON.stringify(first.raise)})`);
 	assert(first.reviewLabel === REVIEW_FIRST_LABEL && REVIEW_FIRST_LABEL === "Review first", "the other way is a Review");
 	const huge = overLimitFirstRead({ reviewTargetTokens: 96_000, budgetTokens: 20_000, entriesOverBudget: 1_200 });
-	assert(huge.raise.target === MEMORY_LIMIT_CEILING_TOKENS && huge.raise.label === "Raise the budget to 80k", `past the ceiling the button sets the ceiling (got: ${JSON.stringify(huge.raise)})`);
+	assert(huge.raise?.target === MEMORY_LIMIT_CEILING_TOKENS && huge.raise.label === "Raise the budget to 80k", `past the ceiling the button sets the ceiling (got: ${JSON.stringify(huge.raise)})`);
 	assert(huge.sentence.includes("Even at the 80k ceiling some of them would still move."), `and the sentence says notes would still move (got: ${huge.sentence})`);
-	assert(overLimitFirstRead({ reviewTargetTokens: 96_000, budgetTokens: 20_000, entriesOverBudget: 1_200, ceilingTokens: 100_000 }).raise.target === 96_000, "a ceiling handed in wins over the mirrored one");
+	assert(overLimitFirstRead({ reviewTargetTokens: 96_000, budgetTokens: 20_000, entriesOverBudget: 1_200, ceilingTokens: 100_000 }).raise?.target === 96_000, "a ceiling handed in wins over the mirrored one");
+	// Already at the ceiling: a raise would change nothing, so none is offered.
+	const atCeiling = overLimitFirstRead({ reviewTargetTokens: 96_000, budgetTokens: MEMORY_LIMIT_CEILING_TOKENS, entriesOverBudget: 300 });
+	assert(atCeiling.raise === null && atCeiling.sentence === "Memorizing now moves about 300 of the least recently touched notes to the archive. You can also:", `no raise is offered at the ceiling (got: ${JSON.stringify(atCeiling)})`);
 	assert(!/least[- ]used/i.test(first.sentence), "the first read never claims least-used either");
 }
 
@@ -555,6 +567,32 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(reviewCardSentence(counts, 246, true).includes("above its budget (246% full)"), "above the budget is said in words, not only as a percent");
 	const none = reviewChangeCounts([]);
 	assert(reviewCardHeadline(none) === "Nothing needed changing." && reviewCardSentence(none, 40, false).startsWith("The notes are already tidy."), "a no-op tidy says so");
+	// Nothing changed because the tidy calls failed: the card says it could not finish, never that the notes are tidy.
+	// The topics left are named, so the person knows which ones.
+	const three = ["Hiring", "Payments", "Office move"];
+	const notFinished = "The Memory model could not tidy 3 topics this time (Hiring, Payments, Office move), so they were left as they were. Nothing was lost. Try again; if it repeats, choose another model.";
+	const headlineLeft = (reviewCardHeadline as (counts: typeof none, topicsLeft?: string[]) => string)(none, three);
+	const sentenceLeft = (reviewCardSentence as (counts: typeof none, percent: number, over: boolean, topicsLeft?: string[]) => string)(none, 40, false, three);
+	assert(headlineLeft === "Review could not finish." && sentenceLeft === notFinished, `a tidy whose calls failed says it could not finish (got: ${headlineLeft} / ${sentenceLeft})`);
+	assert((reviewCardSentence as any)(none, 40, false, ["Office move"]) === "The Memory model could not tidy Office move this time, so it was left as it was. Nothing was lost. Try again; if it repeats, choose another model.", "one topic left is named, in the singular");
+	assert((reviewCardSentence as any)(none, 40, false, ["A", "B", "C", "D", "E"]).includes("could not tidy 5 topics this time (A, B, C and 2 more), so"), "a long list names three and counts the rest");
+	// A save that tidied nothing saved only what left for the budget: the saved screen says that, never "could not finish".
+	const madeRoomHeadline = (reviewSavedHeadline as any)("Ledgerline", none, three, 53);
+	const madeRoomSentence = (reviewSavedSentence as any)(none, 40, false, three, 53);
+	assert(madeRoomHeadline === "Ledgerline made room in its memory." && madeRoomSentence === "53 notes moved to the archive to stay within the budget. The Memory model could not tidy 3 topics this time (Hiring, Payments, Office move); they are unchanged. Try again tidies them; if it repeats, choose another model.", `a save that only archived for the budget says so, and what its Try again does (got: ${madeRoomHeadline} / ${madeRoomSentence})`);
+	assert((reviewSavedSentence as any)(none, 40, false, [], 53) === "53 notes moved to the archive to stay within the budget.", "with no topic left there is no Try again, and no line for it");
+	const copyModule = await import("../../web-ui/src/memory-v2-copy.js") as any;
+	assert(copyModule.reviewBudgetOnlyConfirmBody?.(53) === "53 notes move to the archive to stay within the budget. Nothing else changes." && copyModule.reviewBudgetOnlyConfirmBody?.(1) === "1 note moves to the archive to stay within the budget. Nothing else changes.", "Save's confirm for a budget-only save says what it saves");
+	const appForConfirm = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
+	assert(/body: reviewRun\.changes\.length === 0 && reviewRun\.demotion\.counts\.leaving > 0\s*\? reviewBudgetOnlyConfirmBody\(reviewRun\.demotion\.counts\.leaving\)/.test(appForConfirm), "the confirm uses it when nothing was tidied");
+	assert((reviewSavedSentence as any)(none, 40, false, ["Office move"], 1) === "1 note moved to the archive to stay within the budget. The Memory model could not tidy Office move this time; it is unchanged. Try again tidies it; if it repeats, choose another model.", `one note and one topic, in the singular (got: ${(reviewSavedSentence as any)(none, 40, false, ["Office move"], 1)})`);
+	// The Try again clause comes only with the Try again button.
+	assert((reviewSavedSentence as any)(none, 40, false, three, 53, false) === "53 notes moved to the archive to stay within the budget. The Memory model could not tidy 3 topics this time (Hiring, Payments, Office move); they are unchanged.", `without Try again the budget-only sentence ends at "unchanged." (got: ${(reviewSavedSentence as any)(none, 40, false, three, 53, false)})`);
+	assert((reviewSavedSentence as any)(counts, 90, false, ["Office move"], 0, false).endsWith("Memory is 90% full. Office move could not be tidied this time and was left as it was."), `without Try again the partly done sentence ends with the topic left (got: ${(reviewSavedSentence as any)(counts, 90, false, ["Office move"], 0, false)})`);
+	// Some topics tidied and some failed: both are said, live and saved.
+	assert((reviewCardHeadline as any)(counts, ["Office move"]) === "4 topics tidied." && (reviewCardSentence as any)(counts, 90, false, ["Office move"]).endsWith("then save. Office move could not be tidied this time and was left as it was."), `a partly done tidy says both (got: ${(reviewCardSentence as any)(counts, 90, false, ["Office move"])})`);
+	assert((reviewSavedSentence as any)(counts, 90, false, ["Payments", "Office move"]).endsWith("Memory is 90% full. 2 topics could not be tidied this time (Payments, Office move) and were left as they were. Try again; if it repeats, choose another model."), `the saved card says both, and the way on for the topics left (got: ${(reviewSavedSentence as any)(counts, 90, false, ["Payments", "Office move"])})`);
+	assert((reviewSavedSentence as any)(counts, 90, false, ["Office move"]).endsWith("Office move could not be tidied this time and was left as it was. Try again; if it repeats, choose another model."), "one topic left on the saved card, in the singular");
 	assert(reviewSavedHeadline("Ledgerline", counts) === "Ledgerline tidied its memory." && reviewSavedHeadline("Ledgerline", none) === "Nothing changed in Ledgerline's memory.", "the saved headline names the room");
 	assert(reviewSavedSentence(counts, 90, false) === "4 topics: 2 shortened, 1 merged, 1 moved to the archive, 1 closed. Memory is 90% full.", `the saved sentence (got: ${reviewSavedSentence(counts, 90, false)})`);
 	assert(reviewTopicName(changes[0]) === "Hiring" && reviewTopicName({ topic: "Active Items", section: "Active Items" }) === "Open items", "a topic is named without its section; the open-items section gets the person's word");
@@ -585,6 +623,9 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(disagreeing(1) === "Two notes disagree. Either tidy can merge them into one note, and the text it replaces is kept in the archive.", `one disagreeing pair says how either tidy settles it (got: ${disagreeing(1)})`);
 	assert(disagreeing(2) === "Some notes disagree. Either tidy can merge each pair into one note, and the texts it replaces are kept in the archive.", `several pairs read in the plural (got: ${disagreeing(2)})`);
 	assert(disagreeing(0) === depth(false, false) && disagreeing(1, true) === depth(true, false, 3_000) && disagreeing(1, false, true) === depth(false, true), "with none, or over the budget, or with stale notes, the sentence is as it was");
+	// With no first read nothing was read, so the sentence says nothing of what a read would have found.
+	const missingDepth = reviewDepthSentence({ overBudget: false, staleFlagged: false, firstReadMissing: true, budgetTokens: 20_000, reviewTargetTokens: 16_000 } as Parameters<typeof reviewDepthSentence>[0]);
+	assert(missingDepth === "Memory is 80% full, so tidying the wording is enough.", `with no first read the depth sentence claims nothing about stale notes (got: ${missingDepth})`);
 	const lookAlike = reviewDepthSentence({ overBudget: false, staleFlagged: false, lookAlike: true, disagreeing: 1, budgetTokens: 20_000, reviewTargetTokens: 16_000 });
 	assert(lookAlike === "Some topics look the same, and only the second option can join them, so it is recommended.", `topics that look the same say why the second option is recommended, before any disagreement (got: ${lookAlike})`);
 	// The sentence never contradicts the recommendation: "tidying the wording is enough" only where the server recommends the wording tidy.
@@ -633,8 +674,184 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(reviewRunFastPathBlockers(wordingOnly({ demotion: demotion([row()], { overageTokens: 300 }) }))[0] === "1 note would move to the archive to stay within the budget", "a note leaving for the budget blocks");
 	assert(reviewRunFastPathBlockers(wordingOnly({ budget: budget({ after: 21_000, overBudgetAfter: true }) })).includes("saving would leave memory above its budget"), "crossing the budget blocks");
 	assert(reviewRunFastPathBlockers(wordingOnly({ leftAsIs: [{ topics: ["Hiring", "Payments"], reason: "The room's answer for these was cut off." }] })).length === 0, "a topic the tidy left as it was never stops the automatic save");
+	const reviewStop = { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "not-answering" } as const;
+	assert(reviewRunFastPathBlockers(wordingOnly({ stop: reviewStop, leftAsIs: [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }] })).join("|") === "the Memory model stopped before it finished", "a stopped tidy waits for a person, with its paused notice");
+	assert(reviewRunFastPathBlockers(wordingOnly({ stop: { ...reviewStop, kind: "restart", cause: "restarted" } })).join("|") === "the app restarted before it finished", "a restarted tidy waits for a person");
 	const leftLine = (await import("../../web-ui/src/memory-v2-copy.js") as any).reviewLeftAsIsSentence;
-	assert(leftLine?.(1) === "1 topic was left as it was." && leftLine?.(2) === "2 topics were left as they were.", "the card's one line for topics left as they were");
+	assert(leftLine?.(["Hiring"]) === "Hiring could not be tidied this time and was left as it was." && leftLine?.(["Hiring", "Payments"]) === "2 topics could not be tidied this time (Hiring, Payments) and were left as they were.", "the card's one line for topics left as they were");
+	// Every tidy failed: nothing to save. The card offers Try again for the topics left and Close, never Save, and automatic maintenance does not save it.
+	{
+		const copy = await import("../../web-ui/src/memory-v2-copy.js") as any;
+		const failedAll = tidy({ changes: [], leftAsIs: [{ topics: ["Hiring", "Payments", "Office move"], reason: "The model could not tidy these notes this time." }] });
+		assert(copy.reviewRunNothingToSave?.(failedAll) === true, "a tidy that tidied nothing has nothing to save");
+		assert(copy.reviewRunNothingToSave?.(tidy({ leftAsIs: failedAll.leftAsIs })) === false && copy.reviewRunNothingToSave?.(tidy({ changes: [] })) === false, "a partly done tidy, or one that found nothing to change, is saved as before");
+		const budgetOnly = tidy({ changes: [], leftAsIs: failedAll.leftAsIs, demotion: demotion([row()], { overageTokens: 300 }) });
+		assert(copy.reviewRunNothingToSave?.(budgetOnly) === false, "a note leaving for the budget is still something to save");
+		// A budget raised (or lowered) on the card is something to save, as on Memorize's card: Save stays, so Close never drops it.
+		const raisedOnly = tidy({ changes: [], leftAsIs: failedAll.leftAsIs, budget: budget({ budgetTokens: 30_000, savedBudgetTokens: 20_000 }) });
+		assert(copy.reviewRunNothingToSave?.(raisedOnly) === false, "a raised budget is something to save");
+		const app = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
+		const fastPath = app.slice(app.indexOf("async function maybeFastPathReviewRun"), app.indexOf("async function withReviewRunRequest"));
+		assert(/if \(!fastPathOn \|\| reviewRunNothingToSave\(reviewRun\)\) return false;/.test(fastPath), "automatic maintenance shows a tidy that tidied nothing, and never saves it");
+		const pageRequire = (await import("node:module")).createRequire(new URL("../../web-ui/package.json", import.meta.url));
+		const { createElement } = pageRequire("react");
+		(globalThis as any).React = pageRequire("react");
+		const { renderToStaticMarkup } = pageRequire("react-dom/server");
+		const screen: any = await import(new URL("../../web-ui/src/components/review-screen.tsx", import.meta.url).href);
+		const noop = () => {};
+		const card = (run: ReviewRun) => renderToStaticMarkup(createElement(screen.ReviewCard, { run, roomName: "Supplier Desk", keepIds: [], busy: false, error: null, onToggleKeep: noop, onToggleKeepTopic: noop, onRaiseBudget: noop, onCancel: noop, onBack: noop, backLabel: "Back", onSave: noop, onClose: noop, onTryAgain: noop, onChooseModel: noop, onSignIn: noop })) as string;
+		const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+		const rowButtons = (html: string) => buttons(html.slice(html.lastIndexOf("checkpoint-preview-actions")));
+		// A missing first read read nothing: it lists only what the app found on its own, with no "None" under the model's headings.
+		const readSections = (missing: boolean) => renderToStaticMarkup(createElement(screen.ReviewFirstReadSections, { fields: { couldBeShorter: [], staleOrContradicts: [], needsYourCall: [], topics: [], saysTheSameTwice: ["Alpha and Gamma both say: the report goes out on Mondays."] }, missing })) as string;
+		assert(!readSections(true).includes("<p>None</p>") && !readSections(true).includes("Could be shorter") && !readSections(true).includes("Looks stale") && readSections(true).includes("Says the same twice"), `a missing first read shows no "None" sections (got: ${readSections(true)})`);
+		assert(readSections(false).includes("Could be shorter") && readSections(false).includes("<p>None</p>"), "a real read still says when it found nothing");
+		const reviewShellSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
+		assert(reviewShellSource.includes("<ReviewFirstReadSections fields={assessment.fields} missing={Boolean(assessment.firstReadMissing)} />") && reviewShellSource.includes("firstReadMissing={Boolean(assessment.firstReadMissing)}"), "the first read screen tells both parts when the read is missing");
+		const failedHtml = card(failedAll);
+		assert(failedHtml.includes("<h2>Review could not finish.</h2>") && failedHtml.includes(notFinished) && !failedHtml.includes("already tidy") && !failedHtml.includes("Nothing in these notes needed changing.") && !failedHtml.includes("<h3>Changes</h3>"), `the card says the tidy could not finish, and lists no empty changes (got: ${failedHtml.slice(0, 600)})`);
+		assert(buttons(failedHtml).join("|") === "Close|Choose another model|Try again", `the card offers Close, Choose another model and Try again, never Save (got: ${buttons(failedHtml).join("|")})`);
+		// Every tidy failed but a note still leaves for the budget: Save is offered, and the card says what it saves.
+		const budgetHtml = card(budgetOnly);
+		assert(budgetHtml.includes("The Memory model could not tidy 3 topics this time (Hiring, Payments, Office move), so they were left as they were. Saving moves 1 note to the archive to stay within the budget; nothing else changes.") && !budgetHtml.includes("Try again;") && rowButtons(budgetHtml).slice(0, 3).join("|") === "Cancel|Back|Try again" && rowButtons(budgetHtml)[3]?.startsWith("Save"), `the card says what Save saves, and offers Try again for the topics left (got: ${budgetHtml.slice(0, 700)})`);
+		const partHtml = card(tidy({ leftAsIs: [{ topics: ["Office move"], reason: "The model could not tidy these notes this time." }] }));
+		assert(partHtml.includes("Office move could not be tidied this time and was left as it was.") && (partHtml.match(/could not be tidied/g) ?? []).length === 1, "a partly done tidy says both once");
+		assert(rowButtons(partHtml).join("|") === "Cancel|Back|Try again|Save to memory", `a partly done tidy offers Try again for the topics left before Save (got: ${rowButtons(partHtml).join("|")})`);
+		// Stopped by an unreachable model before anything was tidied: the same layout as every tidy failed, the sentence and then one row.
+		const stoppedHtml = card(tidy({ changes: [], leftAsIs: [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }], stop: { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "not-answering" } }));
+		// The sentence under the headline is announced, as the notice box it replaced was.
+		assert(stoppedHtml.includes("<h2>Review paused.</h2>") && !stoppedHtml.includes(notFinished) && stoppedHtml.includes('<p role="status">GPT-5.5 isn&#x27;t answering right now. Nothing was lost.</p>') && !stoppedHtml.includes("What was tidied can be saved"), `a stop with nothing tidied says nothing was lost, announced (got: ${stoppedHtml.slice(0, 900)})`);
+		assert(buttons(stoppedHtml).join("|") === "Close|Choose another model|Try again", `one row: Close, Choose another model, Try again (got: ${buttons(stoppedHtml).join("|")})`);
+		assert(!stoppedHtml.includes("absorb-run-stop-note") && !failedHtml.includes("absorb-run-stop-note") && /<h2>Review paused\.<\/h2><p role="status">GPT-5\.5 isn&#x27;t answering right now\./.test(stoppedHtml), `the paused card puts its sentence where the failed card puts its own, with no notice box (got: ${stoppedHtml.slice(0, 500)})`);
+		// Under the "Review paused." headline the line is the cause alone, as the first read's notice says it.
+		assert(!stoppedHtml.includes("Review paused because") && !stoppedHtml.includes("Review paused:"), `no "Review paused" twice (got: ${stoppedHtml.slice(0, 500)})`);
+		const failingHtml = card(tidy({ changes: [], leftAsIs: [{ topics: ["Hiring"], reason: "The model could not tidy these notes this time." }], stop: { kind: "failing", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "repeated" } as any }));
+		assert(failingHtml.includes('<p role="status">The Memory model failed the same way twice, so Review stopped. Nothing was lost. Choose another model, or try again later.</p>') && buttons(failingHtml).join("|") === "Close|Choose another model|Try again", `the same failure twice says so, announced, with the ways on (got: ${failingHtml.slice(0, 600)})`);
+		assert(/rs-btn rs-btn-primary"[^>]*>Choose another model</.test(failingHtml) && !/rs-btn rs-btn-primary"[^>]*>Try again</.test(failingHtml), `the same failure twice: Choose another model leads, Try again is a plain button (got: ${failingHtml.slice(failingHtml.lastIndexOf("checkpoint-preview-actions"))})`);
+		assert(failingHtml.includes("<h2>Review could not finish.</h2>"), `a run the same failure stopped is not paused (got: ${failingHtml.slice(0, 300)})`);
+		const restartedHtml = card(tidy({ changes: [], leftAsIs: [{ topics: ["Hiring"], reason: "The app restarted before these notes were tidied." }], stop: { kind: "restart", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "restarted" } }));
+		assert(restartedHtml.includes("<h2>Review paused.</h2>") && restartedHtml.includes('<p role="status">The app restarted. Nothing was lost.</p>') && buttons(restartedHtml).join("|") === "Close|Continue", `a restart with nothing tidied: its sentence, then Close and Continue (got: ${buttons(restartedHtml).join("|")})`);
+		// Stopped before anything was tidied, with notes still leaving for the budget: Save is offered, so the card says what it saves.
+		for (const stop of [{ kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "not-answering" }, { kind: "failing", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "repeated" }] as const) {
+			const leavingHtml = card(tidy({ changes: [], leftAsIs: [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }], demotion: demotion([row(), row({ id: "m-2" })], { overageTokens: 300 }), stop: stop as any }));
+			assert(/<\/h2><p>Saving moves 2 notes to the archive to stay within the budget; nothing else changes\.<\/p>/.test(leavingHtml) && rowButtons(leavingHtml).some((label) => label.startsWith("Save")), `${stop.kind}: a stopped card with notes leaving says what Save saves (got: ${leavingHtml.slice(0, 900)})`);
+			// Its notice sits under the "Review paused." headline too, so it says the cause alone.
+			if (stop.kind === "outage") assert(leavingHtml.includes("<h2>Review paused.</h2>") && leavingHtml.includes("<p>GPT-5.5 isn&#x27;t answering right now. Nothing was lost.</p>") && !leavingHtml.includes("Review paused because"), `outage: the notice under "Review paused." is the cause alone (got: ${leavingHtml.slice(0, 900)})`);
+		}
+		// No Try again where it is sure to fail: the way that works comes first. A spent quota is sure to fail while its way on or its plan's reset is unknown.
+		const unknownReset = { kind: "sign-in", provider: "ChatGPT" } as const;
+		for (const [cause, extra] of [["quota", { quotaWay: unknownReset }], ["not-offered", {}], ["not-on-account", {}], ["region-or-plan", {}]] as const) {
+			const sure = card(tidy({ changes: [], leftAsIs: [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }], stop: { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause, ...extra } }));
+			assert(rowButtons(sure).join("|") === "Close|Choose another model", `${cause}: no Try again on the paused card (got: ${rowButtons(sure).join("|")})`);
+			// With no Try again and no sign-in way, another model is the way on, so it leads.
+			assert(/rs-btn rs-btn-primary"[^>]*>Choose another model</.test(sure), `${cause}: Choose another model is the main button (got: ${sure.slice(sure.lastIndexOf("checkpoint-preview-actions"))})`);
+			const part = card(tidy({ leftAsIs: [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }], stop: { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause, ...extra } }));
+			assert(!buttons(part).includes("Try again") && buttons(part).includes("Choose another model"), `${cause}: no Try again in a partly done card's notice (got: ${buttons(part).join("|")})`);
+		}
+		// The first reads' notice follows the same rule.
+		const notice: any = await import(new URL("../../web-ui/src/components/model-notice.tsx", import.meta.url).href);
+		const noticeHtml = renderToStaticMarkup(createElement(notice.ModelNoticePanel, { notice: { detail: "not-on-account", sentence: "GPT-5.5 isn't available on your ChatGPT account. Nothing was lost." }, onTryAgain: noop, onChooseModel: noop })) as string;
+		assert(notice.retryCanHelp("not-on-account") === false && !buttons(noticeHtml).includes("Try again") && buttons(noticeHtml).includes("Choose another model"), `not on the account: no Try again on the notice either (got: ${buttons(noticeHtml).join("|")})`);
+		const signedOutHtml = card(tidy({ changes: [], leftAsIs: [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }], stop: { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "signed-out" } }));
+		assert(buttons(signedOutHtml).length === 3 && buttons(signedOutHtml)[0] === "Close" && buttons(signedOutHtml)[2] === "Choose another model" && !buttons(signedOutHtml).includes("Try again") && /rs-btn rs-btn-primary"[^>]*>[^<]+<\/button><button[^>]*>Choose another model/.test(signedOutHtml), `signed out: the sign-in way first and primary, then Choose another model, no Try again (got: ${buttons(signedOutHtml).join("|")})`);
+		assert(signedOutHtml.includes('<h2>Review paused.</h2><p role="status">GPT-5.5&#x27;s provider is signed out. Nothing was lost.</p>'), `signed out under the paused headline: the provider's state alone (got: ${signedOutHtml.slice(0, 700)})`);
+		assert(!/rs-btn rs-btn-primary"[^>]*>Choose another model</.test(signedOutHtml), `signed out: the sign-in way stays the one main button (got: ${signedOutHtml.slice(signedOutHtml.lastIndexOf("checkpoint-preview-actions"))})`);
+		const partStoppedHtml = card(tidy({ leftAsIs: [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }], stop: { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "not-answering" } }));
+		assert(partStoppedHtml.includes("Review paused because GPT-5.5 isn&#x27;t answering right now. What was tidied can be saved; the rest is unchanged."), `a stop after some tidying names the model alone, as the first read's notice does (got: ${partStoppedHtml.slice(0, 900)})`);
+		assert(buttons(partStoppedHtml).filter((label) => label === "Try again").length === 1, `a stop after some tidying keeps one Try again, in its notice (got: ${buttons(partStoppedHtml).join("|")})`);
+		// One Try again rule for the notice and both cards: a spent quota someone can lift, or a plan whose reset is ahead or has passed, keeps it;
+		// a gateway refusing the request offers its key first, with no Try again until a way is taken.
+		const leftOne = [{ topics: ["Hiring"], reason: "The Memory model could not be reached, so these notes were not tidied." }];
+		const passedReset = { kind: "sign-in", provider: "ChatGPT", resetsAt: new Date(Date.now() - 5 * 60_000).toISOString() } as const;
+		const resetAhead = { kind: "sign-in", provider: "ChatGPT", resetsAt: new Date(Date.now() + 42 * 60_000).toISOString() } as const;
+		const keyQuota = { kind: "key", provider: "OpenAI" } as const;
+		for (const [label, quotaWay] of [["a plan whose reset has passed", passedReset], ["a plan that resets later", resetAhead], ["a key's spent credit", keyQuota]] as const) {
+			const canWork = rowButtons(card(tidy({ changes: [], leftAsIs: leftOne, stop: { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "quota", quotaWay } })));
+			assert(canWork.join("|") === "Close|Choose another model|Try again", `${label}: Try again on the paused card (got: ${canWork.join("|")})`);
+		}
+		const gatewayRefusedRow = rowButtons(card(tidy({ changes: [], leftAsIs: leftOne, stop: { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "gateway-refused", key: "refused", gateway: "Test Gateway" } })));
+		assert(gatewayRefusedRow.join("|") === "Close|Replace key|Choose another model", `a gateway refusing the request: Replace key first, no Try again (got: ${gatewayRefusedRow.join("|")})`);
+		const rule = notice.retryCanHelp as (cause: string, quotaWay?: unknown) => boolean;
+		assert(!rule("quota") && !rule("quota", unknownReset) && rule("quota", passedReset) && rule("quota", resetAhead) && rule("quota", keyQuota) && !rule("region-or-plan") && !rule("gateway-refused") && !rule("not-on-account") && !rule("signed-out") && !rule("not-offered") && !rule("too-small") && rule("not-answering") && rule("repeated"), "the notice's Try again rule is the cards' rule");
+		const passedNotice = renderToStaticMarkup(createElement(notice.ModelNoticePanel, { notice: { detail: "quota", sentence: "GPT-5.5 has reached your plan's usage limit. Nothing was lost.", quotaWay: passedReset, modelName: "GPT-5.5" }, onTryAgain: noop, onChooseModel: noop })) as string;
+		assert(buttons(passedNotice).join("|") === "Try again|Choose another model", `a passed reset: Try again on the notice (got: ${buttons(passedNotice).join("|")})`);
+		const gatewayNotice = renderToStaticMarkup(createElement(notice.ModelNoticePanel, { notice: { detail: "gateway-refused", sentence: "Test Model refused this request. Nothing was lost.", provider: "test-gateway", key: "refused" }, onTryAgain: noop, onChooseModel: noop, onSignIn: noop })) as string;
+		assert(buttons(gatewayNotice).join("|") === "Replace key|Choose another model", `a gateway refusing the request: Replace key on the notice, no Try again (got: ${buttons(gatewayNotice).join("|")})`);
+		// A paused card never shows a provider's raw id: the model is named alone, whether or not the room's Memory model
+		// lends its label, and a gateway by the name AI setup gives it.
+		const memorizeScreen: any = await import(new URL("../../web-ui/src/components/absorb-run-screen.tsx", import.meta.url).href);
+		const onGateway = { provider: "test-gateway", model: "test-model" };
+		const memorizeCard = (stop: unknown, memoryModel: unknown) => renderToStaticMarkup(createElement(memorizeScreen.AbsorbRunCard, { run: run({ progress: { folded: 1, total: 2 }, sessions: [session(), session({ id: "RC-0002", outcome: "pending" as any, summary: undefined })], stop: stop as any }), roomName: "Supplier Desk", memoryModel, keepIds: [], busy: false, error: null, onToggleKeep: noop, onToggleKeepTopic: noop, onRaiseBudget: noop, onApprove: noop, onCancel: noop, onBackToAssessment: noop, onResume: noop, onChooseModel: noop, onSignIn: noop })) as string;
+		for (const cause of ["quota", "not-answering", "busy", "signed-out", "gateway-refused", "region-or-plan", "not-offered", "not-on-account"] as const) {
+			const stop = { kind: "outage", model: onGateway, cause, ...(cause === "quota" ? { quotaWay: { kind: "gateway", provider: "Test Gateway" } } : {}), ...(cause === "signed-out" || cause === "gateway-refused" ? { key: "refused" } : {}), gateway: "Test Gateway" } as any;
+			const reviewHtml = card(tidy({ leftAsIs: leftOne, stop }));
+			assert(!reviewHtml.includes("test-gateway") && (reviewHtml.includes("Review paused because Test Model ") || reviewHtml.includes("Review paused: Test Gateway ")), `${cause}: Review's paused card shows no raw provider id (got: ${reviewHtml.slice(0, 900)})`);
+			for (const memoryModel of [{ ...onGateway, label: "Test Model" }, { provider: "test-gateway", model: "other-model", label: "Other Model" }, null]) {
+				const memorizeHtml = memorizeCard(stop, memoryModel);
+				assert(!memorizeHtml.includes("test-gateway") && (memorizeHtml.includes("Memorize paused because Test Model ") || memorizeHtml.includes("Memorize paused: Test Gateway ")), `${cause}: Memorize's paused card shows no raw provider id, with ${memoryModel ? memoryModel.model : "no Memory model"} chosen (got: ${memorizeHtml.slice(0, 900)})`);
+			}
+		}
+		const quotaOnGateway = memorizeCard({ kind: "outage", model: onGateway, cause: "quota", quotaWay: { kind: "gateway", provider: "Test Gateway" }, gateway: "Test Gateway" }, null);
+		assert(quotaOnGateway.includes("Memorize paused because Test Model has reached its usage limit or run out of credit. 1 conversation is still waiting. Ask whoever runs Test Gateway about the limit."), `a spent gateway quota on Memorize's card names the model alone and the gateway by its name (got: ${quotaOnGateway.slice(0, 900)})`);
+		// Memorize's paused card follows the same Try again rule.
+		const memorizePassed = memorizeCard({ kind: "outage", model: onGateway, cause: "quota", quotaWay: passedReset }, null);
+		const memorizeUnknown = memorizeCard({ kind: "outage", model: onGateway, cause: "quota", quotaWay: unknownReset }, null);
+		const memorizeRefused = memorizeCard({ kind: "outage", model: onGateway, cause: "gateway-refused", key: "refused", gateway: "Test Gateway" }, null);
+		assert(buttons(memorizePassed).includes("Try again") && !buttons(memorizeUnknown).includes("Try again") && buttons(memorizeRefused).includes("Replace key") && !buttons(memorizeRefused).includes("Try again"), `Memorize's paused card: Try again for a passed reset, none for an unknown one or a gateway's refusal, whose key comes first (got: ${[memorizePassed, memorizeUnknown, memorizeRefused].map((html) => buttons(html).join("|")).join(" / ")})`);
+		// The page around the card: no step line over a card that could not finish, and no first-read heading over a lone notice.
+		const appSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
+		const reviewShell = appSource.slice(appSource.indexOf("function ReviewWorkflowShell"), appSource.indexOf("function AbsorbWorkflowShell"));
+		assert(/state\.step === "run_card" && run && reviewRunNothingToSave\(run\) \? null/.test(reviewShell) && reviewShell.includes("{stepLine && <p>{stepLine}</p>}"), "the could-not-finish card has no step line above it");
+		assert(/\{!unreachableRead && \(\s*<div className="checkpoint-input-heading checkpoint-proposal-heading">\s*<h2>What \{targetLabel\}'s notes need<\/h2>/.test(reviewShell), "the first read's heading goes when the page holds only the notice");
+		// Reopening Maintain on a room whose Review is still working (a reload) reopens that run, as Memorize's does; a card left ready waits behind the chooser.
+		const chooserOpen = appSource.slice(appSource.indexOf("function openMaintainChooser"), appSource.indexOf("function closeMaintainChooser"));
+		assert(/fetchReviewStatus\(target\.agentId\)\.then\(async \(status\) => \{\s*if \(!status\.waitingRunId \|\| opened !== maintainRunRef\.current\) return;\s*const waiting = await fetchReviewRun\(target\.agentId, status\.waitingRunId\);\s*if \(reviewRunIsWorking\(waiting\.state\) && opened === maintainRunRef\.current\) void startPruneMemoryWorkflow\(target\);/.test(chooserOpen), "a reload during a tidy reopens the working Review run, and a ready card left behind waits behind the chooser");
+		// Review's error screen says once that memory is unchanged: never "No memory was changed." beside the error's own "No memory was updated."
+		const reviewErrorScreen = reviewShell.slice(reviewShell.indexOf("<h2>Review could not start</h2>"), reviewShell.indexOf("Start Maintain again"));
+		assert(reviewErrorScreen.includes('{!/No memory was (?:updated|changed)/.test(state.error ?? "") && <p>No memory was changed. You can open Maintain again right away.</p>}'), "Review's error screen says memory is unchanged only once");
+		// A first read that failed while the model answers: Read again asks again, and another model is one click away.
+		assert(reviewShell.includes('{assessment.firstReadMissing && !unreachableRead && <button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}') && reviewShell.includes('title={assessment.firstReadMissing ? "Read the notes again. Nothing is saved." : "Read the notes again, asking the room to fix what this read got wrong. Nothing is saved."}'), "a missing Review read offers Read again and Choose another model");
+		// Save on a tidy another window is working on says so; on one another window stopped, it is not "still here".
+		const approvalWords = appSource.slice(appSource.indexOf("function formatReviewApprovalError"), appSource.indexOf("function CheckpointPreviewShell"));
+		assert(approvalWords.includes('if (code === "review_run_not_ready") return "This tidy is being worked on in another window, so nothing was saved here. Finish it there, or reload this page to follow it here.";'), "Save on a tidy another window is working on says so, and how to follow it here");
+		assert(approvalWords.includes('if (code === "review_run_unknown") return "This tidy is no longer open, so nothing was saved. Start Review again to read the notes as they are now.";') && (appSource.match(/formatReviewApprovalError\(\(e as Error\)\.message, apiErrorCode\(e\)\)/g) ?? []).length === 2, "Save on a stopped tidy says it is no longer open");
+		// A missing first read still offers Discuss first, as Memorize's does; only an unreachable model hides it.
+		assert(/\{!unreachableRead && <button className=\{`rs-btn\$\{assessment\.fields\.needsYourCall\.length > 0 \? " rs-btn-primary" : ""\}`\} onClick=\{onDiscuss\}/.test(reviewShell), "Review's missing read offers Discuss first");
+		// Review's discussion names what it feeds: the tidy, not Memorize's update.
+		const discussionAside = appSource.slice(appSource.indexOf("function MaintenanceDiscussion"), appSource.indexOf("function MaintenanceDiscussion") + 9000);
+		assert(discussionAside.includes("What you agree here goes into the {outcome}, not into this list.") && /aside=\{<ReviewFirstReadSections fields=\{assessment\.fields\} compact missing=\{Boolean\(assessment\.firstReadMissing\)\} \/>\}\s*outcome="tidy"/.test(reviewShell), "Review's discussion says what you agree goes into the tidy");
+		assert(!appSource.includes("runReviewTidyAgain") && /onTryAgain=\{onResumeRun\}/.test(reviewShell), "Try again on the card resumes the same run; nothing starts Review over");
+		// The saved screen after a save that tidied nothing: Try again starts a Review of only the topics left, at the run's depth.
+		const savedScreen = (counts: ReturnType<typeof reviewChangeCounts>, topicsLeft: string[], done = false, stop?: unknown) => renderToStaticMarkup(createElement(screen.ReviewSavedScreen, { roomName: "Supplier Desk", counts, topicsLeft, percent: 40, over: false, archivedEntries: 1, archivedForBudget: 1, warnings: [], undo: { busy: false, done, error: null }, onUndo: noop, onTryAgain: noop, onChooseModel: noop, onReturn: noop, returnLabel: "Done", ...(stop ? { stop } : {}) })) as string;
+		const savedLeft = savedScreen(none, ["Office move"]);
+		assert(savedLeft.includes("<h2>Supplier Desk made room in its memory.</h2>") && savedLeft.includes("1 note moved to the archive to stay within the budget. The Memory model could not tidy Office move this time; it is unchanged. Try again tidies it; if it repeats, choose another model.") && (savedLeft.match(/moved to the archive to stay within the budget/g) ?? []).length === 1 && !savedLeft.includes("could not finish"), `the saved screen after a budget-only save says what it saved, once, and what Try again does (got: ${savedLeft.slice(0, 700)})`);
+		assert(rowButtons(savedLeft).join("|") === "Undo|Done|Choose another model|Try again" && /rs-btn rs-btn-primary"[^>]*>Try again</.test(savedLeft) && !/rs-btn rs-btn-primary"[^>]*>Choose another model</.test(savedLeft), `the saved screen offers Try again for the topics left, the main button, with Choose another model beside it (got: ${rowButtons(savedLeft).join("|")})`);
+		// The saved run's stop decides Try again, by the card's own rule: the same failure twice can still be tried again.
+		const failingStop = { kind: "failing", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "repeated" };
+		assert(rowButtons(savedScreen(none, ["Office move"], false, failingStop)).join("|") === "Undo|Done|Choose another model|Try again" && /rs-btn rs-btn-primary"[^>]*>Try again</.test(savedScreen(none, ["Office move"], false, failingStop)), "a save after the same failure twice keeps Try again as the main button");
+		// Where Try again is sure to fail, it is not offered and the sentence does not promise it; another model leads.
+		const sureStop = { kind: "outage", model: { provider: "openai-compatible", model: "gpt-5.5" }, cause: "not-on-account" };
+		const savedSure = savedScreen(none, ["Office move"], false, sureStop);
+		assert(rowButtons(savedSure).join("|") === "Undo|Done|Choose another model" && /rs-btn rs-btn-primary"[^>]*>Choose another model</.test(savedSure) && (savedSure.match(/rs-btn-primary/g) ?? []).length === 1, `not on the account: Choose another model leads and Try again is not offered (got: ${rowButtons(savedSure).join("|")})`);
+		assert(savedSure.includes("The Memory model could not tidy Office move this time; it is unchanged.</p>") && !savedSure.includes("Try again tidies"), `without Try again the sentence ends at "unchanged." (got: ${savedSure.slice(0, 700)})`);
+		const savedPart = savedScreen(counts, ["Office move"]);
+		assert(rowButtons(savedPart).join("|") === "Undo|Done|Choose another model|Try again" && /rs-btn rs-btn-primary"[^>]*>Done</.test(savedPart) && (savedPart.match(/rs-btn-primary/g) ?? []).length === 1, `a partly done save offers Choose another model and Try again after Done, which stays the main button (got: ${rowButtons(savedPart).join("|")})`);
+		assert(savedPart.includes("Office move could not be tidied this time and was left as it was. Try again; if it repeats, choose another model.</p>"), `with Try again the partly done sentence names it (got: ${savedPart.slice(0, 700)})`);
+		const savedPartSure = savedScreen(counts, ["Office move"], false, sureStop);
+		assert(rowButtons(savedPartSure).join("|") === "Undo|Done|Choose another model" && /rs-btn rs-btn-primary"[^>]*>Done</.test(savedPartSure) && savedPartSure.includes("Office move could not be tidied this time and was left as it was.</p>"), `a partly done save where Try again is sure to fail: no Try again, and the sentence ends with the topic left (got: ${rowButtons(savedPartSure).join("|")} / ${savedPartSure.slice(0, 700)})`);
+		assert(!rowButtons(savedScreen(counts, ["Office move"], true)).includes("Try again") && !rowButtons(savedScreen(none, ["Office move"], true)).includes("Try again") && !rowButtons(savedScreen(none, [])).includes("Try again") && !rowButtons(savedScreen(counts, [])).includes("Try again"), "no Try again after an undo, or with no topic left");
+		assert(!rowButtons(savedScreen(none, ["Office move"], true)).includes("Choose another model") && !rowButtons(savedScreen(none, [])).includes("Choose another model") && !rowButtons(savedScreen(counts, [])).includes("Choose another model"), "no Choose another model after an undo, or with no topic left");
+		assert(/<ReviewSavedScreen[\s\S]{0,1600}?onTryAgain=\{onTryTopicsLeft\}\s*onChooseModel=\{onChooseModel\}/.test(appSource), "the saved screen's Choose another model opens the Memory model's setting, as the card's does");
+		// Taking another model brings Try again back, as on the card: the saved screen reads the saved run's stop through the same offer.
+		const savedSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "review-screen.tsx"), "utf8");
+		const savedBody = savedSource.slice(savedSource.indexOf("export function ReviewSavedScreen"), savedSource.indexOf("export function reviewPercent"));
+		assert(/<ReviewSavedScreen[\s\S]{0,1600}?stop=\{run\?\.stop\}/.test(appSource) && savedBody.includes("useMemoryWaysOn(stop?.cause, stop?.quotaWay, { onTryAgain: left ? onTryAgain : undefined, onChooseModel: left ? onChooseModel : undefined,"), "the saved screen follows the card's Try again rule, and Choose another model brings it back");
+		assert(/onTryTopicsLeft=\{\(\) => void startReviewTidy\(\{ topicsLeftOf: reviewWorkflow\.run \}\)\}/.test(appSource) && appSource.includes("const topics = options?.topicsLeftOf ? options.topicsLeftOf.leftAsIs.flatMap((row) => row.topics) : assessment.fields.topics;") && appSource.includes("const depth = options?.topicsLeftOf?.depth ??") && appSource.includes("await startReviewRun(target.agentId, { depth, topics, ...(guidance ? { guidance } : {}) });"), "the saved screen's Try again asks for the topics left only, at the saved run's depth");
+		// Its guidance is the saved run's own, which a reload does not lose; the page's would be gone.
+		assert(appSource.includes("const guidance = options?.withoutDiscussion ? null : options?.topicsLeftOf ? options.topicsLeftOf.guidance ?? null : reviewWorkflow.guidance ?? null;"), "the saved screen's Try again asks with the saved run's guidance");
+		// A new run's screens never carry the last run's automatic-save line, blocked reasons or undo.
+		assert(/function beginReviewRunWatch\(base: ReviewWorkflowState, runId: string\): void \{[\s\S]{0,200}setReviewWorkflow\(\{ \.\.\.base, step: "running", runId, run: null, runBusy: false, runPollError: null, approvalResult: null, fastPathApplied: undefined, fastPathBlockedReasons: undefined, undo: undefined, error: null \}\);/.test(appSource), "watching a new Review run clears the last run's saved-screen state");
+	}
 	const reviewScreen = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "review-screen.tsx"), "utf8");
 	assert(!/group\.reason/.test(reviewScreen) && !reviewScreen.includes(" \u2014 "), "no reason under it and no em dash");
 	const failedScreen = reviewScreen.slice(reviewScreen.indexOf("export function ReviewRunFailedScreen"), reviewScreen.indexOf("export interface ReviewUndoState"));
@@ -689,7 +906,8 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(allRoomsNotesShown(glanceRooms) === 15 && /notes: allRoomsNotesShown\(data\.rooms\)/.test(fs.readFileSync(new URL("../../web-ui/src/components/Memory.tsx", import.meta.url), "utf-8")), "at a glance adds up to the rows");
 	assert(roomMemoryFactsLine({ notes: 2, waiting: 1, lastMemorizedAt: null }) === "no memories saved yet \u00b7 1 conversation waiting", `a room never saved, with a conversation waiting, says the card's words and what waits (got: ${roomMemoryFactsLine({ notes: 2, waiting: 1, lastMemorizedAt: null })})`);
 	assert(roomMemoryFactsLine({ notes: 2, waiting: 0, lastMemorizedAt: null }) === "no memories saved yet", `a room never saved says what its Home card says, not its starter text as notes (got: ${roomMemoryFactsLine({ notes: 2, waiting: 0, lastMemorizedAt: null })})`);
-	assert(allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 }) === "3 rooms · 1,204 notes · 12 conversations waiting", `the cross-room line (got: ${allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 })})`);
+	// Counts follow the machine's number format: "1'204" on a Swiss one.
+	assert(allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 }) === `3 rooms · ${(1_204).toLocaleString()} notes · 12 conversations waiting`, `the cross-room line (got: ${allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 })})`);
 	const viewed = new Date(2026, 8, 12, 9, 0).getTime();
 	const changedNext = new Date(2026, 8, 14, 9, 0).getTime();
 	assert(asOfSentence(viewed, changedNext) === "Viewing this room's memory as it was on 12 Sep. It changed next on 14 Sep.", `the banner names the viewed day and the next change (got: ${asOfSentence(viewed, changedNext)})`);
@@ -807,20 +1025,60 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(outage("Claude Opus 5.5", "not-answering", 3) === "Memorize paused because Claude Opus 5.5 isn't answering right now. 3 conversations are still waiting.", `the outage sentence (got: ${outage("Claude Opus 5.5", "not-answering", 3)})`);
 	// A model busy past the shared patience; a quota is its own cause now (model-call-causes.ts).
 	assert(outage("GPT-5.5", "busy", 1) === "Memorize paused because GPT-5.5 is still busy after several tries. 1 conversation is still waiting.", `the busy sentence, one waiting (got: ${outage("GPT-5.5", "busy", 1)})`);
-	assert(outage("GPT-5.5", "signed-out", 1) === "Memorize paused because GPT-5.5 cannot answer because its provider is signed out. 1 conversation is still waiting.", `the signed-out sentence (got: ${outage("GPT-5.5", "signed-out", 1)})`);
-	const keyOutage = copy.absorbRunOutageSentence as (model: string, cause: "signed-out", waiting: number, provider?: string, key?: "missing" | "refused") => string;
-	assert(keyOutage("GPT-5.5", "signed-out", 1, "openai", "missing") === "Memorize paused because GPT-5.5 cannot answer because its provider has no key saved. 1 conversation is still waiting.", `the key-missing sentence (got: ${keyOutage("GPT-5.5", "signed-out", 1, "openai", "missing")})`);
-	assert(keyOutage("GPT-5.5", "signed-out", 1, "openai", "refused") === "Memorize paused because GPT-5.5 cannot answer because its provider did not accept the saved key. 1 conversation is still waiting.", `the key-refused sentence (got: ${keyOutage("GPT-5.5", "signed-out", 1, "openai", "refused")})`);
-	assert(outage("GPT-5.5", "quota", 2) === "Memorize paused because GPT-5.5 has reached its usage limit. 2 conversations are still waiting.", `the quota sentence (got: ${outage("GPT-5.5", "quota", 2)})`);
+	assert(outage("GPT-5.5", "signed-out", 1) === "Memorize paused: GPT-5.5's provider is signed out. 1 conversation is still waiting.", `the signed-out sentence (got: ${outage("GPT-5.5", "signed-out", 1)})`);
+	const keyOutage = copy.absorbRunOutageSentence as (model: string, cause: "signed-out", waiting: number, provider?: string, key?: "missing" | "refused" | "no-workspace") => string;
+	// A gateway is named as AI setup names it, from the run's stop, never by the id a shown name may carry;
+	// without that name, and for a known provider, it is "{model}'s provider", the model named without its provider.
+	const gatewayOutage = copy.absorbRunOutageSentence as (model: string, cause: "signed-out", waiting: number, provider?: string, key?: "refused", unreached?: undefined, quotaWay?: undefined, gateway?: string) => string;
+	const gatewayRefused = gatewayOutage("Test Model (test-gateway)", "signed-out", 1, "test-gateway", "refused", undefined, undefined, "Test Gateway");
+	assert(gatewayRefused === "Memorize paused: Test Gateway did not accept the saved key. 1 conversation is still waiting.", `a gateway's refused key names the gateway as AI setup does (got: ${gatewayRefused})`);
+	const reviewPaused = copy.reviewRunPausedSentence as (model: string, stop: { cause: "signed-out"; model: { provider: string }; key: "refused"; gateway?: string }, tidied: boolean) => string;
+	// Nothing tidied: the card's headline says "Review paused.", so the line is the cause alone.
+	const reviewGateway = reviewPaused("Test Model (test-gateway)", { cause: "signed-out", model: { provider: "test-gateway" }, key: "refused", gateway: "Test Gateway" }, false);
+	assert(reviewGateway === "Test Gateway did not accept the saved key. Nothing was lost.", `Review's paused line names the gateway as AI setup does (got: ${reviewGateway})`);
+	const unnamed = reviewPaused("Test Model (gateway-acme)", { cause: "signed-out", model: { provider: "gateway-acme" }, key: "refused" }, false);
+	assert(unnamed === "Test Model's provider did not accept the saved key. Nothing was lost.", `a gateway with no name on the stop is the model's provider, never its id (got: ${unnamed})`);
+	const tidiedGateway = reviewPaused("Test Model (test-gateway)", { cause: "signed-out", model: { provider: "test-gateway" }, key: "refused", gateway: "Test Gateway" }, true);
+	assert(tidiedGateway === "Review paused: Test Gateway did not accept the saved key. What was tidied can be saved; the rest is unchanged.", `with something tidied no headline says it paused, so the line does (got: ${tidiedGateway})`);
+	const known = keyOutage("Claude Sonnet 5.5 (Claude API key)", "signed-out", 2, "anthropic-api-key", "refused");
+	assert(known === "Memorize paused: Claude Sonnet 5.5's provider did not accept the saved key. 2 conversations are still waiting.", `a known provider's line names the model without its provider (got: ${known})`);
+	assert(keyOutage("GPT-5.5", "signed-out", 1, "openai", "missing") === "Memorize paused: GPT-5.5's provider has no key saved. 1 conversation is still waiting.", `the key-missing sentence (got: ${keyOutage("GPT-5.5", "signed-out", 1, "openai", "missing")})`);
+	assert(keyOutage("GPT-5.5", "signed-out", 1, "openai", "refused") === "Memorize paused: GPT-5.5's provider did not accept the saved key. 1 conversation is still waiting.", `the key-refused sentence (got: ${keyOutage("GPT-5.5", "signed-out", 1, "openai", "refused")})`);
+	assert(outage("GPT-5.5", "quota", 2) === "Memorize paused because GPT-5.5 has reached its usage limit or run out of credit. 2 conversations are still waiting.", `the quota sentence (got: ${outage("GPT-5.5", "quota", 2)})`);
 	assert(outage("GPT-5.5", "not-offered", 1) === "Memorize paused because GPT-5.5 is no longer offered. 1 conversation is still waiting.", `the not-offered sentence (got: ${outage("GPT-5.5", "not-offered", 1)})`);
+	// A paused card says the cause, then what is safe, then the way on, as the chat's line does; Choose another model is the button below.
+	const unreachedOutage = copy.absorbRunOutageSentence as (model: string, cause: "not-answering", waiting: number, provider?: string, key?: undefined, unreached?: "connection" | "local-connection") => string;
+	const offline = unreachedOutage("GPT-5.5", "not-answering", 2, "openai", undefined, "connection");
+	assert(offline === "Memorize paused because GPT-5.5 could not be reached. 2 conversations are still waiting. Check your internet connection, then try again.", `the no-connection sentence (got: ${offline})`);
+	const localOff = unreachedOutage("Qwen", "not-answering", 1, "local-llm", undefined, "local-connection");
+	assert(localOff === "Memorize paused because Qwen could not be reached on this computer. 1 conversation is still waiting. Check that the app running it is open, then try again.", `the on-this-computer sentence (got: ${localOff})`);
+	assert(keyOutage("Claude Sonnet 5.5", "signed-out", 2, "anthropic-api-key", "no-workspace") === "Memorize paused: Claude Sonnet 5.5's provider has a key that isn't tied to a workspace. 2 conversations are still waiting.", `the key-outside-a-workspace sentence (got: ${keyOutage("Claude Sonnet 5.5", "signed-out", 2, "anthropic-api-key", "no-workspace")})`);
+	type PausedStop = { cause: "not-answering" | "quota" | "busy" | "signed-out"; model: { provider: string }; key?: "missing" | "refused" | "no-workspace"; unreached?: "connection" | "local-connection" };
+	const paused = copy.reviewRunPausedSentence as (model: string, stop: PausedStop, tidied: boolean) => string;
+	const unreached: PausedStop = { cause: "not-answering", model: { provider: "openai" }, unreached: "connection" };
+	assert(paused("Test Model", unreached, false) === "Test Model could not be reached. Nothing was lost. Check your internet connection, then try again.", `Review paused with nothing tidied: the cause alone, under the paused headline (got: ${paused("Test Model", unreached, false)})`);
+	assert(paused("Test Model", unreached, true) === "Review paused because Test Model could not be reached. What was tidied can be saved; the rest is unchanged. Check your internet connection, then try again.", `Review paused with something tidied (got: ${paused("Test Model", unreached, true)})`);
+	assert(paused("Qwen", { cause: "not-answering", model: { provider: "local-llm" }, unreached: "local-connection" }, false) === "Qwen could not be reached on this computer. Nothing was lost. Check that the app running it is open, then try again.", "Review paused on this computer");
+	assert(paused("GPT-5.5", { cause: "quota", model: { provider: "openai" } }, false) === "GPT-5.5 has reached its usage limit or run out of credit. Nothing was lost.", `Review paused at a usage limit (got: ${paused("GPT-5.5", { cause: "quota", model: { provider: "openai" } }, false)})`);
+	assert(paused("Test Model", { cause: "not-answering", model: { provider: "openai" } }, false) === "Test Model isn't answering right now. Nothing was lost.", `the first read's notice words it the same (got: ${paused("Test Model", { cause: "not-answering", model: { provider: "openai" } }, false)})`);
+	// A gone credential is the provider's state, never "paused because X cannot answer because…".
+	for (const [key, state] of [[undefined, "is signed out"], ["missing", "has no key saved"], ["refused", "did not accept the saved key"], ["no-workspace", "has a key that isn't tied to a workspace"]] as const) {
+		const line = paused("Test Model", { cause: "signed-out", model: { provider: "anthropic-api-key" }, ...(key ? { key } : {}) }, false);
+		assert(line === `Test Model's provider ${state}. Nothing was lost.`, `Review paused on a gone credential (${key ?? "signed out"}) (got: ${line})`);
+	}
+	assert(paused("GPT-5.5", { cause: "busy", model: { provider: "openai" } }, true) === "Review paused because GPT-5.5 is still busy after several tries. What was tidied can be saved; the rest is unchanged.", "a cause with no way on of its own ends with what is safe");
+	for (const tidied of [false, true]) for (const stop of [unreached, { cause: "quota" as const, model: { provider: "openai" } }]) {
+		const line = paused("Test Model", stop, tidied);
+		assert(!(line.includes("Nothing was lost.") && line.includes("What was tidied")) && !line.includes("Room settings"), `one sentence of what is safe, and no Room settings beside the button (got: ${line})`);
+	}
 	// The notice names the model that stopped, from the run's own stop, even
 	// after the person chose another Memory model and that one stopped too.
 	const outageModel = copy.absorbRunOutageModelName as ((stopped: { provider: string; model: string }, memoryModel?: { provider: string; model: string; label?: string } | null) => string) | undefined;
 	assert(outageModel, "the notice's model name comes from the run's stop");
 	const swapped = outageModel({ provider: "anthropic", model: "claude-opus-5-5" }, { provider: "openai", model: "gpt-5.5", label: "GPT-5.5" });
-	assert(swapped === "Claude Opus 5.5 (Claude)", `a notice after a switch names the model that stopped, never the room's earlier one (got: ${swapped})`);
+	assert(swapped === "Claude Opus 5.5", `a notice after a switch names the model that stopped, alone, never the room's earlier one (got: ${swapped})`);
 	const sameModel = outageModel({ provider: "openai-compatible", model: "rm-7" }, { provider: "openai-compatible", model: "rm-7", label: "Room Model" });
-	assert(sameModel === "Room Model (OpenAI-compatible gateway)", `the room's label names the model that stopped when it is that model (got: ${sameModel})`);
+	assert(sameModel === "Room Model", `the room's label names the model that stopped when it is that model (got: ${sameModel})`);
 	const otherLabel = outageModel({ provider: "openai-compatible", model: "rm-7" }, { provider: "openai-compatible", model: "narrow-7", label: "Narrow Model" });
 	assert(!otherLabel.includes("Narrow Model"), `another model's label never names the one that stopped (got: ${otherLabel})`);
 	const waitingCount = copy.absorbRunWaitingCount as (r: AbsorbRun) => number;
@@ -888,6 +1146,9 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	];
 	for (const [what, candidate] of stillSaves) assert(absorbRunNothingRead(candidate) && !absorbRunNothingToSave(candidate), `${what} keeps Save on while no conversation was read`);
 	assert(absorbRunNothingToSave(run({ ...busyFromTheStart, rereads: [reread({ outcome: "pending" }), reread({ id: "m-0102", outcome: "folding" })] })), "a re-read note not tried yet saves nothing");
+	// The chooser's "notes in Unsorted can be sorted": a run that only sorted them saves the sort, as the server does.
+	const sortOnly = run({ ...busyFromTheStart, stop: undefined, progress: { folded: 0, total: 0 }, sessions: [], sorted: [{ id: "m-0101", text: "- Invoices go out on the first.", topic: "Invoicing" }] });
+	assert(absorbRunNothingRead(sortOnly) && !absorbRunNothingToSave(sortOnly), "a run that only sorted notes out of Unsorted can be saved");
 	// The saved screen and the archive.
 	assert(!/read again/.test(absorbRunSavedSentence({ foldedSessions: ["RC-0001"], sortedNotes: 2 })), "the saved screen says nothing of notes read again");
 	assert(!absorbRunSavedSentence({ foldedSessions: ["RC-0001"] }).includes("Unsorted"), "and says nothing when none was");
@@ -953,7 +1214,9 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const review = fs.readFileSync(new URL("../../web-ui/src/components/review-screen.tsx", import.meta.url), "utf8");
 	// An entry that asks to be generated again cannot be saved: Generate again leads, and Save to memory is not offered.
 	const entryApp = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
-	assert(/: !mustGenerateAgain && <button className="rs-btn rs-btn-primary"[^\n]{0,160}?>\{approvalLoading \? "Saving…" : "Save to memory"\}/.test(entryApp) && /generateAgain && <button className=\{mustGenerateAgain \? "rs-btn rs-btn-primary" : "rs-btn"\} disabled=\{approvalLoading\} onClick=\{onGenerate\}>Generate again/.test(entryApp) && /const mustGenerateAgain = generateAgain && \/changed after Remember read it\//.test(entryApp), "Generate again leads where the conversation changed after the read");
+	assert(/: !mustGenerateAgain && <button className="rs-btn rs-btn-primary"[^\n]{0,160}?>\{approvalLoading \? "Saving…" : "Save to memory"\}/.test(entryApp) && /generateAgain && <button className=\{mustGenerateAgain \? "rs-btn rs-btn-primary" : "rs-btn"\} disabled=\{approvalLoading\} onClick=\{onGenerate\}>Generate again/.test(entryApp) && /const mustGenerateAgain = generateAgain && \/changed after Remember read it\|The Memory model changed after this entry was written\//.test(entryApp), "Generate again leads where the conversation or the Memory model changed after the read");
+	// Nothing can be saved there, so no Edit either: an editor left open closes, and the edits stay on the entry for Generate again to ask about.
+	assert(/\{!readOnly && !editing && !mustGenerateAgain && <button className="rs-btn" disabled=\{approvalLoading\} onClick=\{\(\) => setEditing\(true\)\}/.test(entryApp) && /useEffect\(\(\) => \{\s*if \(mustGenerateAgain\) setEditing\(false\);\s*\}, \[mustGenerateAgain\]\);/.test(entryApp), "no Edit where nothing can be saved");
 	// Memorize's rows date a conversation as the first read does ("15 Sep"), never as stored.
 	const runScreen = fs.readFileSync(new URL("../../web-ui/src/components/absorb-run-screen.tsx", import.meta.url), "utf8");
 	assert(!runScreen.includes(": session.date}") && (runScreen.match(/: fmtMemoryDay\(session\.date\)\}/g) ?? []).length === 2, "both row layouts show the day in the app's form");
@@ -1049,7 +1312,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const reviewSource = fs.readFileSync(new URL("../../web-ui/src/components/review-screen.tsx", import.meta.url), "utf8");
 	const appSource = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
 	assert(copySource.includes('"The app restarted. Finished conversations are on this card. Save keeps them."') && !copySource.includes("Finished conversations are kept."), "Memorize's restart line says Save keeps them");
-	assert(reviewSource.includes('"The app restarted. What was tidied is on this card; the rest is unchanged."') && !reviewSource.includes("What was tidied is kept;"), "Review's restart line says the tidy is on the card");
+	assert(reviewSource.includes('`The app restarted. ${nothingTidied ? "Nothing was lost." : "What was tidied is on this card; the rest is unchanged."}`') && !reviewSource.includes("What was tidied is kept;"), "Review's restart line says the tidy is on the card");
 	assert(appSource.includes('"Remembering…"') && !appSource.includes("Drafting memory proposal"), "the dialog's heading has no engine word");
 }
 
@@ -1082,6 +1345,123 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	} finally {
 		globalThis.fetch = realFetch;
 	}
+}
+
+// Memorize's own screens say the same as Review's, and nothing false.
+{
+	const copy = await import("../../web-ui/src/memory-v2-copy.js") as any;
+	const names = await import("../../web-ui/src/model-names.js") as any;
+	const stopped = { provider: "openai-compatible", model: "gpt-5.5" };
+	// The paused card names the model alone, as Review's card and the first read's notice do.
+	const named = copy.absorbRunOutageModelName(stopped, { ...stopped, label: "Test Model" });
+	assert(named === names.modelDisplayName({ ...stopped, modelLabel: "Test Model" }) && !named.includes("("), `Memorize's paused card names the model alone (got: ${named})`);
+	// A restart before any conversation was read, with something still to save: the notice's own line, nothing was lost, and Continue reads them.
+	const restarted = copy.absorbRunOutageSentence("Test Model", "restarted", 2, undefined, undefined, undefined, undefined, undefined, true);
+	assert(restarted === "The app restarted. Nothing was lost. Continue reads the 2 waiting conversations.", `a restart with nothing read says nothing was lost (got: ${restarted})`);
+	assert(copy.absorbRunOutageSentence("Test Model", "restarted", 1, undefined, undefined, undefined, undefined, undefined, true) === "The app restarted. Nothing was lost. Continue reads the waiting conversation.", "one waiting conversation, in the singular");
+	assert(copy.absorbRunOutageSentence("Test Model", "restarted", 1).startsWith("The app restarted. Finished conversations are on this card."), "a restart after some reading keeps its line");
+	assert(copy.absorbRunOutageSentence("Test Model", "not-answering", 2, undefined, undefined, undefined, undefined, undefined, true) === "Memorize paused because Test Model isn't answering right now. 2 conversations are still waiting.", "nothing read but something to save: the notice says it paused");
+	// The paused card, with nothing to save: its headline says "Memorize paused.", so the line is the cause alone, and after a restart Review's words.
+	assert(copy.absorbRunPausedSentence?.("Test Model", "restarted") === "The app restarted. Nothing was lost.", `the paused card after a restart, as Review's (got: ${copy.absorbRunPausedSentence?.("Test Model", "restarted")})`);
+	const alone = (cause: string, extra: { key?: string; unreached?: string; quotaWay?: unknown; gateway?: string } = {}) => copy.absorbRunPausedSentence?.("Test Model", cause, "test-gateway", extra.key, extra.unreached, extra.quotaWay, extra.gateway);
+	assert(alone("not-answering") === "Test Model isn't answering right now. Nothing was lost.", `nothing read: the cause alone (got: ${alone("not-answering")})`);
+	assert(alone("not-answering", { unreached: "connection" }) === "Test Model could not be reached. Nothing was lost. Check your internet connection, then try again.", `nothing read, offline: the cause and its way on (got: ${alone("not-answering", { unreached: "connection" })})`);
+	assert(alone("signed-out", { key: "refused", gateway: "Test Gateway" }) === "Test Gateway did not accept the saved key. Nothing was lost.", `nothing read, a refused key: the gateway's state alone (got: ${alone("signed-out", { key: "refused", gateway: "Test Gateway" })})`);
+	assert(alone("quota", { quotaWay: { kind: "gateway", provider: "Test Gateway" }, gateway: "Test Gateway" }) === "Test Model has reached its usage limit or run out of credit. Nothing was lost. Ask whoever runs Test Gateway about the limit.", `nothing read, a spent quota: the cause and its way on (got: ${alone("quota", { quotaWay: { kind: "gateway", provider: "Test Gateway" }, gateway: "Test Gateway" })})`);
+	assert(copy.absorbRunOutageSentence("Test Model", "not-answering", 2) === "Memorize paused because Test Model isn't answering right now. 2 conversations are still waiting.", "with something read no headline says it paused, so the line does");
+	// No conversation became a note: the headline does not say the room memorized them.
+	const nothingNew = { foldedSessions: ["RC-0001", "RC-0002"], notedSessions: 0, nothingToKeep: 2 };
+	assert(copy.absorbRunSavedHeadline(nothingNew, "Offsite Planning") === "Nothing new for Offsite Planning to remember", `no new note, no "memorized" (got: ${copy.absorbRunSavedHeadline(nothingNew, "Offsite Planning")})`);
+	assert(!copy.absorbRunSavedSentence(nothingNew).includes("0 conversations"), `the sentence counts no zero (got: ${copy.absorbRunSavedSentence(nothingNew)})`);
+	assert(copy.absorbRunSavedHeadline({ foldedSessions: ["RC-0001", "RC-0002"], notedSessions: 1, nothingToKeep: 1 }, "Offsite Planning") === "Offsite Planning memorized 2 conversations", "a save that kept notes reads as before");
+
+	const app = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
+	const memorizeShell = app.slice(app.indexOf("function AbsorbWorkflowShell"), app.indexOf("// Shared discussion surface"));
+	// A paused card with nothing to save changes nothing, so no step line names a change above it, as on Review's.
+	assert(/state\.step === "run_card" && state\.run\?\.stop && absorbRunNothingToSave\(state\.run\) \? null : `Step 2 of 2 · what \$\{targetLabel\} will keep`/.test(memorizeShell) && memorizeShell.includes("{stepLine && <p>{stepLine}</p>}"), "a paused Memorize card with nothing to save has no step line above it");
+	// Its Cancel asks nothing, as Review's Close on such a card: there is nothing to lose.
+	assert(/function confirmCancelAbsorbRun\(\): void \{\s*const run = absorbWorkflow\.run;\s*if \(absorbWorkflow\.step === "run_card" && run\?\.stop && absorbRunNothingToSave\(run\)\) return void absorbRunBackToAssessment\(\);/.test(app), "Cancel on a paused card with nothing to save asks nothing");
+	// The waiting list under the notice dates its conversations as the card does.
+	assert(/<span className="absorb-run-session-date">\{fmtMemoryDay\(conversation\.date\)\}<\/span>/.test(memorizeShell), "the waiting list uses the card's date form");
+	// A notes-only Memorize names no "0 conversations".
+	assert(!/What these \$\{assessment\.availability\.recentContextEntryCount\} conversations hold/.test(memorizeShell) || /recentContextEntryCount === 0/.test(memorizeShell.slice(memorizeShell.indexOf("<h2>{assessment.availability"), memorizeShell.indexOf("<h2>{assessment.availability") + 300)), "a first read with no conversation names no zero");
+	// Undo on Memorize's saved screen, as on Review's.
+	const savedBlock = memorizeShell.slice(memorizeShell.indexOf('state.step === "saved" && state.approvalResult && state.run'), memorizeShell.indexOf('state.step === "error"', memorizeShell.indexOf('state.step === "saved" && state.approvalResult && state.run')));
+	assert(/onClick=\{onUndo\}/.test(savedBlock) && app.includes("function undoAbsorbSave()") && /undoMemorySave\(target\.agentId, saveId\)/.test(app.slice(app.indexOf("async function performAbsorbUndo"))), "Memorize's saved screen offers Undo through the same undo route");
+	assert(savedBlock.includes("{!state.undo?.done && (absorbRunNotesChanged(state.run) > 0 || (state.approvalResult.archivedEntries ?? 0) > 0 || absorbRunSortedRows(state.run).length > 0) && <button"), "a save that only sorted notes into topics offers Undo too");
+	// The Discuss first titles agree with the leave confirm: the discussion is kept, and never saved to memory.
+	assert(!app.includes("the discussion itself is not saved") && !app.includes("The discussion itself is not saved."), "neither Discuss first title says the discussion is not kept");
+	assert(app.includes('title="Talk the first read through before anything is tidied. The discussion is not saved to memory.">Discuss first</button>'), "Review's Discuss first title says what Memorize's says");
+	assert(!app.includes("what you wrote here stays available from the update"), "no line promises the discussion stays once the update runs");
+	// Read again reads again: both screens ask the server for a fresh read.
+	const reviewApi = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "review-api.ts"), "utf8");
+	assert(/fresh: true/.test(reviewApi.slice(reviewApi.indexOf("export function requestFirstRead"), reviewApi.indexOf("export function cancelFirstReadAt"))), "Read again asks for a fresh read, on both screens");
+	// Only Cancel ends a first read: every ask carries its own id, and leaving Maintain or a newer read cancels it on the server.
+	assert((app.match(/askFirstRead\(target\.agentId, "memorize", \(first\) => requestFirstRead<AbsorbAssessmentResponse>\(absorbBaseUrl\(target\.agentId\), |askFirstRead\(target\.agentId, "review", \(first\) => requestFirstRead<ReviewAssessmentResponse>\(reviewBase\(target\.agentId\), /g) ?? []).length === 4 && !/firstReadSignal|firstReadAbortRef/.test(app), "every first read is asked with its own id");
+	assert((app.match(/maintainRunRef\.current \+= 1;\n\t\tcancelFirstRead\(\);/g) ?? []).length === 2 && app.includes("void cancelFirstReadAt((current.kind === \"review\" ? reviewBase : absorbBaseUrl)(current.agentId), current.ask).catch(() => {});"), "leaving Maintain cancels the first read on the server");
+	assert(reviewApi.slice(reviewApi.indexOf("export function cancelFirstReadAt")).includes("body: JSON.stringify({ ask, cancel: true }),"), "Cancel names the ask it ends, on both screens");
+	// A missing read is never kept, so its Read again joins a read a dropped request left running instead of paying for another.
+	assert((app.match(/\.\.\.\(prior\.firstReadMissing \? \{\} : \{ fresh: true \}\), \.\.\.first/g) ?? []).length === 2, "Read again on a missing first read joins a read still being made");
+	// A request cut off without an answer keeps its ask: Read again joins under it, and leaving or going on to the run still cancels it.
+	assert(app.includes("firstReadRef.current = isUnexplainedRequestFailure(error) ? { ...current, cut: true } : null;") && app.includes("ask: cut?.ask ??") && app.includes("if (!cut) cancelFirstRead();"), "a cut request's ask is kept for Read again and for Cancel");
+	assert((app.match(/const run = maintainRunRef\.current;\n\t\tcancelFirstRead\(\);/g) ?? []).length === 4, "going on to the run, on both screens, cancels a first read a cut request left running");
+	// Stop or Back on a run opened because it was waiting asks for the first read, not "No first read this time".
+	const back = app.slice(app.indexOf("async function absorbRunBackToAssessment"), app.indexOf("async function resumeAbsorbRunAfterStop"));
+	assert(/openedWaiting/.test(back) && /startAbsorbWorkflow\(\{ target, readFirst: true \}\)/.test(back) && !/discuss: true/.test(back), "Stop or Back on a waiting run reads the conversations first and shows that read, not the discussion");
+	// A room that saves on its own skipped the first read: Stop or Back reads it then, never "No first read this time".
+	assert(back.includes('(absorbWorkflow.openedWaiting || absorbWorkflow.assessment?.firstReadMissing === "skipped")'), "Stop or Back on a run whose first read was skipped reads the conversations first");
+	assert(app.includes("if ((fastPathEnabled && !options?.discuss && !options?.readFirst) || availability.recentContextEntryCount === 0) {"), "the read asked for after Stop or Back is shown even in a room that saves on its own");
+	assert(app.includes('{assessment.firstReadMissing && assessment.firstReadMissing !== "skipped" && !unreachableRead && <button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}'), "Memorize's missing read offers another model where one can help, as Review's does");
+	const reviewBack = app.slice(app.indexOf("async function reviewRunBackToAssessment"), app.indexOf("/** A tidy with nothing to save is dropped without a confirm"));
+	assert(/openedWaiting/.test(reviewBack) && /startPruneMemoryWorkflow\(target\)/.test(reviewBack) && /status\.waitingRunId\) return beginReviewRunWatch\(\{ \.\.\.CLOSED_REVIEW_WORKFLOW, step: "assessment", target, openedWaiting: true,/.test(app), "Stop or Back on Review's waiting run reads the notes first, as Memorize does");
+
+	// The card: no "From 2 conversations. Read it…" over nothing read, no "New in memory" over rows with nothing to keep.
+	const pageRequire = (await import("node:module")).createRequire(new URL("../../web-ui/package.json", import.meta.url));
+	const { createElement } = pageRequire("react");
+	(globalThis as any).React = pageRequire("react");
+	const { renderToStaticMarkup } = pageRequire("react-dom/server");
+	const screen: any = await import(new URL("../../web-ui/src/components/absorb-run-screen.tsx", import.meta.url).href);
+	const noop = () => {};
+	const card = (absorb: AbsorbRun) => renderToStaticMarkup(createElement(screen.AbsorbRunCard, { run: absorb, roomName: "Offsite Planning", keepIds: [], busy: false, error: null, onToggleKeep: noop, onToggleKeepTopic: noop, onRaiseBudget: noop, onApprove: noop, onCancel: noop, onBackToAssessment: noop, onResume: noop, onChooseModel: noop, onSignIn: noop })) as string;
+	const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+	const rowButtons = (html: string) => buttons(html.slice(html.lastIndexOf("checkpoint-preview-actions")));
+	const waitingRows = [session({ id: "RC-0001", outcome: "pending" as any, summary: undefined }), session({ id: "RC-0002", outcome: "pending" as any, summary: undefined })];
+	const notRead = card(run({ progress: { folded: 0, total: 2 }, sessions: waitingRows, stop: { kind: "restart", model: stopped, cause: "restarted" } as any }));
+	assert(!notRead.includes("From 2 conversations.") && notRead.includes('<h2>Memorize paused.</h2><p role="status">The app restarted. Nothing was lost.</p>'), `nothing read after a restart: Review's words under "Memorize paused.", announced (got: ${notRead.slice(0, 900)})`);
+	assert(rowButtons(notRead).join("|") === "Cancel|Continue" && /rs-btn rs-btn-primary"[^>]*>Continue</.test(notRead) && !notRead.includes("absorb-run-stop-note"), `after a restart one row: Cancel, then Continue as the main button (got: ${buttons(notRead).join("|")})`);
+	// Paused with nothing read: Review's paused card, word for word but its name.
+	const pausedCard = card(run({ progress: { folded: 0, total: 2 }, sessions: waitingRows, stop: { kind: "outage", model: stopped, cause: "not-answering" } as any }));
+	assert(pausedCard.includes('<h2>Memorize paused.</h2><p role="status">GPT-5.5 isn&#x27;t answering right now. Nothing was lost.</p>') && !pausedCard.includes("will keep") && !pausedCard.includes("Memorize paused because"), `the paused card: its headline, then the cause alone, announced (got: ${pausedCard.slice(0, 900)})`);
+	assert(pausedCard.includes('Nothing was lost.</p></div><div class="absorb-review-strip">') && pausedCard.includes("0 of 2 read"), `the chips follow the sentence, as on Review's card (got: ${pausedCard.slice(0, 900)})`);
+	assert(!pausedCard.includes("New in memory") && !pausedCard.includes("No conversation was read yet.") && !pausedCard.includes("absorb-run-stop-note"), `no empty block and no notice box (got: ${pausedCard.slice(0, 1200)})`);
+	assert(buttons(pausedCard).join("|") === "Cancel|Choose another model|Try again" && /rs-btn rs-btn-primary"[^>]*>Try again</.test(pausedCard) && (pausedCard.match(/rs-btn-primary/g) ?? []).length === 1, `one row: Cancel, Choose another model, Try again as the main button, and no Back or Save (got: ${buttons(pausedCard).join("|")})`);
+	const signedOutCard = card(run({ progress: { folded: 0, total: 2 }, sessions: waitingRows, stop: { kind: "outage", model: stopped, cause: "signed-out", key: "refused", gateway: "Test Gateway" } as any }));
+	assert(signedOutCard.includes('<h2>Memorize paused.</h2><p role="status">Test Gateway did not accept the saved key. Nothing was lost.</p>') && buttons(signedOutCard).join("|") === "Cancel|Replace key|Choose another model" && /rs-btn rs-btn-primary"[^>]*>Replace key</.test(signedOutCard) && (signedOutCard.match(/rs-btn-primary/g) ?? []).length === 1, `a refused key: the key's button leads, as on Review's card (got: ${buttons(signedOutCard).join("|")})`);
+	const sureToFail = card(run({ progress: { folded: 0, total: 2 }, sessions: waitingRows, stop: { kind: "outage", model: stopped, cause: "not-on-account" } as any }));
+	assert(buttons(sureToFail).join("|") === "Cancel|Choose another model", `no Try again where it is sure to fail, as on Review's card (got: ${buttons(sureToFail).join("|")})`);
+	// With no Try again and no sign-in way, another model is the way on, so it leads.
+	assert(/rs-btn rs-btn-primary"[^>]*>Choose another model</.test(sureToFail), `where Try again is sure to fail, Choose another model is the main button (got: ${sureToFail.slice(sureToFail.lastIndexOf("checkpoint-preview-actions"))})`);
+	// Paused with nothing read but something to save: the card as it was before the paused card, its notice saying it paused, and Save.
+	const leftOut = card(run({ progress: { folded: 0, total: 2 }, sessions: [session({ id: "RC-0001", outcome: "skipped" as any, summary: undefined }), waitingRows[1]], stop: { kind: "outage", model: stopped, cause: "not-answering" } as any }));
+	assert(leftOut.includes("<h2>What Offsite Planning will keep</h2>") && !leftOut.includes("Memorize paused.</h2>") && leftOut.includes("absorb-run-stop-note") && leftOut.includes("Memorize paused because GPT-5.5 isn&#x27;t answering right now. 1 conversation is still waiting.") && rowButtons(leftOut).join("|") === "Cancel|Back|Save to memory", `paused with a conversation left out: the card's own headline, the notice that says it paused, and Save (got: ${leftOut.slice(0, 1200)})`);
+	const leaving = card(run({ progress: { folded: 0, total: 2 }, sessions: waitingRows, demotion: demotion([row(), row({ id: "m-2" })]), stop: { kind: "outage", model: stopped, cause: "not-answering" } as any }));
+	assert(leaving.includes("<h2>What Offsite Planning will keep</h2>") && leaving.includes("Memorize paused because GPT-5.5 isn&#x27;t answering right now. 2 conversations are still waiting.") && leaving.includes("<h3>New in memory</h3>") && leaving.includes("No conversation was read yet.") && rowButtons(leaving).join("|") === "Cancel|Back|Save to memory", `paused with notes leaving for the budget: the card as before (got: ${leaving.slice(0, 1400)})`);
+	const restartLeftOut = card(run({ progress: { folded: 0, total: 2 }, sessions: [session({ id: "RC-0001", outcome: "skipped" as any, summary: undefined }), waitingRows[1]], stop: { kind: "restart", model: stopped, cause: "restarted" } as any }));
+	assert(restartLeftOut.includes("<h2>What Offsite Planning will keep</h2>") && restartLeftOut.includes("The app restarted. Nothing was lost. Continue reads the waiting conversation.") && rowButtons(restartLeftOut).join("|") === "Cancel|Back|Save to memory", `a restart with something to save: the card as before (got: ${restartLeftOut.slice(0, 1200)})`);
+	// Something read: no paused headline, so the notice keeps its "Memorize paused because".
+	const partRead = card(run({ progress: { folded: 1, total: 2 }, sessions: [session(), waitingRows[1]], stop: { kind: "outage", model: stopped, cause: "not-answering" } as any }));
+	assert(partRead.includes("<h2>What Offsite Planning will keep</h2>") && partRead.includes("Memorize paused because GPT-5.5 isn&#x27;t answering right now. 1 conversation is still waiting."), `something read: the card's own headline, and the notice says it paused (got: ${partRead.slice(0, 900)})`);
+	const nothingKept = card(run({ progress: { folded: 2, total: 2 }, sessions: [session({ id: "RC-0001", outcome: "dropped", reason: "small talk", summary: undefined }), session({ id: "RC-0002", outcome: "dropped", reason: "small talk", summary: undefined })] }));
+	assert(!nothingKept.includes("<h3>New in memory</h3>") && nothingKept.includes("Nothing to keep"), `rows that all kept nothing sit under no "New in memory" (got: ${nothingKept.slice(0, 900)})`);
+	const notesOnly = card(run({ progress: { folded: 0, total: 0 }, sessions: [] }));
+	assert(!notesOnly.includes("From 0 conversations"), "a notes-only card names no zero");
+	// A run that only sorted notes out of Unsorted offers Save, which saves the sort.
+	const sortOnlyCard = card(run({ progress: { folded: 0, total: 0 }, sessions: [], sorted: [{ id: "m-0101", text: "- Invoices go out on the first.", topic: "Invoicing" }] }));
+	const sortOnlySave = /<button class="rs-btn rs-btn-primary"[^>]*>Save[^<]*<\/button>/.exec(sortOnlyCard)?.[0] ?? "";
+	assert(sortOnlySave && !sortOnlySave.includes("disabled"), `a sort-only card's Save is on (got: ${sortOnlySave || sortOnlyCard.slice(-600)})`);
+	// Not on the account: Try again would meet the same refusal, so the paused card offers the way that works.
+	const notOnAccount = card(run({ progress: { folded: 1, total: 2 }, sessions: [session(), waitingRows[1]], stop: { kind: "outage", model: stopped, cause: "not-on-account" } as any }));
+	assert(notOnAccount.includes("absorb-run-stop-note") && !notOnAccount.includes(">Try again<") && notOnAccount.includes(">Choose another model<"), `not on the account: no Try again on the paused Memorize card (got: ${notOnAccount.slice(0, 1200)})`);
 }
 
 console.log("memory v2 copy smoke passed: the run card, the limit bar, the automatic-maintenance gate, the Review sentences, and the words both memory surfaces speak");

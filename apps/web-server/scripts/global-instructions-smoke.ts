@@ -24,7 +24,6 @@ const {
 	readGlobalInstructions,
 	ROOM_INSTRUCTIONS_SECTION_HEADING,
 	writeGlobalInstructions,
-	writePersistentRoomInstructions,
 } = await import("../src/persistent-room-instructions.js");
 const { parsePersistentRoomInstructionsMarker, persistentRoomInstructionsMarkerLine, ROOM_INSTRUCTIONS_MAX_CHARS } = await import("../src/persistent-room-instructions-text.js");
 const {

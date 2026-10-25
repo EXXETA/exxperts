@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { PaneHeader } from "./pane-header";
+import { isServiceUnreachableLine } from "../api";
 import {
 	acceptSkillCandidate,
 	createSkill,
@@ -217,7 +218,7 @@ function SkillRow({ skill, onOpen, opening = false }: { skill: SkillListItem; on
 	);
 }
 
-export function SkillsPage() {
+export function SkillsPage({ serviceBack }: { /** Counts the page's reconnects after an outage. */ serviceBack?: number }) {
 	const [skills, setSkills] = useState<SkillListItem[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -251,6 +252,12 @@ export function SkillsPage() {
 	useEffect(() => {
 		void refresh();
 	}, [refresh]);
+
+	// A line saying the service could not be reached goes once it answers again
+	// after an outage, and the library is read again.
+	useEffect(() => {
+		if (isServiceUnreachableLine(error)) void refresh();
+	}, [serviceBack]);
 
 	function backToList(notice?: string) {
 		setMode({ kind: "list" });

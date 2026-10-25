@@ -3,6 +3,7 @@ import type { PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgent
 import { fetchPersistentRoomLifecycleCounts } from "../persistent-room-management-api";
 import { confirmDialog } from "./confirm-dialog";
 import { PaneHeader } from "./pane-header";
+import { shownRoomName } from "../../../web-server/src/room-name";
 
 function plural(count: number, noun: string, pluralNoun = `${noun}s`): string {
 	return `${count} ${count === 1 ? noun : pluralNoun}`;
@@ -34,7 +35,7 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 	const [countsFailed, setCountsFailed] = useState(false);
 	const [submitting, setSubmitting] = useState<"purge" | "archive" | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const roomName = status.displayName || status.id;
+	const roomName = shownRoomName(status.displayName) || status.id;
 
 	useEffect(() => {
 		if (!visible) return;

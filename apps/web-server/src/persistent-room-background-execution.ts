@@ -27,6 +27,7 @@ import {
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
 import { modelNotOnAccount, modelNotOnAccountSentence } from "./model-not-on-account.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
+import { createTurnStepLog, landedTextAfter } from "./persistent-room-turn-steps.js";
 import { buildPersistentRoomCurrentInstructionsSection } from "./persistent-room-instructions.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -49,6 +50,8 @@ import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import { createNativeProviderSearchExtension, resolveNativeProviderSearchDecision, shouldRegisterClientWebSearch } from "../../../pi-package/extensions/web-search/native-provider-search.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import toolResultAgingExt from "../../../pi-package/extensions/tool-result-aging/index.js";
+import { keepAppTurnFailure } from "./failed-prompt-step-back.js";
+import { SERVER_STOPPED_REASON, STOP_SCHEDULED_RUN_SENTENCE, answerAlreadyEnded, trackRunningWork } from "./server-stop.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -133,8 +136,16 @@ function safeExecutionId(value: unknown): string {
 	return normalized;
 }
 
+const SCHEDULED_USER_ITEM_PREFIX = "scheduled-user-";
+
 export function scheduledPromptBackgroundUserItemId(executionId: string): string {
-	return `scheduled-user-${safeExecutionId(executionId)}`;
+	return `${SCHEDULED_USER_ITEM_PREFIX}${safeExecutionId(executionId)}`;
+}
+
+/** Whether a conversation's last message on the person's side is a scheduled run's prompt: sent by the app, never handed to the person. */
+export function lastUserItemIsScheduledPrompt(items: ReadonlyArray<unknown> | undefined): boolean {
+	const lastUser = [...(items ?? [])].reverse().find((item) => (item as { kind?: unknown } | null)?.kind === "user") as { id?: unknown } | undefined;
+	return typeof lastUser?.id === "string" && lastUser.id.startsWith(SCHEDULED_USER_ITEM_PREFIX);
 }
 
 export function scheduledPromptBackgroundAssistantItemId(executionId: string): string {
@@ -449,8 +460,8 @@ async function createPersistentRoomBackgroundSession(input: {
 	const backgroundToolNames = persistentRoomBackgroundSessionToolNames(toolPolicy.allowedToolNames);
 	const customTools = workspaceToolsEnabled && effectiveWorkspacePolicy.policy
 		// Same file tools as the live bind, bound to the session cwd this run
-		// binds with.
-		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy, { localFilesCwd: input.cwd })
+		// binds with. It never has bash or the skills folder, and its refusals say so.
+		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy, { localFilesCwd: input.cwd, background: true })
 		: [];
 	const customToolNames = new Set(customTools.map((tool) => String(tool.name)));
 	if (customToolNames.size !== workspaceToolNames.length || !workspaceToolNames.every((toolName) => customToolNames.has(toolName))) {
@@ -522,10 +533,15 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 	let thread = prepared.thread;
 	let userItemPersisted = false;
 	let assistantText = "";
+	// The text before a failed attempt the runtime asks again: the retry's text takes the place of the attempt's.
+	let retryFrom: string | undefined;
 	let providerRefusal = "";
 	let usage: PersistentRoomBackgroundExecutionResult["usage"];
 	let terminalReason: "completed" | "failed" = "failed";
 	const autoDeclinedQuestions = createPersistentRoomAutoDeclinedQuestionLog();
+	const steps = createTurnStepLog();
+	// Each step is upserted by its own id, so a run landed twice keeps one copy, before the answer.
+	const withSteps = (items: unknown[]): unknown[] => steps.items(`scheduled-step-${executionId}`).reduce<unknown[]>((acc, step) => upsertItem(acc, { ...step }), items);
 	const declinedQuestionItemIdPrefix = scheduledPromptBackgroundDeclinedQuestionItemIdPrefix(executionId);
 	// Bookkeeping must never cost the answer (or the honest failure note): the
 	// landed text is the paid result of this run, the away-notes sit on top of
@@ -551,6 +567,9 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 	const turnId = input.turnId ?? `scheduled_${executionId}`.slice(0, 120);
 	const connectionId = input.connectionId ?? `scheduler:${executionId}`.slice(0, 120);
 	let activeTurnId: string | undefined;
+	// Set when a server stop ends this turn: the run then ends with the stop's line and code.
+	let stoppedByServer = false;
+	let releaseStopWork: (() => void) | undefined;
 	try {
 		thread = writePersistentAgentThread(prepared.roomId, prepared.threadId, {
 			state: thread.state === "active" ? "active" : "standby",
@@ -561,11 +580,18 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		userItemPersisted = true;
 		const startedTurn = beginPersistentAgentTurn(prepared.roomId, prepared.threadId, { turnId, connectionId });
 		activeTurnId = startedTurn.turnId;
+		releaseStopWork = trackRunningWork("scheduled turn", () => {
+			// An answer that already ended is left to finish while the runtime's post-turn work runs: the run completed.
+			if (answerAlreadyEnded(session.agent.state.messages)) return;
+			stoppedByServer = true;
+			void Promise.resolve((session as any)?.abort?.()).catch(() => {});
+		});
 		session.subscribe((event: any) => {
+			if (event?.type === "message_end") steps.note(event.message);
 			if (event?.type !== "message_end" || event?.message?.role !== "assistant") return;
 			if (event.message.stopReason === "error") providerRefusal = String(event.message.errorMessage ?? "");
 			const text = textFromMessageParts(event.message.content);
-			if (text) assistantText = [assistantText, text].filter(Boolean).join("\n\n");
+			({ text: assistantText, retryFrom } = landedTextAfter({ text: assistantText, retryFrom }, text, event.message.stopReason === "error" && session.retriesAfter(event.message)));
 			const messageUsage = usageFromMessageUsage(event.message.usage);
 			// Sum across assistant messages so multi-message turns account fully.
 			if (messageUsage) {
@@ -583,6 +609,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		});
 		const promptText = prepared.promptPrefix ? [prepared.promptPrefix, "", prompt].join("\n") : prompt;
 		await session.prompt(promptText);
+		if (stoppedByServer) throw Object.assign(new Error(STOP_SCHEDULED_RUN_SENTENCE), { code: SERVER_STOPPED_REASON });
 		if (!assistantText.trim() && modelNotOnAccount(providerRefusal)) throw new ScheduledModelNotOnAccountError(modelLock);
 		if (!assistantText.trim()) throw new Error("scheduled persistent-room execution produced no assistant text");
 		terminalReason = "completed";
@@ -590,18 +617,25 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		if (userItemPersisted) {
 			try {
 				const current = getPersistentAgentThread(prepared.roomId, prepared.threadId) ?? thread;
+				// A run the stop ended keeps what it had said, above the stop's line.
+				const keptPartial = stoppedByServer && assistantText.trim() !== "";
+				const withAnswer = (items: unknown[]): unknown[] => keptPartial ? upsertItem(items, { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false, ts: Date.now() }) : items;
 				thread = writePersistentAgentThread(prepared.roomId, prepared.threadId, {
 					state: current.state === "active" ? "active" : "standby",
 					origin: current.origin,
 					model: current.model,
-					items: appendFailureItem(noteItemsOrJustTheItems(current.items ?? []), executionId, error instanceof ScheduledModelNotOnAccountError ? error.message : "Scheduled background task failed before an assistant response was saved."),
+					items: appendFailureItem(noteItemsOrJustTheItems(withAnswer(withSteps(current.items ?? []))), executionId, stoppedByServer ? STOP_SCHEDULED_RUN_SENTENCE : error instanceof ScheduledModelNotOnAccountError ? error.message : "Scheduled background task failed before an assistant response was saved."),
 				}).thread;
 			} catch {
 				// Preserve the original execution error. Worker finalization records status.
 			}
 		}
+		if (stoppedByServer && (error as { code?: unknown } | null)?.code !== SERVER_STOPPED_REASON) throw Object.assign(new Error(STOP_SCHEDULED_RUN_SENTENCE), { code: SERVER_STOPPED_REASON });
 		throw error;
 	} finally {
+		releaseStopWork?.();
+		// Before the turn ends: a room opened the moment it does must not hand this prompt back.
+		try { keepAppTurnFailure(session as any); } catch {}
 		if (activeTurnId) {
 			try { finishPersistentAgentTurn(prepared.roomId, prepared.threadId, { turnId: activeTurnId, terminalReason }); } catch {}
 		}
@@ -613,7 +647,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		state: "standby",
 		origin: current.origin,
 		model: current.model,
-		items: noteItemsOrJustTheItems(upsertItem(current.items ?? [], { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false, ts: Date.now() })),
+		items: noteItemsOrJustTheItems(upsertItem(withSteps(current.items ?? []), { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false, ts: Date.now() })),
 	}, {
 		// The model already ran and its tokens are already spent; this write only lands the paid
 		// answer under the thread's existing lock. A profile switch mid-generation must not turn

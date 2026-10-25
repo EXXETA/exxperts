@@ -6,10 +6,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { symlinkOrSkip } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-room-shelf-home-"));
 const tempAgentsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-room-shelf-root-"));
 process.env.HOME = tempHome;
+process.env.USERPROFILE = tempHome;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
 const {
@@ -158,8 +160,7 @@ try {
 	// The fence: resolution rejects traversal-ish names and symlinks.
 	await expectShelfError(() => resolveShelfFilePath(roomId, "../agent.json"), "invalid_name", "traversal name");
 	await expectShelfError(() => resolveShelfFilePath(roomId, "missing.md"), "file_not_found", "missing file");
-	if (process.platform !== "win32") {
-		fs.symlinkSync("/etc/hosts", path.join(shelfDir, "sneaky.md"));
+	if (process.platform !== "win32" && symlinkOrSkip("/etc/hosts", path.join(shelfDir, "sneaky.md"), "room-shelf-smoke", "the linked shelf file case")) {
 		await expectShelfError(() => resolveShelfFilePath(roomId, "sneaky.md"), "not_file", "symlink must be refused");
 		fs.rmSync(path.join(shelfDir, "sneaky.md"));
 	}
@@ -367,13 +368,13 @@ try {
 	fs.writeFileSync(path.join(linkedTok, "keep.md"), "not the shelf's");
 	fs.utimesSync(linkedTok, past, past);
 	fs.renameSync(trashDir, `${trashDir}.real`);
-	fs.symlinkSync(linkTarget, trashDir, "dir");
-	sweepExpiredShelfTrash(roomId);
+	const trashLinked = symlinkOrSkip(linkTarget, trashDir, "room-shelf-smoke", "the linked trash folder case", "dir");
+	if (trashLinked) sweepExpiredShelfTrash(roomId);
 	const linkTargetKept = fs.existsSync(path.join(linkedTok, "keep.md"));
-	fs.unlinkSync(trashDir);
+	if (trashLinked) fs.unlinkSync(trashDir);
 	fs.renameSync(`${trashDir}.real`, trashDir);
 	fs.rmSync(linkTarget, { recursive: true, force: true });
-	assert(linkTargetKept, "the sweep leaves a linked trash folder's target alone");
+	if (trashLinked) assert(linkTargetKept, "the sweep leaves a linked trash folder's target alone");
 
 	// ---- Inline rename: collision rule + ledger rewrite + cache re-key -------
 	fs.writeFileSync(path.join(shelfDir, "rename-me.pdf"), minimalPdf());

@@ -4,6 +4,9 @@
 // as "open in another window" with Resume disabled until a refocus. Here the
 // socket's close reaches the server half a second late: Home reads again,
 // and the room's Resume is offered without a refocus or a reload.
+// Then the room is open in a second window: Home shows it greyed, and when
+// that window closes, Home offers the room again by itself while it keeps
+// focus. With no card greyed, Home does not keep reading the room list.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -12,11 +15,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-
-function assert(condition: unknown, message: string): asserts condition {
-	if (!condition) throw new Error(message);
-}
+import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 // A machine without Chromium cannot run a browser assertion at all; skip
 // whole, the same way remote-settings-readonly-smoke does.
@@ -146,6 +145,40 @@ try {
 			await card.waitFor({ timeout: 10000 });
 			await waitUntil(() => door.isEnabled(), `round ${round}: the room just left is offered again without a refocus`, 6000);
 		}
+
+		let listReads = 0;
+		page.on("request", (request) => {
+			if (request.method() === "GET" && new URL(request.url()).pathname === "/api/persistent-agents") listReads += 1;
+		});
+		const otherCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+		const otherPage = await otherCtx.newPage();
+		await otherPage.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+		await otherPage.waitForLoadState("networkidle");
+		const otherDismiss = otherPage.locator(".whats-new-close");
+		if (await otherDismiss.count()) await otherDismiss.click();
+		await otherPage.locator(".persistent-agent-card").filter({ hasText: "Leave Lock Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await otherPage.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
+		await page.reload();
+		await page.waitForLoadState("networkidle");
+		if (await dismiss.count()) await dismiss.click();
+		const openElsewhere = /open in another window/;
+		await waitUntil(async () => !(await door.isEnabled()) && openElsewhere.test(await door.getAttribute("title") ?? ""), "Home shows the room open in another window", 10000);
+		await page.evaluate(() => {
+			(window as unknown as { __focusEvents: number }).__focusEvents = 0;
+			window.addEventListener("focus", () => { (window as unknown as { __focusEvents: number }).__focusEvents += 1; });
+		});
+		await otherCtx.close();
+		const closedAt = Date.now();
+		await waitUntil(() => door.isEnabled(), "the room closed in the other window is offered again while Home keeps focus", 7500);
+		console.log(`home-leave-lock smoke: offered again ${Date.now() - closedAt} ms after the other window closed`);
+		if (openElsewhere.test(await door.getAttribute("title") ?? "")) throw new Error("the card still says the room is open in another window");
+		const focusEvents = await page.evaluate(() => (window as unknown as { __focusEvents: number }).__focusEvents);
+		if (focusEvents !== 0) throw new Error(`expected no focus event while Home waited, got ${focusEvents}`);
+
+		await page.waitForTimeout(1000);
+		const readsBefore = listReads;
+		await page.waitForTimeout(12000);
+		if (listReads !== readsBefore) throw new Error(`with no card greyed, Home read the room list ${listReads - readsBefore} more times in 12 s`);
 		await ctx.close();
 	} finally {
 		await browser.close();

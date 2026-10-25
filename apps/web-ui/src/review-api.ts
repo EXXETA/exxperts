@@ -10,7 +10,6 @@ import { ApiRequestError, apiFetch, fetchJson } from "./api";
 import type { RunKeepRequest } from "./absorb-run-api";
 import type {
 	PersistentAgentId,
-	ReviewAssessmentResponse,
 	ReviewDepth,
 	ReviewDiscussionSignoffResponse,
 	ReviewDiscussionTurnResponse,
@@ -27,7 +26,7 @@ export interface ReviewDiscussionMessage {
 	content: string;
 }
 
-function reviewBase(agentId: PersistentAgentId): string {
+export function reviewBase(agentId: PersistentAgentId): string {
 	return `/api/persistent-agents/${encodeURIComponent(agentId)}/review`;
 }
 
@@ -55,12 +54,22 @@ export function fetchReviewStatus(agentId: PersistentAgentId): Promise<ReviewSta
 	return fetchJson<ReviewStatusResponse>(`${reviewBase(agentId)}/status`);
 }
 
-/** The first read. `retryFeedback` asks the same read again, naming what the last one left out. */
-export function requestReviewAssessment(agentId: PersistentAgentId, options?: { retryFeedback?: string[] }): Promise<ReviewAssessmentResponse> {
-	return fetchJson<ReviewAssessmentResponse>(`${reviewBase(agentId)}/assess`, {
+/** The first read of Memorize or Review, at its `base`. `retryFeedback` asks the same read again, naming what the last one left out; `fresh` asks the model again instead of the kept read; `ask` names this ask for its Cancel; `signal` ends the page's wait. */
+export function requestFirstRead<T>(base: string, options?: { retryFeedback?: string[]; fresh?: boolean; ask?: string; signal?: AbortSignal }): Promise<T> {
+	return fetchJson<T>(`${base}/assess`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify(options?.retryFeedback?.length ? { retryFeedback: options.retryFeedback } : {}),
+		body: JSON.stringify({ ...(options?.retryFeedback?.length ? { retryFeedback: options.retryFeedback } : {}), ...(options?.fresh ? { fresh: true } : {}), ...(options?.ask ? { ask: options.ask } : {}) }),
+		...(options?.signal ? { signal: options.signal } : {}),
+	});
+}
+
+/** Cancel for a first read the page asked for at `base`: the server stops it once no other page waits for it. */
+export function cancelFirstReadAt(base: string, ask: string): Promise<{ cancelled: boolean }> {
+	return fetchJson<{ cancelled: boolean }>(`${base}/assess`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ ask, cancel: true }),
 	});
 }
 

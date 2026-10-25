@@ -21,6 +21,7 @@ import {
 	type RemoteRoomRow,
 } from "../remote-access-api";
 import { fetchRemoteClientContext, useRemoteClientContext } from "../remote-client-context";
+import { shownRoomName } from "../../../web-server/src/room-name";
 
 /**
  * Remote access, managed where the other app-level choices live instead of a
@@ -344,8 +345,8 @@ export function RemoteAccessPage() {
 			setRooms((rows) => (rows ?? []).map((row) => (row.id === room.id ? { ...row, exposed } : row)));
 			setNote(
 				exposed
-					? `"${room.displayName}" is reachable remotely again.`
-					: `"${room.displayName}" is hidden from remote devices. Not a security control; to keep it truly unreachable, revoke the device.`,
+					? `"${shownRoomName(room.displayName) || room.id}" is reachable remotely again.`
+					: `"${shownRoomName(room.displayName) || room.id}" is hidden from remote devices. Not a security control; to keep it truly unreachable, revoke the device.`,
 			);
 		} catch (e) {
 			setError((e as Error).message);
@@ -575,7 +576,7 @@ export function RemoteAccessPage() {
 					<div className="settings-rows">{(rooms ?? []).map((room) => (
 						<div key={room.id} className="settings-row remote-room-row">
 							<div className="settings-row-main">
-								<span className="settings-row-label">{room.displayName}</span>
+								<span className="settings-row-label">{shownRoomName(room.displayName) || room.id}</span>
 								{room.bashEnabled && <span className="settings-row-sub">Can run commands on this computer</span>}
 								{!room.bashEnabled && room.writeEnabled && <span className="settings-row-sub">Can change files in its workspace</span>}
 							</div>

@@ -4,6 +4,7 @@ import path from "node:path";
 
 const {
 	createPersistentRoomCapabilityPolicy,
+	isFullWorkspacePath,
 	createPersistentRoomDefaultCapabilityPolicy,
 	deletePersistentRoomCapabilityPolicy,
 	deletePersistentRoomDefaultCapabilityPolicy,
@@ -27,13 +28,14 @@ function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
 
-function expectPolicyError(fn: () => unknown, code: string, label: string): void {
+function expectPolicyError(fn: () => unknown, code: string, label: string, words?: string): void {
 	try {
 		fn();
 	} catch (error) {
 		assert(error instanceof PersistentRoomWorkspacePolicyError, `${label}: expected PersistentRoomWorkspacePolicyError`);
 		assert(error.code === code, `${label}: expected ${code}, got ${error.code}`);
 		assert(!error.message.includes(tmp), `${label}: error message must not leak temp absolute path`);
+		if (words !== undefined) assert(error.message === words, `${label}: expected the words "${words}", got "${error.message}"`);
 		return;
 	}
 	throw new Error(`${label}: expected ${code}`);
@@ -208,21 +210,35 @@ try {
 	assert(deletedDefaultAgain.deleted === false, "second room-default delete should be safe no-op");
 	assert(resolvePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).source === "none", "resolver should return none after thread/default policies are removed");
 
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: "" }), "missing_root", "missing root");
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: path.join(tmp, "missing") }), "root_not_found", "missing directory");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: "" }), "missing_root", "missing root", "Choose a folder for this room.");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: path.join(tmp, "missing") }), "root_not_found", "missing directory", "There is no folder at that path. Check it and save again.");
 	const fileRoot = path.join(tmp, "file.txt");
 	fs.writeFileSync(fileRoot, "not a directory");
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: fileRoot }), "root_not_directory", "file path");
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: repoRoot }), "forbidden_root", "repo root");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: fileRoot }), "root_not_directory", "file path", "That is a file, not a folder. Choose the folder it is in.");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: repoRoot }), "forbidden_root", "repo root", "This folder is the exxperts app itself, which rooms never open. Choose another folder.");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: repoChild }), "under_forbidden_root", "repo child");
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: tmp }), "ancestor_of_forbidden_root", "ancestor containing repo and state roots");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: tmp }), "ancestor_of_forbidden_root", "ancestor containing repo and state roots", "This folder contains the exxperts app itself, so a room can't work in it. Choose a project folder instead, such as one in Documents.");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: persistentAgentsRoot }), "forbidden_root", "persistent agents root");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: agentRoot }), "forbidden_root", "agent root");
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: exxetaStateRoot }), "forbidden_root", "exxeta state root");
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: stateAgentRoot }), "under_forbidden_root", "the agent folder of the state tree");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: exxetaStateRoot }), "forbidden_root", "exxeta state root", "This folder is exxperts' own data, which rooms never open. Choose another folder.");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: stateAgentRoot }), "under_forbidden_root", "the agent folder of the state tree", "This folder is exxperts' own data, which rooms never open. Choose another folder.");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: path.join(homeRoot, ".exxperts") }), "forbidden_root", "the whole state tree");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: siblingProfileRoot }), "forbidden_root", "another profile's tree");
-	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: homeRoot }), "ancestor_of_forbidden_root", "a folder holding the whole state family");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: homeRoot }), "ancestor_of_forbidden_root", "a folder holding the whole state family", "This folder contains exxperts' own data, so a room can't work in it. Choose a project folder instead, such as one in Documents.");
+	const fullPathExample = process.platform === "win32" ? "C:\\Users\\you\\Projects" : process.platform === "darwin" ? "/Users/you/Projects" : "/home/you/projects";
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: "Projects/demo" }), "root_not_absolute", "a relative path", `Use the folder's full path, for example ${fullPathExample}.`);
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: '""' }), "missing_root", "a pair of quotes alone", "Choose a folder for this room.");
+	for (const [input, full] of [["C:\\Users\\you\\Projects", true], ["c:/Users/you", true], ["\\\\server\\share\\Projects", true], ["\\Projects", false], ["/Projects", false], ["C:Projects", false], ["Projects\\demo", false]] as const) {
+		assert(isFullWorkspacePath(input, "win32") === full, `on Windows ${JSON.stringify(input)} is ${full ? "" : "not "}a full path`);
+	}
+	for (const [input, full] of [["/Users/you/Projects", true], ["Projects/demo", false]] as const) {
+		assert(isFullWorkspacePath(input, "darwin") === full, `on a Mac ${JSON.stringify(input)} is ${full ? "" : "not "}a full path`);
+	}
+	// Windows' "Copy as path" puts the path in double quotes.
+	for (const quoted of [`"${workspaceRoot}"`, ` '${workspaceRoot}' `]) {
+		const fromQuoted = createPersistentRoomCapabilityPolicy({ ...baseInput, root: quoted });
+		assert(fromQuoted.roots[0]?.realpath === fs.realpathSync.native(workspaceRoot), `a quoted path ${JSON.stringify(quoted)} should save the folder inside the quotes`);
+	}
 
 	const symlinkToRepo = path.join(tmp, "repo-link");
 	try {

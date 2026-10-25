@@ -220,8 +220,10 @@ try {
 		await page.waitForLoadState("networkidle");
 		await composer.fill("A question on a key outside a workspace.");
 		await page.getByRole("button", { name: "Send" }).click();
-		const workspaceLine = page.getByText("Claude Opus 5.5 cannot answer because its key isn't tied to a workspace.", { exact: true });
+		// The message went back into the box, and the notice says so.
+		const workspaceLine = page.getByText("Claude Opus 5.5 cannot answer because its key isn't tied to a workspace. Your message is back in the box.", { exact: true });
 		await workspaceLine.waitFor({ timeout: 20000 });
+		assert(await composer.inputValue() === "A question on a key outside a workspace.", `the refused message is back in the box, got ${JSON.stringify(await composer.inputValue())}`);
 		assert(await page.getByRole("button", { name: "Replace key" }).count() >= 1, "the workspace line offers Replace key");
 		assert(await page.getByText(/did not accept the saved key|check the model and its sign-in/).count() === 0, "the chat names the workspace, not a refused key or the raw words");
 		pass("a chat turn refused for a key outside a workspace says so, with Replace key");

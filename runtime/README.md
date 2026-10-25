@@ -53,7 +53,6 @@ I regularly publish my own `pi-mono` work sessions here:
 | **[@earendil-works/pi-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
 | **[@earendil-works/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI |
 | **[@earendil-works/pi-tui](packages/tui)** | Terminal UI library with differential rendering |
-| **[@earendil-works/pi-web-ui](packages/web-ui)** | Web components for AI chat interfaces |
 
 For Slack/chat automation and workflows see [earendil-works/pi-chat](https://github.com/earendil-works/pi-chat).
 
@@ -71,7 +70,7 @@ npm run check        # Lint, format, and type check
 ./pi-test.sh         # Run pi from sources (can be run from any directory)
 ```
 
-> **Note:** `npm run check` requires `npm run build` to be run first. The web-ui package uses `tsc` which needs compiled `.d.ts` files from dependencies.
+> **Note:** `npm run check` requires `npm run build` to be run first.
 
 ## License
 

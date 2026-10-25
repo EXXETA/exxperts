@@ -12,7 +12,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { PageFailureCode, PageFailureRecord, PageFailureState } from "./absorb-run-pages.js";
+import type { PageFailureCode, PageFailureState } from "./absorb-run-pages.js";
 
 export const MEMORIZE_PAGE_FAILURES_FILE = "memorize-page-failures.json";
 

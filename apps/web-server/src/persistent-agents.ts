@@ -16,7 +16,7 @@ import { SessionManager } from "@exxeta/exxperts-runtime";
 import { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_DISCUSSION_TOKEN_BUDGET, ABSORB_DISCUSSION_WORKER_TYPE, absorbAvailabilityFromL1b, recentContextSessions, buildAbsorbAssessmentPrompt, buildAbsorbAssessmentRetryPrompt, extractRecentContextForAbsorb, buildAbsorbDiscussionPrompt, buildSectionPurposeMap, parseAbsorbAssessment } from "./absorb-consolidation.js";
 import type { AbsorbAssessmentFields, AbsorbAssessmentHandoffInput, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionPromptTelemetry, AbsorbDiscussionTokenBudget, AbsorbModelLock, AbsorbPromptTelemetry } from "./absorb-consolidation.js";
 import { assembleProposedRecentContext, buildCheckpointCompressionPrompt, buildCheckpointProposalPreview, CHECKPOINT_COMPRESSION_WORKER_TYPE, CHECKPOINT_PAGE_MAX_CHARS, CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP, CheckpointPromptOverflowError, CHECKPOINT_CUT_WORD_TARGET, fitCheckpointFields, nextLowerDensity, parseCheckpointCompressionFields, repairCheckpointFields, salvageCutCheckpointFields, rememberSentenceModelName, withRetryNotice, type CheckpointCompressionPromptInput } from "./checkpoint-compression.js";
-import { buildRememberFinalPrompt, buildRememberPageFromNotes, rememberShortMemoryView, buildRememberPartPrompt, buildRememberPartShortenPrompt, countBodyMustKeeps, countPartNoteMustKeeps, planRememberParts, REMEMBER_PART_NOTE_CEILING_TOKENS, REMEMBER_PART_PARALLELISM, REMEMBER_PART_TRIGGER, REMEMBER_SPLIT_DEPTH, rememberPartCapTokens, missingKeepRequests, rememberDatedTitle, rememberLocalDay, rememberTitleFromWords, rememberPartsTelemetry, rememberPartKeyPrompt, rememberNoLineMessage, rememberWindowTooSmallMessage, RememberTooLargeError, splitRememberStretch, withHighLevelLines, type RememberPartsPlan, type RememberPromptContext, type RememberStretch, type RememberUnreadRange } from "./remember-two-stage.js";
+import { buildRememberFinalPrompt, buildRememberPageFromNotes, rememberShortMemoryView, buildRememberPartPrompt, buildRememberPartShortenPrompt, countBodyMustKeeps, countPartNoteMustKeeps, planRememberParts, REMEMBER_PART_NOTE_CEILING_TOKENS, REMEMBER_PART_PARALLELISM, REMEMBER_PART_TRIGGER, REMEMBER_SPLIT_DEPTH, rememberPartCapTokens, missingKeepRequests, rememberDatedTitle, rememberLocalDay, rememberTitleFromWords, rememberPartsTelemetry, rememberPartKeyPrompt, rememberNoLineMessage, RememberTooLargeError, splitRememberStretch, withHighLevelLines, type RememberPartsPlan, type RememberPromptContext, type RememberStretch, type RememberUnreadRange } from "./remember-two-stage.js";
 import { clearRememberWork, keepRememberPartNote, readRememberPartNote, rememberPartKey } from "./remember-parts-cache.js";
 import { buildConsultPrompt, CONSULT_MAX_STACK_EXCHANGES, CONSULT_PRIOR_ANSWER_BOUNDARY_MAX_CHARS, CONSULT_QUESTION_MAX_CHARS, CONSULT_WORKER_TYPE } from "./consult.js";
 import type { ConsultPriorExchange, ConsultPromptTelemetry } from "./consult.js";
@@ -31,7 +31,8 @@ import { isRoomModelOffered } from "./room-models.js";
 import { readOrgIdentityState } from "./org-identity.js";
 import type { OrgIdentity } from "./org-identity.js";
 import { resolvePersistentRoomEffectiveWorkspacePolicy, type PersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
-import { listShelfFilesWithOrigin, resolveShelfFilePath } from "./persistent-room-shelf.js";
+import { handOffApprovalSubject, PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "./room-approval-titles.js";
+import { listShelfFilesWithOrigin } from "./persistent-room-shelf.js";
 import { listTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { backgroundRunsDirectoryPath, isValidBackgroundRunId } from "./background-runs.js";
 import { artifactRoot } from "../../../pi-package/extensions/artifacts/index.js";
@@ -41,7 +42,7 @@ import { conversationForgotten, eraseAgainIfForgotten, eraseConversationWords, s
 import { MAINTENANCE_DIAGNOSTICS_DIRNAME, maintenanceDiagnosticsDir, recordMaintenanceWorkerCalls, writeMaintenanceDiagnosticsRecord, type MaintenanceDiagnosticsProcess } from "./maintenance-diagnostics.js";
 import { readPersistentRoomLastUsed, recordPersistentRoomLastUsed, recordPersistentRoomLastUsedIfAbsent, type PersistentRoomLastUsed } from "./persistent-room-last-used.js";
 import { readSessionPathMessages } from "./session-path-reader.js";
-import { callWithPatience, classifyModelFailure, failureWords, ModelUnreachableError, patienceSpent, WaitLine, type PatienceOptions, type PatienceWait } from "./model-call-causes.js";
+import { callWithPatience, classifyModelFailure, failureWords, ModelUnreachableError, patienceSpent, unreachableError, WaitLine, type PatienceOptions, type PatienceWait } from "./model-call-causes.js";
 import { buildPersistentRoomInstructionsLayer, composePersistentRoomInstructions, readPersistentRoomInstructions, validatePersistentRoomInstructionsText, writePersistentRoomInstructions, type ComposedPersistentRoomInstructions, type PersistentRoomInstructions } from "./persistent-room-instructions.js";
 import { readPersistentRoomGlobalInstructionsSetting, writePersistentRoomGlobalInstructionsEnabled } from "./persistent-room-global-instructions-setting.js";
 import { parsePersistentRoomInstructionsLayerFingerprint } from "./persistent-room-instructions-text.js";
@@ -49,6 +50,8 @@ import { abortAllSpecialistTasks, abortConversationSpecialistTasks, runningSpeci
 import { computePersistentRoomScheduleDueOccurrence, listPersistentRoomScheduleJobs, parsePersistentRoomSchedule, readPersistentRoomScheduleStore, summarizePersistentRoomScheduleJobs, writePersistentRoomScheduleStore } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { PersistentRoomScheduleSummary } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
+import { isSharedServer } from "./server-hooks.js";
+import { trimHumanText } from "./room-name.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
@@ -156,14 +159,6 @@ export type CheckpointTranscriptSourceMetadata = PiSessionCheckpointTranscriptSo
 export interface CheckpointTranscriptSourceResult {
 	items: CheckpointTranscriptItem[];
 	source: CheckpointTranscriptSourceMetadata;
-}
-
-export interface CheckpointProposalRequest {
-	conversationId: string;
-	model: PersistentAgentModelLock;
-	density: CheckpointDensity;
-	rememberText?: string;
-	items?: CheckpointTranscriptItem[];
 }
 
 export interface CheckpointProposalResponse {
@@ -1192,15 +1187,15 @@ export interface PersistentAgentScaffoldResult {
 }
 
 function collapseHumanWhitespace(value: string): string {
-	return value.replace(/\s+/g, " ").trim();
+	return trimHumanText(value);
 }
 
-function normalizeRequiredHumanName(value: unknown, label: string): string {
+function normalizeRequiredHumanName(value: unknown, requiredMessage: string): string {
 	// NFC at intake: macOS paste can deliver NFD ("Café" as e + combining
 	// accent), which would otherwise store as a byte-different twin of the
 	// composed name and slip past the uniqueness check.
 	const normalized = typeof value === "string" ? collapseHumanWhitespace(value).normalize("NFC") : "";
-	if (!normalized) throw new Error(`${label} is required`);
+	if (!normalized) throw new Error(requiredMessage);
 	return normalized;
 }
 
@@ -1268,7 +1263,7 @@ function defaultPreferredUserAddress(userDisplayName: string): string {
 }
 
 export function normalizePersistentAgentDisplayName(value: unknown): string {
-	return normalizeRequiredHumanName(value, "displayName");
+	return normalizeRequiredHumanName(value, "Room name is required.");
 }
 
 export function persistentAgentSlugFromDisplayName(displayNameRaw: unknown): string {
@@ -1295,7 +1290,7 @@ function persistentAgentIdCandidate(baseAgentId: string, attempt: number): Persi
 export function normalizePersistentAgentScaffoldInput(input: PersistentAgentScaffoldInput): NormalizedPersistentAgentScaffoldInput {
 	const raw = input ?? {};
 	const displayName = normalizePersistentAgentDisplayName(raw.displayName ?? raw.name);
-	const userDisplayName = normalizeRequiredHumanName(raw.user?.displayName ?? raw.userName, "user.displayName");
+	const userDisplayName = normalizeRequiredHumanName(raw.user?.displayName ?? raw.userName, "Your name is required.");
 	const preferredAddress = normalizeOptionalHumanText(raw.user?.preferredAddress ?? raw.preferredAddress ?? raw.preferredUserAddress) ?? defaultPreferredUserAddress(userDisplayName);
 	const role = normalizeScaffoldRole(raw.role ?? raw.templateId);
 	const description = normalizeOptionalHumanText(raw.description);
@@ -1545,10 +1540,6 @@ function persistentAgentInstanceFrom(input: PersistentAgentInstance | string): P
 
 type PersistentAgentPathContext = PersistentAgentInstance | string;
 
-function agentRoot(id: string): string {
-	return createPersistentAgentInstance(id).rootDir;
-}
-
 function ensureDir(dir: string): void {
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
@@ -1590,27 +1581,12 @@ function runtimeDir(root: PersistentAgentPathContext): string {
 	return root instanceof PersistentAgentInstance ? root.runtimeDir() : path.join(root, "runtime");
 }
 
-function runtimeStatePath(root: PersistentAgentPathContext): string {
-	return root instanceof PersistentAgentInstance ? root.runtimeStatePath() : path.join(runtimeDir(root), "state.json");
-}
-
 function runtimeThreadsDir(root: PersistentAgentPathContext): string {
 	return root instanceof PersistentAgentInstance ? root.runtimeThreadsDir() : path.join(runtimeDir(root), "threads");
 }
 
 function runtimePiSessionsDir(root: PersistentAgentPathContext): string {
 	return root instanceof PersistentAgentInstance ? root.runtimePiSessionsDir() : path.join(runtimeDir(root), "pi-sessions");
-}
-
-function runtimeThreadPath(root: PersistentAgentPathContext, threadId: string): string {
-	if (root instanceof PersistentAgentInstance) return root.runtimeThreadPath(threadId);
-	const safeThreadId = safeRuntimeThreadId(threadId);
-	if (!safeThreadId) throw new Error("invalid persistent-agent thread id");
-	return path.join(runtimeThreadsDir(root), `${safeThreadId}.json`);
-}
-
-function assertPersistentAgentId(id: string): asserts id is PersistentAgentId {
-	validatePersistentAgentId(id);
 }
 
 function safeRuntimeThreadId(raw: unknown): string | null {
@@ -1642,6 +1618,7 @@ function persistentAgentTurnConflictError(agentId: PersistentAgentId, threadId: 
 	const verb = state.state === "cancelling" ? "is cancelling" : "is still running";
 	const error = new Error(`persistent-agent activeThread ${verb}; stop it or wait for completion before changing runtime boundaries: ${agentId}/${threadId}`);
 	(error as any).statusCode = 409;
+	(error as any).code = "turn_running";
 	return error;
 }
 
@@ -1712,6 +1689,26 @@ export function conversationMovedError(): Error {
 	return Object.assign(new Error(CONVERSATION_MOVED_MESSAGE), { statusCode: 409, code: "conversation_moved" });
 }
 
+/** The room's own files can't be read, which says nothing about another window. */
+export function roomFilesUnreadableError(sharedServer = isSharedServer(), refused: "message" | "remember" = "message"): Error {
+	const message = refused === "remember"
+		? `The room could not read its own files, so Remember did not start. Nothing was saved. ${sharedServer ? "Generate again in a moment; if it repeats, tell your admin." : "Generate again; if it repeats, restart exxperts."}`
+		: `The room could not read its own files, so your message was not sent. Nothing was lost. ${sharedServer ? "Try again in a moment; if it repeats, tell your admin." : "Try again; if it repeats, restart exxperts."}`;
+	return Object.assign(new Error(message), { statusCode: 409, code: "room_files_unreadable" });
+}
+
+function roomStateUnreadable(instance: PersistentAgentInstance): boolean {
+	return fs.existsSync(instance.runtimeStatePath()) && readJson(instance.runtimeStatePath()) === null;
+}
+
+/** Remember reads only the room's open conversation: a room that can't read its own files says so, and a window the room moved on from is told so. */
+export function assertRememberReadsOpenConversation(agentIdRaw: string, conversationId: string): void {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	if (roomStateUnreadable(instance)) throw roomFilesUnreadableError(isSharedServer(), "remember");
+	if (getPersistentAgentRuntimeState(instance.agentId).activeThreadId !== conversationId) throw conversationMovedError();
+	if (!getPersistentAgentThread(instance.agentId, conversationId)) throw roomFilesUnreadableError(isSharedServer(), "remember");
+}
+
 export function assertNoRememberGeneration(agentIdRaw: string, threadIdRaw: string): void {
 	if (!rememberGenerations.has(rememberGenerationKey(agentIdRaw, threadIdRaw))) return;
 	const error = new Error(REMEMBER_GENERATING_MESSAGE);
@@ -1728,11 +1725,13 @@ export function beginPersistentAgentTurn(agentIdRaw: string, threadIdRaw: string
 	// whose page is already saved.
 	settleCommits(instance.agentId, instance.rootDir);
 	assertNoRememberGeneration(instance.agentId, threadId);
+	if (roomStateUnreadable(instance)) throw roomFilesUnreadableError();
 	const runtime = getPersistentAgentRuntimeState(instance.agentId);
 	if ((runtime.state !== "active" && runtime.state !== "standby") || runtime.activeThreadId !== threadId) throw conversationMovedError();
 	const thread = getPersistentAgentThread(instance.agentId, threadId);
-	if (!thread || thread.state === "closed") {
-		const error = new Error("persistent-agent activeThread is missing or closed");
+	if (!thread) throw roomFilesUnreadableError();
+	if (thread.state === "closed") {
+		const error = new Error("persistent-agent activeThread is closed");
 		(error as any).statusCode = 409;
 		throw error;
 	}
@@ -2199,6 +2198,8 @@ export interface PersistentRoomAutoDeclinedQuestionLog {
 
 function persistentRoomAutoDeclinedQuestionNoteText(question: string): string {
 	const title = String(question ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
+	if (title === PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE) return "While you were away, the room asked to run a command. It did not run, because nobody was there to approve it.";
+	if (handOffApprovalSubject(title) !== null) return "While you were away, the room asked to hand work to a specialist. It did not, because nobody was there to approve it.";
 	if (!title) return "While you were away, a question came up and was answered with a safe default.";
 	return `While you were away, a question came up and was answered with a safe default: ${title}`;
 }
@@ -2222,11 +2223,16 @@ export function createPersistentRoomAutoDeclinedQuestionLog(): PersistentRoomAut
 		},
 		appendItems(items, idPrefix) {
 			let next = [...items];
+			// A question whose card this turn kept already says on that card that it ended (Approval.tsx).
+			const turnStart = next.map((item) => (item as any)?.kind).lastIndexOf("user");
+			const cardNotes = new Set(next.slice(turnStart + 1).filter((item: any) => item?.kind === "approval" && !item.done).map((item: any) => persistentRoomAutoDeclinedQuestionNoteText(String(item.title ?? ""))));
 			notes.forEach((note, index) => {
 				const id = `${idPrefix}-${index + 1}`;
 				const item = { kind: "system", id, text: note.text, level: "info" };
 				const existing = next.findIndex((candidate) => String((candidate as any)?.id ?? "") === id);
-				if (existing >= 0) next[existing] = { ...(next[existing] as any), ...item };
+				if (cardNotes.has(note.text)) {
+					if (existing >= 0) next.splice(existing, 1);
+				} else if (existing >= 0) next[existing] = { ...(next[existing] as any), ...item };
 				else next.push(item);
 			});
 			return next;
@@ -2549,6 +2555,13 @@ export function hasPersistentAgentTurnInFlight(agentIdRaw: string): boolean {
 		if (key.startsWith(prefix) && (state.state === "running" || state.state === "cancelling")) return true;
 	}
 	return false;
+}
+
+// Turns not idle across all rooms and threads: what a server stop waits for.
+export function countPersistentAgentTurnsInFlight(): number {
+	let count = 0;
+	for (const state of persistentAgentActiveTurns.values()) if (state.state !== "idle") count += 1;
+	return count;
 }
 
 const PURGE_TOMBSTONE_INFIX = ".purging-";
@@ -3136,10 +3149,30 @@ function normalizePersistentAgentThreadItems(raw: unknown): unknown[] {
 		? [{ kind: "system", id: PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE_ID, text: PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE, level: "info" }, ...items.slice(-PERSISTENT_AGENT_THREAD_ITEM_CAP)]
 		: items;
 	try {
-		return JSON.parse(JSON.stringify(capped)) as unknown[];
+		return dropDoubledLandedAnswers(JSON.parse(JSON.stringify(capped)) as unknown[]);
 	} catch {
 		throw new Error("thread items must be JSON-serializable");
 	}
+}
+
+// Threads saved before the client save learned to merge with a landing can hold
+// one answer twice in a turn: the client's copy and the server's landed one.
+// The landed one is whole, so the other copy, equal to it or a piece of it
+// once spaces are evened out, goes.
+function dropDoubledLandedAnswers(items: unknown[]): unknown[] {
+	const words = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim();
+	const drop = new Set<number>();
+	let turnStart = 0;
+	for (let i = 0; i <= items.length; i++) {
+		if (i < items.length && (items[i] as any)?.kind !== "user") continue;
+		const turn = items.slice(turnStart, i).map((item: any, offset) => ({ item, index: turnStart + offset })).filter(({ item }) => item?.kind === "assistant");
+		for (const landed of turn.filter(({ item }) => String(item.id ?? "").startsWith("detached-assistant-"))) {
+			const whole = words(landed.item.text);
+			for (const other of turn) if (other !== landed && !String(other.item.id ?? "").startsWith("detached-assistant-") && words(other.item.text) && whole.includes(words(other.item.text))) drop.add(other.index);
+		}
+		turnStart = i + 1;
+	}
+	return drop.size ? items.filter((_, index) => !drop.has(index)) : items;
 }
 
 /**
@@ -4561,6 +4594,7 @@ The web UI and CLI render Markdown directly.
 
 - Output Markdown as plain text. Do not wrap your entire response in a markdown code fence or any outer fence.
 - Use fenced code blocks only for actual code snippets.
+- Write file paths as \`inline code\`, so they show exactly as written.
 - Tables, headings, bullet lists, and emphasis render natively; use them when they improve clarity.
 - When structure genuinely helps the current discussion (flows, architectures, relationships), you may include a small Mermaid diagram in a \`\`\`mermaid fence — the web chat renders it inline. Keep diagrams small. A mermaid sketch is for understanding in the flow of conversation; anything the user will keep, share, or present is deliverable work — when specialist delegation is available, propose that instead.
 
@@ -4951,10 +4985,6 @@ export function upgradePersistentAgentConstitution(agentIdRaw: string, options: 
 		archivedL1aRelPath: eventRecord.paths.archivedL1a,
 		eventRecordRelPath: eventRecord.paths.eventRecord,
 	};
-}
-
-export function scaffoldPersistentAgent(input: PersistentAgentScaffoldInput): PersistentAgentScaffoldResult {
-	return createPersistentAgentFromScaffoldInput(input);
 }
 
 function buildPromptBudget(l0: string, l1a: string, l1b: string, l2: string): PersistentAgentPromptBudget {
@@ -6201,7 +6231,6 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 	const status = getPersistentAgentStatus(instance.agentId);
 	assertPersistentAgentAcceptsCheckpoint(status);
 	const root = instance.rootDir;
-	const agentJsonPath = instance.agentJsonPath();
 	const meta = instance.readAgentJson();
 	if (!meta) throw new Error("agent.json is missing or invalid JSON");
 	const l1bPath = instance.l1bCurrentPath(meta);
@@ -7304,6 +7333,8 @@ export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelL
 			buildRetryPrompt: buildAbsorbAssessmentRetryPrompt,
 		});
 	} catch (error) {
+		// An unreachable model is the one notice with its ways out, as on Review; reading again would fail the same way.
+		if (error instanceof ModelUnreachableError) throw error;
 		return missing(error instanceof WorkerOutputRefusedError ? error.reason : "failed");
 	}
 	if (!generated.text.trim()) return missing("failed");
@@ -7725,8 +7756,12 @@ export async function buildCheckpointProposal(raw: any, generate: CheckpointComp
 			await probe(options?.signal);
 		} catch (probeError) {
 			if (options?.signal?.aborted) throw error;
-			const probeFailure = classifyModelFailure(probeError);
-			throw probeFailure.cause === "unreachable" ? new ModelUnreachableError(probeFailure.detail, model, probeError) : new ModelUnreachableError("not-answering", model, error);
+			const probeFailure = classifyModelFailure(probeError, { provider: model.provider });
+			if (probeFailure.cause !== "unreachable") throw new ModelUnreachableError("not-answering", model, error);
+			const unreachable = await unreachableError(probeFailure.detail, model, probeError);
+			// Cancelled while the gateway's list was read: the cancel wins.
+			if (options?.signal?.aborted) throw error;
+			throw unreachable;
 		}
 		throwIfRememberCancelled(options?.signal);
 	};

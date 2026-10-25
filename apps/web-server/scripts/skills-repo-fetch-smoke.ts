@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { sha256 } from "../src/skills-store.js";
+import { symlinkOrSkip } from "./smoke-server-process.js";
 import {
 	cloneRepoShallow,
 	describeCloneFailure,
@@ -418,8 +419,9 @@ try {
 	const symRepo = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skills-symlink-"));
 	cleanup.push(symRepo);
 	fs.mkdirSync(path.join(symRepo, "x"));
-	fs.symlinkSync(secretFile, path.join(symRepo, "x", "SKILL.md"));
-	assert(readRepoCandidate(symRepo, "x", "local-fixture") === null, "a symlinked SKILL.md must be refused (no arbitrary file read)");
+	if (symlinkOrSkip(secretFile, path.join(symRepo, "x", "SKILL.md"), "skills-repo-fetch-smoke", "the linked SKILL.md case")) {
+		assert(readRepoCandidate(symRepo, "x", "local-fixture") === null, "a symlinked SKILL.md must be refused (no arbitrary file read)");
+	}
 
 	// --- cheap win: leading-dash hosts rejected independently of git's own fix --
 	assert(!resolveRepoSource("git@-oProxyCommand=x:a/b").ok, "an scp host starting with '-' must be rejected");

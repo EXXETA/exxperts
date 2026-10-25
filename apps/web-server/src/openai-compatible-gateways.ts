@@ -568,14 +568,6 @@ export function findOpenAiCompatibleGateway(gatewayId: string, paths: GatewayFil
 	return readOpenAiCompatibleGateways(paths).gateways.find((gateway) => gateway.id === gatewayId);
 }
 
-export function findOpenAiCompatibleGatewayByProvider(providerId: string, paths: GatewayFilePaths = {}): OpenAiCompatibleGateway | undefined {
-	return readOpenAiCompatibleGateways(paths).gateways.find((gateway) => gateway.providerId === providerId);
-}
-
-export function isOpenAiCompatibleGatewayProvider(providerId: string, paths: GatewayFilePaths = {}): boolean {
-	return findOpenAiCompatibleGatewayByProvider(providerId, paths) !== undefined;
-}
-
 function writeJsonAtomically(filePath: string, data: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const tmpPath = `${filePath}.${process.pid}.tmp`;

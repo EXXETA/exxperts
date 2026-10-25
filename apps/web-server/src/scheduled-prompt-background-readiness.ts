@@ -13,7 +13,6 @@ import type {
 import {
 	SCHEDULED_ROOM_MODEL_POLICY_KEY,
 } from "./persistent-agent-ai-profiles.js";
-import { readPersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import { resolveScheduledRoomModel, RoomModelUnavailableError } from "./room-models.js";
 import { classifyPersistentRoomBackgroundRunTarget, getPersistentAgentStatus, getPersistentAgentThread } from "./persistent-agents.js";
 import {
@@ -250,7 +249,6 @@ export function checkScheduledPromptBackgroundRunExecutionReadiness(
 		modelLock = classification.target.model;
 		target = { kind: "resume-thread", roomId, threadId: classification.target.threadId, model: modelLock };
 	} else {
-		const activeProfileState = readPersistentAgentAiProfileState();
 		try {
 			modelLock = resolveScheduledRoomModel(roomId);
 			modelPolicyCheck = "ready";

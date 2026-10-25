@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -41,7 +41,6 @@ process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 
 const CLAUDE = { provider: "fake-claude", model: "claude-fake" };
-const GPT = { provider: "fake-gpt", model: "gpt-fake" };
 
 // --- The two providers -------------------------------------------------------------
 
@@ -110,26 +109,8 @@ async function waitUntil(predicate: () => Promise<boolean> | boolean, label: str
 	throw new Error(`timed out waiting until ${label}`);
 }
 
-const WebSocketImpl: any = (await import("ws")).default;
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
-let socket: any = null;
-const frames: any[] = [];
-
-async function connect(agentId: string, conversationId: string): Promise<void> {
-	frames.length = 0;
-	socket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${agentId}&conversationId=${conversationId}`, { headers: { ...SMOKE_AUTH_HEADERS } });
-	socket.addEventListener("message", (event: { data: unknown }) => { try { frames.push(JSON.parse(String(event.data))); } catch {} });
-	await new Promise<void>((resolve, reject) => { socket.addEventListener("open", () => resolve()); socket.addEventListener("error", () => reject(new Error("websocket failed to connect"))); });
-	await waitUntil(() => frames.some((frame) => frame.type === "ready"), "ready frame");
-}
-
-async function turn(agentId: string, text: string): Promise<Request> {
-	const before = requests.length;
-	socket.send(JSON.stringify({ type: "prompt", text }));
-	await waitUntil(async () => requests.length > before && (await api(`/api/persistent-agents/${agentId}/status`)).body?.activeThread?.inFlight === false, `the turn "${text}" settled`);
-	return requests[requests.length - 1]!;
-}
 
 try {
 	await new Promise<void>((resolve) => providers.listen(0, "127.0.0.1", resolve));
@@ -203,7 +184,6 @@ try {
 	console.error(serverOutput.join("").slice(-8000));
 	throw error;
 } finally {
-	try { socket?.close(); } catch {}
 	try { (providers as any).closeAllConnections?.(); } catch {}
 	try { providers.close(); } catch {}
 	await stopSmokeServer(server);

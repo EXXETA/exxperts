@@ -7,7 +7,9 @@
 
 import type { AbsorbRun, AbsorbRunChange, AbsorbRunChangeKind, AbsorbRunSession, ArchivedEntryCard, ArchiveRow, EntryCard, EntryKind, MemoryModelStopCause, ReviewDepth, ReviewRun, ReviewRunChange, ReviewRunChangeKind, RunBudget, RunDemotion } from "./types";
 import { fmtMemoryDay } from "./memory-surface-copy";
-import { modelTooltipName } from "./model-names";
+import { modelDisplayName } from "./model-names";
+import { knownRemoteClientContext } from "./remote-client-context";
+import { GATEWAY_REFUSED_CAUSE, gatewayNotFoundLine, gatewayRefusedWayOn, quotaCause, quotaWayOn, REGION_OR_PLAN_CAUSE, unreachedCause, unreachedWayOn, type GatewayFind, type QuotaWay, type Unreached } from "./turn-failure-line";
 import { notOnAccountWhy } from "../../web-server/src/model-not-on-account";
 import { credentialGoneOf, credentialGoneWhy, credentialGoneWords, type CredentialKey } from "../../web-server/src/model-not-offered";
 
@@ -138,19 +140,24 @@ export function absorbRunNothingRead(run: AbsorbRun): boolean {
 	return !run.sessions.some((row) => row.outcome === "folded" || row.outcome === "dropped" || row.outcome === "summarized")
 		&& !(run.rereads ?? []).some((row) => row.outcome === "folded");
 }
+/** The card moved the budget away from the room's setting: a save makes it the setting, in Memorize and Review alike. */
+function runBudgetChanged(run: { budget: RunBudget }): boolean {
+	return run.budget.budgetTokens !== run.budget.savedBudgetTokens;
+}
 /**
  * Save is off only when a save would change nothing: no conversation read, and
- * none of the four things a save still records: a conversation left out (taken
+ * none of the five things a save still records: a conversation left out (taken
  * off the waiting list), notes leaving for the budget (archived), a limit raised
- * on the card (made the room's setting), or a summary note the model read again
- * (marked as tried).
+ * on the card (made the room's setting), a summary note the model read again
+ * (marked as tried), or notes sorted out of Unsorted into topics (moved there).
  */
 export function absorbRunNothingToSave(run: AbsorbRun): boolean {
 	return absorbRunNothingRead(run)
 		&& !run.sessions.some((row) => row.outcome === "skipped")
 		&& run.demotion.counts.leaving === 0
-		&& run.budget.budgetTokens === run.budget.savedBudgetTokens
-		&& !(run.rereads ?? []).some((row) => row.outcome !== "pending" && row.outcome !== "folding");
+		&& !runBudgetChanged(run)
+		&& !(run.rereads ?? []).some((row) => row.outcome !== "pending" && row.outcome !== "folding")
+		&& absorbRunSortedRows(run).length === 0;
 }
 export const ABSORB_NOTHING_READ_SENTENCE = "No conversation was read yet.";
 export const ABSORB_NOTHING_READ_SAVE_TITLE = "Nothing to save yet: no conversation was read.";
@@ -160,23 +167,73 @@ export function memoryModelSignInLabel(key?: CredentialKey): string {
 	return credentialGoneWords(credentialGoneOf(key)).button;
 }
 
-/** Why a run stopped on its Memory model, as the notice's sentence says it (draft wording). The provider names the account a refusal is about; `key` tells a key connection's missing or refused key from a sign-in. */
-export function memoryModelStopWhy(cause: MemoryModelStopCause, provider?: string, key?: CredentialKey): string {
+/** Why a run stopped on its Memory model, as the notice's sentence says it (draft wording). The provider names the account a refusal is about; `key` tells a key connection's missing or refused key from a sign-in; `unreached` says the model could not be reached, as the chat's line does. */
+export function memoryModelStopWhy(cause: MemoryModelStopCause, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay): string {
+	if (cause === "not-answering" && unreached) return unreachedCause(unreached);
 	switch (cause) {
 		case "busy": return "is still busy after several tries";
 		case "signed-out": return credentialGoneWhy(credentialGoneOf(key));
-		case "quota": return "has reached its usage limit";
+		case "quota": return quotaCause(quotaWay);
 		case "not-offered": return "is no longer offered";
 		case "not-on-account": return notOnAccountWhy(provider);
+		case "region-or-plan": return REGION_OR_PLAN_CAUSE;
+		case "gateway-refused": return GATEWAY_REFUSED_CAUSE;
 		default: return "isn't answering right now";
 	}
 }
 
+/** The way on a paused card's line ends with, after what is safe; none where the card's buttons are the way on. Choose another model sits below the line, so the line never names it. On a shared server a gateway's key is the admin's, as the chat's line says, and no button replaces it. */
+export function memoryModelStopWayOn(cause: MemoryModelStopCause, unreached?: Unreached, quotaWay?: QuotaWay, gatewayFind?: GatewayFind): string {
+	const shared = knownRemoteClientContext()?.sharedServer === true;
+	if (cause === "quota") return quotaWayOn(quotaWay);
+	if (cause === "gateway-refused") return shared ? `${gatewayRefusedWayOn(true)}.` : "";
+	if (cause === "gateway-not-found") return gatewayNotFoundLine("", "", gatewayFind, shared).wayOn ?? "";
+	return cause === "not-answering" && unreached ? unreachedWayOn(unreached, shared) : "";
+}
+
+/**
+ * Why a run paused: a gone credential is the provider's state, never "cannot answer because".
+ * `gateway`: the company gateway as AI setup names it, from the run's stop; without it the provider is the model's, named without its provider.
+ * `gatewayFind`: after a gateway's bare "not found", what its model list said, as the chat's line says it.
+ */
+function pausedCause(model: string, cause: MemoryModelStopCause, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gateway?: string, gatewayFind?: GatewayFind): string {
+	if (cause === "signed-out") {
+		const state = credentialGoneWords(credentialGoneOf(key)).state;
+		return gateway ? `${gateway} ${state}` : `${model.replace(/\s*\([^()]*\)$/, "")}'s provider ${state}`;
+	}
+	if (cause === "gateway-not-found") return gatewayNotFoundLine(gateway || provider || "The gateway", model, gatewayFind, false).cause.replace(/\.$/, "");
+	return `${model} ${memoryModelStopWhy(cause, provider, key, unreached, quotaWay)}`;
+}
+
+/** Why a run paused, after "Memorize paused" or "Review paused": a gone credential follows a colon, never a second "because". */
+function pausedFor(model: string, cause: MemoryModelStopCause, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gateway?: string, gatewayFind?: GatewayFind): string {
+	return `${cause === "signed-out" ? ":" : " because"} ${pausedCause(model, cause, provider, key, unreached, quotaWay, gateway, gatewayFind)}`;
+}
+
+/** Under a card's "paused" headline: the cause alone, nothing lost, then the way on, as the first read's notice says it. */
+function pausedCauseSentence(model: string, cause: MemoryModelStopCause, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gateway?: string, gatewayFind?: GatewayFind): string {
+	const wayOn = memoryModelStopWayOn(cause, unreached, quotaWay, gatewayFind);
+	return `${pausedCause(model, cause, provider, key, unreached, quotaWay, gateway, gatewayFind)}. Nothing was lost.${wayOn ? ` ${wayOn}` : ""}`;
+}
+
 /** The one notice of a run that stopped because its Memory model is not answering, or is busy. It names the conversations still waiting, never "0 conversations". */
-export function absorbRunOutageSentence(model: string, cause: MemoryModelStopCause, waiting: number, provider?: string, key?: CredentialKey): string {
-	const why = memoryModelStopWhy(cause, provider, key);
+export function absorbRunOutageSentence(model: string, cause: MemoryModelStopCause, waiting: number, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gateway?: string, nothingRead = false, gatewayFind?: GatewayFind): string {
+	if (cause === "restarted" && nothingRead) return `The app restarted. Nothing was lost. Continue reads the ${waiting === 1 ? "waiting conversation" : `${waiting} waiting conversations`}.`;
 	const still = waiting === 0 ? "" : waiting === 1 ? " 1 conversation is still waiting." : ` ${waiting} conversations are still waiting.`;
-	return `${cause === "restarted" ? "The app restarted. Finished conversations are on this card. Save keeps them." : `Memorize paused because ${model} ${why}.`}${still}`;
+	const wayOn = memoryModelStopWayOn(cause, unreached, quotaWay, gatewayFind);
+	return `${cause === "restarted" ? "The app restarted. Finished conversations are on this card. Save keeps them." : `Memorize paused${pausedFor(model, cause, provider, key, unreached, quotaWay, gateway, gatewayFind)}.`}${still}${wayOn ? ` ${wayOn}` : ""}`;
+}
+
+/** Memorize's paused card, with nothing to save: its headline says "Memorize paused.", so the line is the cause alone, and after a restart Review's words. */
+export function absorbRunPausedSentence(model: string, cause: MemoryModelStopCause, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gateway?: string, gatewayFind?: GatewayFind): string {
+	return cause === "restarted" ? "The app restarted. Nothing was lost." : pausedCauseSentence(model, cause, provider, key, unreached, quotaWay, gateway, gatewayFind);
+}
+
+/** Review's paused line: the cause, what is safe, then the way on. With nothing tidied the card's headline says "Review paused.", so the line is the cause alone. */
+export function reviewRunPausedSentence(model: string, stop: { cause: MemoryModelStopCause; model: { provider: string }; key?: CredentialKey; unreached?: Unreached; quotaWay?: QuotaWay; gateway?: string; gatewayFind?: GatewayFind }, tidied: boolean): string {
+	if (!tidied) return pausedCauseSentence(model, stop.cause, stop.model.provider, stop.key, stop.unreached, stop.quotaWay, stop.gateway, stop.gatewayFind);
+	const wayOn = memoryModelStopWayOn(stop.cause, stop.unreached, stop.quotaWay, stop.gatewayFind);
+	return `Review paused${pausedFor(model, stop.cause, stop.model.provider, stop.key, stop.unreached, stop.quotaWay, stop.gateway, stop.gatewayFind)}. What was tidied can be saved; the rest is unchanged.${wayOn ? ` ${wayOn}` : ""}`;
 }
 
 /**
@@ -187,7 +244,7 @@ export function absorbRunOutageSentence(model: string, cause: MemoryModelStopCau
  */
 export function absorbRunOutageModelName(stopped: { provider: string; model: string }, memoryModel?: { provider: string; model: string; label?: string } | null): string {
 	const label = memoryModel && memoryModel.provider === stopped.provider && memoryModel.model === stopped.model ? memoryModel.label : undefined;
-	return modelTooltipName({ provider: stopped.provider, model: stopped.model, ...(label ? { modelLabel: label } : {}) });
+	return modelDisplayName({ provider: stopped.provider, model: stopped.model, ...(label ? { modelLabel: label } : {}) });
 }
 
 /** Every conversation this run read was kept whole as its summary: the model sorted none of them into topics. */
@@ -414,7 +471,8 @@ export function nextKeepTopics(current: string[], section: string, title: string
 export interface OverLimitFirstRead {
 	headline: string;
 	sentence: string;
-	raise: { target: number; label: string };
+	/** Null when the budget is already as high as a raise could set it. */
+	raise: { target: number; label: string } | null;
 	reviewLabel: string;
 }
 
@@ -434,12 +492,13 @@ export function overLimitFirstRead(input: { reviewTargetTokens: number; budgetTo
 	const pastCeiling = wanted > ceiling;
 	const target = pastCeiling ? ceiling : wanted;
 	const moves = `Memorizing now moves about ${count} of the least recently touched notes to the archive.`;
+	const canRaise = target > input.budgetTokens;
 	return {
 		headline: `Memory is ${percent}% full.`,
-		sentence: pastCeiling
+		sentence: pastCeiling && canRaise
 			? `${moves} Even at the ${fmtTokenLimit(ceiling)} ceiling some of them would still move. You can also:`
 			: `${moves} You can also:`,
-		raise: { target, label: pastCeiling ? `Raise the budget to ${fmtTokenLimit(target)}` : `Raise the budget to ${fmtTokenLimit(target)} to keep everything that is there now` },
+		raise: canRaise ? { target, label: pastCeiling ? `Raise the budget to ${fmtTokenLimit(target)}` : `Raise the budget to ${fmtTokenLimit(target)} to keep everything that is there now` } : null,
 		reviewLabel: REVIEW_FIRST_LABEL,
 	};
 }
@@ -472,8 +531,14 @@ function absorbSessionChangeCount(session: AbsorbRunSession, kind: "closed"): nu
  * path's own business. The room setting is checked by the caller; this is
  * the run's own verdict.
  */
+/** A run that stopped before it finished is shown, never saved on its own: its notice holds the ways on. */
+function stoppedRunBlocker(stop: AbsorbRun["stop"] | ReviewRun["stop"]): string[] {
+	if (!stop) return [];
+	return [stop.kind === "restart" ? "the app restarted before it finished" : "the Memory model stopped before it finished"];
+}
+
 export function absorbRunFastPathBlockers(run: AbsorbRun): string[] {
-	const blockers: string[] = [];
+	const blockers: string[] = stoppedRunBlocker(run.stop);
 	const leaving = run.demotion.counts.leaving;
 	if (leaving > 0) {
 		blockers.push(leaving === 1
@@ -502,8 +567,9 @@ function absorbRunBesideCount(run: AbsorbRun, beside: NonNullable<AbsorbRunChang
 }
 
 /** The saved screen's headline: what the room now remembers, or what the update did instead. */
-export function absorbRunSavedHeadline(result: { foldedSessions?: string[]; archivedForBudget?: number; sortedNotes?: number }, roomName: string): string {
-	const folded = result.foldedSessions?.length ?? 0;
+export function absorbRunSavedHeadline(result: { foldedSessions?: string[]; notedSessions?: number; archivedForBudget?: number; sortedNotes?: number }, roomName: string): string {
+	// Conversations that only had nothing to keep were read, not memorized.
+	const folded = result.notedSessions === 0 ? 0 : result.foldedSessions?.length ?? 0;
 	if (folded === 0) return (result.archivedForBudget ?? 0) > 0 ? `${roomName} made room in its memory` : (result.sortedNotes ?? 0) > 0 ? `${roomName} sorted its notes into topics` : `Nothing new for ${roomName} to remember`;
 	return `${roomName} memorized ${folded} ${folded === 1 ? "conversation" : "conversations"}`;
 }
@@ -549,8 +615,8 @@ export function absorbRunSavedSentence(result: { foldedSessions?: string[]; note
 		return parts.join(" ");
 	}
 	// A run that only sorted Unsorted says that, not "0 conversations".
-	if (folded > 0 || nothing > 0 || sorted === 0) parts.push(folded === 1 ? "1 conversation became lasting notes." : `${folded} conversations became lasting notes.`);
-	if (nothing > 0) parts.push(`${nothing} had nothing to keep.`);
+	if (folded > 0 || (nothing === 0 && sorted === 0)) parts.push(folded === 1 ? "1 conversation became lasting notes." : `${folded} conversations became lasting notes.`);
+	if (nothing > 0) parts.push(folded > 0 ? `${nothing} had nothing to keep.` : `${nothing === 1 ? "1 conversation" : `${nothing} conversations`} had nothing to keep.`);
 	if (sorted > 0) parts.push(`${absorbRunSortedTitle(sorted)}.`);
 	if (newTopics > 0) parts.push(newTopics === 1 ? "1 new topic." : `${newTopics} new topics.`);
 	if (remaining > 0) parts.push(waitsForNextMemorizeSentence(remaining));
@@ -942,6 +1008,13 @@ export const DISCUSS_FIRST_LABEL = "Discuss first";
 
 export const DISCUSS_FIRST_TITLE = "Read the conversations first and talk through what to keep. Nothing is saved yet.";
 
+/** The confirm before leaving a discussion. It is kept beside its first read, so one on a missing first read is not kept at all. */
+export function discussionKeptSentence(flow: "Memorize" | "Review", firstReadMissing: boolean): string {
+	return firstReadMissing
+		? `With no first read, your discussion is not kept: it does not come back when you open ${flow} again.`
+		: `Your discussion is kept; it comes back when you open ${flow} again, unless your memory or its Memory model changes first.`;
+}
+
 /** The same fact as a clause, for the sentences that build on it. */
 export const AUTOMATIC_APPLY_ON_SENTENCE = "This room applies memory updates automatically";
 
@@ -1073,28 +1146,63 @@ export function reviewChangeParts(counts: ReviewChangeCounts): string {
 	return parts.join(", ");
 }
 
-export function reviewCardHeadline(counts: ReviewChangeCounts): string {
-	if (counts.notes === 0) return "Nothing needed changing.";
+export const REVIEW_NOT_FINISHED_HEADLINE = "Review could not finish.";
+
+/** The run stopped because the Memory model failed the same way twice in a row. */
+export const REVIEW_STOPPED_REPEATING_SENTENCE = "The Memory model failed the same way twice, so Review stopped. Nothing was lost. Choose another model, or try again later.";
+
+/** What Save does on a card where nothing was tidied but notes still leave for the budget. */
+export function reviewBudgetSaveSentence(leavingForBudget: number): string {
+	return `Saving moves ${plural(leavingForBudget, "note", "notes")} to the archive to stay within the budget; nothing else changes.`;
+}
+
+/** No note changed and topics were left as they were: the tidy did not get to them, so the notes are not "already tidy". */
+function reviewNotFinishedSentence(topicsLeft: string[], leavingForBudget = 0, tryAgain = true): string {
+	const left = topicsLeft.length === 1 ? `${topicsLeft[0]} this time, so it was left as it was` : `${topicsLeft.length} topics this time (${reviewTopicNames(topicsLeft)}), so they were left as they were`;
+	// Notes still leave for the budget, so the card offers Save: say what it saves.
+	if (leavingForBudget > 0) return `The Memory model could not tidy ${left}. ${reviewBudgetSaveSentence(leavingForBudget)}`;
+	return `The Memory model could not tidy ${left}. Nothing was lost.${tryAgain ? " Try again; if it repeats, choose another model." : ""}`;
+}
+
+/** The topics named in a sentence; a long list names the first three and counts the rest. */
+function reviewTopicNames(topics: string[]): string {
+	const named = topics.slice(0, 3).join(", ");
+	return topics.length > 3 ? `${named} and ${topics.length - 3} more` : named;
+}
+
+/** `topicsLeft`: the topics this tidy left as they were (reviewRunTopicsLeft). */
+export function reviewCardHeadline(counts: ReviewChangeCounts, topicsLeft: string[] = []): string {
+	if (counts.notes === 0) return topicsLeft.length > 0 ? REVIEW_NOT_FINISHED_HEADLINE : "Nothing needed changing.";
 	return `${plural(counts.topics, "topic", "topics")} tidied.`;
 }
 
-export function reviewCardSentence(counts: ReviewChangeCounts, percentAfter: number, overAfter: boolean): string {
+/** `leavingForBudget`: the notes the budget sends to the archive if this is saved. */
+export function reviewCardSentence(counts: ReviewChangeCounts, percentAfter: number, overAfter: boolean, topicsLeft: string[] = [], leavingForBudget = 0): string {
 	// The percent lives on the strip and the budget line below; the sentence
 	// says what happened and what to do, like the Memorize card's.
-	if (counts.notes === 0) return `The notes are already tidy. Memory is ${percentAfter}% full.`;
+	if (counts.notes === 0) return topicsLeft.length > 0 ? reviewNotFinishedSentence(topicsLeft, leavingForBudget) : `The notes are already tidy. Memory is ${percentAfter}% full.`;
 	const over = overAfter ? ` Memory stays above its budget (${percentAfter}% full).` : "";
-	return `${reviewChangeParts(counts)}. Read the changes, keep any note the room should not let go, then save.${over}`;
+	const left = topicsLeft.length > 0 ? ` ${reviewLeftAsIsSentence(topicsLeft)}` : "";
+	return `${reviewChangeParts(counts)}. Read the changes, keep any note the room should not let go, then save.${over}${left}`;
 }
 
-export function reviewSavedHeadline(roomName: string, counts: ReviewChangeCounts): string {
-	if (counts.notes === 0) return `Nothing changed in ${roomName}'s memory.`;
+/** `archivedForBudget`: the notes this save moved to the archive to stay within the budget. */
+export function reviewSavedHeadline(roomName: string, counts: ReviewChangeCounts, topicsLeft: string[] = [], archivedForBudget = 0): string {
+	if (counts.notes === 0 && archivedForBudget > 0) return `${roomName} made room in its memory.`;
+	if (counts.notes === 0) return topicsLeft.length > 0 ? REVIEW_NOT_FINISHED_HEADLINE : `Nothing changed in ${roomName}'s memory.`;
 	return `${roomName} tidied its memory.`;
 }
 
-export function reviewSavedSentence(counts: ReviewChangeCounts, percent: number, over: boolean): string {
+/** `tryAgain`: the screen offers Try again for the topics left; without that button no line names it. */
+export function reviewSavedSentence(counts: ReviewChangeCounts, percent: number, over: boolean, topicsLeft: string[] = [], archivedForBudget = 0, tryAgain = true): string {
 	const memory = over ? `Memory is still above its budget (${percent}% full).` : `Memory is ${percent}% full.`;
-	if (counts.notes === 0) return `The notes were already tidy. ${memory}`;
-	return `${plural(counts.topics, "topic", "topics")}: ${reviewChangeParts(counts)}. ${memory}`;
+	if (counts.notes === 0 && archivedForBudget > 0) {
+		const left = topicsLeft.length === 0 ? "" : topicsLeft.length === 1 ? ` The Memory model could not tidy ${topicsLeft[0]} this time; it is unchanged.${tryAgain ? " Try again tidies it; if it repeats, choose another model." : ""}` : ` The Memory model could not tidy ${topicsLeft.length} topics this time (${reviewTopicNames(topicsLeft)}); they are unchanged.${tryAgain ? " Try again tidies them; if it repeats, choose another model." : ""}`;
+		return `${reviewSavedArchiveSentence(archivedForBudget)}${left}`;
+	}
+	if (counts.notes === 0) return topicsLeft.length > 0 ? reviewNotFinishedSentence(topicsLeft, 0, tryAgain) : `The notes were already tidy. ${memory}`;
+	const left = topicsLeft.length > 0 ? ` ${reviewLeftAsIsSentence(topicsLeft)}${tryAgain ? " Try again; if it repeats, choose another model." : ""}` : "";
+	return `${plural(counts.topics, "topic", "topics")}: ${reviewChangeParts(counts)}. ${memory}${left}`;
 }
 
 /** One line for a topic's row on the card: "Incident history · 3 notes shortened, 1 moved to the archive". */
@@ -1116,7 +1224,8 @@ export const REVIEW_DEPTH_ROWS: Record<ReviewDepth, { title: string; text: strin
 };
 
 /** Why one depth is offered first, in the person's terms: how full the memory is, never tokens. */
-export function reviewDepthSentence(input: { overBudget: boolean; staleFlagged: boolean; lookAlike?: boolean; disagreeing?: number; budgetTokens: number; reviewTargetTokens: number }): string {
+/** `firstReadMissing`: nothing was read, so the sentence names nothing a read would have found. */
+export function reviewDepthSentence(input: { overBudget: boolean; staleFlagged: boolean; lookAlike?: boolean; disagreeing?: number; firstReadMissing?: boolean; budgetTokens: number; reviewTargetTokens: number }): string {
 	if (input.overBudget) return "Memory is above its budget, so moving what is finished or stale to the archive is recommended.";
 	if (input.staleFlagged) return "The first read found stale notes, so moving them to the archive is recommended.";
 	// `lookAlike`: the same finding the server's recommendation reads, so the sentence never contradicts it.
@@ -1124,7 +1233,7 @@ export function reviewDepthSentence(input: { overBudget: boolean; staleFlagged: 
 	// `disagreeing`: the pairs of notes the first read found disagreeing. Both depths settle them the same way, by a merge.
 	if ((input.disagreeing ?? 0) === 1) return "Two notes disagree. Either tidy can merge them into one note, and the text it replaces is kept in the archive.";
 	if ((input.disagreeing ?? 0) > 1) return "Some notes disagree. Either tidy can merge each pair into one note, and the texts it replaces are kept in the archive.";
-	return `Memory is ${memoryFullPercent(input.reviewTargetTokens, input.budgetTokens)}% full and nothing looks stale, so tidying the wording is enough.`;
+	return `Memory is ${memoryFullPercent(input.reviewTargetTokens, input.budgetTokens)}% full${input.firstReadMissing ? "" : " and nothing looks stale"}, so tidying the wording is enough.`;
 }
 
 // --- The Review run --------------------------------------------------------
@@ -1171,7 +1280,7 @@ export function reviewRunArchiveCount(run: ReviewRun): number {
  * business: nothing leaves and nothing is judged.
  */
 export function reviewRunFastPathBlockers(run: ReviewRun): string[] {
-	const blockers: string[] = [];
+	const blockers: string[] = stoppedRunBlocker(run.stop);
 	const leaving = run.demotion.counts.leaving;
 	if (leaving > 0) {
 		blockers.push(leaving === 1
@@ -1190,9 +1299,19 @@ export function reviewRunFastPathBlockers(run: ReviewRun): string[] {
 	return blockers;
 }
 
-/** The Review card's one line for the topics it left as they were; why is for the diagnostics. */
-export function reviewLeftAsIsSentence(count: number): string {
-	return count === 1 ? "1 topic was left as it was." : `${count} topics were left as they were.`;
+/** The line for the topics a tidy left as they were, beside what it did tidy; why is for the diagnostics. */
+export function reviewLeftAsIsSentence(topics: string[]): string {
+	return topics.length === 1 ? `${topics[0]} could not be tidied this time and was left as it was.` : `${topics.length} topics could not be tidied this time (${reviewTopicNames(topics)}) and were left as they were.`;
+}
+
+/** The topics a tidy left as they were, by the names a person reads. */
+export function reviewRunTopicsLeft(run: Pick<ReviewRun, "leftAsIs">): string[] {
+	return run.leftAsIs.flatMap((group) => group.topics.map(topicLabel));
+}
+
+/** Topics were left as they were and nothing changed, leaves for the budget or moved the budget: a save would only record a review that tidied nothing. */
+export function reviewRunNothingToSave(run: Pick<ReviewRun, "leftAsIs" | "changes" | "demotion" | "budget">): boolean {
+	return reviewRunTopicsLeft(run).length > 0 && run.changes.length === 0 && run.demotion.counts.leaving === 0 && !runBudgetChanged(run);
 }
 
 /** What the person agreed in the discussion, as the card lists it back. */
@@ -1248,6 +1367,11 @@ export function reviewRunGuidanceSummary(run: ReviewRun): ReviewGuidanceSummary 
 }
 
 /** The saved screen's extra line when the budget, not the tidy, sent notes to the archive. */
+/** Save's confirm for a review that tidied nothing: only notes leaving for the budget are saved. */
+export function reviewBudgetOnlyConfirmBody(leaving: number): string {
+	return `${leaving === 1 ? "1 note moves" : `${leaving} notes move`} to the archive to stay within the budget. Nothing else changes.`;
+}
+
 export function reviewSavedArchiveSentence(archivedForBudget: number): string | null {
 	if (archivedForBudget <= 0) return null;
 	return archivedForBudget === 1

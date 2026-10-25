@@ -43,14 +43,6 @@ function assertIncludes(haystack: string, needle: string, label: string): void {
 	assert(haystack.includes(needle), `${label}: expected to include ${needle}`);
 }
 
-function assertNotIncludes(haystack: string, needle: string, label: string): void {
-	assert(!haystack.includes(needle), `${label}: expected not to include ${needle}`);
-}
-
-function readJson(file: string): any {
-	return JSON.parse(fs.readFileSync(file, "utf-8"));
-}
-
 function l1b(agentId: string, sentinel: string): string {
 	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Persistent agent id: ${agentId}\n- Last checkpoint: none\n\n## Deep Memory\n\n${sentinel} deep memory.\n\n## Active Items\n\n${sentinel} active item.\n\n## Recent Context\n\nNo checkpointed sessions yet.\n`;
 }

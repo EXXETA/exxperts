@@ -42,6 +42,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { providerErrorFields } from "../utils/provider-error-fields.js";
 
 // ============================================================================
 // Configuration
@@ -100,6 +101,8 @@ interface RequestBody {
 // ============================================================================
 
 function isRetryableError(status: number, errorText: string): boolean {
+	// A spent plan stays spent until it resets: asking again only delays the answer.
+	if (/usage_limit_reached|usage_not_included/i.test(errorText)) return false;
 	if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
 		return true;
 	}
@@ -242,6 +245,8 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			// Fetch with retry logic for rate limits and transient errors
 			let response: Response | undefined;
 			let lastError: Error | undefined;
+			// A refused credential or request: asking again cannot change the answer.
+			let refusedForGood = false;
 
 			for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 				if (options?.signal?.aborted) {
@@ -272,12 +277,14 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 					}
 
 					// Parse error for friendly message on final attempt or non-retryable error
+					refusedForGood = response.status === 401 || response.status === 403;
 					const fakeResponse = new Response(errorText, {
 						status: response.status,
 						statusText: response.statusText,
 					});
 					const info = await parseErrorResponse(fakeResponse);
-					throw new Error(info.friendlyMessage || info.message);
+					// The status and the body's error ride along as the OpenAI client keeps them, for the failed message's own fields.
+					throw Object.assign(new Error(info.friendlyMessage || info.message), { status: response.status, error: info.error });
 				} catch (error) {
 					if (error instanceof Error) {
 						if (error.name === "AbortError" || error.message === "Request was aborted") {
@@ -286,7 +293,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 					}
 					lastError = error instanceof Error ? error : new Error(String(error));
 					// Network errors are retryable
-					if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit") && !codexModelNotOnAccount(lastError.message)) {
+					if (attempt < MAX_RETRIES && !refusedForGood && !lastError.message.includes("usage limit") && !codexModelNotOnAccount(lastError.message)) {
 						const delayMs = BASE_DELAY_MS * 2 ** attempt;
 						await sleep(delayMs, options?.signal);
 						continue;
@@ -319,6 +326,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : String(error);
+			Object.assign(output, providerErrorFields(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -1227,7 +1235,7 @@ async function processWebSocketStream(
 // Error Handling
 // ============================================================================
 
-async function parseErrorResponse(response: Response): Promise<{ message: string; friendlyMessage?: string }> {
+async function parseErrorResponse(response: Response): Promise<{ message: string; friendlyMessage?: string; error?: unknown }> {
 	const raw = await response.text();
 	let message = raw || response.statusText || "Request failed";
 	let friendlyMessage: string | undefined;
@@ -1242,7 +1250,8 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 		if (!err && typeof parsed?.detail === "string" && parsed.detail.trim()) message = parsed.detail;
 		if (err) {
 			const code = err.code || err.type || "";
-			if (/usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) || response.status === 429) {
+			// A short rate limit keeps its own words and wait; only a spent plan is a usage limit.
+			if (/usage_limit_reached|usage_not_included/i.test(code) || (response.status === 429 && !/rate_limit_exceeded/i.test(code))) {
 				const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
 				const mins = err.resets_at
 					? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000))
@@ -1251,6 +1260,7 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 				friendlyMessage = `You have hit your ChatGPT usage limit${plan}.${when}`.trim();
 			}
 			message = err.message || friendlyMessage || message;
+			return { message, friendlyMessage, error: err };
 		}
 	} catch {}
 

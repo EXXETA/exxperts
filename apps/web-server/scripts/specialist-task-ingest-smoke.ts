@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { symlinkOrSkip } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-task-ingest-home-"));
 process.env.HOME = tempHome;
@@ -38,23 +39,23 @@ try {
 	fs.writeFileSync(path.join(shelfDir, "deck.html"), okHtml);
 	fs.writeFileSync(path.join(shelfDir, "evil.html"), "<!doctype html><script>alert(1)</script>");
 	fs.writeFileSync(path.join(shelfDir, "big.pptx"), "not really a deck");
-	fs.symlinkSync(path.join(shelfDir, "deck.html"), path.join(shelfDir, "link.html"));
+	const linked = symlinkOrSkip(path.join(shelfDir, "deck.html"), path.join(shelfDir, "link.html"), "specialist-task-ingest-smoke", "the linked shelf file case");
 	fs.writeFileSync(path.join(shelfDir, "huge.md"), Buffer.alloc(SPECIALIST_TASK_CAPS.perFileBytesByExtension[".md"] + 1));
 
 	const resolveShelfSource = (name: string) => path.join(shelfDir, name);
 
 	// ---- staging: guards + hash-pinned revise targets ----------------------
 	const staged = ingestShelfInputs(
-		["files/deck.html", "files/evil.html", "files/link.html", "files/gone.html", "files/big.pptx", "files/huge.md", "tasks/tsk-old/kept.html"],
+		["files/deck.html", "files/evil.html", ...(linked ? ["files/link.html"] : []), "files/gone.html", "files/big.pptx", "files/huge.md", "tasks/tsk-old/kept.html"],
 		"tasks/tsk-new",
 		resolveShelfSource,
 	);
 	assert(staged.inputArtifacts.includes("tasks/tsk-new/inputs/deck.html"), "valid shelf file stages under inputs/");
 	assert(staged.inputArtifacts.includes("tasks/tsk-old/kept.html"), "non-shelf inputs pass through untouched");
 	assert(staged.inputArtifacts.length === 2, `only the valid file + passthrough survive, got ${JSON.stringify(staged.inputArtifacts)}`);
-	assert(staged.dropped.length === 5, `every refused shelf input is reported dropped, got ${JSON.stringify(staged.dropped)}`);
+	assert(staged.dropped.length === (linked ? 5 : 4), `every refused shelf input is reported dropped, got ${JSON.stringify(staged.dropped)}`);
 	assert(staged.dropped.some((d) => d.sourceRelativePath === "files/evil.html" && /script/i.test(d.reason)), "unsafe html is refused by the content validator");
-	assert(staged.dropped.some((d) => d.sourceRelativePath === "files/link.html"), "symlinks are refused (lstat)");
+	if (linked) assert(staged.dropped.some((d) => d.sourceRelativePath === "files/link.html"), "symlinks are refused (lstat)");
 	assert(staged.dropped.some((d) => d.sourceRelativePath === "files/gone.html"), "missing shelf file is dropped");
 	assert(staged.dropped.some((d) => d.sourceRelativePath === "files/big.pptx" && /cannot be ingested/.test(d.reason)), "extensions without a cap are refused");
 	assert(staged.dropped.some((d) => d.sourceRelativePath === "files/huge.md" && /size cap/.test(d.reason)), "over-cap shelf files are refused");

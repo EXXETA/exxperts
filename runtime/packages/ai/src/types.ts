@@ -309,6 +309,10 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	/** A failed call's HTTP status, when the provider answered with one. */
+	errorStatus?: number;
+	/** The provider's own type or code for a failed call ("rate_limit_error", "insufficient_quota"), when it sent one. */
+	errorType?: string;
 	/**
 	 * The assistant content exactly as the provider's wire produced it, kept
 	 * only when the parsed `content` above could not hold every block —

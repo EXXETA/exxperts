@@ -10,10 +10,6 @@ export async function fetchRoomModelProviders(): Promise<RoomModelProviderView[]
 	return status.providers ?? [];
 }
 
-export async function fetchRoomModels(agentId: string): Promise<RoomModelsView> {
-	return (await fetchJson<{ models: RoomModelsView }>(`/api/persistent-agents/${encodeURIComponent(agentId)}/models`)).models;
-}
-
 /** Sets a row (a lock), clears it back to the default (null), or leaves it (absent). */
 export async function putRoomModels(agentId: string, patch: Partial<Record<RoomModelTask, RoomModelLock | null>>): Promise<RoomModelsView> {
 	return (await fetchJson<{ models: RoomModelsView }>(`/api/persistent-agents/${encodeURIComponent(agentId)}/models`, {

@@ -6,6 +6,7 @@
 //
 // Offline: no server, no provider, no network, no port.
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -233,6 +234,227 @@ await section("restart-and-resume", async () => {
 	assert(!after.stop && asked.length > 0 && !asked.includes(keptRow!.id), `Try again reads Gamma without the kept note, got ${JSON.stringify({ stop: after.stop, asked: asked.length, kept: asked.includes(keptRow!.id) })}`);
 	approveReviewRun(fourth.agentId, paused.runId, SAVE_AT);
 	assert(textOf(fourth.l1bPath, keptRow!.id) === keptRow!.text, `the kept note is saved as the person left it, got ${JSON.stringify(textOf(fourth.l1bPath, keptRow!.id))}`);
+});
+
+// Try again on a card with topics left, while the model answers: only those
+// topics are read again, on the same run, with the Memory model as it is now;
+// what was tidied, kept and edited stays.
+await section("try-again-topics-left", async () => {
+	const room = createRoom("Try Again Room", {
+		Alpha: [["m-0401", "- Alpha one says the quarterly report goes to the finance desk on the first Monday."], ["m-0402", "- Alpha two is an old note about the 2024 report."]],
+		Beta: [["m-0403", "- Beta one says the harbour inspection happens every second Thursday of the month."]],
+		Gamma: [["m-0404", "- Gamma one says the crates are sealed at the northern quay before they leave."]],
+	});
+	const topicsIn = (prompt: string) => [...new Set(notesOf(prompt).map((note) => note.topic))];
+	// Cut off whenever Beta or Gamma is in the call: the group is split, and only those two are left.
+	const failsOnBetaGamma: ReviewRunGenerate = async (prompt) => {
+		if (topicsIn(prompt).some((topic) => topic !== "Alpha")) return { text: "Tidied.\n\n```json\n{\"ops\": [", truncated: true, usage: { input: 100, output: 16_384 } };
+		return fence([{ op: "update", id: "m-0401", text: "- Alpha one: the report goes to finance on the first Monday." }, { op: "archive", id: "m-0402", why: "stale" }]);
+	};
+	const first = await settle(room.agentId, startReviewRun(room.agentId, { depth: "tidy", model: MODEL, generate: failsOnBetaGamma, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	const leftTopics = (run: ReviewRun) => run.leftAsIs.flatMap((row) => row.topics).sort().join(",");
+	assert(!first.stop && leftTopics(first) === "Beta,Gamma" && first.changes.some((change) => change.id === "m-0401"), `Alpha is tidied and Beta and Gamma are left, got ${JSON.stringify({ stop: first.stop, left: first.leftAsIs, changes: first.changes.map((change) => change.id) })}`);
+	const edited = "- Alpha one, as the person wrote it.";
+	review.editReviewRunEntry(room.agentId, first.runId, "m-0401", edited);
+	review.keepReviewRunEntries(room.agentId, first.runId, { keepIds: ["m-0402"] });
+
+	// The same failure again: the same card, with the same topics named, and nothing done is lost.
+	const MODEL_B = { provider: "openai-compatible", model: "gpt-5.5-mini", label: "GPT-5.5 mini" };
+	const failedCalls: string[][] = [];
+	let resumeError: Error | null = null;
+	try {
+		review.resumeReviewRun(room.agentId, first.runId, MODEL_B, RUN_CLOCK(), { generate: async (prompt) => { failedCalls.push(topicsIn(prompt)); throw new Error("provider 500"); } });
+	} catch (error) { resumeError = error as Error; }
+	assert(!resumeError, `Try again is taken on a card whose topics failed while the model answers, got ${resumeError?.message}`);
+	const again = await settle(room.agentId, first.runId);
+	assert(failedCalls.length > 0 && failedCalls.every((topics) => !topics.includes("Alpha")), `Try again reads only the topics left, got ${JSON.stringify(failedCalls)}`);
+	assert(again.state === "ready" && !again.stop && leftTopics(again) === "Beta,Gamma", `a second failure gives the same card with the topics named, got ${JSON.stringify({ state: again.state, left: again.leftAsIs })}`);
+	assert(again.changes.find((change) => change.id === "m-0401")?.after === edited && again.demotion.keepIds.includes("m-0402"), `the edit and the keep stay, got ${JSON.stringify({ changes: again.changes, keep: again.demotion.keepIds })}`);
+
+	// Another model chosen, then Try again: one call, for Beta and Gamma only, on the new model.
+	const calls: Array<{ model: string; topics: string[] }> = [];
+	review.resumeReviewRun(room.agentId, first.runId, MODEL_B, RUN_CLOCK(), { generate: async (prompt, model) => {
+		calls.push({ model: model.model, topics: topicsIn(prompt) });
+		return fence(notesOf(prompt).map((note) => ({ op: "update", id: note.id, text: `- ${note.topic} shortened.` })));
+	} });
+	const done = await settle(room.agentId, first.runId);
+	assert(calls.length === 1 && calls[0].model === "gpt-5.5-mini" && calls[0].topics.sort().join(",") === "Beta,Gamma", `one call for the topics left, on the model chosen now, got ${JSON.stringify(calls)}`);
+	assert(done.leftAsIs.length === 0 && ["m-0401", "m-0403", "m-0404"].every((id) => done.changes.some((change) => change.id === id)) && done.changes.find((change) => change.id === "m-0401")?.after === edited, `the card holds every tidy with the edit, got ${JSON.stringify(done.changes)}`);
+	approveReviewRun(room.agentId, first.runId, SAVE_AT);
+	assert(textOf(room.l1bPath, "m-0401") === edited && textOf(room.l1bPath, "m-0402") && textOf(room.l1bPath, "m-0403") === "- Beta shortened.", "Save writes the edit, the kept note and the new tidy");
+	// The saved screen's Try again: a new Review asked for only the topics left reads only those.
+	const asked: string[] = [];
+	const onlyGamma = await settle(room.agentId, startReviewRun(room.agentId, { depth: "tidy", topics: ["Gamma"], model: MODEL, generate: async (prompt) => { asked.push(...topicsIn(prompt)); return fence([]); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	assert(onlyGamma.topics.join(",") === "Gamma" && [...new Set(asked)].join(",") === "Gamma", `a Review of the topics left reads only them, got ${JSON.stringify({ topics: onlyGamma.topics, asked })}`);
+
+	// The memory changed underneath the card: Try again refuses before any call.
+	const stale = createRoom("Stale Try Again Room", { Beta: [["m-0411", "- Beta one says the harbour inspection happens every second Thursday."]] });
+	const staleRun = await settle(stale.agentId, startReviewRun(stale.agentId, { depth: "tidy", model: MODEL, generate: async () => { throw new Error("provider 500"); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	fs.writeFileSync(stale.l1bPath, fs.readFileSync(stale.l1bPath, "utf-8").replace("every second Thursday", "every first Thursday"));
+	let staleCalls = 0;
+	let refused: Error | null = null;
+	try { review.resumeReviewRun(stale.agentId, staleRun.runId, MODEL, RUN_CLOCK(), { generate: async () => { staleCalls++; return fence([]); } }); } catch (error) { refused = error as Error; }
+	assert(/stale/.test(refused?.message ?? "") && staleCalls === 0, `a memory changed underneath is refused before any call, got ${refused?.message ?? "a resume"}`);
+
+	// A run revived after a restart: Continue reads the topic the restart caught and the one that failed.
+	const WORDING: Record<string, (n: number) => string> = {
+		Alpha: (n) => `- Alpha invoice ${n} was approved by the finance desk after the quarterly budget review.`,
+		Beta: (n) => `- The beta shipment ${n} leaves the northern harbour on schedule with sealed crates.`,
+		Gamma: (n) => `- Gamma record ${n} keeps the harbour inspection dates and who signed for each delivery.`,
+	};
+	const many = (prefix: string, base: number) => Array.from({ length: 90 }, (_, n): [string, string] => [`m-${base + n}`, WORDING[prefix](n)]);
+	const SMALL = { contextWindow: 400_000, maxOutputTokens: 4_000 };
+	const restarted = createRoom("Revived Try Again Room", { Alpha: many("Alpha", 9000), Beta: many("Beta", 9200), Gamma: many("Gamma", 9400) });
+	const answer = (prompt: string) => { const one = notesOf(prompt)[0]; return fence([{ op: "update", id: one.id, text: `- ${one.text.slice(0, 30).trimEnd()}.` }]); };
+	const mixed: ReviewRunGenerate = async (prompt) => {
+		const topics = topicsIn(prompt);
+		if (topics.includes("Gamma")) return new Promise<AbsorbGenerateResult>(() => {});
+		if (topics.includes("Beta")) throw new Error("provider 500");
+		return answer(prompt);
+	};
+	const { runId } = startReviewRun(restarted.agentId, { depth: "tidy", model: MODEL, generate: mixed, resolveModelWindow: () => SMALL, now: RUN_CLOCK });
+	const deadline = Date.now() + 30_000;
+	for (;;) {
+		const live = getReviewRun(restarted.agentId, runId);
+		if (live.changes.some((change) => change.id === "m-9000") && live.leftAsIs.some((row) => row.topics.includes("Beta"))) break;
+		assert(Date.now() < deadline, "Alpha was tidied and Beta left");
+		await sleep(2);
+	}
+	resetReviewRunsForTests();
+	const revived = getReviewRun(restarted.agentId, runId);
+	assert(revived.stop?.kind === "restart" && leftTopics(revived) === "Beta,Gamma", `the revived card names Beta and Gamma, got ${JSON.stringify(revived.leftAsIs)}`);
+	const read: string[] = [];
+	review.resumeReviewRun(restarted.agentId, runId, MODEL, RUN_CLOCK(), { generate: async (prompt) => { read.push(...topicsIn(prompt)); return answer(prompt); } });
+	const continued = await settle(restarted.agentId, runId);
+	assert(continued.leftAsIs.length === 0 && [...new Set(read)].sort().join(",") === "Beta,Gamma" && continued.changes.some((change) => change.id === "m-9000"), `Continue reads Beta and Gamma and keeps Alpha, got ${JSON.stringify({ read: [...new Set(read)], left: continued.leftAsIs })}`);
+});
+
+// A tidy call the provider refuses as a bad request is not sent again as it
+// was, a group is split only when it was too large or refused, and the same
+// failure twice in a row stops the run with what is left on the card.
+await section("same-failure-stops", async () => {
+	const WORDING: Record<string, (n: number) => string> = {
+		Alpha: (n) => `- Alpha invoice ${n} was approved by the finance desk after the quarterly budget review.`,
+		Beta: (n) => `- The beta shipment ${n} leaves the northern harbour on schedule with sealed crates.`,
+		Gamma: (n) => `- Gamma record ${n} keeps the harbour inspection dates and who signed for each delivery.`,
+		Delta: (n) => `- Delta order ${n} ships from the southern depot once the customs papers are stamped.`,
+		Epsilon: (n) => `- Epsilon ticket ${n} is closed after the customer confirms the fix in writing.`,
+		Zeta: (n) => `- Zeta contract ${n} renews each spring unless one side gives notice in writing.`,
+	};
+	const many = (prefix: string, base: number) => Array.from({ length: 90 }, (_, n): [string, string] => [`m-${base + n}`, WORDING[prefix](n)]);
+	const SMALL = { contextWindow: 400_000, maxOutputTokens: 4_000 };
+	const topicsIn = (prompt: string) => [...new Set(notesOf(prompt).map((note) => note.topic))];
+
+	// A plain 400 on one group: one call, no resend, no split; the topics are left with the reason.
+	const small = createRoom("Bad Request Room", { Alpha: [["m-0501", "- Alpha one."]], Beta: [["m-0502", "- Beta one."]], Gamma: [["m-0503", "- Gamma one."]] });
+	let badCalls = 0;
+	const bad = await settle(small.agentId, startReviewRun(small.agentId, { depth: "tidy", model: MODEL, generate: async () => { badCalls++; throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}'); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	assert(badCalls === 1 && bad.leftAsIs.flatMap((row) => row.topics).sort().join(",") === "Alpha,Beta,Gamma", `a 400 is asked once and the group is not split, got ${JSON.stringify({ calls: badCalls, left: bad.leftAsIs })}`);
+	// The same refusal in Mistral's words, or with its status on the error itself: one call each.
+	for (const [label, refusal, name] of [
+		["Mistral's 400", () => new Error('Mistral API error (400): {"object":"error","message":"Bad request","type":"invalid_request_error"}'), "Mistral Refusal Room"],
+		["a 400 on the error", () => Object.assign(new Error("Bad request"), { status: 400 }), "Status Refusal Room"],
+		["a 400 on the error's statusCode", () => Object.assign(new Error("Bad request"), { statusCode: 400 }), "Status Code Refusal Room"],
+		["a 400 only as the runtime's errorStatus", () => Object.assign(new Error("Bad request"), { errorStatus: 400 }), "Error Status Refusal Room"],
+	] as const) {
+		const refusedRoom = createRoom(name, { Alpha: [["m-0531", "- Alpha one."]] });
+		let refusedCalls = 0;
+		const refusedRun = await settle(refusedRoom.agentId, startReviewRun(refusedRoom.agentId, { depth: "tidy", model: MODEL, generate: async () => { refusedCalls++; throw refusal(); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+		assert(refusedCalls === 1 && refusedRun.leftAsIs.length === 1, `${label} is asked once, got ${JSON.stringify({ calls: refusedCalls, left: refusedRun.leftAsIs })}`);
+	}
+
+	// The same 400 on every group of six: the run stops after the groups already in flight.
+	const big = createRoom("Same Failure Room", { Alpha: many("Alpha", 5100), Beta: many("Beta", 5200), Gamma: many("Gamma", 5300), Delta: many("Delta", 5400), Epsilon: many("Epsilon", 5500), Zeta: many("Zeta", 5600) });
+	let bigCalls = 0;
+	const stopped = await settle(big.agentId, startReviewRun(big.agentId, { depth: "tidy", model: MODEL, generate: async () => { bigCalls++; throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}'); }, resolveModelWindow: () => SMALL, now: RUN_CLOCK }).runId);
+	assert(bigCalls <= review.REVIEW_GROUPS_IN_FLIGHT + 1 && (stopped.stop as any)?.kind === "failing" && stopped.leftAsIs.flatMap((row) => row.topics).length === 6, `the same failure twice stops the run, got ${JSON.stringify({ calls: bigCalls, stop: stopped.stop, left: stopped.leftAsIs.flatMap((row) => row.topics) })}`);
+	// The same 400 with a new request id each time, as a gateway's body adds one to the words: still the same failure, so the run stops.
+	const withIds = createRoom("Request Id Room", { Alpha: many("Alpha", 6100), Beta: many("Beta", 6200), Gamma: many("Gamma", 6300), Delta: many("Delta", 6400), Epsilon: many("Epsilon", 6500), Zeta: many("Zeta", 6600) });
+	let idCalls = 0;
+	const idStopped = await settle(withIds.agentId, startReviewRun(withIds.agentId, { depth: "tidy", model: MODEL, generate: async () => { idCalls++; throw new Error(`400 status code (no body)\n{"message":"Bad request","request_id":"${randomUUID()}"}`); }, resolveModelWindow: () => SMALL, now: RUN_CLOCK }).runId);
+	assert(idCalls <= review.REVIEW_GROUPS_IN_FLIGHT + 1 && (idStopped.stop as any)?.kind === "failing" && idStopped.leftAsIs.flatMap((row) => row.topics).length === 6, `two failures that differ only in a request id stop the run, got ${JSON.stringify({ calls: idCalls, stop: idStopped.stop, left: idStopped.leftAsIs.flatMap((row) => row.topics) })}`);
+
+	// A server error on one group: asked once more, then left as it was; one group failing is not a pattern.
+	const fiveHundred = createRoom("Server Error Room", { Alpha: [["m-0511", "- Alpha one."]] });
+	let serverCalls = 0;
+	const leftOnRetry = await settle(fiveHundred.agentId, startReviewRun(fiveHundred.agentId, { depth: "tidy", model: MODEL, generate: async () => { serverCalls++; throw new Error("provider 500"); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	assert(serverCalls === 2 && !leftOnRetry.stop && leftOnRetry.leftAsIs.length === 1, `one group's server error buys one more call and leaves it, got ${JSON.stringify({ calls: serverCalls, stop: leftOnRetry.stop })}`);
+
+	// A refusal still splits: the topic it was about is left, the other one is tidied.
+	const refusing = createRoom("Refusal Room", { Alpha: [["m-0521", "- Alpha one says the report goes to finance on Mondays."]], Beta: [["m-0522", "- Beta one says something the model refuses."]] });
+	const asked: string[][] = [];
+	const refusedRun = await settle(refusing.agentId, startReviewRun(refusing.agentId, { depth: "tidy", model: MODEL, generate: async (prompt) => {
+		const topics = topicsIn(prompt);
+		asked.push(topics);
+		if (topics.includes("Beta")) throw new Error("The model refused to answer this request.");
+		return fence([{ op: "update", id: "m-0521", text: "- Alpha one: finance on Mondays." }]);
+	}, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	assert(!refusedRun.stop && refusedRun.changes.some((change) => change.id === "m-0521") && refusedRun.leftAsIs.flatMap((row) => row.topics).join(",") === "Beta", `a refusal is split down to its topic, got ${JSON.stringify({ asked, stop: refusedRun.stop, left: refusedRun.leftAsIs })}`);
+});
+
+// Review's first read never blocks Review: a call that fails while the model
+// answers (a bad request, a refusal, an empty or unreadable reply) gives the
+// missing-read answer, as Memorize's does; only an unreachable model is an error.
+await section("first-read-missing", async () => {
+	const { default: Fastify } = await import("fastify");
+	const { registerReviewAssessRoutes } = await import("../src/review-assess-routes.js");
+	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
+	const room = createRoom("First Read Room", { Alpha: [["m-0601", "- Alpha one says the report goes to finance on Mondays."]], Beta: [["m-0602", "- Beta one says the crates leave on Thursdays."]] });
+	const ask = async (generate: () => Promise<{ text: string }>, agentId = room.agentId) => {
+		const app = Fastify();
+		registerReviewAssessRoutes(app, { room: (id) => ({ id }), errorReply: (reply: any, error: any) => reply.code(error?.statusCode ?? 500).send({ error: error?.message, code: error?.code }), modelLock: () => MODEL, generate });
+		const answer = await app.inject({ method: "POST", url: `/api/persistent-agents/${agentId}/review/assess`, payload: {} });
+		await app.close();
+		return { status: answer.statusCode, body: answer.json() as any };
+	};
+	for (const [label, generate] of [
+		["a bad request", async () => { throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}'); }],
+		["a refusal", async () => { throw new Error("The model refused to answer this request."); }],
+		["an empty reply", async () => ({ text: "   " })],
+		["an unreadable reply", async () => ({ text: "<<<garbage>>> {{{" })],
+	] as const) {
+		const answer = await ask(generate as () => Promise<{ text: string }>);
+		assert(answer.status === 200 && answer.body.firstReadMissing === true && answer.body.assessmentMarkdown === "None.", `${label} gives the missing first read, got ${JSON.stringify(answer)}`);
+	}
+	const unreachable = await ask(async () => { throw new ModelUnreachableError("not-answering", MODEL); });
+	assert(unreachable.status === 503 && unreachable.body.code === "model_unreachable", `an unreachable model is still its notice, got ${JSON.stringify(unreachable)}`);
+	// A room with a note said twice: the missing read names no topics, so going on without it tidies every topic, as the page's own missing read does.
+	const twice = "- The quarterly report goes to the finance desk every Monday morning.";
+	const finding = createRoom("Finding Room", { Alpha: [["m-0611", twice]], Beta: [["m-0612", "- Beta one says the crates leave on Thursdays."]], Gamma: [["m-0613", twice]] });
+	const missingWithFinding = await ask(async () => { throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}'); }, finding.agentId);
+	assert(missingWithFinding.body.firstReadMissing === true && missingWithFinding.body.fields.saysTheSameTwice.length === 1 && missingWithFinding.body.fields.topics.length === 0, `a missing read names no topics to tidy, got ${JSON.stringify(missingWithFinding.body.fields)}`);
+});
+
+// A stop on a company gateway names it as AI setup does, so the card never shows its id.
+await section("gateway-named", async () => {
+	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
+	const notes = Array.from({ length: 30 }, (_, n): [string, string] => [`m-${3000 + n}`, `- Alpha invoice ${n} was approved by the finance desk after the quarterly budget review.`]);
+	const room = createRoom("Gateway Review Room", { Alpha: notes });
+	const signedOut: ReviewRunGenerate = async () => { throw new ModelUnreachableError("signed-out", MODEL); };
+	const stopped = await settle(room.agentId, startReviewRun(room.agentId, { depth: "tidy", model: MODEL, generate: signedOut, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	assert(stopped.stop?.cause === "signed-out" && (stopped.stop as { gateway?: string }).gateway === "Synthetic Gateway", `the stop names the gateway, got ${JSON.stringify(stopped.stop)}`);
+});
+
+// Each cause stops the run with the stop the card reads: the cause, the key, why it was not reached, who can lift a
+// spent limit, and the gateway's name, as Memorize's run builds it.
+await section("stop-per-cause", async () => {
+	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
+	const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persistent-agent-worker-runtime.js");
+	const last = (words: string) => new IsolatedPersistentAgentWorkerTurnError("review tidy worker", "error", words);
+	const cases: Array<[string, ConstructorParameters<typeof ModelUnreachableError>[0], string, string]> = [
+		["a spent quota", "quota", '429 {"error":{"code":"insufficient_quota","type":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."}}', '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"quota","quotaWay":{"kind":"gateway","provider":"Synthetic Gateway"},"gateway":"Synthetic Gateway"}'],
+		["a refused key", "signed-out", '401 {"error":{"code":"invalid_api_key","type":"invalid_request_error","message":"Incorrect API key provided."}}', '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"signed-out","key":"refused","gateway":"Synthetic Gateway"}'],
+		["a gateway's 403", "gateway-refused", "HTTP 403 Forbidden", '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"gateway-refused","key":"refused","gateway":"Synthetic Gateway"}'],
+		["an unreached model", "not-answering", "fetch failed: ECONNREFUSED", '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"not-answering","unreached":"connection","gateway":"Synthetic Gateway"}'],
+		["a busy model", "still-busy", '429 {"error":{"type":"rate_limit_error","message":"Rate limit reached"}}', '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"busy","gateway":"Synthetic Gateway"}'],
+	];
+	const notes = Array.from({ length: 30 }, (_, n): [string, string] => [`m-${3100 + n}`, `- Alpha invoice ${n} was approved by the finance desk after the quarterly budget review.`]);
+	for (const [label, detail, words, expected] of cases) {
+		const room = createRoom(`Stop Review Room ${label}`, { Alpha: notes });
+		const stops: ReviewRunGenerate = async () => { throw new ModelUnreachableError(detail, MODEL, last(words)); };
+		const stopped = await settle(room.agentId, startReviewRun(room.agentId, { depth: "tidy", model: MODEL, generate: stops, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+		assert(JSON.stringify(stopped.stop) === expected, `${label}: the stop, got ${JSON.stringify(stopped.stop)}`);
+	}
 });
 
 // A journal a restart cannot use, in a folder where its delete fails: the

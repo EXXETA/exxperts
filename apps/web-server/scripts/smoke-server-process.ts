@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess, ChildProcessByStdio, ChildProcessWithoutNullStreams } from "node:child_process";
 import diagnosticsChannel from "node:diagnostics_channel";
+import fs from "node:fs";
 import net from "node:net";
 import type { AddressInfo, Socket } from "node:net";
 import type { Writable } from "node:stream";
@@ -25,6 +26,20 @@ export function smokeHomeEnv(tempHome: string, extra: Record<string, string | un
 	delete env.EXXPERTS_STATE_HOME;
 	delete env.EXXPERTS_CODING_AGENT_DIR;
 	return env;
+}
+
+// A normal Windows account (Developer Mode off) may not make links: the
+// smoke skips that case and says so, and any other failure still fails.
+// Returns whether the link was made.
+export function symlinkOrSkip(target: string, linkPath: string, smoke: string, what: string, type?: "dir" | "file"): boolean {
+	try {
+		fs.symlinkSync(target, linkPath, type);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+		console.log(`${smoke}: ${what} skipped (EPERM)`);
+		return false;
+	}
 }
 
 // A port nothing listens on, for a server or fake a smoke starts: the system
@@ -200,4 +215,19 @@ export async function stopSmokeServer(server: ChildProcessWithoutNullStreams | n
 		killTree(server.pid, "SIGKILL");
 		await waitUpTo(5_000);
 	}
+}
+
+// Kill the smoke's server outright, so no stop runs: for a row that needs the
+// connection lost the way a crash or a power cut loses it. The tree gets
+// SIGKILL (taskkill /F on Windows), and the wait for its exit is bounded as
+// in stopSmokeServer, its timer cleared. Printed as a stop too, so the runner
+// never retries a port clash after it.
+export async function killSmokeServer(server: ChildProcessWithoutNullStreams | null | undefined): Promise<void> {
+	if (!server || server.exitCode != null || server.pid == null) return;
+	console.error("smoke server stopped (killed)");
+	const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
+	let timer: NodeJS.Timeout | undefined;
+	killTree(server.pid, "SIGKILL");
+	await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); })]);
+	clearTimeout(timer);
 }

@@ -3,7 +3,6 @@ import path from "node:path";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
 import { listTaskLedgerRecords, rewriteTaskLedgerRecord, type TaskLedgerArtifact, type TaskLedgerRecord } from "./persistent-room-task-ledger.js";
 import {
-	PERSISTENT_ROOM_SHELF_RELATIVE_PREFIX,
 	allocateShelfFilename,
 	isShelfRelativePath,
 	persistentRoomShelfDirPath,

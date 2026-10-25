@@ -34,7 +34,7 @@ Any other provider the runtime knows (Google Gemini, Groq, Mistral, DeepSeek, Op
 Every room has two model rows in **Room settings, Model**:
 
 - **Conversation**: the model the room talks with. A new conversation starts on it, and so do the room's scheduled tasks.
-- **Memory**: the model that does the room's memory work: Remember, Memorize and Review, and also its file and document tasks, Consult and Ask memory. Ask memory across several rooms runs on the Memory default.
+- **Memory**: the model that does the room's memory work: Remember, Memorize and Review, and also its file and document tasks, Consult, and a question asked in the Memory page's **HiveMind** tab. A HiveMind question across several rooms runs on the Memory default.
 
 Each row has one picker with the approved models grouped by provider. In the Memory picker, the models this release recommends for Claude and ChatGPT Plus/Pro are marked **Recommended**, and the Claude API key's models take the Claude sign-in's tag.
 
@@ -68,7 +68,7 @@ Current identities:
 | Web profile label | ChatGPT Plus/Pro |
 | Runtime provider id | `openai-codex` |
 | CLI/TUI OAuth option | ChatGPT Plus/Pro (Codex Subscription) |
-| Primary approved persistent-room model | `openai-codex/gpt-5.5` |
+| First approved persistent-room model | `openai-codex/gpt-6.1-sol` |
 
 Requirements:
 
@@ -163,8 +163,8 @@ Open **AI setup**, then **Add provider**, then **Add gateway**. Give the gateway
 Each model in the list carries four decisions:
 
 - **Approve**: whether rooms may run on this model.
-- **Supports images**: whether attached images are sent to the model. A model left unticked is registered as text-only, and an attached image is not sent to it. The room says so plainly rather than passing the image along silently.
-- **Supports web search**: whether this model may search the web through the gateway's own search machinery. Ticking it makes Exxperts ask for provider-side search on every request to that model, so the model can look things up itself instead of only through the room's `web_search` tool. Leave it unticked unless the gateway really runs search for that model. A gateway that does not will do one of two things, and only one of them is loud: some reject that model's requests outright, others accept the request, ignore the field and answer without searching. Because the second failure is silent, confirm a newly ticked model with a question about something current before relying on it. The room's own `web_search` tool stays available either way, and the two coexist. Detection ticks this for you where a gateway declares it; otherwise it is yours to set. See [`web-search.md`](web-search.md) for the app's own search, which is a separate setting.
+- **images**: whether attached images are sent to the model. A model left unticked is registered as text-only, and an attached image is not sent to it. The room says so plainly rather than passing the image along silently.
+- **web search**: whether this model may search the web through the gateway's own search machinery. Ticking it makes Exxperts ask for provider-side search on every request to that model, so the model can look things up itself instead of only through the room's `web_search` tool. Leave it unticked unless the gateway really runs search for that model. A gateway that does not will do one of two things, and only one of them is loud: some reject that model's requests outright, others accept the request, ignore the field and answer without searching. Because the second failure is silent, confirm a newly ticked model with a question about something current before relying on it. The room's own `web_search` tool stays available either way, and the two coexist. Detection ticks this for you where a gateway declares it; otherwise it is yours to set. See [`web-search.md`](web-search.md) for the app's own search, which is a separate setting.
 - **Context window**: the token budget Exxperts assumes for this model. It drives the room's context reading and decides when a conversation is compacted, so a wrong number here is felt as premature compaction or as a chip that never fills.
 
 Below the list, pick the gateway's **Memory model**, the one it suggests for memory work; rooms still choose theirs in Room settings, Model. Save, and the gateway appears as a row in AI setup.
@@ -396,11 +396,11 @@ Status endpoints and UI should be used for readiness checks, not for copying or 
 | ChatGPT Plus/Pro or Anthropic option is not visible in `/login` | Confirm you chose `Use a subscription`; provider labels may have changed; escalate with a non-secret description. |
 | OpenAI-compatible gateway is not visible under `/login` → `Use an API key` | Run `exxperts setup openai-compatible` first so runtime `models.json` defines provider `openai-compatible`; restart the CLI/TUI if needed. |
 | Gateway validation fails with `model not found`, `unknown model`, or similar | Confirm the exact model id/alias with the gateway owner/admin. Model ids can be case-sensitive. Correct it in **Approve models**, or rerun `exxperts setup openai-compatible` with the corrected id; do not paste raw gateway logs or keys. |
-| A gateway model ignores an attached image | The model is registered as text-only. Tick **supports images** for it in **Approve models**, and confirm with the gateway owner/admin that the model really accepts image input. |
+| A gateway model ignores an attached image | The model is registered as text-only. Tick **images** for it in **Approve models**, and confirm with the gateway owner/admin that the model really accepts image input. |
 | A room compacts far too early, or its context reading never moves | The model's context window is wrong. Correct it per model in **Approve models**; auto-detection fills it in only where the gateway declares it. |
 | Sign-in succeeds but the web still shows not connected | Close and reopen AI setup; restart the web app if needed; do not inspect or share raw credential files. |
 | A provider's models are missing from the pickers | The readiness gate likely still sees missing auth, missing runtime model config, or missing/invalid local app policy. Reopen AI setup and read the provider row's status. |
-| A conversation stops because its provider signed out | The room says which provider is signed out and keeps a **Reconnect**. Sign in again and the room continues by itself, or switch the conversation to another model in Room settings, Model. |
+| A conversation stops because its provider signed out | The room says which provider is signed out, with **Sign in** and **Choose another model**, and your message goes back into the box. Sign in again and send it, or switch the conversation to another model in Room settings, Model. |
 | Switching the open conversation is refused as too long | The new model's window cannot hold the conversation. Remember it and continue on the new model, or Forget it. |
 | Status output appears to contain secrets | Stop and escalate before sharing screenshots/output. |
 

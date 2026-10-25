@@ -1,5 +1,6 @@
 import type { RememberRead } from "./remember-read";
 import type { CredentialKey } from "../../web-server/src/model-not-offered";
+import type { FailureCause, FailureLineParts, GatewayFind, QuotaWay, Unreached } from "./turn-failure-line";
 
 /**
  * Display label for an agent id in usage/history views. Rooms are labelled by
@@ -15,21 +16,6 @@ export function agentLabel(id: string): string {
 		researcher: "Researcher",
 	};
 	return RETIRED[id] ?? id;
-}
-
-export interface ConversationMeta {
-	id: string;
-	title: string;
-	createdAt: number;
-	updatedAt: number;
-	agent: string;
-	persona: string;
-	activeOwner: string;
-	messageCount: number;
-}
-
-export interface PersistedConversation extends Omit<ConversationMeta, "messageCount"> {
-	items: ChatItem[];
 }
 
 export interface AuthProviderStatus {
@@ -131,9 +117,6 @@ export interface RoomModelProviderView {
 	memory: WebChatModelOption[];
 }
 
-export type PersistentRoomModelOption = WebChatModelOption;
-export type PersistentRoomModelStatus = WebChatModelStatus;
-
 export interface PersistentRoomPathHashView {
 	algorithm: "sha256";
 	value: string;
@@ -147,6 +130,8 @@ export interface PersistentRoomWorkspaceRootView {
 	basename: string;
 	pathHash: PersistentRoomPathHashView;
 	source: PersistentRoomWorkspaceRootSource;
+	/** The folder's full path; the server sends it only to a page on this computer. */
+	path?: string;
 }
 
 export type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
@@ -171,23 +156,6 @@ export interface PersistentRoomCapabilityPolicyView {
 	writeEnabled: boolean;
 	bashEnabled?: boolean;
 	nativePiFilesystemToolsEnabled?: boolean;
-}
-
-export interface PersistentRoomWorkspacePolicyResponse {
-	agentId: string;
-	conversationId: string;
-	storage: { kind: string };
-	policy: PersistentRoomCapabilityPolicyView | null;
-}
-
-export interface PersistentRoomWorkspaceValidateResponse extends PersistentRoomWorkspacePolicyResponse {
-	policy: PersistentRoomCapabilityPolicyView;
-	warnings: string[];
-}
-
-export interface PersistentRoomWorkspaceClearResponse extends PersistentRoomWorkspacePolicyResponse {
-	policy: null;
-	deleted: boolean;
 }
 
 export interface PersistentRoomWorkspaceDefaultInput {
@@ -225,6 +193,8 @@ export interface PersistentAgentAiProfileStatus {
 		configured: boolean;
 		source?: AuthProviderStatus["source"];
 		label?: string;
+		/** The service refused the saved key at the last call, or refused it as made outside a workspace; or the last call found the sign-in gone. */
+		keyRefused?: "refused" | "no-workspace" | "signed-out";
 	};
 	requiredModels: Array<{
 		provider: string;
@@ -306,7 +276,7 @@ export type AbsorbAvailabilityReason = "available" | "not_ready" | "insufficient
 
 export interface AbsorbAvailability {
 	/** A first read or a discussion turn waiting out a busy Memory model. */
-	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean; provider?: string };
 	available: boolean;
 	reason: AbsorbAvailabilityReason;
 	recentContextEntryCount: number;
@@ -775,26 +745,18 @@ export interface AbsorbRun {
 	 * model was not answering, or was busy or at its usage limit. What finished
 	 * is on the card; the rest wait. Absent otherwise.
 	 */
-	/** `key`: a signed-out key connection's key is missing, or saved and refused. */
-	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause; key?: CredentialKey };
+	/** `key`: a signed-out key connection's key is missing, or saved and refused. `unreached`: not answering because no connection opened, or because the model runs on this computer. `gateway`: the company gateway the model runs through, as AI setup names it. */
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause; key?: CredentialKey; unreached?: Unreached; quotaWay?: QuotaWay; gateway?: string; gatewayFind?: GatewayFind };
 	/** A busy Memory model being waited out: the card says when the next try is. */
-	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean; provider?: string };
 }
 
 /** Why a Memorize or Review run stopped on its Memory model: the notice's sentence and its buttons follow it. */
-export type MemoryModelStopCause = "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted";
+export type MemoryModelStopCause = "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "region-or-plan" | "gateway-refused" | "gateway-not-found" | "restarted";
 
 /** The 202 answer to a v2 propose: the run to poll, not a finished draft. */
 export interface AbsorbRunStart {
 	runId: string;
-}
-
-/** Memorize v2 extras on absorb/status; absent on a server that still answers v1. */
-export interface AbsorbStatusV2Fields {
-	version?: 2;
-	sessions?: { id: string; title: string; date: string; tokens: number }[];
-	budget?: BudgetState;
-	prepass?: { demotionRequired: boolean; entriesOverBudget: number };
 }
 
 // ── Review v2 ──────────────────────────────────────────────────────────────
@@ -876,10 +838,10 @@ export interface ReviewRun {
 	/** failed: one product sentence. */
 	error?: string;
 	/** The run stopped before every group was tidied because the Memory model cannot be reached: the card shows the one notice. */
-	/** `key`: a signed-out key connection's key is missing, or saved and refused. */
-	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause; key?: CredentialKey };
+	/** `key`: a signed-out key connection's key is missing, or saved and refused. `unreached`: not answering because no connection opened, or because the model runs on this computer. `gateway`: the company gateway the model runs through, as AI setup names it. `failing`: the same failure twice in a row. */
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause; key?: CredentialKey; unreached?: Unreached; quotaWay?: QuotaWay; gateway?: string; gatewayFind?: GatewayFind } | { kind: "failing"; model: { provider: string; model: string }; cause: "repeated"; key?: undefined; unreached?: undefined; quotaWay?: undefined; gateway?: undefined; gatewayFind?: undefined };
 	/** A busy Memory model being waited out: the card says when the next try is. */
-	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean; provider?: string };
 }
 
 /** The 202 answer to starting a review: the run to poll. */
@@ -912,7 +874,7 @@ export interface ReviewRunApprovalResponse {
 /** What a room says about Review before anything starts. */
 export interface ReviewStatusResponse {
 	/** A first read or a discussion turn waiting out a busy Memory model. */
-	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean; provider?: string };
 	agentId: PersistentAgentId;
 	available: boolean;
 	/** Why not, in the product's own words; absent when it is available. */
@@ -1451,11 +1413,6 @@ export interface PersistentAgentModeOption {
 	description: string;
 }
 
-export interface PersistentAgentModesResponse {
-	defaultModeId: string;
-	modes: PersistentAgentModeOption[];
-}
-
 export interface PersistentAgentCreateRequest {
 	displayName: string;
 	userName: string;
@@ -1566,6 +1523,8 @@ export type ChatItem =
 			result?: string;
 			/** Tool result `details` object, when the server sends one (e.g. fetch_url title/finalUrl). */
 			details?: any;
+			/** When the step began (epoch ms), as the server stamped its start. */
+			startedAt?: number;
 	  }
 	| {
 			kind: "approval";
@@ -1578,8 +1537,15 @@ export type ChatItem =
 			options?: string[];
 			placeholder?: string;
 			done?: string;         // set after user answers; we keep card visible
+			/** The question ended with nobody there to answer it: shown resolved, never sent. */
+			unanswered?: boolean;
 	  }
-	| { kind: "system"; id: string; text: string; level?: "info" | "error" }
+	// `details`: a failed turn's line keeps the provider's own sentence, keys masked, behind Details.
+	// `returnedId`: the line of a message handed back to the box, by the step back's id.
+	// `failure` and `provider`: what the newest line's buttons are decided from; `detailsFrom`: whose words Details shows.
+	// `parts`: a failure line's words, the cause first; its text is built from them and from where the message is.
+	// `messageAbove`: the failed message and what its turn showed stay above, and Try again continues that turn; `messageBack`: it is back in the box.
+	| { kind: "system"; id: string; text: string; level?: "info" | "error"; details?: string; quotaWay?: QuotaWay; gatewayFind?: GatewayFind; returnedId?: string; failure?: FailureCause; provider?: string; detailsFrom?: string; parts?: FailureLineParts; messageAbove?: true; messageBack?: true }
 	| {
 			// Consult MR-5 (§4.4): the permanent thread item left by a transfer.
 			// `l1bFingerprint` is the `algorithm:value` string — machine provenance

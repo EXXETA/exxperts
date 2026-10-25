@@ -9,6 +9,8 @@
  * else sorts rooms; a second `.sort` over rooms anywhere is a bug.
  */
 
+import { shownRoomName } from "./room-name.js";
+
 /** Every order this build can show. A mode is added here in the slice that can honour it, never before. */
 export const ROOM_ORDER_MODES = ["recent", "name-asc", "name-desc", "custom"] as const;
 export type RoomOrderMode = (typeof ROOM_ORDER_MODES)[number];
@@ -160,13 +162,12 @@ export function sanitizeRoomOrderCustomOrder(value: unknown): string[] {
 
 // The comparison the home screen always used (`localeCompare` on the name,
 // the id where there is none), with one option added: digits count as numbers,
-// "Room 2" before "Room 10". Nothing else differs, so a home screen nobody has
-// touched keeps its order on upgrade except where a number was read as text.
-// Built once; the locale is the runtime's.
+// "Room 2" before "Room 10". The name is the one the card shows, so an
+// "Unnamed room" sorts under U. Built once; the locale is the runtime's.
 const nameCollator = new Intl.Collator(undefined, { numeric: true });
 
 function shownName(room: RoomOrderable): string {
-	return room.displayName || room.id;
+	return shownRoomName(room.displayName) || room.id;
 }
 
 /**

@@ -97,7 +97,6 @@ try {
 		userName: "Synthetic User",
 		preferredUserAddress: "Synthetic User",
 	});
-	const instance = createPersistentAgentInstance(agentId);
 
 	// A. Message-bearing standby remains locked and cannot be rewritten to another model.
 	const standbyThreadId = "standby_locked_a";

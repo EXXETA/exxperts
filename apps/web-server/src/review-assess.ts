@@ -284,7 +284,8 @@ export function reviewAvailability(input: ReviewAvailabilityInput): ReviewAvaila
 		available: reason === "available",
 		reason,
 		message: reason === "available" ? "Review is available." : REVIEW_UNAVAILABLE_SENTENCES[reason],
-		topics: input.topics.length,
+		// The topics a person sees by name, as the status counts them: not the open-items list, not an empty heading.
+		topics: input.topics.filter((topic) => topic.section === "Deep Memory" && topic.notes > 0).length,
 		notes: countNotes(input.topics),
 		budgetTokens: input.budgetTokens,
 		reviewTargetTokens: input.reviewTargetTokens,

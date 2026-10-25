@@ -73,10 +73,13 @@ try {
 		{ type: "message_start", message: { ...partial } },
 		{ type: "message_end", message: { ...partial } },
 		{ type: "agent_start" },
-		{ type: "tool_execution_start", toolCallId: "t1" },
 	]) {
 		assert(projectAgentEventForWebClient(passthrough) === passthrough, `${passthrough.type} passes through untouched`);
 	}
+	// A step's start gains when it began, and keeps the rest as it was.
+	const before = Date.now();
+	const started = projectAgentEventForWebClient({ type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls" } });
+	assert(started.toolCallId === "t1" && started.toolName === "bash" && started.args.command === "ls" && started.startedAt >= before && started.startedAt <= Date.now(), `a step's start carries when it began, got ${JSON.stringify(started)}`);
 
 	// Unknown message_update variants pass through untouched (forward-compat).
 	const unknown = wrap({ type: "future_delta", contentIndex: 0, delta: "?" });

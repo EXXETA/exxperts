@@ -49,7 +49,7 @@ const {
 	writePersistentAgentRuntimeState,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
-const { buildRememberPartPrompt, planRememberParts, rememberPartKeyPrompt, REMEMBER_PART_TRIGGER, rememberPartsTargetTokens, RememberTooLargeError } = await import("../src/remember-two-stage.js");
+const { buildRememberPartPrompt, planRememberParts, rememberPartKeyPrompt, REMEMBER_PART_TRIGGER, rememberPartsTargetTokens } = await import("../src/remember-two-stage.js");
 const { baseDensityTarget } = await import("../src/checkpoint-compression.js");
 const { estimateTokens } = await import("../src/token-estimate.js");
 const { clearRememberWork, rememberPartKey } = await import("../src/remember-parts-cache.js");
@@ -173,14 +173,6 @@ const generate = async (prompt: string, _model: unknown, call?: { trigger?: stri
 };
 
 const options = { resolveModelWindow: () => WINDOW };
-
-async function waitUntilAborted(numbers: number[]): Promise<void> {
-	const deadline = Date.now() + 5_000;
-	while (!numbers.every((number) => abortedCalls.includes(number))) {
-		assert(Date.now() < deadline, `the parts ${numbers.join(" and ")} should be aborted, got ${JSON.stringify(abortedCalls)}`);
-		await sleep(10);
-	}
-}
 
 try {
 	// --- The cut -----------------------------------------------------------------

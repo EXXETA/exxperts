@@ -68,6 +68,40 @@ assert(disabledResult?.isError === true, "disabled fetch_url should refuse");
 assert(/disabled/i.test(toolText(disabledResult)), "refusal should mention disabled state");
 delete process.env.EXXETA_FETCH_URL_DISABLED;
 
+// A page or an API that answers 4xx or 5xx is a failure the room and the model both see, not a page read.
+{
+	const http = await import("node:http");
+	const server = http.createServer((req, res) => {
+		if (req.url === "/missing.json") { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found; use /v2/notes" })); return; }
+		if (req.url === "/long-404") { res.writeHead(404, { "content-type": "text/plain" }); res.end("gone ".repeat(4_000)); return; }
+		if (req.url === "/broken") { res.writeHead(500, { "content-type": "text/html" }); res.end("<html><head><title>Server Error</title></head><body><h1>Server Error</h1><p>Something broke on our side, please try again later.</p></body></html>"); return; }
+		res.writeHead(200, { "content-type": "text/plain" }); res.end("The export takes five minutes.");
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const port = (server.address() as { port: number }).port;
+	process.env.EXXETA_FETCH_URL_ALLOW_PRIVATE = "1";
+	process.env.EXXETA_FETCH_URL_BROWSER = "off";
+	try {
+		const local = register();
+		const missing = await local.execute("smoke", { url: `http://127.0.0.1:${port}/missing.json` });
+		assert(missing?.isError === true && toolText(missing).startsWith("Couldn't read page: the site answered 404 Not Found.\n"), `a 404 is a failure, got ${missing?.isError} ${toolText(missing)}`);
+		assert(toolText(missing).includes('{"error":"not found; use /v2/notes"}'), `the model keeps what the site said beside the failure, got ${toolText(missing)}`);
+		const broken = await local.execute("smoke", { url: `http://127.0.0.1:${port}/broken` });
+		assert(broken?.isError === true && toolText(broken).startsWith("Couldn't read page: the site answered 500 Internal Server Error.\n") && toolText(broken).includes("Something broke on our side"), `a 500 is a failure, with the page's words for the model, got ${broken?.isError} ${toolText(broken)}`);
+		const long = await local.execute("smoke", { url: `http://127.0.0.1:${port}/long-404` });
+		assert(long?.isError === true && toolText(long).length < 2_300, `what the site said is kept short, got ${toolText(long).length} characters`);
+		const { stepPlainLine } = await import("../../web-ui/src/step-lines.js");
+		// The card's label already says it could not read the page; its line says what the site answered.
+		assert(stepPlainLine(toolText(missing)) === "The site answered 404 Not Found.", `the card shows only the plain line, got ${stepPlainLine(toolText(missing))}`);
+		const fine = await local.execute("smoke", { url: `http://127.0.0.1:${port}/notes.txt` });
+		assert(fine?.isError !== true && toolText(fine).includes("five minutes"), `a page that answers is read, got ${toolText(fine)}`);
+	} finally {
+		delete process.env.EXXETA_FETCH_URL_ALLOW_PRIVATE;
+		delete process.env.EXXETA_FETCH_URL_BROWSER;
+		server.close();
+	}
+}
+
 console.log("fetch_url tool smoke passed");
 
 export {};

@@ -171,6 +171,6 @@ The smoke unpacks the archive to a temp dir and runs it with a sanitized environ
 
 ## Known blockers before final packaging
 
-- The package still runs TypeScript server sources through `tsx`; a final package should build `apps/web-server` to JS.
+- The npm tarball still runs the TypeScript server sources through `tsx`. The release archives do not: `scripts/bundle-release.mjs` builds `apps/web-server/dist/server.mjs` in the archive, and the launcher runs that file (`bin/lib/server-entry.cjs`).
 - Local workspace runtime packages are consumed via `file:` dependencies; npm registry publishing needs either published `@exxeta/exxperts-*` packages or a bundling step that vendors them cleanly.
 - Font redistribution/licensing must be confirmed before external delivery.

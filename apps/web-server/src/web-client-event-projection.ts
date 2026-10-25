@@ -9,6 +9,9 @@
 // message_update and passes through untouched — it stays the authoritative
 // full-message reconciliation for the client.
 export const projectAgentEventForWebClient = (event: any): any => {
+	// A step's start carries when it began. The frame is kept as sent for a
+	// reattach, so a page that reloads counts the step's time on from here.
+	if (event?.type === "tool_execution_start") return { ...event, startedAt: Date.now() };
 	if (event?.type !== "message_update") return event;
 	const update = event.assistantMessageEvent;
 	switch (update?.type) {

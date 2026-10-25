@@ -162,10 +162,11 @@ function killTree(pid, signal) {
 }
 
 let server;
-// A POSIX child killed by an unhandled signal (the normal SIGTERM outcome
-// here) has exitCode null and signalCode set, so checking exitCode alone
-// would misread a clean teardown as a live process, escalate to a pointless
-// SIGKILL, and fail the final assertion.
+// The server ends a SIGTERM through its own stop, with an exit code; a
+// wrapper or a process the signal reaches before the server listens can still
+// die by the signal, with exitCode null and signalCode set. Checking exitCode
+// alone would misread such a teardown as a live process, escalate to a
+// pointless SIGKILL, and fail the final assertion.
 function serverDead() {
 	return server.exitCode != null || server.signalCode != null;
 }

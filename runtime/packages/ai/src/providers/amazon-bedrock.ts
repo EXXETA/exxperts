@@ -45,6 +45,7 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
+import { providerErrorFields } from "../utils/provider-error-fields.js";
 
 export type BedrockThinkingDisplay = "summarized" | "omitted";
 
@@ -270,6 +271,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatBedrockError(error);
+			Object.assign(output, providerErrorFields(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

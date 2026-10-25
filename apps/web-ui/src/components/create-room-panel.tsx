@@ -1,6 +1,7 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
 import type { PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentModeOption } from "../types";
+import { trimHumanText } from "../../../web-server/src/room-name";
 
 /**
  * "Your name" is the same person room after room on one machine, so the last
@@ -150,7 +151,7 @@ export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card
 
 	async function submit(e: FormEvent<HTMLFormElement>) {
 		e.preventDefault();
-		const displayName = values.personalAgentName.trim();
+		const displayName = trimHumanText(values.personalAgentName);
 		const trimmedUserName = values.userName.trim();
 		if (!displayName) {
 			setError("Room name is required.");

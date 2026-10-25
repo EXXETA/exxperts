@@ -90,7 +90,7 @@ try {
 	const controlWorkspacePolicyCountBefore = workspacePolicyCount(controlRoot);
 
 	const created = createPersistentAgentFromScaffoldInput({
-		displayName: "Wolfgang MR10b Smoke",
+		displayName: "Checkpoint Smoke Room",
 		userName: "Synthetic User",
 		preferredUserAddress: "Synthetic User",
 	});
@@ -139,7 +139,7 @@ try {
 			exxetaStateRoot,
 			root: selectedRoot,
 		}),
-		/blocked by policy|forbidden/i,
+		/exxperts' own data, which rooms never open/,
 		"selected room root should be forbidden as a workspace",
 	);
 

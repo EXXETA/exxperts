@@ -114,7 +114,12 @@ const MODE_BODY_SENTINELS: Record<string, string> = {
 	learning: "patient mentor",
 };
 
-function assertGenericAgent(agentId: string, expected: { displayName: string; userName: string; preferredAddress: string; role?: string; description?: string; mode?: string; shouldContainBorja?: boolean }): void {
+// The room folders on disk: a listing or a scaffold creates none that was not asked for.
+function roomFolders(): string[] {
+	return fs.readdirSync(tempAgentsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+}
+
+function assertGenericAgent(agentId: string, expected: { displayName: string; userName: string; preferredAddress: string; role?: string; description?: string; mode?: string }): void {
 	const agentRoot = path.join(tempAgentsRoot, agentId);
 	assertGenericAnatomy(agentRoot);
 	assertNoGlobalStateCopied(agentRoot);
@@ -141,7 +146,6 @@ function assertGenericAgent(agentId: string, expected: { displayName: string; us
 	assertIncludes(l1a, "l1a-mode-end", `${agentId}: L1a mode slot end marker`);
 	assertIncludes(l1a, MODE_BODY_SENTINELS[expectedMode], `${agentId}: L1a mode body should match ${expectedMode} preset`);
 	assertNotIncludes(l1a, "L1b", `${agentId}: L1a should not teach internal layer jargon`);
-	if (!expected.shouldContainBorja) assertNotIncludes(l1a, "Borja", `${agentId}: L1a should not hard-code Borja`);
 
 	const l1b = readText(path.join(agentRoot, "L1b/current.md"));
 	assertIncludes(l1b, `Persistent agent id: ${agentId}`, `${agentId}: L1b generated id`);
@@ -160,7 +164,7 @@ function assertGenericAgent(agentId: string, expected: { displayName: string; us
 try {
 	const initiallyListed = listPersistentAgents();
 	assert(Array.isArray(initiallyListed) && initiallyListed.length === 0, "fresh empty agents root should list no rooms");
-	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "fresh listing must not create borja-coordinator");
+	assert(roomFolders().length === 0, `a fresh listing creates no room folder, got ${JSON.stringify(roomFolders())}`);
 
 	const tom = createPersistentAgentFromScaffoldInput({
 		displayName: "  Tom  ",
@@ -190,12 +194,12 @@ try {
 	assert(!fs.existsSync(path.join(tempAgentsRoot, "tom-2")), "refused duplicate must not leave a scaffold root behind");
 	assert(readText(path.join(tempAgentsRoot, "tom", "agent.json")) === tomAgentBeforeDuplicate, "refused duplicate must not touch original tom");
 
-	const wolfgang = createPersistentAgentFromScaffoldInput({
-		displayName: "Wolfgang",
+	const atlas = createPersistentAgentFromScaffoldInput({
+		displayName: "Atlas",
 		userName: "Alice Example",
 		preferredUserAddress: "Alice",
 	});
-	assert(wolfgang.agent.agentId === "wolfgang", "Wolfgang should produce agentId wolfgang");
+	assert(atlas.agent.agentId === "atlas", "Atlas should produce agentId atlas");
 
 	const accented = createPersistentAgentFromScaffoldInput({
 		displayName: "Tóm! Smith",
@@ -250,20 +254,21 @@ try {
 		preferredAddress: "Alice",
 		description: "Friendly planning companion",
 	});
-	assertGenericAgent("wolfgang", { displayName: "Wolfgang", userName: "Alice Example", preferredAddress: "Alice" });
+	assertGenericAgent("atlas", { displayName: "Atlas", userName: "Alice Example", preferredAddress: "Alice" });
 	assertGenericAgent("tom-smith", { displayName: "Tóm! Smith", userName: "Alice Example", preferredAddress: "Alice" });
 	assertGenericAgent("mentor-max", { displayName: "Mentor Max", userName: "Alice Example", preferredAddress: "Alice", mode: "learning" });
 
-	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "generic scaffolding must not create borja-coordinator");
+	// The template names no one: two rooms made alike differ only in the name each was given.
+	const l1aOf = (agentId: string, displayName: string) => readText(path.join(tempAgentsRoot, agentId, "L1a.md")).split(displayName).join("<room>").split(agentId).join("<id>");
+	assert(l1aOf("atlas", "Atlas") === l1aOf("tom-smith", "Tóm! Smith"), "two rooms made alike have the same L1a but for their names");
+	const madeIds = [tom, atlas, accented, nfdIntake, mentor].map((made) => made.agent.agentId).sort();
+	assert(JSON.stringify(roomFolders()) === JSON.stringify(madeIds), `only the rooms asked for have folders, got ${JSON.stringify(roomFolders())}`);
 
 	const listed = listPersistentAgents();
 	const listedIds = listed.map((status: any) => status.id);
 	const sortedListedIds = [...listedIds].sort((a, b) => a.localeCompare(b));
 	assert(JSON.stringify(listedIds) === JSON.stringify(sortedListedIds), "listPersistentAgents should be sorted deterministically");
-	for (const id of ["tom", "tom-smith", "wolfgang"]) {
-		assert(listedIds.includes(id), `listPersistentAgents should include ${id}`);
-	}
-	assert(!listedIds.includes("borja-coordinator"), "listPersistentAgents should not inject borja-coordinator");
+	assert(JSON.stringify(sortedListedIds) === JSON.stringify(madeIds), `listPersistentAgents lists the rooms made and no other, got ${JSON.stringify(listedIds)}`);
 	const listedTom = listed.find((status: any) => status.id === "tom");
 	assert(listedTom?.displayName === "Tom" && listedTom?.status === "ready", "list should return Tom ready status");
 

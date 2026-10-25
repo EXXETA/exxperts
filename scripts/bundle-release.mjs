@@ -349,8 +349,8 @@ if (brokenImports.length > 0) {
 	process.exit(1);
 }
 
-// Supply-chain guard: the npm files allowlist ships all of docs/ and
-// scripts/, so an archive built from the INTERNAL tree would stage
+// Supply-chain guard: the npm files allowlist ships every page in docs/
+// and all of scripts/, so an archive built from the INTERNAL tree would stage
 // internal-only files into app/ and ship them to the public release. Which
 // files those are is defined in ONE place, the exclusion manifest in
 // scripts/cut-mirror.mjs — stripInternalPaths reads it from there. The

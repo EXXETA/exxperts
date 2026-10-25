@@ -39,6 +39,7 @@ import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js"
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
+import { providerErrorFields } from "../utils/provider-error-fields.js";
 
 /**
  * Check if conversation messages contain tool calls or tool results.
@@ -447,9 +448,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			Object.assign(output, providerErrorFields(error));
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+			const unreadBody = (error as { unreadBody?: unknown })?.unreadBody;
+			if (unreadBody) output.errorMessage += `\n${JSON.stringify(unreadBody)}`;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -527,12 +531,25 @@ function createClient(
 				}
 			: headers;
 
-	return new OpenAI({
+	return new OpenAIKeepingUnreadBodies({
 		apiKey,
 		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
 	});
+}
+
+/**
+ * The library reads a failed answer's words only from its body's "error"
+ * field, so a gateway's {"message":"Forbidden"} reads "403 status code (no
+ * body)". Such a body rides on the error, and its words follow the message.
+ */
+class OpenAIKeepingUnreadBodies extends OpenAI {
+	protected override makeStatusError(status: number, error: object, message: string | undefined, headers: Headers) {
+		const made = super.makeStatusError(status, error, message, headers);
+		if (error && typeof error === "object" && !("error" in error)) Object.assign(made, { unreadBody: error });
+		return made;
+	}
 }
 
 function buildParams(

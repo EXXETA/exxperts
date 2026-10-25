@@ -208,9 +208,7 @@ Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
 | `~/.exxperts/agent/` | Embedded runtime provider/auth/model/session state | yes |
 | `~/.exxperts/app/run/active-profile.json` | Pointer to the loaded data profile (Settings → Profiles; absent = the standard `~/.exxperts`) | no (transient) |
 | `~/.exxperts-<name>/` | Additional data profiles, each a self-contained `.exxperts` tree; the standard `~/.exxperts` never moves | yes |
-| `~/.exxeta/` | Legacy alpha/prototype product state only, if present | yes (legacy) |
 | `.exxperts-cache/*.log` | Dev process logs | no (gitignored) |
-| `.exxeta-cache/` | Legacy local cache only, if present | no (gitignored) |
 
 ## Troubleshooting
 
@@ -257,8 +255,7 @@ What's worth backing up:
 
 - `~/.exxperts/app/`: product/app state, meaning persistent rooms (memory, archives, event records), conversations, schedules, usage, KB/MCP/search config.
 - `~/.exxperts/agent/`: embedded runtime provider/auth/model/session state, including local provider credentials where applicable.
-- `~/.exxeta/`: legacy alpha/prototype product state only if you still have data there.
 - The repo (use git).
 - `.env`: secrets (don't commit).
 
-Not worth backing up: `.exxperts-cache/` (dev logs), legacy `.exxeta-cache/` contents, `node_modules/`.
+Not worth backing up: `.exxperts-cache/` (dev logs), `node_modules/`.

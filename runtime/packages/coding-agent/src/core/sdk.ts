@@ -183,8 +183,7 @@ function getAttributionHeaders(
 	if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) {
 		return {
 			"HTTP-Referer": "https://exxeta.com/exxperts",
-			"X-OpenRouter-Title": "pi",
-			"X-OpenRouter-Categories": "cli-agent",
+			"X-OpenRouter-Title": "exxperts",
 		};
 	}
 

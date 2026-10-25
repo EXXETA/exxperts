@@ -46,8 +46,6 @@ export const PERSISTENT_ROOM_MEMORY_TOOL_NAMES = ["memory_recall"] as const;
 export const PERSISTENT_ROOM_MCP_TOOL_NAMES = ["mcp"] as const;
 
 export type PersistentRoomWorkspaceAccessModeLike = "bounded" | "localFiles";
-export type PersistentRoomWorkspaceToolName = typeof PERSISTENT_ROOM_WORKSPACE_TOOL_NAMES[number];
-export type PersistentRoomLocalFilesToolName = typeof PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES[number];
 export type PersistentRoomWorkspaceToolSelection =
 	| { kind: "standard" }
 	| { kind: "custom"; allowedToolNames: string[] };
@@ -100,22 +98,10 @@ function persistentRoomWorkspaceToolSelectionLabel(workspaceAccessMode: Persiste
 	return workspaceAccessMode === "localFiles" ? "local files workspace tool selection" : "bounded workspace tool selection";
 }
 
-export function isPersistentRoomWorkspaceToolName(toolName: string): toolName is PersistentRoomWorkspaceToolName {
-	return PERSISTENT_ROOM_WORKSPACE_TOOL_NAME_SET.has(toolName);
-}
-
-export function isPersistentRoomLocalFilesToolName(toolName: string): toolName is PersistentRoomLocalFilesToolName {
-	return PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAME_SET.has(toolName);
-}
-
 function translateLegacyPersistentRoomWorkspaceToolName(toolName: string): string[] {
 	if (toolName === PERSISTENT_ROOM_LEGACY_MARKDOWN_WRITE_TOOL_NAME) return [...PERSISTENT_ROOM_BOUNDED_WRITER_TOOL_NAMES];
 	if (toolName === PERSISTENT_ROOM_LEGACY_SPREADSHEET_READ_TOOL_NAME) return [];
 	return [toolName];
-}
-
-export function normalizePersistentRoomWorkspaceToolNameSubset(rawToolNames: unknown, label = "workspace tool selection"): string[] {
-	return normalizePersistentRoomWorkspaceToolNameSubsetForMode(rawToolNames, "bounded", label);
 }
 
 export function normalizePersistentRoomWorkspaceToolNameSubsetForMode(rawToolNames: unknown, workspaceAccessMode: PersistentRoomWorkspaceAccessModeLike, label = persistentRoomWorkspaceToolSelectionLabel(workspaceAccessMode)): string[] {
@@ -171,10 +157,6 @@ function validSelectedWorkspaceToolNamesForModeOrEmpty(rawToolNames: readonly st
 	} catch {
 		return [];
 	}
-}
-
-function validSelectedWorkspaceToolNamesOrEmpty(rawToolNames: readonly string[]): string[] {
-	return validSelectedWorkspaceToolNamesForModeOrEmpty(rawToolNames, "bounded");
 }
 
 export function hasPersistentRoomReadonlyWorkspaceToolBundle(policy: PersistentRoomWorkspaceToolPolicyLike | null | undefined): boolean {

@@ -9,7 +9,7 @@
  */
 
 /** The step's label: true for every source the search reads (notes, archive, remembered conversations). */
-export const MEMORY_RECALL_STEP = { running: "Searching memory", done: "Searched memory" };
+export const MEMORY_RECALL_STEP = { running: "Searching memory", done: "Searched memory", failed: "Couldn't search memory" };
 
 const ENVELOPE_HEAD = /^\[MEMORY RECALL:[^\]\n]*\]\n(?:Rows from this room's own memory follow[^\n]*\n)?/m;
 const ENVELOPE_TAIL = /\n?\[\/MEMORY RECALL\]\s*$/;

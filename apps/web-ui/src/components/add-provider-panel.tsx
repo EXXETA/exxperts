@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GroupHeader } from "./pane-header";
 import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
-import { ApiRequestError, apiFetch, fetchJson } from "../api";
+import { ApiRequestError, apiFetch, fetchJson, withoutServiceLine } from "../api";
 import { distinctModelNames } from "../model-names";
 import { nameEndsInKey } from "../../../web-server/src/model-not-offered";
 import { applyToApproved, approvedCount, detectionAnswers, draftEffective, isNonChatMode, setAllApproved, trustDetected, type BulkDetection } from "../gateway-model-bulk";
@@ -1247,7 +1247,7 @@ const PROVIDER_KEY_NOTES: Record<string, string> = {
 // "Add provider" flow on the AI setup page: the full raw-Pi sign-in surface —
 // subscription (OAuth) providers plus API-key providers — followed by the
 // approve-models step that creates the provider's profile.
-export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyFormOpen, keyFormBlocked, profilesSignature }: {
+export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyFormOpen, keyFormBlocked, profilesSignature, serviceBack }: {
 	/** Opened and closed by the pane header's Add provider button. */
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -1261,6 +1261,8 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	 *  provider becomes addable again, so both of this panel's lists are re-read when
 	 *  it moves. Passing nothing simply keeps the open-time refresh. */
 	profilesSignature?: string;
+	/** Counts the page's reconnects after an outage: an open panel reads its lists again. */
+	serviceBack?: number;
 }) {
 	const [providers, setProviders] = useState<LoginProviderCatalogEntry[] | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -1336,14 +1338,19 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	}
 
 	// Both lists are read on open, and read again whenever the profile list above
-	// moves. That list is where a gateway-backed profile gets removed, and the
-	// server deletes the gateway with it; without this the row below stayed on
-	// screen offering to edit something that no longer exists.
+	// moves or the service answers again after an outage. That list is where a
+	// gateway-backed profile gets removed, and the server deletes the gateway
+	// with it; without this the row below stayed on screen offering to edit
+	// something that no longer exists.
 	useEffect(() => {
 		if (!open) return;
 		void refreshProviders();
 		void refreshGateways();
-	}, [open, profilesSignature]);
+	}, [open, profilesSignature, serviceBack]);
+	// The service answers again after an outage: a line saying it could not be reached is no longer true.
+	useEffect(() => {
+		login.setError(withoutServiceLine);
+	}, [serviceBack]);
 
 	async function removeKey(provider: LoginProviderCatalogEntry) {
 		login.setError(null);

@@ -33,6 +33,10 @@ fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
 
 const REFUSED = "so rooms don't open it";
 const READ_ONLY = "can be read but not changed by rooms";
+const SKILLS_FOLDER_CLOSED = "is in the person's own skills folder, which opens to this room only while its terminal (Bash) is on. Tell the person; they can turn Bash on for this room in Room settings, Workspace, Edit workspace.";
+const SKILLS_FOLDER_READ_ONLY = "is in the person's own skills folder: rooms can read it only while Bash is on, and never change it. Tell the person.";
+const SKILLS_FOLDER_BACKGROUND = "is in the person's own skills folder, which a background run can't open. Tell the person.";
+const TERMINAL_ADVICE = "terminal command";
 const REFERENCE = "REFERENCE-NEEDLE: the guide's reference text.";
 const OTHER = "OTHER-NEEDLE: a second skill's notes.";
 const SECRET = "SECRET-NEEDLE";
@@ -380,6 +384,7 @@ try {
 	refused(r2[9], "editing a skill's provenance.json");
 	refused(r2[10], "writing provenance.json into a new skill");
 	refused(r2[11], "writing skills/../auth.json");
+	assert(r2[11].includes(TERMINAL_ADVICE), `with the terminal on a refusal may offer a command the person approves, got: ${r2[11].slice(0, 500)}`);
 	refused(r2[12], "writing a .git file into a skill folder");
 	refused(r2[13], "writing provenance.json with a trailing .");
 	refused(r2[14], "writing the skills folder itself");
@@ -422,10 +427,18 @@ try {
 	// 4. Closed again on the next call once the terminal is off, and never
 	// open in a bounded room.
 	await server.setWorkspace(room, "localFiles", false);
-	const r4 = await server.runTurn(room, "conv-bash-off", [read(path.join(guide, "reference.md")), write(path.join(main.store, "made-off", "SKILL.md"), "x\n"), ls(main.store)]);
-	refused(r4[0], "reading with the terminal off");
-	refused(r4[1], "writing with the terminal off");
-	refused(r4[2], "ls with the terminal off");
+	const r4 = await server.runTurn(room, "conv-bash-off", [read(path.join(guide, "reference.md")), write(path.join(main.store, "made-off", "SKILL.md"), "x\n"), ls(main.store), read(path.join(main.agentDir, "auth.json")), write(path.join(guide, "provenance.json"), "{}\n"), read(path.join(guide, "server.key")), write(main.store, "x\n"), write(path.join(guide, ".mcp.json"), "{}\n"), write(path.join(guide, ".husky", "pre-commit"), "x\n")]);
+	// The skills folder says it opens with the terminal on; nothing offers a command the room cannot run.
+	for (const [index, what] of ["reading", "writing", "ls"].entries()) {
+		assert(r4[index].includes(SKILLS_FOLDER_CLOSED) && !r4[index].includes(TERMINAL_ADVICE), `${what} the skills folder with the terminal off must say it opens with Bash on, got: ${r4[index].slice(0, 500)}`);
+	}
+	assert(r4[3].includes(REFUSED) && !r4[3].includes(TERMINAL_ADVICE) && !r4[3].includes(AUTH), `the app's data with the terminal off is refused with no command offered, got: ${r4[3].slice(0, 500)}`);
+	// What stays unwritable with the terminal on says it opens for reading only then.
+	assert(r4[4].includes(SKILLS_FOLDER_READ_ONLY) && !r4[4].includes(TERMINAL_ADVICE), `a skill's provenance.json with the terminal off says it can be read only with Bash on and never changed, got: ${r4[4].slice(0, 500)}`);
+	assert(r4[5].includes(REFUSED) && !r4[5].includes(SKILLS_FOLDER_CLOSED) && !r4[5].includes(TERMINAL_ADVICE), `a secret file in a skill with the terminal off says it stays closed, got: ${r4[5].slice(0, 500)}`);
+	for (const [index, what] of [[6, "the skills folder itself"], [7, "a skill's .mcp.json"], [8, "a skill's .husky hook"]] as const) {
+		assert(r4[index].includes(SKILLS_FOLDER_READ_ONLY) && !r4[index].includes(TERMINAL_ADVICE), `writing ${what} with the terminal off says it can be read only with Bash on and never changed, got: ${r4[index].slice(0, 500)}`);
+	}
 	assert(!fs.existsSync(path.join(main.store, "made-off")), "nothing may be written with the terminal off");
 	const bounded = await server.createRoom("Bounded Room");
 	await server.setWorkspace(bounded, "bounded", false);
@@ -440,7 +453,7 @@ try {
 	delete process.env.EXXPERTS_DATA_DIR;
 	Object.assign(process.env, { HOME: home, USERPROFILE: home, EXXPERTS_CODING_AGENT_DIR: main.agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: main.agentsRoot, EXXETA_HOME: repoRoot });
 	const { executePersistentRoomBackgroundPrompt } = await import("../src/persistent-room-background-execution.js");
-	script = [read(path.join(guide, "reference.md"))];
+	script = [read(path.join(guide, "reference.md")), write(path.join(workspaceRoot, ".mcp.json"), "{}\n")];
 	turnResults = null;
 	await executePersistentRoomBackgroundPrompt({
 		roomId: room,
@@ -451,8 +464,12 @@ try {
 		agentDir: main.agentDir,
 	} as any);
 	const backgroundResults = turnResults as string[] | null;
-	assert(backgroundResults && backgroundResults.length === 1, `the background run must call read once, got ${JSON.stringify(backgroundResults)}`);
-	refused(backgroundResults[0], "reading the skills folder from a background run");
+	assert(backgroundResults && backgroundResults.length === 2, `the background run must call read and write once each, got ${JSON.stringify(backgroundResults)}`);
+	// A background run has no bash tool and never opens the skills folder: the person's own skill
+	// is named as such, never "a secret file or the app's own data", and no command is offered.
+	assert(!backgroundResults[0].includes(REFERENCE), "a background run never reads the skills folder");
+	assert(backgroundResults[0].includes(SKILLS_FOLDER_BACKGROUND) && !backgroundResults[0].includes(REFUSED) && !backgroundResults[0].includes(TERMINAL_ADVICE) && !backgroundResults[0].includes(SKILLS_FOLDER_CLOSED), `a background run's read of a skill says a background run can't open it, got: ${backgroundResults[0].slice(0, 500)}`);
+	assert(backgroundResults[1].includes(READ_ONLY) && !backgroundResults[1].includes(TERMINAL_ADVICE), `a background run's refused write offers no command, got: ${backgroundResults[1].slice(0, 500)}`);
 
 	// 6. A data profile: the store under <home>/.exxperts-work opens the same
 	// way, found from the profile, and its auth file stays closed.

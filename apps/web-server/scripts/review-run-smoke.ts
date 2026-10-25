@@ -46,6 +46,7 @@ const {
 	hasActiveReviewRun,
 	keepReviewRunEntries,
 	resetReviewRunsForTests,
+	resumeReviewRun,
 	REVIEW_TIDY_WORKER_FAILED,
 	REVIEW_TIDY_REFUSED_TWICE,
 	REVIEW_TIDY_NOT_REACHED,
@@ -491,7 +492,8 @@ try {
 	// --- 1. What the room says before anything starts -------------------------
 	const status = reviewRunStatus(roomA.agentId);
 	assert(status.available === true && !status.reason, `a room with notes should be able to review, got ${JSON.stringify(status)}`);
-	assert(status.topics === TOPICS.length + 1, `the status should count every topic that holds a note, got ${status.topics}`);
+	// "A first read of N topics": the titled topics a person sees, never the open-items list.
+	assert(status.topics === TOPICS.length, `the status should count the titled topics that hold a note, got ${status.topics}`);
 	assert(status.notes === TOPICS.length * NOTES_PER_TOPIC + 3, `the status should count every note, got ${status.notes}`);
 	assert(status.budget.overBudget === true && status.budget.reviewTargetTokens > TIGHT_BUDGET, `this fixture is deliberately over its budget, got ${JSON.stringify(status.budget)}`);
 	assert(status.recommendedDepth === "tidy", `a memory over its limit should be offered the deeper tidy first, got ${status.recommendedDepth}`);
@@ -645,7 +647,11 @@ try {
 		return rename(from, to);
 	}) as typeof fs.renameSync;
 	let approved;
+	const archiveIdsBefore = new Set(readArchive(roomA.agentId).map((row) => `${row.id}|${row.archived}|${row.why}`));
 	try { approved = approveReviewRun(roomA.agentId, run.runId, APPROVED_AT); } finally { fs.renameSync = rename; }
+	// A rewritten note's earlier wording is kept in the archive, but no note left: the saved screen counts only notes that left.
+	const addedRows = readArchive(roomA.agentId).filter((row) => !archiveIdsBefore.has(`${row.id}|${row.archived}|${row.why}`));
+	assert(addedRows.some((row) => row.why === "superseded") && approved.archivedEntries === addedRows.filter((row) => row.why !== "superseded").length, `the archive count leaves out earlier wordings, got ${JSON.stringify({ archivedEntries: approved.archivedEntries, added: addedRows.map((row) => row.why) })}`);
 	assert(limitAsMemoryLands === TIGHT_BUDGET, `the room keeps its limit until the memory file lands, got ${limitAsMemoryLands}`);
 	assert(approved.writesMemory === true && approved.reviewId === approved.saveId, `an approval names the write it made under both names, got ${JSON.stringify({ reviewId: approved.reviewId, saveId: approved.saveId })}`);
 	assert(approved.eventRelPath.startsWith("events/review/") && !path.isAbsolute(approved.eventRelPath), `the approval names its record by the room-relative path, got ${JSON.stringify(approved.eventRelPath)}`);
@@ -695,7 +701,7 @@ try {
 	const seededRows = wholeArchive.filter((row) => row.id === SEEDED_ARCHIVE_ID);
 	assert(seededRows.length === 1 && seededRows[0].archived === SEEDED_ARCHIVED_ON, `the earlier save's row is still in the archive, once and as it was, got ${JSON.stringify(seededRows)}`);
 	const archive = wholeArchive.filter((row) => row.id !== SEEDED_ARCHIVE_ID);
-	assert(archive.length === approved.archivedEntries, `the archive should hold exactly what the approval counted beside the seeded row, got ${archive.length} against ${approved.archivedEntries}`);
+	assert(archive.filter((row) => row.why !== "superseded").length === approved.archivedEntries, `the archive should hold exactly the notes the approval counted beside the seeded row and the earlier wordings, got ${archive.length} against ${approved.archivedEntries}`);
 	assert(archive.some((row) => row.why === "superseded" && /-v1$/.test(row.id)), `the words a tidy replaced go to the archive under a versioned id, got ${JSON.stringify(archive.map((row) => `${row.id}:${row.why}`))}`);
 	assert(archive.some((row) => row.id === `${entryId(1)}-v2` && row.why === "superseded"), `a note whose earlier version an older save already archived gets the next version, never a second -v1, got ${JSON.stringify(archive.filter((row) => row.id.startsWith(entryId(1))).map((row) => row.id))}`);
 	assert(archive.some((row) => row.why === "stale"), "a note the tidy judged stale leaves with that reason");
@@ -754,7 +760,12 @@ try {
 	await settle(roomB.agentId, runB.runId, "room two");
 	assert(getReviewRun(roomB.agentId, runB.runId).state === "cancelled", "a cancelled run stays cancelled");
 	assert(fs.readFileSync(roomB.l1bPath, "utf-8") === roomBBytes, "a cancelled run writes nothing at all");
-	expectThrows(() => approveReviewRun(roomB.agentId, runB.runId), /not ready/, "approving a cancelled run");
+	// A run that is over is no longer open: Save, a keep or the limit on its card says so, as for a run
+	// the server no longer holds. Try again still answers "not ready", so that card watches the run and says it stopped.
+	const refusal = (fn: () => unknown) => { try { fn(); return "none"; } catch (error) { return `${(error as { code?: string }).code} ${(error as { statusCode?: number }).statusCode}`; } };
+	const overRefusals = [refusal(() => approveReviewRun(roomB.agentId, runB.runId)), refusal(() => keepReviewRunEntries(roomB.agentId, runB.runId, { keepIds: [] })), refusal(() => setReviewRunBudget(roomB.agentId, runB.runId, RAISED_BUDGET))];
+	assert(overRefusals.every((answer) => answer === "review_run_unknown 404"), `Save, a keep and the limit on a cancelled run say it is no longer open, got ${JSON.stringify(overRefusals)}`);
+	assert(refusal(() => resumeReviewRun(roomB.agentId, runB.runId, MODEL)) === "review_run_not_ready 409", `Try again on a cancelled run is not ready, so its card watches it, got ${refusal(() => resumeReviewRun(roomB.agentId, runB.runId, MODEL))}`);
 	assert(!hasActiveReviewRun(roomB.agentId), "a cancelled run releases the room");
 
 	// A room with nothing to tidy says so rather than starting a run.

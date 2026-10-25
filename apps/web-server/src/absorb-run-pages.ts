@@ -40,6 +40,7 @@
 import type { FoldUnreadableClass } from "./absorb-ops.js";
 import { BLIP_PAUSE_MS, blipClassOf, classifyModelFailure, ModelUnreachableError, outageClassOf, patienceSpent, rateLimitPauseMs, requestTooLarge, type OutageClass, type UnreachableDetail } from "./model-call-causes.js";
 import type { CredentialKey } from "./model-not-offered.js";
+import type { GatewayFind, QuotaWay, Unreached } from "../../web-ui/src/turn-failure-line.js";
 
 /** Why a page climbed the ladder. Older records may also say "refused-twice", "failed-twice" or "stopped-twice". */
 export type SummaryReason = "unreadable-twice" | "nothing-usable" | "oversize" | "too-large" | "apply-threw" | "failed" | "refused" | "timed-out" | "restarted" | "restarted-twice" | "filing-threw";
@@ -69,7 +70,7 @@ export type PageEnding =
 	| { kind: "summarized"; reason: SummaryReason }
 	| { kind: "waiting"; reason: WaitingReason }
 	/** The page whose call failed and whose probe failed too (or whose failure named a rate limit): it waits, unrecorded, and the run stops. */
-	| { kind: "outage"; outageClass?: OutageClass; unreachable?: UnreachableDetail; unreachableKey?: CredentialKey }
+	| { kind: "outage"; outageClass?: OutageClass; unreachable?: UnreachableDetail; unreachableKey?: CredentialKey; unreached?: Unreached; quotaWay?: QuotaWay; gatewayFind?: GatewayFind }
 	/** The person cancelled while this page was in flight: it waits, unrecorded, and the run stops. */
 	| { kind: "cancelled" };
 
@@ -151,6 +152,17 @@ export interface PagesOutcome {
 	unreachable?: UnreachableDetail;
 	/** Signed out on a key connection: its key is missing, or saved and refused. */
 	unreachableKey?: CredentialKey;
+	/** Not answering because no connection opened, or because the model runs on this computer. */
+	unreached?: Unreached;
+	/** Out of quota: who can lift it. */
+	quotaWay?: QuotaWay;
+	/** A gateway's bare "not found": what its model list said. */
+	gatewayFind?: GatewayFind;
+}
+
+function unreachableEnding(error: ModelUnreachableError): Extract<PageEnding, { kind: "outage" }> {
+	const { detail, key, unreached, quotaWay, gatewayFind } = error.details;
+	return { kind: "outage", unreachable: detail, ...(key ? { unreachableKey: key } : {}), ...(unreached ? { unreached } : {}), ...(quotaWay ? { quotaWay } : {}), ...(gatewayFind ? { gatewayFind } : {}) };
 }
 
 // The word tests and the pauses live in model-call-causes.ts, the one reading
@@ -206,6 +218,9 @@ export async function foldPages<P>(pages: readonly P[], state: PageFailureState,
 				if (ending.outageClass) outcome.outageClass = ending.outageClass;
 				if (ending.unreachable) outcome.unreachable = ending.unreachable;
 				if (ending.unreachableKey) outcome.unreachableKey = ending.unreachableKey;
+				if (ending.unreached) outcome.unreached = ending.unreached;
+				if (ending.quotaWay) outcome.quotaWay = ending.quotaWay;
+				if (ending.gatewayFind) outcome.gatewayFind = ending.gatewayFind;
 				break;
 			}
 		}
@@ -227,7 +242,7 @@ async function foldOnePage<P>(page: P, held: PageFailureState, deps: PageDeps<P>
 		} catch (error) {
 			// The placement call can meet an outage too: the page waits, unfiled.
 			if (deps.cancelled()) return { kind: "cancelled" };
-			if (error instanceof ModelUnreachableError) return { kind: "outage", unreachable: error.details.detail, ...(error.details.key ? { unreachableKey: error.details.key } : {}) };
+			if (error instanceof ModelUnreachableError) return unreachableEnding(error);
 			// Recorded, so the next run places it by code with no call, never the same way again.
 			held.records.set(key, { at: deps.now().toISOString(), provider: deps.model.provider, model: deps.model.model, code: "filing-threw" });
 			return { kind: "waiting", reason: "filing-threw" };
@@ -245,7 +260,7 @@ async function foldOnePage<P>(page: P, held: PageFailureState, deps: PageDeps<P>
 				}
 			} catch (error) {
 				if (deps.cancelled()) return { kind: "cancelled" };
-				if (error instanceof ModelUnreachableError) return { kind: "outage", unreachable: error.details.detail, ...(error.details.key ? { unreachableKey: error.details.key } : {}) };
+				if (error instanceof ModelUnreachableError) return unreachableEnding(error);
 			}
 			if (deps.cancelled()) return { kind: "cancelled" };
 		}
@@ -289,7 +304,7 @@ async function foldOnePage<P>(page: P, held: PageFailureState, deps: PageDeps<P>
 					trace.outageClass = busyClass;
 					return { ...outage(busyClass), unreachable: detail };
 				}
-				return { kind: "outage", unreachable: detail, ...(error.details.key ? { unreachableKey: error.details.key } : {}) };
+				return unreachableEnding(error);
 			}
 			const message = deps.failureMessage(error);
 			if (requestTooLarge(message)) {
@@ -318,7 +333,7 @@ async function foldOnePage<P>(page: P, held: PageFailureState, deps: PageDeps<P>
 			if (deps.cancelled()) return { kind: "cancelled" };
 			const answered = probed === true;
 			trace.probe = answered ? "answered" : "failed";
-			if (probed instanceof ModelUnreachableError) return { kind: "outage", unreachable: probed.details.detail, ...(probed.details.key ? { unreachableKey: probed.details.key } : {}) };
+			if (probed instanceof ModelUnreachableError) return unreachableEnding(probed);
 			if (!answered) return outage();
 			// The model answers, so the failure is this page's own: down the ladder.
 			// A call that ran out its time limit is not asked in pieces: each

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { withoutServiceLine } from "../api";
 import { credentialGoneWords, modelCredentialWords } from "../../../web-server/src/model-not-offered";
 import { modelDisplayName, modelOnProvider } from "../model-names";
 import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
@@ -29,7 +30,7 @@ function defaultUnavailableSentence(row: AiDefaultsView[RoomModelTask]): string 
 		: `${named} is no longer offered. Rooms on this default wait until you choose another here.`;
 }
 
-export function AiDefaultsGroup({ refreshKey }: { refreshKey?: string }) {
+export function AiDefaultsGroup({ refreshKey, serviceBack }: { refreshKey?: string; /** Counts the page's reconnects after an outage. */ serviceBack?: number }) {
 	const remoteClient = useRemoteClientContext();
 	// A read-only device sees the defaults but cannot change them; on a shared
 	// server only its admin may, so they read the same way, with one line.
@@ -39,16 +40,18 @@ export function AiDefaultsGroup({ refreshKey }: { refreshKey?: string }) {
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	// Re-read when the provider set or a sign-in changes (the caller's key).
+	// Re-read when the provider set or a sign-in changes (the caller's key), and
+	// when the service answers again after an outage.
 	useEffect(() => {
 		let cancelled = false;
 		Promise.all([fetchAiDefaults(), fetchRoomModelProviders()]).then(([nextDefaults, nextProviders]) => {
 			if (cancelled) return;
 			setDefaults(nextDefaults);
 			setProviders(nextProviders);
+			setError(withoutServiceLine);
 		}, (e) => { if (!cancelled) setError((e as Error).message); });
 		return () => { cancelled = true; };
-	}, [refreshKey]);
+	}, [refreshKey, serviceBack]);
 
 	async function save(task: RoomModelTask, lock: RoomModelLock) {
 		setSaving(true);
@@ -91,10 +94,13 @@ export function AiDefaultsGroup({ refreshKey }: { refreshKey?: string }) {
 	return (
 		<div className="settings-group ai-defaults-group">
 			<GroupHeader kicker="Default models" line="Rooms use these until you set their own in Room settings, Model." />
-			<div className="settings-rows">
-				{row("conversation", "Conversation")}
-				{row("memory", "Memory")}
-			</div>
+			{/* Defaults that could not be read are not "Choose a model": the line below says why. */}
+			{(defaults || !error) && (
+				<div className="settings-rows">
+					{row("conversation", "Conversation")}
+					{row("memory", "Memory")}
+				</div>
+			)}
 			{remoteClient.sharedServer && <p className="cli-note">{SHARED_SERVER_ADMIN_LINE}</p>}
 			{error && <p className="room-model-error" role="alert">{error}</p>}
 		</div>

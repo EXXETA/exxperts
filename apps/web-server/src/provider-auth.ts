@@ -42,7 +42,8 @@ export function providerLoginState(): { pending: boolean; provider?: string; url
 	return { pending: true, provider: pending.provider, url: pending.url, instructions: pending.instructions };
 }
 
-export async function startProviderLogin(providerId: string): Promise<{ url: string; instructions?: string | null }> {
+/** `onSignedIn` runs once the new credentials are stored. */
+export async function startProviderLogin(providerId: string, onSignedIn?: () => void): Promise<{ url: string; instructions?: string | null }> {
 	if (!knownOAuthProviderIds().includes(providerId)) {
 		throw new ProviderAuthError(`Unknown OAuth provider: ${providerId}`, 400);
 	}
@@ -109,6 +110,7 @@ export async function startProviderLogin(providerId: string): Promise<{ url: str
 		})
 		.then(() => {
 			entry.done = true;
+			onSignedIn?.();
 		})
 		.catch((error: unknown) => {
 			entry.done = true;
@@ -174,9 +176,11 @@ const ANTHROPIC_KEY_CHECK_TIMEOUT_MS = 10_000;
  * fails; an answer that says neither, or none at all, saves the key with a
  * notice that it could not be checked. Returns that notice, or null. Other
  * providers, and a key the save itself refuses, are not asked. The key goes
- * only into the request's header: never into a message or the log.
+ * only into the request's header: never into a message or the log. A check
+ * that fails hands its status and Anthropic's words to `onFailed`, for the
+ * log's codes.
  */
-export async function checkProviderApiKey(providerId: string, key: string): Promise<string | null> {
+export async function checkProviderApiKey(providerId: string, key: string, onFailed?: (failure: unknown) => void): Promise<string | null> {
 	const trimmedKey = key.trim();
 	if (providerId !== ANTHROPIC_API_KEY_PROVIDER || !trimmedKey || trimmedKey.includes("sk-ant-oat")) return null;
 	const configured = ModelRegistry.create(AuthStorage.inMemory()).getAll().find((model) => model.provider === ANTHROPIC_API_KEY_PROVIDER)?.baseUrl;
@@ -187,12 +191,14 @@ export async function checkProviderApiKey(providerId: string, key: string): Prom
 			headers: { "x-api-key": trimmedKey, "anthropic-version": "2023-06-01" },
 			signal: AbortSignal.timeout(ANTHROPIC_KEY_CHECK_TIMEOUT_MS),
 		});
-	} catch {
+	} catch (error) {
+		onFailed?.(error);
 		return ANTHROPIC_KEY_UNCHECKED;
 	}
 	if (response.ok) return null;
-	if (response.status === 401 || response.status === 403) throw new ProviderAuthError(ANTHROPIC_KEY_REFUSED, 400);
 	const words = await response.text().catch(() => "");
+	onFailed?.(new Error(`${response.status} ${words}`));
+	if (response.status === 401 || response.status === 403) throw new ProviderAuthError(ANTHROPIC_KEY_REFUSED, 400);
 	if (response.status === 400 && anthropicKeyNeedsWorkspace(words)) throw new ProviderAuthError(ANTHROPIC_KEY_NO_WORKSPACE, 400);
 	return ANTHROPIC_KEY_UNCHECKED;
 }

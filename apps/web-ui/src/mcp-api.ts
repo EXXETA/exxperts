@@ -1,4 +1,4 @@
-import { redirectToSignInOn401 } from "./api";
+import { apiFetch } from "./api";
 export interface McpConnectorAuthStatus {
 	mode: "oauth" | "bearer" | "none";
 	// Entry explicitly configures OAuth (custom client) — a login is expected
@@ -39,8 +39,7 @@ export interface McpConnectorsStatusResponse {
 }
 
 async function fetchJson<T>(input: string, init: RequestInit | undefined, fallbackError: string): Promise<T> {
-	const response = await fetch(input, init);
-	redirectToSignInOn401(response);
+	const response = await apiFetch(input, init);
 	let payload: unknown = null;
 	try {
 		payload = await response.json();

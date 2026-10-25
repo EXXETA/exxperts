@@ -23,7 +23,11 @@ import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_
 //      runtime's message;
 //   3. the client receives a red notify line AFTER the turn ended, in the
 //      house wording, and no error frame (the turn did not fail: the answer
-//      is on the screen and only the condensing did not happen).
+//      is on the screen and only the condensing did not happen);
+//   4. a page that leaves, or Stop, while the runtime shortens a conversation
+//      that overflowed leaves it free: the next message is answered, not
+//      refused as still running, and the shortening stops without asking the
+//      model again or showing a failure.
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-auto-compaction-failure-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -53,6 +57,12 @@ function assert(condition: unknown, message: string): asserts condition {
 // ---------------------------------------------------------------------------
 let chatCalls = 0;
 let summaryCalls = 0;
+// Row 4: a message marked OVERFLOW is refused as too long; a summary asked for while a scene holds it waits for the scene to answer it.
+let overflowMode = false;
+let holdNextSummary = false;
+const heldSummaries: http.ServerResponse[] = [];
+// The chat requests made while overflowMode is on, a refused one included.
+let overflowChats = 0;
 
 function sseChunk(payload: unknown): string {
 	return `data: ${JSON.stringify(payload)}\n\n`;
@@ -79,22 +89,43 @@ const gateway = http.createServer((req, res) => {
 		const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
 		// The summarization request wraps the transcript in <conversation> tags.
 		const isSummary = messages.some((message) => message?.role === "user" && messageText(message).includes("<conversation>"));
+		if (overflowMode) {
+			if (isSummary && holdNextSummary) { holdNextSummary = false; heldSummaries.push(res); return; }
+			if (!isSummary) overflowChats += 1;
+			if (messageText([...messages].reverse().find((message) => message?.role === "user")).includes("OVERFLOW")) {
+				res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "This model's maximum context length is 64000 tokens. Please reduce the length of the messages.", type: "invalid_request_error", code: "context_length_exceeded" } }));
+				return;
+			}
+		}
 		if (isSummary) summaryCalls += 1; else chatCalls += 1;
+		answer(res, model, isSummary);
+	});
+});
+
+function answer(res: http.ServerResponse, model: string, isSummary: boolean): void {
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+		// The first answer reads little; the second reads enough to trip threshold compaction.
+		const promptTokens = overflowMode || (!isSummary && chatCalls === 1) ? 100 : PROMPT_TOKENS;
 		const base = { id: `cmpl_${chatCalls + summaryCalls}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model };
 		res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }));
-		for (const chunk of isSummary ? CUT_SUMMARY_CHUNKS : ANSWER_CHUNKS) {
+		for (const chunk of isSummary ? (overflowMode ? ["# Goal\n", "Short answers."] : CUT_SUMMARY_CHUNKS) : ANSWER_CHUNKS) {
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }] }));
 		}
 		res.write(sseChunk({
 			...base,
-			choices: [{ index: 0, delta: {}, finish_reason: isSummary ? "length" : "stop" }],
-			usage: { prompt_tokens: PROMPT_TOKENS, completion_tokens: COMPLETION_TOKENS, total_tokens: PROMPT_TOKENS + COMPLETION_TOKENS },
+			choices: [{ index: 0, delta: {}, finish_reason: isSummary && !overflowMode ? "length" : "stop" }],
+			usage: { prompt_tokens: promptTokens, completion_tokens: COMPLETION_TOKENS, total_tokens: promptTokens + COMPLETION_TOKENS },
 		}));
 		res.write("data: [DONE]\n\n");
 		res.end();
-	});
-});
+}
+
+/** Answers the newest held summary as a whole one, if its caller still waits for it. */
+function answerHeldSummary(): void {
+	const held = heldSummaries.at(-1);
+	if (!held || held.writableEnded || held.socket?.destroyed) return;
+	try { answer(held, "narrow-model", true); } catch {}
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -276,6 +307,8 @@ try {
 		}, null, 2),
 		{ mode: 0o600 },
 	);
+	// A small kept window, so the first exchange is what the summary condenses.
+	fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ compaction: { keepRecentTokens: 5 } }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(productAppRoot, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible" }, null, 2), { mode: 0o600 });
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
@@ -295,16 +328,22 @@ try {
 	ws = await WsHarness.connect(roomId, conversationId, "narrow-model");
 	await ws.waitFor((frame) => frame.type === "ready", "ready frame");
 
-	// --- 1. The turn lands; the runtime then tries to condense and is refused --
+	// --- 1. Two turns land; the runtime then tries to condense the first and is refused --
 	ws.send({ type: "prompt", text: "Say something short." });
-	const agentEndIndex = await ws.waitFor((row) => row.type === "event" && row.event?.type === "agent_end", "agent_end");
-	await ws.waitFor((row) => row.type === "usage_turn", "usage_turn frame");
+	const firstEndIndex = await ws.waitFor((row) => row.type === "event" && row.event?.type === "agent_end", "the first agent_end");
+	for (const deadline = Date.now() + 15_000; (await requestJson(`/api/persistent-agents/${roomId}/status`)).body?.activeThread?.inFlight !== false;) {
+		assert(Date.now() < deadline, "the first turn should settle");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	ws.send({ type: "prompt", text: "Say something short again." });
+	const agentEndIndex = await ws.waitFor((row) => row.type === "event" && row.event?.type === "agent_end", "agent_end", firstEndIndex + 1);
+	await ws.waitFor((row) => row.type === "usage_turn", "usage_turn frame", firstEndIndex + 1);
 	const compactionEndIndex = await ws.waitFor((row) => row.type === "event" && row.event?.type === "compaction_end", "compaction_end event");
 	const compactionEnd = ws.frames[compactionEndIndex].event;
 	assert(compactionEnd.reason === "threshold", `the oversized reading should trip threshold compaction, got ${JSON.stringify(compactionEnd)}`);
 	assert(typeof compactionEnd.errorMessage === "string" && compactionEnd.errorMessage.includes(RUNTIME_REASON), `the cut summary should be refused by the runtime, got ${JSON.stringify(compactionEnd)}`);
 	assert(summaryCalls === 1, `the gateway should have seen exactly one summary request, got ${summaryCalls}`);
-	assert(chatCalls === 1, `the gateway should have seen exactly one chat request, got ${chatCalls}`);
+	assert(chatCalls === 2, `the gateway should have seen exactly two chat requests, got ${chatCalls}`);
 	pass("the turn lands and the runtime refuses the summary the gateway cut off");
 
 	// --- 2. The server says so in its log ------------------------------------
@@ -322,12 +361,76 @@ try {
 	// --- 3. The room is told, after the turn, without the turn failing -------
 	const noticeIndex = await ws.waitFor((row) => row.type === "ui_request" && row.kind === "notify" && row.level === "error", "the compaction notice", 0, 10_000);
 	const notice = ws.frames[noticeIndex];
-	const expected = `The room could not condense its conversation history: Summarization failed: ${RUNTIME_REASON}. Your memory is unchanged. Remember, then continue: the next conversation starts from what was remembered. Or continue on a model with a larger output limit in Room settings, Model.`;
-	assert(notice.message === expected, `the notice should use the house wording, got ${JSON.stringify(notice.message)}`);
+	// The runtime's words stay in the log line above, never on the room's line. The page words the line from
+	// the notice's fields: a summary cut at the model's output limit, whose way on is a model that writes longer answers.
+	assert(notice.failure === "could-not-shorten" && notice.summaryCut === true && notice.reason === "threshold" && notice.model?.model === "narrow-model", `the notice carries what the page words its line from, got ${JSON.stringify(notice)}`);
+	assert(notice.message === undefined && notice.words === undefined, `the notice carries no words of its own, got ${JSON.stringify(notice)}`);
 	assert(noticeIndex > agentEndIndex, "the notice should follow the turn's end, not interrupt it");
 	assert(!ws.frames.some((frame) => frame.type === "error"), `a failed compaction must not fail the turn, saw ${JSON.stringify(ws.frames.filter((frame) => frame.type === "error"))}`);
 	assert(ws.frames.filter((frame) => frame.type === "ui_request" && frame.kind === "notify" && frame.level === "error").length === 1, "one attempt, one notice");
 	pass("the client receives one red notice line after the turn, and no error frame");
+
+	// --- 4. Leaving or Stop while the runtime shortens an overflowing conversation frees it, and the shortening stops quietly --
+	ws.close();
+	overflowMode = true;
+	const settled = async (roomId: string, label: string) => {
+		for (const deadline = Date.now() + 15_000; (await requestJson(`/api/persistent-agents/${roomId}/status`)).body?.activeThread?.inFlight !== false;) {
+			assert(Date.now() < deadline, label);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+	};
+	// A room with one answer, then a message too long for the model, whose shortening the gateway holds.
+	const overflowing = async (name: string) => {
+		const roomId = await createRoom(name);
+		const conversationId = `overflow_${Date.now().toString(36)}`;
+		await putThread(roomId, conversationId, "narrow-model", []);
+		ws = await WsHarness.connect(roomId, conversationId, "narrow-model");
+		await ws.waitFor((frame) => frame.type === "ready", `${name}'s ready frame`);
+		ws.send({ type: "prompt", text: "Say something short." });
+		await ws.waitFor((row) => row.type === "event" && row.event?.type === "agent_end", `${name}'s first answer`);
+		await settled(roomId, `${name}'s first turn should settle`);
+		const held = heldSummaries.length;
+		holdNextSummary = true;
+		ws.send({ type: "prompt", text: "OVERFLOW: read this very long paste." });
+		for (const deadline = Date.now() + 15_000; heldSummaries.length === held;) {
+			assert(Date.now() < deadline, `the runtime should start shortening after the overflow, saw ${ws.frames.map((frame) => frame.event?.type ?? frame.type).join(", ")}`);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		return { roomId, conversationId };
+	};
+	const failureFramesFrom = (from: number) => ws!.frames.slice(from).filter((frame) => (frame.type === "ui_request" && frame.kind === "notify" && frame.level === "error") || frame.event?.failure || frame.type === "error");
+	const answeredFrom = async (from: number, label: string) => {
+		ws!.send({ type: "prompt", text: "Say something short." });
+		const outcome = await ws!.waitFor((row) => (row.type === "error" && row.code === "turn_running") || (row.type === "event" && row.event?.type === "agent_end"), label, from);
+		assert(ws!.frames[outcome].type !== "error", `${label}: the conversation is free, got ${JSON.stringify(ws!.frames[outcome])}`);
+	};
+
+	const left = await overflowing("Overflow Leave Room");
+	ws.close();
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	ws = await WsHarness.connect(left.roomId, left.conversationId, "narrow-model");
+	const back = await ws.waitFor((frame) => frame.type === "ready", "the ready frame after coming back");
+	await answeredFrom(back + 1, "the answer after coming back");
+	await settled(left.roomId, "the answer after coming back should settle");
+	const chatsAfterBack = overflowChats;
+	answerHeldSummary();
+	await new Promise((resolve) => setTimeout(resolve, 1200));
+	assert(overflowChats === chatsAfterBack, `the left session's shortening never asks the model again, got ${overflowChats - chatsAfterBack} chat requests`);
+	assert(failureFramesFrom(back + 1).length === 0, `coming back shows no failure, got ${JSON.stringify(failureFramesFrom(back + 1))}`);
+	pass("leaving while the runtime shortens an overflowing conversation frees it, and the shortening never asks again behind it");
+
+	ws.close();
+	const stopped = await overflowing("Overflow Stop Room");
+	const stopIndex = ws.frames.length;
+	const chatsAtStop = overflowChats;
+	ws.send({ type: "abort" });
+	await settled(stopped.roomId, "Stop during the shortening should end the turn");
+	answerHeldSummary();
+	await new Promise((resolve) => setTimeout(resolve, 1200));
+	assert(overflowChats === chatsAtStop, `after Stop the shortening never asks the model again, got ${overflowChats - chatsAtStop} chat requests`);
+	assert(failureFramesFrom(stopIndex).length === 0, `Stop during the shortening shows no failure line, got ${JSON.stringify(failureFramesFrom(stopIndex))}`);
+	await answeredFrom(ws.frames.length, "the answer after Stop");
+	pass("Stop while the runtime shortens stops it quietly, and the next message is answered");
 
 	console.log(`auto-compaction-failure-smoke: ${passes} checks passed`);
 } catch (error) {
@@ -336,6 +439,7 @@ try {
 	process.exitCode = 1;
 } finally {
 	ws?.close();
+	for (const held of heldSummaries) held.destroy();
 	if (server) await stopSmokeServer(server);
 	await new Promise<void>((resolve) => gateway.close(() => resolve()));
 	try { fs.rmSync(tempHome, { recursive: true, force: true }); } catch {}

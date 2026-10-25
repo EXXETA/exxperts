@@ -243,6 +243,13 @@ try {
 		assert(!fake.calls.some((call) => call.part), `no part is asked, got ${fake.calls.filter((call) => call.part).length}`);
 	});
 
+	await section("a probe's bare 403 on a gateway is the gateway refusing, as chat reads it", async () => {
+		const room = roomWithConversation("gateway refused probe", { messages: 6 });
+		const fake = fakeModel(() => unknownTooBig());
+		const outcome = await propose(room, fake.generate, { patience: { sleep: async () => {}, probe: async () => { throw new Error("HTTP 403 Forbidden"); } } }).then(() => "a page", (error) => error);
+		assert(outcome instanceof ModelUnreachableError && outcome.details.detail === "gateway-refused", `the notice names the gateway refusing, got ${outcome instanceof ModelUnreachableError ? JSON.stringify(outcome.details) : outcome instanceof Error ? outcome.message : outcome}`);
+	});
+
 	await section("a failure not about size, at every size, stops Remember after a bounded number of calls", async () => {
 		const room = roomWithConversation("unknown words everywhere", { messages: 6 });
 		const fake = fakeModel(() => unknownTooBig());

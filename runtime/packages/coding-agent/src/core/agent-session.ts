@@ -139,7 +139,7 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 			errorMessage?: string;
 	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; errorStatus?: number }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 
 /** Listener function for agent session events */
@@ -257,6 +257,23 @@ interface ToolDefinitionEntry {
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+
+/** The statuses asked again: too many requests, the provider's own errors, an overload; the same ones the retry words below name. */
+const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 500, 502, 503, 504, 529]);
+/** A spent plan, credit or gateway budget answers 429 too, and stays spent: asking again only delays the answer. */
+const SPENT_ERROR_TYPES: ReadonlySet<string> = new Set(["usage_limit_reached", "usage_not_included", "insufficient_quota", "budget_exceeded"]);
+/**
+ * The statuses a provider's own client already asked again, with its own waits, before it gave up:
+ * asking again here would multiply its tries. Keep in step with `isRetryableError` in openai-codex-responses.ts.
+ */
+const STATUSES_ASKED_BY_PROVIDER: Readonly<Record<string, ReadonlySet<number>>> = {
+	"openai-codex-responses": new Set([429, 500, 502, 503, 504]),
+};
+
+/** True when the API's own client already asked this status again before it gave up, so the session does not. */
+export function statusAskedAgainByProvider(api: string | undefined, status: number | undefined): boolean {
+	return api !== undefined && status !== undefined && STATUSES_ASKED_BY_PROVIDER[api]?.has(status) === true;
+}
 
 // ============================================================================
 // AgentSession Class
@@ -1191,6 +1208,57 @@ export class AgentSession {
 		preflightResult?.(true);
 		await this.agent.prompt(messages);
 		await this.waitForRetry();
+	}
+
+	/**
+	 * Whether continueAfterFailure can run: the conversation ends on failed
+	 * attempts (an error, or an empty answer) after a user message or a tool result.
+	 */
+	canContinueAfterFailure(): boolean {
+		return this._withoutFailedAttempts() !== undefined;
+	}
+
+	/**
+	 * Has the model answer the conversation's last message again after its
+	 * answer failed, without sending that message twice: the failed attempts
+	 * leave what the model is sent (the session file keeps them, as the
+	 * runtime's own retry does), and the model continues from the message, or
+	 * from the last tool result, so a tool that already ran is not asked for
+	 * again. The system prompt is built for the turn as prompt() builds it;
+	 * messages a before_agent_start handler adds are left out, since they ride
+	 * beside a new user message.
+	 */
+	async continueAfterFailure(): Promise<void> {
+		if (this.isStreaming) throw new Error("Agent is already processing.");
+		const kept = this._withoutFailedAttempts();
+		if (!kept) throw new Error("No failed answer to continue from");
+		if (!this.model) throw new Error(formatNoModelSelectedMessage());
+		if (!this._modelRegistry.hasConfiguredAuth(this.model)) throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+		const lastUser = [...kept].reverse().find((message) => message.role === "user");
+		const promptText = typeof lastUser?.content === "string"
+			? lastUser.content
+			: (lastUser?.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("");
+		const result = await this._extensionRunner.emitBeforeAgentStart(promptText, undefined, this._baseSystemPrompt, this._baseSystemPromptOptions, this._contextPolicy);
+		this.agent.state.systemPrompt = result?.systemPrompt ?? this._baseSystemPrompt;
+		this.agent.state.messages = kept;
+		await this.agent.continue();
+		await this.waitForRetry();
+	}
+
+	/** The conversation without its trailing failed attempts; undefined when it does not end on one after a user message or a tool result. */
+	private _withoutFailedAttempts(): AgentMessage[] | undefined {
+		const messages = this.agent.state.messages;
+		let end = messages.length;
+		while (end > 0) {
+			const message = messages[end - 1];
+			if (message.role !== "assistant") break;
+			// An empty answer: a finished message with no text, no tool call and no output tokens.
+			const empty = message.stopReason === "stop" && !message.usage?.output && !message.content.some((part) => part.type === "toolCall" || (part.type === "text" && part.text.trim() !== ""));
+			if (message.stopReason !== "error" && !empty) break;
+			end--;
+		}
+		const last = messages[end - 1];
+		return end < messages.length && (last?.role === "user" || last?.role === "toolResult") ? messages.slice(0, end) : undefined;
 	}
 
 	/**
@@ -2519,9 +2587,18 @@ export class AgentSession {
 	private _isRetryableError(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error" || !message.errorMessage) return false;
 
+		// A spent plan or credit stays spent, whatever its words say.
+		if (message.errorType && SPENT_ERROR_TYPES.has(message.errorType)) return false;
+
 		// Context overflow is handled by compaction, not retry
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (isContextOverflow(message, contextWindow)) return false;
+
+		// The provider's client already asked this status again; its words must not ask it a second time.
+		if (statusAskedAgainByProvider(message.api, message.errorStatus)) return false;
+
+		// A status that says the provider is busy or failed on its own side, whatever its words.
+		if (message.errorStatus !== undefined && RETRYABLE_STATUSES.has(message.errorStatus)) return true;
 
 		const err = message.errorMessage;
 		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, request ended without sending chunks, HTTP/2 closed before response, terminated, retry delay exceeded
@@ -2572,6 +2649,7 @@ export class AgentSession {
 			maxAttempts: settings.maxRetries,
 			delayMs,
 			errorMessage: message.errorMessage || "Unknown error",
+			...(message.errorStatus !== undefined ? { errorStatus: message.errorStatus } : {}),
 		});
 
 		// Remove error message from agent state (keep in session for history)
@@ -2630,6 +2708,16 @@ export class AgentSession {
 
 		await this._retryPromise;
 		await this.agent.waitForIdle();
+	}
+
+	/**
+	 * Whether the runtime answers this failed message by asking again: its
+	 * agent_end is followed by auto_retry_start. False for the attempt that
+	 * spends the last try, whose run ends the turn. Read it before that run's
+	 * agent_end is handled, as its listeners do.
+	 */
+	retriesAfter(message: AssistantMessage): boolean {
+		return this.autoRetryEnabled && this._isRetryableError(message) && this._retryAttempt < this.settingsManager.getRetrySettings().maxRetries;
 	}
 
 	/** Whether auto-retry is currently in progress */

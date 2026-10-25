@@ -10,6 +10,7 @@ import {
 	SPECIALIST_TASK_CAPS,
 	type SpecialistTemplate,
 } from "./specialist-templates.js";
+import { handOffApprovalTitle } from "./room-approval-titles.js";
 
 /**
  * Visuals V2 room wiring (contract spec §5): the L2 specialist-templates index
@@ -176,8 +177,9 @@ export function verbatimUserRequestMatches(quote: string, userText: string): boo
 
 type TextToolResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined; isError?: boolean };
 
+// A decline the person made on the approval card is already shown there; every other refusal gets its card.
 function refusal(text: string, details?: Record<string, unknown>): TextToolResult {
-	return { content: [{ type: "text", text }], details };
+	return { content: [{ type: "text", text }], details, ...(details?.outcome === "declined" ? {} : { isError: true }) };
 }
 
 export interface CreateDelegateTaskToolOptions {
@@ -286,7 +288,7 @@ export function createDelegateTaskTool(options: CreateDelegateTaskToolOptions): 
 			const noun = /^[A-Z]{2,}/.test(template.label) ? template.label : template.label.charAt(0).toLowerCase() + template.label.slice(1);
 			const article = /^(svg|html|[aeiou])/i.test(noun) ? "an" : "a";
 			const approved = await ctx.ui.confirm(
-				`Have a specialist create ${article} ${noun}?`,
+				handOffApprovalTitle(`${article} ${noun}`),
 				[
 					// The guidance the client shows behind "Details": three short
 					// paragraphs (isolation, grant, lifecycle), no redundancy. The

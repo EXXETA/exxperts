@@ -12,6 +12,7 @@ delete process.env.EXXPERTS_STATE_HOME;
 const { compareRoomsByName, compareRoomsByRecentUse, isRoomOrderMode, orderRooms, roomLastUsedTimes, ROOM_ORDER_CUSTOM_MAX, ROOM_ORDER_DEFAULT_MODE, ROOM_ORDER_MODES, sanitizeRoomOrderCustomOrder, validateRoomOrderMode, mergeRoomOrderCustomOrder, reconcileRoomsByCustomOrder, validateRoomOrderCustomOrder } = await import("../src/room-order.js");
 const { readRoomOrder, ROOM_ORDER_FILENAME, ROOM_ORDER_SAVE_FAILED_SENTENCE, roomOrderPath, roomOrderPayload, saveRoomOrder } = await import("../src/room-order-store.js");
 const { classifyRemoteRoute } = await import("../src/remote-route-policy.js");
+const { shownRoomName } = await import("../src/room-name.js");
 const { productAppStatePath } = await import("../../../pi-package/product-state-paths.js");
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -361,10 +362,10 @@ try {
 	}
 
 	// --- Upgrade day: with nothing saved, the order is the one the home screen
-	// always had (its own line, kept here as the reference), except that a
-	// number in a name now counts as a number. Same names, same ids, so the
-	// reference's lack of a tie-break cannot show. ---
-	const homeScreenBefore = (list: Array<{ id: string; displayName?: string }>) => list.slice().sort((a, b) => (a.displayName || a.id).localeCompare(b.displayName || b.id));
+	// always had (its own line, on the name the card shows, kept here as the
+	// reference), except that a number in a name now counts as a number. Same
+	// names, same ids, so the reference's lack of a tie-break cannot show. ---
+	const homeScreenBefore = (list: Array<{ id: string; displayName?: string }>) => list.slice().sort((a, b) => (shownRoomName(a.displayName) || a.id).localeCompare(shownRoomName(b.displayName) || b.id));
 	const digitFree = [
 		// The twins' ids run AGAINST the order the old line gives their names: a
 		// comparison that stopped telling case or accents apart would fall back
@@ -377,6 +378,9 @@ try {
 		const rotated = [...digitFree.slice(shift), ...digitFree.slice(0, shift)];
 		assert(ids(orderRooms(rotated, { mode: ROOM_ORDER_DEFAULT_MODE })) === ids(homeScreenBefore(rotated)), `names without digits keep the order they had before the feature (rotation ${shift})`);
 	}
+	// The name the card shows: a blank or invisible name reads "Unnamed room" and sorts under U, and an invisible character at an end is not part of the name.
+	const shown = [{ id: "u1", displayName: "\u200b" }, { id: "t", displayName: "Tango" }, { id: "c", displayName: "\u200bCharlie" }, { id: "v", displayName: "Victor" }, { id: "b", displayName: "   " }];
+	assert(ids(orderRooms(shown, { mode: "name-asc" })) === "c,t,b,u1,v", `rooms sort by the name the card shows, got ${ids(orderRooms(shown, { mode: "name-asc" }))}`);
 	const numbered = [{ id: "r1", displayName: "Room 1" }, { id: "r10", displayName: "Room 10" }, { id: "r2", displayName: "Room 2" }];
 	assert(ids(homeScreenBefore(numbered)) === "r1,r10,r2" && ids(orderRooms(numbered, { mode: "name-asc" })) === "r1,r2,r10", "the one difference: 10 no longer sorts before 2");
 

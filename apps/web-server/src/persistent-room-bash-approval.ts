@@ -15,6 +15,8 @@
  * construct it.
  */
 
+import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "./room-approval-titles.js";
+
 export type PersistentRoomBashApprovalDecision = { allow: true } | { allow: false; reason: string };
 
 /** The minimal slice of the runtime's ExtensionContext the guard touches. */
@@ -57,7 +59,7 @@ export function createPersistentRoomBashApprovalGuard(options: CreatePersistentR
 			// leaves the transcript system note — the same path every other
 			// detached dialog takes.
 			const approved = await ctx.ui!.confirm(
-				"Run this command?",
+				PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE,
 				[
 					...(cwd ? [`Runs in: ${cwd}`] : []),
 					"You can auto-approve bash for this room in Workspace settings.",

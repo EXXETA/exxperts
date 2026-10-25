@@ -34,6 +34,7 @@ import {
 	retainThoughtSignature,
 } from "./google-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { providerErrorFields } from "../utils/provider-error-fields.js";
 
 export interface GoogleVertexOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "any";
@@ -284,6 +285,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			Object.assign(output, providerErrorFields(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

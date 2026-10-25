@@ -1,11 +1,15 @@
-import { memo, useId, useReducer, useState } from "react";
+import { memo, useEffect, useId, useReducer, useState } from "react";
 import type { ChatItem } from "../types";
 import { formatAbsoluteTime, formatRelativeTime } from "../message-time";
 import { CopyButton } from "./CopyButton";
 import { ImageActions } from "./ImageActions";
-import { MarkdownRenderer, looksLikeMarkdown, unwrapOuterMarkdownFence } from "./Markdown";
+import { MarkdownRenderer, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
 import { MEMORY_RECALL_STEP, memoryRecallDisplayText } from "../memory-recall-display";
+import { failureButtons, failureLineParts, failureLineWords } from "../turn-failure-line";
+import { commandAborted, commandDeclined, lastName, missingToolName, nobodyToApprove, readableToolName, stepOutcome, stoppedBeforeAsking } from "../step-lines";
+import { SPECIALIST_TEMPLATE_LABELS } from "../../../web-server/src/specialist-template-labels";
+import { useRemoteClientContext } from "../remote-client-context";
 
 // The message copy control (CopyButton.tsx): on assistant replies it sits
 // permanently below the text (the thing people quote); on the user's own
@@ -16,8 +20,15 @@ import { MEMORY_RECALL_STEP, memoryRecallDisplayText } from "../memory-recall-di
  * Compact, single-line preview of a tool call's key argument. Used as
  * the inline summary on the collapsed tool chip (Claude-Code style).
  */
-function utf8ByteLength(value: string): number {
-	return new TextEncoder().encode(value).length;
+function clip(value: string, max = 160): string {
+	return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+/** A path with its file name first, so a cut summary hides the folder rather than the name. */
+function pathSummary(raw: string): string {
+	const name = lastName(raw);
+	const folder = raw.replace(/[\\/]+$/, "").slice(0, -name.length - 1);
+	return name && folder ? `${name} · ${folder}` : raw;
 }
 
 function domainOf(url: string): string {
@@ -33,15 +44,12 @@ function domainOf(url: string): string {
  * so the raw call reads as "mcp {json}". Surface what actually happened
  * instead: which remote tool, connect, search, or auth step.
  */
-function mcpChipView(args: any): { name: string; summary: string } {
+function mcpChipView(args: any, details: any): { name: string; summary: string } {
 	const a = args && typeof args === "object" ? args : {};
 	if (a.tool) {
-		let inner = "";
-		if (typeof a.args === "string" && a.args.trim()) {
-			inner = a.args.trim();
-		}
-		const parts = [a.server ? String(a.server) : "", inner].filter(Boolean);
-		return { name: `🔌 ${String(a.tool)}`, summary: parts.join(" · ").slice(0, 160) };
+		// The connector's name, never the call's raw arguments.
+		const server = typeof a.server === "string" && a.server ? a.server : typeof details?.server === "string" ? details.server : "";
+		return { name: `🔌 ${String(a.tool)}`, summary: server.slice(0, 160) };
 	}
 	if (a.action === "auth-start" || a.action === "auth-complete") {
 		return { name: "🔌 Connector login", summary: String(a.server ?? "") };
@@ -56,51 +64,47 @@ function mcpChipView(args: any): { name: string; summary: string } {
 /**
  * Human chip labels for the remaining tools, matching the web_search /
  * fetch_url / mcp treatment: an emoji plus what the tool is doing in user
- * terms, never the internal tool name. Running gets the in-flight form; done
- * and error get the finished form (the status icon carries the outcome).
+ * terms, never the internal tool name. Running gets the in-flight form, done
+ * the finished form, and an error says the step did not happen.
  */
-const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: string }> = {
-	bash: { icon: "⌨️", running: "Running command", done: "Ran command" },
-	read: { icon: "📄", running: "Reading file", done: "Read file" },
-	write: { icon: "✏️", running: "Writing file", done: "Wrote file" },
-	edit: { icon: "✏️", running: "Editing file", done: "Edited file" },
-	ls: { icon: "📁", running: "Listing files", done: "Listed files" },
-	find: { icon: "📁", running: "Finding files", done: "Found files" },
-	grep: { icon: "🔎", running: "Searching files", done: "Searched files" },
+const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: string; failed: string }> = {
+	bash: { icon: "⌨️", running: "Running command", done: "Ran command", failed: "Couldn't run command" },
+	read: { icon: "📄", running: "Reading file", done: "Read file", failed: "Couldn't read file" },
+	write: { icon: "✏️", running: "Writing file", done: "Wrote file", failed: "Couldn't write file" },
+	edit: { icon: "✏️", running: "Editing file", done: "Edited file", failed: "Couldn't edit file" },
+	ls: { icon: "📁", running: "Listing files", done: "Listed files", failed: "Couldn't list files" },
+	find: { icon: "📁", running: "Finding files", done: "Looked for files", failed: "Couldn't look for files" },
+	grep: { icon: "🔎", running: "Searching files", done: "Searched files", failed: "Couldn't search files" },
+	read_skill: { icon: "🛠️", running: "Reading skill", done: "Read skill", failed: "Couldn't use the skill" },
 	// The room's Files tools (persistent-room-shelf-tools.ts): a chip reading
 	// "Read file" says what happened, where the raw name "read_file" only said
 	// which tool did it.
-	read_file: { icon: "📄", running: "Reading file", done: "Read file" },
-	search_file: { icon: "🔎", running: "Searching file", done: "Searched file" },
+	read_file: { icon: "📄", running: "Reading file", done: "Read file", failed: "Couldn't read file" },
+	search_file: { icon: "🔎", running: "Searching file", done: "Searched file", failed: "Couldn't search file" },
 	memory_recall: { icon: "🗄️", ...MEMORY_RECALL_STEP },
-	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
-	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
-	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },
-	artifact_write: { icon: "🗂️", running: "Writing artifact", done: "Wrote artifact" },
-	artifact_write_html_deck: { icon: "🗂️", running: "Building deck", done: "Built deck" },
+	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base", failed: "Couldn't search knowledge base" },
+	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts", failed: "Couldn't list artifacts" },
+	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact", failed: "Couldn't read artifact" },
+	artifact_write: { icon: "🗂️", running: "Writing artifact", done: "Wrote artifact", failed: "Couldn't write artifact" },
+	artifact_write_html_deck: { icon: "🗂️", running: "Building deck", done: "Built deck", failed: "Couldn't build deck" },
+	delegate_task: { icon: "🤝", running: "Handing off", done: "Handed off", failed: "Couldn't hand off" },
 };
 
 function genericChipName(name: string, status: ToolChatItem["status"]): string {
 	const view = GENERIC_TOOL_VIEWS[name];
 	// A stopped call keeps the in-flight verb: it WAS reading the file, and it
-	// never got to have read it. The icon and the body say how it ended.
-	if (view) return `${view.icon} ${status === "running" || status === "stopped" ? view.running : view.done}`;
+	// never got to have read it. The icon and the body say how it ended. A
+	// command says Stopped instead (stateLabel): "Running command" read as running.
+	if (view) return `${view.icon} ${status === "running" || status === "stopped" ? view.running : status === "error" ? view.failed : view.done}`;
 	// Unknown tool: humanize the internal name rather than showing it raw.
-	const humanized = name.replace(/_/g, " ").trim() || "Tool";
-	return `🛠️ ${humanized.charAt(0).toUpperCase()}${humanized.slice(1)}`;
+	return `🛠️ ${readableToolName(name)}`;
 }
 
 function summariseToolArgs(name: string, args: any): string {
 	if (!args || typeof args !== "object") return "";
-	if (name === "bash") return String(args.command ?? "").slice(0, 160);
-	if (name === "write") {
-		const path = String(args.path ?? "").slice(0, 120);
-		const content = typeof args.content === "string" ? ` · ${args.content.length} chars/${utf8ByteLength(args.content)} bytes` : "";
-		const overwrite = args.overwrite === true ? " · overwrite" : "";
-		return `${path}${content}${overwrite}`.slice(0, 160);
-	}
-	if (name === "read" || name === "ls" || name === "find" || name === "grep" || name === "edit")
-		return String(args.path ?? "").slice(0, 160);
+	if (name === "bash") return clip(String(args.command ?? ""));
+	if (name === "read" || name === "write" || name === "edit" || name === "ls") return clip(pathSummary(String(args.path ?? "")));
+	if (name === "find" || name === "grep") return clip([args.pattern, args.path].filter((part) => typeof part === "string" && part.trim()).join(" · "));
 	// Files tools take a plain shelf filename (`name`), never a path; a search
 	// names its query first and the file it was fenced to, when it was.
 	if (name === "read_file") return String(args.name ?? "").slice(0, 160);
@@ -115,6 +119,8 @@ function summariseToolArgs(name: string, args: any): string {
 		return (query && topic ? `${query} · ${topic}` : query || topic).slice(0, 160);
 	}
 	if (name === "fetch_url") return String(args.url ?? "").slice(0, 160);
+	// A hand-off names its specialist; a name that is none stays as the room wrote it.
+	if (name === "delegate_task") return SPECIALIST_TEMPLATE_LABELS[String(args.template ?? "")] ?? String(args.template ?? "").slice(0, 160);
 	if (name === "web_search") return String(args.query ?? "").slice(0, 160);
 	if (name.startsWith("kb_")) {
 		const vault = args.vault ? `${args.vault}` : "default knowledge base";
@@ -136,10 +142,31 @@ function summariseToolArgs(name: string, args: any): string {
 	}
 }
 
-function ResultBody({ text }: { text: string }) {
-	const unwrapped = unwrapOuterMarkdownFence(text);
+const MARKDOWN_FILE = /\.(?:md|markdown|mdx)$/i;
+const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+
+/** Only a Markdown document renders as one: a .md file read, or a page read as Markdown. Everything else is shown as written. */
+function isMarkdownResult(item: ToolChatItem): boolean {
+	if (item.status !== "done") return false;
+	if (item.name === "read" || item.name === "read_file") return MARKDOWN_FILE.test(String(item.args?.path ?? item.args?.name ?? ""));
+	return item.name === "fetch_url" && item.details?.format === "markdown";
+}
+
+/** What a finished write or edit did, in the person's words; the model keeps the tool's own text. */
+function plainDoneLine(item: ToolChatItem): string | null {
+	if (item.status !== "done" || !item.result) return null;
+	const path = String(item.args?.path ?? "");
+	const name = lastName(path) || path;
+	if (item.name === "write" && /^Successfully wrote \d+ bytes to /.test(item.result)) return `Saved ${name}.`;
+	const edits = item.name === "edit" ? /^Successfully replaced (\d+) block\(s\) in /.exec(item.result) : null;
+	if (edits) return Number(edits[1]) === 1 ? `Changed ${name}.` : `Changed ${edits[1]} places in ${name}.`;
+	return null;
+}
+
+function ResultBody({ text, markdown }: { text: string; markdown: boolean }) {
+	const unwrapped = markdown ? unwrapOuterMarkdownFence(text).replace(FRONT_MATTER, "") : text;
 	const trimmed = unwrapped.length > 20000 ? unwrapped.slice(0, 20000) + "\n\n…(truncated)" : unwrapped;
-	if (looksLikeMarkdown(trimmed)) {
+	if (markdown) {
 		return (
 			<div className="md md-result">
 				<MarkdownRenderer>{trimmed}</MarkdownRenderer>
@@ -199,7 +226,7 @@ function ConsultThreadExchange({ label, question, answer, asOf, defaultExpanded 
 			</div>
 			<div id={contentId} className={`consult-answer consult-item-answer ${folded ? "is-folded" : ""}`}>
 				<div className="md">
-					<MarkdownRenderer>{answer}</MarkdownRenderer>
+					<MarkdownRenderer answer>{answer}</MarkdownRenderer>
 				</div>
 			</div>
 			{isLong && (
@@ -360,7 +387,7 @@ export function TaskThreadItem({ item, onOpenTaskArtifact }: { item: TaskChatIte
 					</button>
 					{notesOpen && (
 						<div id={contentId} className="task-summary md">
-							<MarkdownRenderer>{summary}</MarkdownRenderer>
+							<MarkdownRenderer answer>{summary}</MarkdownRenderer>
 						</div>
 					)}
 				</div>
@@ -374,46 +401,133 @@ export function TaskThreadItem({ item, onOpenTaskArtifact }: { item: TaskChatIte
 
 type ToolChatItem = Extract<ChatItem, { kind: "tool" }>;
 
+/** How long a command has run, once it is long enough to wonder: "7 s", "1 min 5 s". */
+export function runningForText(ms: number): string {
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 3) return "";
+	return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+// Counted from when the step began, so a reload counts on; a step with no
+// start time counts from when its card appeared.
+function RunningFor({ since }: { since?: number }) {
+	const [shownAt] = useState(() => Date.now());
+	const [now, setNow] = useState(shownAt);
+	useEffect(() => {
+		const timer = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(timer);
+	}, []);
+	const text = runningForText(now - (since ?? shownAt));
+	return text ? <span className="chip-running-for">{text}</span> : null;
+}
+
+// The connector adapter's codes for a connection that failed, and for a connector tool that is not there;
+// any other failed connector step keeps its own name.
+const CONNECTION_FAILURES = new Set(["connect_failed", "server_not_connected", "server_backoff", "not_connected"]);
+const MISSING_CONNECTOR_TOOLS = new Set(["tool_not_found", "tool_not_found_after_reconnect"]);
+
+/**
+ * The label of a step that did not run, was stopped, or failed for a reason
+ * its verb would hide: the state, then what the step was about ("Not run ·
+ * rm notes.txt", "No such tool · create_issue"). Null for a step whose label
+ * is its verb. `summary` is the step's own summary. `labelOnly`: the label is
+ * the whole fact, so the step has nothing to open.
+ */
+function stateLabel(item: ToolChatItem, summary: string): { name: string; summary: string; labelOnly?: true } | null {
+	if (item.name === "bash" && item.status === "stopped") return { name: "⌨️ Stopped", summary };
+	if (item.status !== "error") return null;
+	const missing = missingToolName(item.result);
+	if (missing) return { name: `${GENERIC_TOOL_VIEWS[item.name]?.icon ?? "🛠️"} No such tool`, summary: readableToolName(missing), labelOnly: true };
+	if (item.name === "bash" && (commandDeclined(item.result) || nobodyToApprove(item.result) || stoppedBeforeAsking(item.result))) return { name: "⌨️ Not run", summary };
+	if (item.name === "delegate_task" && (nobodyToApprove(item.result) || stoppedBeforeAsking(item.result))) return { name: "🤝 Not handed off", summary };
+	if (item.name === "mcp") {
+		const args = item.args && typeof item.args === "object" ? item.args : {};
+		const error = String(item.details?.error ?? "");
+		const connector = String(item.details?.server || args.server || args.connect || summary).slice(0, 160);
+		if (error === "auth_required") return { name: "🔌 Needs sign-in", summary: connector };
+		if (CONNECTION_FAILURES.has(error)) return { name: "🔌 Couldn't connect", summary: connector };
+		if (MISSING_CONNECTOR_TOOLS.has(error)) return { name: "🔌 No such tool", summary: String(args.tool ?? args.describe ?? item.details?.requestedTool ?? "").slice(0, 160), labelOnly: true };
+	}
+	return null;
+}
+
+/** What a step's mark means, in words for a screen reader: the mark itself is hidden from it. */
+function stateWord(status: ToolChatItem["status"], refused: boolean): string {
+	return refused ? "Refused" : status === "error" ? "Failed" : status === "stopped" ? "Stopped" : status === "done" ? "Done" : "";
+}
+
 /**
  * The single collapsed tool chip. Rendered standalone for every tool call, and
  * nested (unchanged) inside a ToolBundle for consecutive web_search/fetch_url
- * runs; `nested` only adds the muted right-aligned provider on search calls,
- * because one run can mix providers (searxng can come back mid-run).
+ * runs. `saidOnCard`: the card beside a declined command already says so.
  */
-function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
+function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; saidOnCard?: boolean }) {
+	// A command ended by Stop comes back as an error; the person stopped it, so it reads as stopped.
+	const item: ToolChatItem = shown.name === "bash" && shown.status === "error" && commandAborted(shown.result) ? { ...shown, status: "stopped", result: undefined } : shown;
+	// Read through the hook, so a card shown before the server answered takes its words once it does.
+	const { sharedServer } = useRemoteClientContext();
+	const failed = item.status === "error";
+	// A refusal (the app's rules, the room's settings or the person kept the step from running) looks calm; a failure stays red.
+	const outcome = failed && typeof item.result === "string" ? stepOutcome(item.result, item, sharedServer) : null;
+	const refused = outcome?.refused === true;
 	const summary = summariseToolArgs(item.name, item.args);
-	const icon = item.status === "running" ? "…" : item.status === "error" ? "✗" : item.status === "stopped" ? "■" : "✓";
+	const icon = item.status === "running" ? "…" : refused ? "⊘" : failed ? "✗" : item.status === "stopped" ? "■" : "✓";
 	// fetch_url reads as a source: show the page title + domain (from the
 	// result details) instead of the raw tool name and URL argument.
 	const isFetchUrl = item.name === "fetch_url";
 	const fetchUrl = isFetchUrl ? String(item.details?.finalUrl ?? item.args?.url ?? "") : "";
 	const fetchDomain = fetchUrl ? domainOf(fetchUrl) : "";
-	const mcpView = item.name === "mcp" ? mcpChipView(item.args) : null;
+	const mcpView = item.name === "mcp" ? mcpChipView(item.args, item.details) : null;
 	// web_search reads as a lookup: show the query itself, not the tool name.
 	const isWebSearch = item.name === "web_search";
 	const searchQuery = isWebSearch ? String(item.args?.query ?? "").slice(0, 160) : "";
-	const chipName = isFetchUrl
-		? `🌐 ${String(item.details?.title || "Fetch URL")}`
-		: isWebSearch
-			? `🔍 ${searchQuery || "Web search"}`
-			: mcpView ? mcpView.name : genericChipName(item.name, item.status);
-	const chipSummary = isFetchUrl ? fetchDomain || summary : isWebSearch ? "" : mcpView ? mcpView.summary : summary;
-	const provider = nested && isWebSearch ? String(item.details?.provider ?? "") : "";
+	const state = stateLabel(item, mcpView ? mcpView.summary : summary);
+	const chipName = state
+		? state.name
+		: isFetchUrl
+			? (failed ? "🌐 Couldn't read page" : `🌐 ${String(item.details?.title || "Fetch URL")}`)
+			: isWebSearch
+				? (failed ? "🔍 Couldn't search the web" : `🔍 ${searchQuery || "Web search"}`)
+				: mcpView ? mcpView.name : genericChipName(item.name, item.status);
+	const chipSummary = state ? state.summary : isFetchUrl ? fetchDomain || summary : isWebSearch ? (failed ? searchQuery : "") : mcpView ? mcpView.summary : summary;
+	// One line in the person's words: why a failed step did not work (written for the model, which keeps it), or what a write or an edit did.
+	const plainLine = outcome?.line ?? plainDoneLine(item);
+	// Nothing to open: "You declined this command." stands on the card beside it, or the label already says there is no such tool.
+	const labelOnly = state?.labelOnly === true || (saidOnCard && failed && commandDeclined(item.result));
+	const word = stateWord(item.status, refused);
+	const head = (
+		<>
+			<span className="icon" aria-hidden="true">{icon}</span>
+			{word && <span className="sr-only">{word}</span>}
+			<span className="name">{chipName}</span>
+			{state && chipSummary && <span className="sep" aria-hidden="true">·</span>}
+			{/* A command cut at 160 characters, with nothing to open, can still be read in full. */}
+			{chipSummary && <span className="summary" title={labelOnly && item.name === "bash" ? String(item.args?.command ?? "") || undefined : undefined}>{chipSummary}</span>}
+			{item.status === "running" && item.name === "bash" && <RunningFor since={item.startedAt} />}
+			{item.status === "running" && <span className="spinner" />}
+		</>
+	);
+	const look = `tool-chip ${refused ? "refused" : item.status}`;
+	if (labelOnly) {
+		return (
+			<div className={look}>
+				<div className="chip-head">{head}</div>
+			</div>
+		);
+	}
 	return (
-		<details className={`tool-chip ${item.status}`}>
-			<summary>
-				<span className="icon">{icon}</span>
-				<span className="name">{chipName}</span>
-				{chipSummary && <span className="summary">{chipSummary}</span>}
-				{provider && <span className="chip-provider">{provider}</span>}
-				{item.status === "running" && <span className="spinner" />}
-			</summary>
+		<details className={look}>
+			<summary>{head}</summary>
 			<div className="chip-body">
 				{item.result && item.status !== "running" ? (
-					<div className="chip-result">
-						<span className="label">{item.status === "error" ? "error" : "result"}</span>
-						<ResultBody text={item.name === "memory_recall" ? memoryRecallDisplayText(item.result) : item.result} />
-					</div>
+					plainLine ? (
+						<div className="chip-line">{plainLine}</div>
+					) : (
+						<div className="chip-result">
+							<span className="label">{failed ? "error" : "result"}</span>
+							<ResultBody markdown={isMarkdownResult(item)} text={item.name === "memory_recall" ? memoryRecallDisplayText(item.result) : item.result} />
+						</div>
+					)
 				) : (
 					<div className="chip-empty">
 						{item.status === "running" ? "Working…" : item.status === "stopped" ? "Stopped before it finished." : "No output."}
@@ -430,7 +544,8 @@ function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
  * chip). The line speaks in outcomes, not call counts: search rests as
  * "Searched the web", fetches count the pages actually read. Failures stay
  * quiet while anything succeeded (a muted "· N failed" footnote); the line
- * only goes red when every call in the run failed. While a call is in flight
+ * only goes red when every call in the run failed, and reads as a refusal
+ * when every one of them was refused. While a call is in flight
  * the line shows the in-progress label plus the current query/domain as a
  * muted swapping tail. Expanded, the individual chips nest unchanged — each
  * still opens to its result body.
@@ -445,14 +560,18 @@ export function ToolBundle({ items }: { items: ToolChatItem[] }) {
 	// Stopped only speaks for the whole bundle when nothing in it got anywhere;
 	// a run that read three pages before Stop still says it read three.
 	const allStopped = !active && succeeded === 0 && failed === 0 && stopped > 0;
-	const status = active ? "running" : allStopped ? "stopped" : allFailed ? "error" : "done";
-	const icon = active ? "…" : allStopped ? "■" : allFailed ? "✗" : "✓";
+	// Every call that did not work was refused (web search switched off, say): the run reads as a refusal, as each call does.
+	const refused = items.filter((call) => call.status === "error" && typeof call.result === "string" && stepOutcome(call.result, call)?.refused).length;
+	const allRefused = allFailed && refused === failed;
+	const status = active ? "running" : allStopped ? "stopped" : allRefused ? "refused" : allFailed ? "error" : "done";
+	const icon = active ? "…" : allStopped ? "■" : allRefused ? "⊘" : allFailed ? "✗" : "✓";
+	const word = active ? "" : allStopped ? "Stopped" : allRefused ? "Refused" : allFailed ? "Failed" : "Done";
 	const label = active
 		? (isSearch ? "🔍 Searching the web" : "🌐 Reading pages")
 		: allStopped
 			? (isSearch ? "🔍 Web search stopped" : "🌐 Stopped reading pages")
 			: allFailed
-				? (isSearch ? "🔍 Web search failed" : "🌐 Couldn't read the pages")
+				? (isSearch ? (allRefused ? "🔍 Couldn't search the web" : "🔍 Web search failed") : "🌐 Couldn't read the pages")
 				: isSearch
 					? "🔍 Searched the web"
 					: `🌐 Read ${succeeded} ${succeeded === 1 ? "page" : "pages"}`;
@@ -466,7 +585,8 @@ export function ToolBundle({ items }: { items: ToolChatItem[] }) {
 		<div className="bubble-row">
 			<details className={`tool-chip tool-bundle ${status}`}>
 				<summary>
-					<span className="icon">{icon}</span>
+					<span className="icon" aria-hidden="true">{icon}</span>
+					{word && <span className="sr-only">{word}</span>}
 					<span className="name">{label}</span>
 					{!active && !allFailed && failed > 0 && <span className="bundle-failed">· {failed} failed</span>}
 					{!active && !allStopped && stopped > 0 && <span className="bundle-failed">· {stopped} stopped</span>}
@@ -475,7 +595,7 @@ export function ToolBundle({ items }: { items: ToolChatItem[] }) {
 				</summary>
 				<div className="bundle-body">
 					{items.map((call) => (
-						<ToolChip key={call.id} item={call} nested />
+						<ToolChip key={call.id} item={call} />
 					))}
 				</div>
 			</details>
@@ -539,23 +659,102 @@ function MessageTime({ ts }: { ts: number }) {
 	);
 }
 
+type SystemChatItem = Extract<ChatItem, { kind: "system" }>;
+
+/** What the newest failure line's buttons do. `shared`: a shared server, where the admin is a way on no button takes. `reviewsMemory`: whether the room has memory Review can open on. */
+export interface FailureLineActions {
+	shared: boolean;
+	reviewsMemory: boolean;
+	onTryAgain: (line: SystemChatItem) => void;
+	onReviewMemory: () => void;
+	onChooseModel: () => void;
+	onReplaceKey: (provider: string) => void;
+	onOpenAiSetup: (provider: string) => void;
+}
+
+// Only the newest failure line is drawn in full, with its buttons; an older one
+// folds to its cause and keeps its Details.
+function FailureLine({ item, newest, actions }: { item: SystemChatItem; newest: boolean; actions?: FailureLineActions }) {
+	const saidId = useId();
+	const [open, setOpen] = useState(false);
+	const decided = newest && actions ? failureButtons(item.failure, item.quotaWay, actions.shared, item.gatewayFind) : null;
+	const buttons = decided && { ...decided, replaceKey: decided.replaceKey && Boolean(item.provider), reviewMemory: decided.reviewMemory && actions!.reviewsMemory };
+	const shown = failureLineParts(item);
+	const [cause, rest] = buttons ? [failureLineWords(shown.cause, buttons), failureLineWords(shown.rest, buttons)] : [shown.cause, shown.rest];
+	const toggle = item.details ? (
+		<button type="button" className="failure-details-toggle" aria-expanded={open} aria-controls={saidId} onClick={() => setOpen((value) => !value)}>
+			{newest ? (open ? "Hide details" : "Show details") : "Details"}
+		</button>
+	) : null;
+	const said = item.details ? (
+		<div id={saidId} className="failure-said" hidden={!open}>
+			{item.detailsFrom && <span className="failure-said-from">From {item.detailsFrom}</span>}
+			<span className="failure-said-words">{item.details}</span>
+		</div>
+	) : null;
+	if (!newest) {
+		return (
+			<div className="system-line error failure-line is-folded">
+				<span className="failure-mark" aria-hidden="true" />
+				<div className="failure-body">
+					<p className="system-line-text failure-cause">{cause}</p>
+					{toggle}
+					{said}
+				</div>
+			</div>
+		);
+	}
+	const anyButton = Boolean(buttons && (buttons.tryAgain || buttons.reviewMemory || buttons.chooseModel || buttons.replaceKey || buttons.aiSetup));
+	return (
+		<div className="system-line error failure-line">
+			<span className="failure-mark" aria-hidden="true" />
+			<div className="failure-body">
+				<div className="system-line-text">
+					<p className="failure-cause">{cause}</p>
+					{rest && <p className="failure-next">{rest}</p>}
+				</div>
+				{(anyButton || toggle) && (
+					<div className="failure-actions">
+						{buttons?.tryAgain && <button type="button" className="rs-btn" onClick={() => actions?.onTryAgain(item)}>Try again</button>}
+						{buttons?.reviewMemory && <button type="button" className="rs-btn" onClick={() => actions?.onReviewMemory()}>Review memory</button>}
+						{buttons?.chooseModel && <button type="button" className="rs-btn" onClick={() => actions?.onChooseModel()}>Choose another model</button>}
+						{buttons?.replaceKey && <button type="button" className="rs-btn" onClick={() => actions?.onReplaceKey(item.provider ?? "")}>Replace key</button>}
+						{buttons?.aiSetup && <button type="button" className="rs-btn" onClick={() => actions?.onOpenAiSetup(item.provider ?? "")}>Open AI setup</button>}
+						{toggle}
+					</div>
+				)}
+				{said}
+			</div>
+		</div>
+	);
+}
+
 /**
  * `copyText` is set by the transcript on exactly one assistant item per reply
  * (see reply-copy.ts): the whole reply's text, ready to copy. Absent on every
  * other assistant item, which then shows no copy button. `copyTs` rides with
- * it: when the reply began, shown next to the button. Plain primitives keep
- * the memo working.
+ * it: when the reply began, shown next to the button. `saidOnCard` marks a
+ * declined command whose card already says so (declinesSaidOnCards in
+ * Approval.tsx). `newestFailure`: this failure line is the newest one, so
+ * it is drawn in full, with `failureActions` for its buttons. Plain
+ * primitives keep the memo working.
  */
-function MessageImpl({ item, attachmentAccess, copyText, copyTs }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess; copyText?: string; copyTs?: number }) {
+function MessageImpl({ item, attachmentAccess, copyText, copyTs, saidOnCard, newestFailure, failureActions }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess; copyText?: string; copyTs?: number; saidOnCard?: boolean; newestFailure?: boolean; failureActions?: FailureLineActions }) {
 	// Bumped on every hover of the row so the relative time is recomputed.
 	const [, refreshTime] = useReducer((n: number) => n + 1, 0);
 	if (item.kind === "system") {
-		return <div className={`system-line ${item.level === "error" ? "error" : ""}`}>{item.text}</div>;
+		// Keyed by whether it is the newest, so a line that folds closes its Details.
+		if (item.level === "error") return <FailureLine key={newestFailure ? "newest" : "folded"} item={item} newest={newestFailure === true} actions={failureActions} />;
+		return (
+			<div className="system-line">
+				<span className="system-line-text">{item.text}</span>
+			</div>
+		);
 	}
 	if (item.kind === "tool") {
 		return (
 			<div className="bubble-row">
-				<ToolChip item={item} />
+				<ToolChip item={item} saidOnCard={saidOnCard} />
 			</div>
 		);
 	}
@@ -642,7 +841,7 @@ function MessageImpl({ item, attachmentAccess, copyText, copyTs }: { item: ChatI
 						<div className="md assistant-markdown">
 							{/* A picture the reply shows from the room's shelf opens the
 							    viewer through the same onOpen the attachment chips use. */}
-							<MarkdownRenderer renderMermaid={!assistantStreaming} onOpenRoomFile={attachmentAccess?.onOpen}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>
+							<MarkdownRenderer answer renderMermaid={!assistantStreaming} onOpenRoomFile={attachmentAccess?.onOpen}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>
 						</div>
 					)}
 				</div>

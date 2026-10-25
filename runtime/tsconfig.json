@@ -16,12 +16,10 @@
 			"typebox": ["./node_modules/typebox"],
 			"@exxeta/exxperts-tui": ["./packages/tui/src/index.ts"],
 			"@exxeta/exxperts-tui/*": ["./packages/tui/src/*"],
-			"@exxeta/exxperts-web-ui": ["./packages/web-ui/src/index.ts"],
-			"@exxeta/exxperts-web-ui/*": ["./packages/web-ui/src/*"],
 			"@exxeta/exxperts-agent-old": ["./packages/agent-old/src/index.ts"],
 			"@exxeta/exxperts-agent-old/*": ["./packages/agent-old/src/*"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
-	"exclude": ["packages/web-ui/**/*", "**/dist/**"]
+	"exclude": ["**/dist/**"]
 }

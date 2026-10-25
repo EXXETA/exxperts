@@ -6,9 +6,9 @@
  * screens: the copy speaks of topics, notes, the archive, and how full memory
  * is.
  */
-import { modelWaitLine } from "./model-notice";
-import { ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, memoryModelSignInLabel, memoryModelStopWhy, plainFirstReadLine } from "../memory-v2-copy";
-import { modelTooltipName } from "../model-names";
+import { MemoryWaysOnButtons, modelWaitLine, retryCanHelp, useMemoryWaysOn } from "./model-notice";
+import { ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, plainFirstReadLine, reviewRunPausedSentence } from "../memory-v2-copy";
+import { modelDisplayName } from "../model-names";
 import { useState } from "react";
 import type { ArchivedEntryCard, ArchiveRow, ReviewAssessmentFields, ReviewAvailability, ReviewDepth, ReviewRun } from "../types";
 import { MarkdownRenderer } from "./Markdown";
@@ -24,6 +24,7 @@ import {
 	memoryFullPercent,
 	REVIEW_DEPTH_ORDER,
 	REVIEW_DEPTH_ROWS,
+	reviewBudgetSaveSentence,
 	reviewCardHeadline,
 	reviewCardSentence,
 	reviewChangeCounts,
@@ -40,7 +41,9 @@ import {
 	reviewTopicGroupSummary,
 	reviewTopicName,
 	topicLabel,
-	reviewLeftAsIsSentence,
+	reviewRunNothingToSave,
+	REVIEW_STOPPED_REPEATING_SENTENCE,
+	reviewRunTopicsLeft,
 	type ReviewChange,
 	type ReviewChangeCounts,
 } from "../memory-v2-copy";
@@ -66,15 +69,17 @@ function ReadSection({ title, items, wide }: { title: string; items: string[]; w
  * as empty. The notes the app found disagreeing join the model's own stale
  * or contradicting ones, after them, so one section says it.
  */
-export function ReviewFirstReadSections({ fields, compact = false }: { fields: ReviewAssessmentFields; compact?: boolean }) {
+export function ReviewFirstReadSections({ fields, compact = false, missing = false }: { fields: ReviewAssessmentFields; compact?: boolean; missing?: boolean }) {
 	const saysTheSameTwice = fields.saysTheSameTwice ?? [];
 	const disagree = fields.disagree ?? [];
 	const topicsThatLookTheSame = fields.topicsThatLookTheSame ?? [];
 	const waitInUnsorted = fields.waitInUnsorted ?? [];
+	const stale = [...fields.staleOrContradicts, ...disagree];
+	// A missing first read read nothing, so an empty heading of the model's would say "None" for a read that never happened.
 	return (
 		<>
-			<ReadSection title="Could be shorter" items={fields.couldBeShorter} wide={!compact} />
-			<ReadSection title="Looks stale or contradicts itself" items={[...fields.staleOrContradicts, ...disagree]} wide={!compact} />
+			{!(missing && fields.couldBeShorter.length === 0) && <ReadSection title="Could be shorter" items={fields.couldBeShorter} wide={!compact} />}
+			{!(missing && stale.length === 0) && <ReadSection title="Looks stale or contradicts itself" items={stale} wide={!compact} />}
 			{saysTheSameTwice.length > 0 && <ReadSection title="Says the same twice" items={saysTheSameTwice} wide={!compact} />}
 			{topicsThatLookTheSame.length > 0 && <ReadSection title="Topics that look the same" items={topicsThatLookTheSame} wide={!compact} />}
 			{waitInUnsorted.length > 0 && <ReadSection title="Not sorted into topics yet" items={waitInUnsorted} wide={!compact} />}
@@ -84,12 +89,13 @@ export function ReviewFirstReadSections({ fields, compact = false }: { fields: R
 }
 
 /** How much to tidy: two rows in the chooser's shape, one of them the room's own recommendation. */
-export function ReviewDepthPicker({ availability, staleFlagged, lookAlike = false, disagreeing = 0, chosen, onChoose }: { availability: ReviewAvailability; staleFlagged: boolean; lookAlike?: boolean; disagreeing?: number; chosen: ReviewDepth; onChoose: (depth: ReviewDepth) => void }) {
+export function ReviewDepthPicker({ availability, staleFlagged, lookAlike = false, disagreeing = 0, firstReadMissing = false, chosen, onChoose }: { availability: ReviewAvailability; staleFlagged: boolean; lookAlike?: boolean; disagreeing?: number; firstReadMissing?: boolean; chosen: ReviewDepth; onChoose: (depth: ReviewDepth) => void }) {
 	const sentence = reviewDepthSentence({
 		overBudget: availability.overBudget,
 		staleFlagged,
 		lookAlike,
 		disagreeing,
+		firstReadMissing,
 		budgetTokens: availability.budgetTokens,
 		reviewTargetTokens: availability.reviewTargetTokens,
 	});
@@ -276,7 +282,7 @@ function GuidanceBlock({ title, items }: { title: string; items: string[] }) {
  * The card: every change this tidy makes, what would leave for the archive, and
  * where that leaves the limit. Save is the only thing on this screen that writes.
  */
-export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlockedReasons, onToggleKeep, onToggleKeepTopic, onRaiseBudget, onEditEntry, onCancel, onBack, backLabel, onSave, onTryAgain, onChooseModel, onSignIn }: {
+export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlockedReasons, onToggleKeep, onToggleKeepTopic, onRaiseBudget, onEditEntry, onCancel, onBack, backLabel, onSave, onClose, onTryAgain, onChooseModel, onSignIn }: {
 	run: ReviewRun;
 	roomName: string;
 	/** The keep set as the person left it: the card answers a toggle before the server does. */
@@ -293,7 +299,9 @@ export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlocke
 	onBack: () => void;
 	backLabel: string;
 	onSave: () => void;
-	/** The one notice's ways out, when the run stopped because its Memory model cannot be reached. */
+	/** A tidy with nothing to save: leave it. */
+	onClose: () => void;
+	/** Tidy only the topics left, on this same run, with the Memory model as it is now. */
 	onTryAgain?: () => void;
 	onChooseModel?: () => void;
 	onSignIn?: (provider: string) => void;
@@ -305,26 +313,33 @@ export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlocke
 	const guidance = reviewRunGuidanceSummary(run);
 	const overBudget = run.demotion.overageTokens > 0;
 	const fullPercent = reviewRunFullPercent(run);
-	const leftAsIsTopics = run.leftAsIs.reduce((sum, group) => sum + group.topics.length, 0);
+	const topicsLeft = reviewRunTopicsLeft(run);
+	const nothingToSave = reviewRunNothingToSave(run);
+	const nothingTidied = counts.notes === 0;
+	const stop = run.stop;
+	const stopSentence = !stop ? null : stop.kind === "failing"
+		? REVIEW_STOPPED_REPEATING_SENTENCE
+		: stop.cause === "restarted"
+		? `The app restarted. ${nothingTidied ? "Nothing was lost." : "What was tidied is on this card; the rest is unchanged."}`
+		: reviewRunPausedSentence(modelDisplayName({ provider: stop.model.provider, model: stop.model.model }), stop, !nothingTidied);
+	// After the same failure twice another model leads, as its sentence names it first.
+	const ways = useMemoryWaysOn(stop?.cause, stop?.quotaWay, { onTryAgain, onChooseModel, onSignIn, provider: stop?.model.provider ?? "", chooseFirst: stop?.kind === "failing", gatewayFind: stop?.gatewayFind });
 	return (
 		<div className="checkpoint-proposal-page absorb-proposal-page absorb-run-card review-card">
 			<div className="checkpoint-input-heading checkpoint-proposal-heading">
-				<h2>{reviewCardHeadline(counts)}</h2>
-				<p>{reviewCardSentence(counts, fullPercent, run.budget.overBudgetAfter)}</p>
+				<h2>{stop && stop.kind !== "failing" && nothingTidied ? "Review paused." : reviewCardHeadline(counts, topicsLeft)}</h2>
+				{nothingToSave && stopSentence ? <p role="status">{stopSentence}</p> : !(stop && nothingTidied) ? <p>{reviewCardSentence(counts, fullPercent, run.budget.overBudgetAfter, topicsLeft, run.demotion.counts.leaving)}</p> : run.demotion.counts.leaving > 0 && <p>{reviewBudgetSaveSentence(run.demotion.counts.leaving)}</p>}
 			</div>
 			<div className="absorb-review-strip">
 				<div className="absorb-review-status"><span>Topics</span><strong>{counts.topics} tidied</strong></div>
 				<div className="absorb-review-status"><span>Notes</span><strong>{counts.notes} changed</strong></div>
 			</div>
 			{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
-			{run.stop && (
+			{stop && !nothingToSave && (
 				<div className="memory-action-note absorb-run-stop-note" role="status">
-					<p>{run.stop.cause === "restarted" ? "The app restarted. What was tidied is on this card; the rest is unchanged." : `Review paused because ${modelTooltipName({ provider: run.stop.model.provider, model: run.stop.model.model })} ${memoryModelStopWhy(run.stop.cause, run.stop.model.provider, run.stop.key)}. What was tidied can be saved; the rest is unchanged.`}</p>
+					<p>{stopSentence}</p>
 					<div className="absorb-run-note-actions">
-						{onTryAgain && <button className="rs-btn" disabled={busy} onClick={onTryAgain}>{run.stop.cause === "restarted" ? "Continue" : ABSORB_TRY_AGAIN_LABEL}</button>}
-						{/* A restart says nothing about the model: it answered, so Continue is the one way on. */}
-						{onChooseModel && run.stop.cause !== "restarted" && <button className="rs-btn" disabled={busy} onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
-						{onSignIn && run.stop.cause === "signed-out" && <button className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(run.stop!.model.provider)}>{memoryModelSignInLabel(run.stop.key)}</button>}
+						<MemoryWaysOnButtons ways={ways} cause={stop.cause} credentialKey={stop.key} busy={busy} />
 					</div>
 				</div>
 			)}
@@ -350,24 +365,34 @@ export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlocke
 						<GuidanceBlock title="Other instructions" items={guidance.instructions} />
 					</section>
 				)}
-				<section className="absorb-proposal-section">
-					<h3>Changes</h3>
-					{groups.length === 0 ? <p>Nothing in these notes needed changing.</p> : (
-						<div className="absorb-run-change-groups">
-							{groups.map((group) => <TopicChangeGroup key={group.key} topic={group.topic} changes={group.changes} busy={busy} onEditEntry={onEditEntry} />)}
-						</div>
-					)}
-				</section>
+				{!(nothingTidied && topicsLeft.length > 0) && (
+					<section className="absorb-proposal-section">
+						<h3>Changes</h3>
+						{groups.length === 0 ? <p>Nothing in these notes needed changing.</p> : (
+							<div className="absorb-run-change-groups">
+								{groups.map((group) => <TopicChangeGroup key={group.key} topic={group.topic} changes={group.changes} busy={busy} onEditEntry={onEditEntry} />)}
+							</div>
+						)}
+					</section>
+				)}
 				<ArchiveSection budget={run.budget} demotion={run.demotion} keepIds={keepIds} keepTopics={run.demotion.keepTopics} busy={busy} onToggleKeep={onToggleKeep} onToggleKeepTopic={onToggleKeepTopic} onRaiseBudget={onRaiseBudget} />
-				{leftAsIsTopics > 0 && <p className="absorb-help-note review-left-as-is">{reviewLeftAsIsSentence(leftAsIsTopics)}</p>}
 			</div>
-			<div className="checkpoint-preview-actions">
-				<button className="rs-btn" disabled={busy} onClick={onCancel} title="Stop this tidy. Nothing is saved.">Cancel</button>
-				<button className="rs-btn" disabled={busy} onClick={onBack} title="Return to the first read. This tidy is dropped and nothing is saved.">{backLabel}</button>
-				<button className="rs-btn rs-btn-primary" disabled={busy} onClick={onSave} title={overBudget || run.budget.overBudgetAfter ? "Save these changes and leave memory above its budget" : "Save these changes to memory"}>
-					{overBudget || run.budget.overBudgetAfter ? "Save over the budget" : "Save to memory"}
-				</button>
-			</div>
+			{nothingToSave ? (
+				// Could not finish, paused or not: the sentence above, its ways on in this one row.
+				<div className="checkpoint-preview-actions">
+					<button className="rs-btn" disabled={busy} onClick={onClose}>Close</button>
+					<MemoryWaysOnButtons ways={ways} cause={stop?.cause} credentialKey={stop?.key} row busy={busy} />
+				</div>
+			) : (
+				<div className="checkpoint-preview-actions">
+					<button className="rs-btn" disabled={busy} onClick={onCancel} title="Stop this tidy. Nothing is saved.">Cancel</button>
+					<button className="rs-btn" disabled={busy} onClick={onBack} title="Return to the first read. This tidy is dropped and nothing is saved.">{backLabel}</button>
+					{!stop && topicsLeft.length > 0 && onTryAgain && <button className="rs-btn" disabled={busy} onClick={onTryAgain}>{ABSORB_TRY_AGAIN_LABEL}</button>}
+					<button className="rs-btn rs-btn-primary" disabled={busy} onClick={onSave} title={overBudget || run.budget.overBudgetAfter ? "Save these changes and leave memory above its budget" : "Save these changes to memory"}>
+						{overBudget || run.budget.overBudgetAfter ? "Save over the budget" : "Save to memory"}
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -396,9 +421,11 @@ export interface ReviewUndoState {
 	limitLoweredTo?: number;
 }
 
-export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEntries, archivedForBudget, limitRaised = false, openConversationKeepsMemory = false, rebasedOnto, warnings, undo, onUndo, onReturn, returnLabel }: {
+export function ReviewSavedScreen({ roomName, counts, topicsLeft = [], percent, over, archivedEntries, archivedForBudget, limitRaised = false, openConversationKeepsMemory = false, rebasedOnto, warnings, undo, onUndo, onTryAgain, onChooseModel, stop, onReturn, returnLabel }: {
 	roomName: string;
 	counts: ReviewChangeCounts;
+	/** The topics the saved tidy left as they were. */
+	topicsLeft?: string[];
 	percent: number;
 	over: boolean;
 	archivedEntries: number;
@@ -412,17 +439,31 @@ export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEnt
 	warnings: string[];
 	undo: ReviewUndoState;
 	onUndo: () => void;
+	/** A new Review of only the topics this save left as they were. */
+	onTryAgain?: () => void;
+	/** Room settings at the Memory model, for the topics left. */
+	onChooseModel?: () => void;
+	/** The saved run's stop: Try again shows where the card would offer it. */
+	stop?: ReviewRun["stop"];
 	onReturn: () => void;
 	returnLabel: string;
 }) {
-	const budgetLine = reviewSavedArchiveSentence(archivedForBudget);
+	// A save that tidied nothing says what left for the budget in its own sentence.
+	const budgetLine = counts.notes === 0 ? null : reviewSavedArchiveSentence(archivedForBudget);
+	const left = !undo.done && topicsLeft.length > 0;
+	const { tryAgain, chooseModel } = useMemoryWaysOn(stop?.cause, stop?.quotaWay, { onTryAgain: left ? onTryAgain : undefined, onChooseModel: left ? onChooseModel : undefined, provider: undefined, gatewayFind: stop?.gatewayFind });
+	// A save that only made room, stopped by a cause Try again cannot help: another model is the way on.
+	const retryHelps = !stop || retryCanHelp(stop.cause, stop.quotaWay, stop.gatewayFind);
+	const chooseLeads = Boolean(chooseModel) && counts.notes === 0 && !retryHelps;
+	// The save worked when it changed notes, so Done stays the main button.
+	const tryAgainFirst = Boolean(tryAgain) && counts.notes === 0 && !chooseLeads;
 	const meanwhileLine = rememberedMeanwhileSentence(rebasedOnto);
 	return (
 		<div className="checkpoint-proposal-page checkpoint-saved-page absorb-saved-state review-saved">
 			<div className="checkpoint-input-heading">
 				<p className="card-kicker">{undo.done ? "Undone" : "Saved"}</p>
-				<h2>{undo.done ? "Undone." : reviewSavedHeadline(roomName, counts)}</h2>
-				<p>{undo.done ? `${roomName}'s memory is as it was before this tidy.` : reviewSavedSentence(counts, percent, over)}</p>
+				<h2>{undo.done ? "Undone." : reviewSavedHeadline(roomName, counts, topicsLeft, archivedForBudget)}</h2>
+				<p>{undo.done ? `${roomName}'s memory is as it was before this tidy.` : reviewSavedSentence(counts, percent, over, topicsLeft, archivedForBudget, Boolean(tryAgain))}</p>
 				{undo.done && undo.limitLoweredTo !== undefined && <p>{LIMIT_LOWERED_ON_UNDO_SENTENCE(undo.limitLoweredTo)}</p>}
 				{!undo.done && budgetLine && <p>{budgetLine}</p>}
 				{!undo.done && limitRaised && <p>{LIMIT_RAISED_ON_SAVE_SENTENCE}</p>}
@@ -442,7 +483,9 @@ export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEnt
 			{warnings.length > 0 && <div className="checkpoint-proposal-warnings">{warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 			<div className="checkpoint-preview-actions">
 				{!undo.done && (counts.notes > 0 || archivedEntries > 0) && <button className="rs-btn" disabled={undo.busy} title={`Put ${roomName}'s memory back as it was before this tidy`} onClick={onUndo}>{undo.busy ? "Undoing…" : "Undo"}</button>}
-				<button className="rs-btn rs-btn-primary" onClick={onReturn}>{returnLabel}</button>
+				<button className={`rs-btn${tryAgainFirst || chooseLeads ? "" : " rs-btn-primary"}`} onClick={onReturn}>{returnLabel}</button>
+				{chooseModel && <button className={`rs-btn${chooseLeads ? " rs-btn-primary" : ""}`} disabled={undo.busy} onClick={chooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
+				{tryAgain && <button className={`rs-btn${tryAgainFirst ? " rs-btn-primary" : ""}`} disabled={undo.busy} onClick={tryAgain}>{ABSORB_TRY_AGAIN_LABEL}</button>}
 			</div>
 		</div>
 	);

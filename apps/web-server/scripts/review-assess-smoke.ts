@@ -212,7 +212,7 @@ assert(reviewMachineFindings(parseMemoryDocument(["## Deep Memory", "", "### Uns
 
 const available = reviewAvailability({ roomBusy: false, migrated: true, runActive: false, topics: TOPICS, budgetTokens: 20000, reviewTargetTokens: 820 });
 assert(available.available && available.reason === "available", "a quiet migrated room with notes can be reviewed");
-assert(available.topics === 3 && available.notes === 13 && !available.overBudget, "availability should carry the room's own numbers");
+assert(available.topics === 2 && available.notes === 13 && !available.overBudget, `availability counts the topics a person sees by name, as the status does, and every note, got ${available.topics} topics and ${available.notes} notes`);
 assert(available.recommendedDepth === "wording", "availability before the first read recommends the wording tidy");
 
 const busy = reviewAvailability({ roomBusy: true, migrated: true, runActive: false, topics: TOPICS, budgetTokens: 20000, reviewTargetTokens: 820 });

@@ -195,15 +195,6 @@ export function countWords(text: string): number {
 	return trimmed ? trimmed.split(/\s+/).length : 0;
 }
 
-function firstLineOf(text: string): string {
-	return toLines(text).find((line) => line.trim()) ?? "";
-}
-
-function truncate(value: string, max = 80): string {
-	const one = normalizeLine(value);
-	return one.length <= max ? one : `${one.slice(0, max - 1)}…`;
-}
-
 export interface FoldPromptInput {
 	agentId: string;
 	model: { provider: string; model: string };

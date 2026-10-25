@@ -1,127 +1,239 @@
-<div align="center">
+<p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/exxperts-logo-negative.png">
-    <img src="docs/assets/exxperts-logo.png" alt="exxperts" width="360" align="center" />
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web-ui/public/brand/exxperts-logo-negative.png">
+    <img src="apps/web-ui/public/brand/exxperts-logo.png" alt="exxperts" width="180">
   </picture>
-</div>
+</p>
 
-<p align="center"><b>AI colleagues that learn and remember. On your machine, under your control.</b></p>
-
-<p align="center">Local-first AI agents with governed, approval-gated memory. Works with any model provider; MCP tools and web search built in. Nothing remembered without your say-so, nothing leaves your machine.</p>
+<p align="center">A free, open-source desktop app for getting work done with AI</p>
 
 <p align="center">
-  <a href="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml"><img src="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-8CA5FF" alt="License: Apache 2.0" /></a>
-  <a href="https://github.com/EXXETA/exxperts/releases"><img src="https://img.shields.io/github/v/release/EXXETA/exxperts?include_prereleases&color=EBFF59" alt="Latest release" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-46DCFF" alt="macOS, Windows, Linux" />
+  <a href="https://github.com/EXXETA/exxperts/releases/latest"><img src="https://img.shields.io/github/v/release/EXXETA/exxperts?color=EBFF59" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-8CA5FF" alt="License: Apache 2.0"></a>
+</p>
+
+<h1 align="center">Most AI apps learn about you on their&nbsp;own.<br>exxperts learns with&nbsp;you.</h1>
+
+<p align="center">
+  An AI knows what you told it. Only you know why it matters and what has changed since. So what it remembers is a guess, and every later answer builds on it.
 </p>
 
 <p align="center">
-<a href="#download-the-app">Download</a> ·
-<a href="#see-it">See it</a> ·
-<a href="#how-a-room-grows">How it works</a> ·
-<a href="#why-exxperts">Why exxperts</a> ·
-<a href="#install">Install</a> ·
-<a href="#ways-to-use-exxperts">Ways to use it</a> ·
-<a href="#documentation">Docs</a>
+  <b>exxperts shows you that guess first, so you can fix it before anything is saved.</b>
 </p>
-
-## Download the app
-
-The easiest way to run exxperts: a desktop app. Download, open, connect your AI provider. No terminal involved.
 
 <p align="center">
-  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.dmg"><img src="docs/assets/download-mac.png" alt="Download for Mac (Apple Silicon .dmg)" width="300" /></a>
-  &nbsp;&nbsp;
-  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-setup-win-x64.exe"><img src="docs/assets/download-windows.png" alt="Download for Windows (installer .exe)" width="300" /></a>
+  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.dmg"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme/download-mac-dark.png"><img src=".github/readme/download-mac-light.png" alt="Download for Mac (Apple silicon)" width="260"></picture></a>
+  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-setup-win-x64.exe"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/readme/download-windows-dark.png"><img src=".github/readme/download-windows-light.png" alt="Download for Windows (64-bit installer)" width="260"></picture></a>
 </p>
 
-<p align="center">Also available: <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-win-x64.zip">Windows portable zip</a> · <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.zip">macOS zip</a> · checksums on <a href="https://github.com/EXXETA/exxperts/releases">Releases</a></p>
+<p align="center"><sub>Also as a <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-win-x64.zip">portable Windows .zip</a> · <a href="#install">Linux, Intel Mac and the terminal</a> · <a href="https://github.com/EXXETA/exxperts/releases/latest">All downloads</a></sub></p>
 
-Both builds are signed. The macOS app is notarized by Apple and opens clean; the Windows installer is publisher-verified as Exxeta AG. While a release is new, Windows SmartScreen may show a one-time notice: *More info* shows the verified publisher, then *Run anyway*. Prefer a terminal? See [Install](#install).
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset=".github/readme/hero-phone-dark.webp">
+    <source media="(max-width: 600px)" srcset=".github/readme/hero-phone-light.webp">
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/hero-dark.webp">
+    <img src=".github/readme/hero-light.webp" alt="The Weekly report room's memory draft, marked not saved: A week comparing the new reporting tool. Under What to keep: Adopting the new reporting tool for the weekly report, and The report goes out on Fridays at 10:00. Below are Save to memory, Edit and Discard." width="760">
+  </picture>
+</p>
 
-## See it
+<p align="center">The memory is a plain file on your computer. Each answer sends the conversation and the room's memory to the AI you choose, as any AI app does.</p>
 
-![A three-act tour: ask and the room searches the live web; Remember proposes what to keep and you edit the proposal before approving it; the memory page shows the room's notes by topic and every conversation it memorized](docs/assets/exxperts-demo.gif)
+<p align="center"><sub>One room per project or topic · Sign in with ChatGPT, Claude or GitHub Copilot, or use an API key or your company's gateway</sub></p>
 
-Every note shows **when it was saved** and which conversation it came from, and every memorized conversation opens as it was stored. The growth chart is clickable time travel: pick a day, read everything your AI knew then.
+## AI can read your chats, not your mind
 
-![The exxperts launcher: seven persistent rooms from Agent frameworks to Research: local AI and Trip: Japan 2026, each with its own governed memory](docs/assets/exxperts-rooms.png)
+An AI learns from what you type: what comes up often, what you asked last, what you spent an hour on. It can't see the meeting where you changed your mind. Say you spend a week asking about a new reporting tool because you are deciding whether to adopt it. Then, in a meeting, you decide against it. An AI that learns on its own now counts that tool as part of your work, and its next answers build on it. At best, other apps let you find and delete it later, if you notice.
 
-![The approval gate: a memory proposal shows exactly what the room will remember, and nothing is saved until you approve it](docs/assets/exxperts-checkpoint.png)
+In exxperts you see it before it is kept. When you press **Remember**, the draft says "Adopting the new reporting tool". You change it to "Decided against the new reporting tool" and save. A conversation you never remember leaves nothing in memory.
 
-![The memory page: how full each room's memory is, its notes by topic, its waiting and memorized conversations, and the growth graph with the budget line](docs/assets/exxperts-memory.png)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/remember-dark.webp">
+    <img src=".github/readme/remember-light.webp" alt="A 21-second clip in the Weekly report room. After a question about the new reporting tool, press Remember. The draft keeps the line Adopting the new reporting tool for the weekly report. Press Edit, change that line to Decided against the new reporting tool, and save. In a new conversation, How do I send this week's report? gets: As before, from the spreadsheet: you decided against the new reporting tool. It goes out on Friday at 10:00." width="860">
+  </picture>
+</p>
 
-## How a room grows
+## How it works
 
-**Work.** A room replaces a chat thread: it is the durable place where you set up your exxpert's tools, folders, connections, and skills - and the exxpert in it searches the web, reads pages, writes documents, decks and web pages, and runs background tasks. Which tools each room may use is your call.
+1. **Work in a room.** Ask, write and research as you would in any AI chat.
+2. **Press Remember.** The room drafts what is worth keeping from the conversation. You edit the draft, save it or discard it.
+3. **The next conversation knows it.** The room starts every conversation with its saved notes.
 
-**Remember.** At the end of a conversation, the room proposes what is worth keeping. You steer it, edit it, or reject it; nothing enters memory without you.
+When enough has piled up, the room's card says it is time to sort what you saved into short notes by topic, so the memory stays small and easy to read. You start it from the card. Once 20 saved conversations are waiting to be sorted, the room needs that sorting before you start a new one. The room shows every change before saving, and asks when a new note may disagree with an older one: keep both, or replace the older one.
 
-**Memorize.** The room turns remembered conversations into lasting notes, grouped by topic, and shows you what it will keep before anything is saved. Notes that no longer fit move to an archive the room can still read, never to the bin. This is how a room stops being a tool and starts becoming a colleague: conversation by conversation, it knows more of your work.
+## Quick answers
 
-Every memory traces back to the conversation it came from, and everything a room is lives as plain files on your machine. Switch AI providers anytime, and you keep the colleague.
+- **Is it free?** Yes, and it needs no account with us. You pay only your AI provider, if it charges you.
+- **Which AI does it use?** The one you already have. Sign in with a ChatGPT Plus or Pro plan, a Claude Pro or Max plan, or GitHub Copilot (GitHub's plan, not Microsoft 365 Copilot). Or use an API key, a code you create on the provider's website and pay for by use: Claude, OpenAI, Gemini, Mistral, OpenRouter and others work. Or connect your company's gateway. [All the ways in](#bring-your-own-ai).
+- **Do I have to check every conversation?** Only the ones you keep. When a conversation is done, **Remember** shows the draft, and **Forget** deletes the conversation instead. Once you trust a room, a switch can skip the draft.
+- **Memory or chat history: what is kept?** A conversation you remember is kept on your computer: the notes you confirm go into memory, and the whole conversation stays there to read and search. A conversation you forget is deleted for good.
+- **How is it different from memory in ChatGPT or Claude?** They save memory on their own and show it afterwards, where you can edit or delete it, and both can keep a separate memory per project. exxperts shows you what it would keep before keeping it, stores the memory as a file on your computer, and works with whichever AI you use.
+- **Does one project's memory reach another?** Only when you ask. Each room has its own memory. Mention another room with @ and the answer comes from that room's memory.
+- **Can I use it with confidential work?** Yes, with an AI provider your company allows for that data. Your messages and the room's memory go to that provider, under its terms for the way you connect, including whether it may train on them. What changes: you decide what the memory holds, it is stored on your computer, each project can have a room of its own, and nothing goes to us. [Where your data goes](#where-your-data-goes).
+- **Does the memory help?** On a public test of long chat histories, a room answering from its memory did as well as the same model reading the whole history, using under a quarter of the tokens to answer each question. [How it was measured](#measured).
+- **Who makes it?** [Exxeta](https://exxeta.com/en/exxperts). The people behind it are named [at the end of this page](#license-and-credits).
 
-## Why exxperts
+## One room per project or topic
 
-- **Memory is opt-in, not automatic.** The AI remembers only what you explicitly approve: every proposed memory passes a review gate before it's written.
-- **Every memory has a receipt.** Each note carries the day it was saved and the conversation it came from, every change is in History with what changed, and time travel shows exactly what your AI knew on any given day.
-- **You can see what the model saw.** The full context behind any answer is inspectable, so replies can be audited rather than taken on faith.
-- **Memory you can correct.** Edit, move, pin, archive or restore any note by hand, and undo the last memory save; wrong facts don't fossilize.
-- **Everything lives on your machine.** Memory, conversations, credentials, and the files you attach or a room creates: plain files on your disk, under your control. No cloud account, no telemetry; nothing leaves your machine unless you send it. The optional remote mode (off by default) only ever serves your own paired devices over your private tunnel; there is no cloud in between.
-- **No provider lock-in.** Claude, ChatGPT, Gemini, Mistral, or any OpenAI-compatible endpoint, including local models; switching keeps everything your AI has learned, and a provider outage never strands your work.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/rooms-dark.webp">
+    <img src=".github/readme/rooms-light.webp" alt="Home with six rooms: Contract review, Customer interviews, Japan trip, Product launch, Thesis on urban heat and Weekly report. Each shows when its memory was last saved, how many conversations are waiting, and its model and way in: a Claude API key, a ChatGPT plan, a Claude sign-in, a company gateway or GitHub Copilot." width="860">
+  </picture>
+</p>
 
-Most local AI tools are chat interfaces with hidden state. exxperts is built around governed memory: lean by design, and the more you work with it, the sharper it gets. How well a room answers from that memory, against having the whole history in the prompt, is measured in [docs/memory.md](docs/memory.md#how-well-it-works-measured).
+A room is an assistant for one thing you keep coming back to: a project, a product, a course you teach, a thesis, a trip. It has its own instructions, memory, folder and choice of AI model, and its memory holds only what you confirmed in that room. It is a personal app: rooms are not shared with a team.
+
+## Memory you can check
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/history-dark.webp">
+    <img src=".github/readme/history-light.webp" alt="One sorting's change to the Launch plan topic, from a room's History: the beta date 10 November struck through above 17 November, the code freeze moved from 30 October to 6 November with the line 'the newer date decides', and two added notes." width="860">
+  </picture>
+</p>
+
+- **History.** Every change to a room's memory, newest first, with what was added, updated or archived. Every note shows the day it was saved.
+- **Look back.** The growth chart has a point for every save. Click one to read the memory as it was then.
+- **Undo.** Take back the room's last sorting or tidy-up, as long as nothing has changed the memory since.
+- **Edit by hand.** Add, edit, pin, move or delete any note. A deleted note goes to the archive, where you can restore it or delete it for good.
+- **Tidy up with AI.** The room can make the notes shorter and clearer and move what is finished to the archive. You see every change first.
+
+<details>
+<summary><b>For developers: the memory is a Markdown file</b></summary>
+
+A room's memory lives in one file, `~/.exxperts/app/personalized-agents/<room>/L1b/current.md`, and any editor can open it. Its notes are read with every message, within the room's memory budget; the archive and the conversations you remembered are searched only when a question needs them. Two notes, as they are on disk:
+
+```markdown
+### Launch plan
+
+<!-- e: id=m-0002 kind=fact saved=2026-10-01 from=RC-0001 learned=2026-09-26 -->
+- Alex owns the Harbor beta launch, end to end; Sam leads engineering for the beta.
+
+<!-- e: id=m-0004 kind=fact saved=2026-10-01 from=RC-0001 learned=2026-09-26 -->
+- Everyone on the waitlist gets in on the same day, so nobody hears about it second-hand.
+```
+
+Compared with a `CLAUDE.md` or rules file you keep by hand, a room drafts each update and shows it to you before saving. It does not feed Claude Code or Cursor; they can only read the file like any other. How the pieces fit: [How exxperts works](docs/how-exxperts-works.md) and [Memory](docs/memory.md).
+
+</details>
+
+## What a room can do
+
+- **Search the web** through your AI plan's own search, DuckDuckGo, or a search engine you run yourself, and read the pages it finds.
+- **Work in a folder you choose.** *Full access* works with files like you do; *Bounded* keeps the room inside that folder. Either way, the room's file tools refuse common secret and key files, saved logins and the app's own data. Commands are off until you turn them on in Full access; the room then asks before each one, unless you tell it to run without asking.
+- **Write documents and slide decks** as web pages, with charts and diagrams, in the background while you keep talking.
+- **Use your tools.** Connect GitHub, Notion, Linear, Atlassian, Google Drive, Gmail, Microsoft 365 and more, or any MCP server, and switch each one on per room.
+- **Learn skills.** Import skills from GitHub, including Anthropic's. A skill that changes waits for your review before a room uses it again.
+- **Run on a schedule.** Daily, weekly or one-time prompts, while the app is running.
+
+<details>
+<summary>And three more</summary>
+
+- **HiveMind** answers one question from the memory of all your rooms, or the ones you pick, and names the room each fact came from.
+- **Remote access** opens your rooms on your phone over your own private Tailscale network. It is off until you turn it on.
+- **The Wallet** shows what each room and model spends, measured on your computer.
+
+</details>
+
+## Bring your own AI
+
+| Way in | What you need |
+|---|---|
+| **ChatGPT** | A ChatGPT Plus or Pro plan. Sign in from the app. |
+| **Claude** | A Claude Pro or Max plan. Sign in from the app. |
+| **GitHub Copilot** | A Copilot plan. Sign in from the app. Its models include Claude where your plan has them. |
+| **API key** | A key for Claude, OpenAI, Google Gemini, Mistral, OpenRouter, DeepSeek, xAI, Groq or about twenty more. |
+| **Your gateway** | Any OpenAI-compatible address, such as a company LiteLLM or vLLM gateway. The app loads its models for you. |
+
+Each room picks its own model in **Room settings, Model**: one for conversations and one for memory work. You can change the model between answers, even in the middle of a conversation, and the room keeps its memory. When an answer fails, the room says why in plain words, and **Try again** picks up where it stopped. [Provider setup](docs/provider-setup.md).
+
+Local model servers such as Ollama or LM Studio offer the same kind of address as a gateway, but we have not tested them with exxperts yet.
+
+## Where your data goes
+
+**Stored on your computer:** your rooms, their memory and conversations, the files they make, and your sign-ins, in `~/.exxperts` in your home folder. You can move that folder, for example into a synced folder, in **Settings, Profiles**. exxperts has no account, no server of its own, no analytics and no crash reports. Nothing goes to us.
+
+**Sent out, only to do the work:**
+
+- **To the AI provider you chose:** the conversation, the room's instructions and memory, and the files it reads. This happens with every answer, when you press Remember, and when the room sorts or tidies its memory.
+- **To a search engine and the sites it finds:** search terms go to your AI plan's own search, DuckDuckGo or a search engine you run, and the room opens the pages it needs. Search is on at first. To turn it off, choose **Off** in **Settings, Web search** and untick **Provider search where available**; a gateway model still searches while web search is ticked for it in **Settings, AI setup**. Rooms can still open links you give them.
+- **To a connector's server:** when you add a connector or sign in to it, and when a room that has it switched on uses it.
+- **To GitHub:** the desktop app checks for a new version at launch and every six hours. An update downloads only when you choose **Install and restart**.
+
+<details>
+<summary><b>For IT and security teams</b></summary>
+
+- **Local only.** The app's server listens only on this computer (127.0.0.1) and every request needs a sign-in token. Remote access, off by default, adds the person's own paired devices over their Tailscale network. [SECURITY.md](SECURITY.md) has the threat model.
+- **Sign-ins and keys.** AI sign-ins and API keys are kept in `~/.exxperts/agent/auth.json`, connector sign-ins in `~/.exxperts/agent/mcp-oauth/`, and connector tokens in `~/.exxperts/agent/mcp.json`; none are in the system keychain. On Mac and Linux only the person's account can read `auth.json` (file mode 600); on Windows it has the user folder's permissions.
+- **Off by default:** running commands, saving memory without the previews, and remote access. Connectors and skills are switched on per room.
+- **Files.** Even with Full access, the room's file tools refuse a built-in list of secret files and folders, such as `.env` files, keys, `.ssh`, cloud logins and shell startup files, and the app's own data. Commands, when turned on, run only after the person approves each one, unless they switch that room to run them without asking.
+- **Every other connection**, besides the list above:
+  - Each saved gateway is asked for its model list and prices at start, once a day, and when a model is not found.
+  - Sign-ins are refreshed with Anthropic, OpenAI or GitHub as needed. GitHub also serves Copilot's model list, the skills someone browses or imports, and ripgrep when a terminal install has none (the desktop app ships its own).
+  - **Health Check** and `exxperts doctor` test whether cdn.sheetjs.com can be reached when a source install lacks spreadsheet support, and reach the person's own search engine if one is set.
+  - Docker Hub, only if the local search engine is set up. A terminal install that builds from source downloads its npm packages and a headless Chromium.
+  - Pages the person opens in a browser load their own resources.
+  - Requests to OpenRouter name exxperts as the app.
+- **Signed releases.** The Mac app is signed by Exxeta AG and notarized by Apple. The Windows installer is signed by Exxeta AG. Every release lists SHA-256 checksums and three software bills of materials. The terminal installers check the checksum before unpacking; if it does not match, they do not use that file and build from the GitHub source instead. A vulnerability scan runs every week.
+- **Updates** never install by themselves. The desktop app checks GitHub for a new version and shows a notice; the download starts only when the person chooses **Install and restart**, and is checked against the SHA-512 in the release's update file. The portable Windows .zip has no **Install and restart**: its notice opens the download page.
+- **Not there yet:** central policy management, a list of allowed providers, a managed install package, and a switch for the update check. Settings are per person.
+- **Security reports** go privately to the addresses in [SECURITY.md](SECURITY.md).
+
+</details>
 
 ## Install
 
-One command installs everything:
+**The app.** Download it for [Mac with Apple silicon](https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.dmg) or [Windows 64-bit](https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-setup-win-x64.exe) (also as a [portable .zip](https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-win-x64.zip)). The Mac app is signed by Exxeta AG and notarized by Apple, and the Windows installer is signed by Exxeta AG; if Windows shows a SmartScreen notice for a new release, **More info** names that publisher. Then:
 
-**macOS / Linux**
+1. Open **Settings, AI setup** and sign in. With a ChatGPT Plus or Pro plan or a Claude Pro or Max plan, that is all you need: no API key, no terminal. For Copilot, an API key or a gateway, choose **Add provider**.
+2. On Home, create a room and give it a name.
+3. Talk to it, then press **Remember** when you are done.
+
+**The terminal**, for Linux and Intel Macs, or to run the app in your browser on Mac or Windows:
+
 ```bash
+# macOS and Linux
 curl -fsSL https://raw.githubusercontent.com/EXXETA/exxperts/main/install.sh | bash
 ```
 
-**Windows (PowerShell)**
 ```powershell
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
 ```
 
-Then run `exxperts web`: your browser opens, signed in. Web search is built in via DuckDuckGo, no setup needed ([limits](docs/web-search.md)). Re-run the same command anytime to update.
+Then run `exxperts web` and the app opens in your browser. Run the same line again to update. `exxperts doctor` checks your install and says how to fix what is missing.
 
 <details>
-<summary>Requirements, troubleshooting, and platform notes</summary>
+<summary>Requirements and other systems</summary>
 
-- Prebuilt archives (bundled runtime, checksum-verified) for macOS Apple Silicon, Windows x64, Linux x64; everything else builds from source automatically (needs Git + Node.js ≥ 20.6).
-- An AI subscription (Claude or ChatGPT) or any API key / OpenAI-compatible gateways (save several; each room picks its models in Room settings, Model); sign in via **AI setup** in the app. All provider paths: [docs/provider-setup.md](docs/provider-setup.md).
-- `exxperts doctor` checks any install and prints the fix for whatever's missing.
-- Windows notes, corporate networks, per-user Git installs, PowerShell policies, proxy/TLS: see [docs/quickstart.md](docs/quickstart.md).
-- Contributors: `git clone` + `npm install` + `npm run install:global` builds and installs the commands from source; [CONTRIBUTING.md](CONTRIBUTING.md) has the full setup.
+- Ready-made builds for macOS on Apple silicon, Windows x64 and Linux x64. On other systems the same line builds from source, which needs Git and Node.js 20.6 or newer.
+- The app and the terminal install share the same rooms and memory in `~/.exxperts`, and one of them runs at a time.
+- Running commands in rooms on Windows needs Git for Windows. The [Quickstart](docs/quickstart.md) has the Windows notes and the steps by hand.
+
 </details>
 
-## Ways to use exxperts
+## Measured
 
-One product, one shared brain (`~/.exxperts`), several doors; open whichever fits the moment:
+- **Memory.** On LongMemEval-S, a public test of long chat histories, a room answered 47 of 50 questions from its memory, using under a quarter of the tokens to answer each question, once its memory was built. The same model reading the whole history answered 41. The model was Claude Sonnet 5. In the test every conversation was saved without a person checking it, so it measures the memory, not the check. [How it was measured](docs/memory.md#how-well-it-works-measured).
+- **Tests.** About 320 smoke tests. GitHub runs them on Linux, macOS and Windows for every pull request and every change to main; the 40 or so that need a browser are skipped there.
 
-| Door | Get it | Updates | Terminal needed |
-|---|---|---|---|
-| **Desktop app** | [Download above](#download-the-app) | Check for Updates installs and restarts in one click; the app also asks the GitHub releases feed for the newest version at launch and every six hours, which only shows a notice, nothing installs by itself | Never |
-| **Browser** (`exxperts web`) | One-liner above · or *Open in Browser* from the app | Re-run the one-liner | To start it |
-| **Terminal** (`exxperts cli`) | Same install | Same | Yes |
-| **Clone & build** | `git clone` | `git pull` | Yes |
+## Docs and help
 
-The app is self-contained and always runs its own version; a terminal install updates separately. Already installed via the terminal? **The app uses the same data, just download and open it.** Only one server runs at a time, whichever door you opened.
+- **Start:** [Quickstart](docs/quickstart.md) · [Connect your AI](docs/provider-setup.md) · [How exxperts works](docs/how-exxperts-works.md)
+- **Use:** [Memory](docs/memory.md) · [Files and commands](docs/workspace-and-bash.md) · [Connectors](docs/mcp.md) · [Web search](docs/web-search.md) · [Wallet](docs/wallet.md)
+- **Trust:** [Security](SECURITY.md) · [What's new](CHANGELOG.md) · [All docs](docs/README.md)
 
-### What's inside
+Stuck? Run **Health Check** in the desktop app, or `exxperts doctor`, and open an [issue](https://github.com/EXXETA/exxperts/issues) with what it says.
 
-Persistent rooms with governed memory · artifacts (documents, decks, pages your rooms produce) · delegated background tasks · skills · MCP connectors · scheduled work · web search (rooms on Claude and ChatGPT search through the provider itself, gateway models through their gateway where marked, everything else through the built-in search: DuckDuckGo with no setup, or [SearXNG](docs/web-search.md) for heavy use) · a health check (`exxperts doctor` / in-app) · multi-provider wallet.
+## Contributing
 
-### Documentation
+Bug reports and ideas are welcome in [Issues](https://github.com/EXXETA/exxperts/issues). Before a larger change, open an issue so we can agree on it first. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup and the checks. Please report security issues privately, as [SECURITY.md](SECURITY.md) describes.
 
-[Quickstart](docs/quickstart.md) · [How exxperts works](docs/how-exxperts-works.md) · [Web search](docs/web-search.md) · [Security & threat model](SECURITY.md) · [Desktop app](apps/desktop/README.md) · [Contributing](CONTRIBUTING.md) · [Docs index](docs/README.md)
+If exxperts is useful to you, a star helps others find it. To hear about new versions, choose **Watch**, then **Custom**, then **Releases**.
 
-### License
+## License and credits
 
-[Apache 2.0](LICENSE). Free for personal and commercial use. This repository is the exxperts Community Edition; an Enterprise version is in the works.
-
-exxperts is designed and built by **Borja Odriozola Schick** ([@borcho23](https://github.com/borcho23)) and **Fernando Pastor Alonso** ([@ferpastoralonso](https://github.com/ferpastoralonso)) at [Exxeta](https://exxeta.com). It is built on [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner; the bundled runtime under `runtime/` is derived from Pi (v0.70.5, MIT), with the upstream license preserved in [`runtime/LICENSE`](runtime/LICENSE) and the fork documented in [`runtime/NOTICE.md`](runtime/NOTICE.md). Third-party product names and logos in the connector directory are trademarks of their respective owners (glyphs from [Simple Icons](https://simpleicons.org), CC0), used for identification only. Contact: borja.odriozola.schick@exxeta.ch and fernando.pastor@exxeta.ch
+[Apache 2.0](LICENSE), free for personal and commercial use. exxperts is designed and built by **Borja Odriozola Schick** ([@borcho23](https://github.com/borcho23)) and **Fernando Pastor Alonso** ([@ferpastoralonso](https://github.com/ferpastoralonso)) at [Exxeta](https://exxeta.com). It is built on [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner; the bundled runtime under `runtime/` is derived from Pi (MIT), with its license in [`runtime/LICENSE`](runtime/LICENSE) and the fork described in [`runtime/NOTICE.md`](runtime/NOTICE.md). Connector logos come from [Simple Icons](https://simpleicons.org) (CC0) and belong to their owners.

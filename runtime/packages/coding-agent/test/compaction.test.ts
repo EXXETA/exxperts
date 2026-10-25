@@ -522,6 +522,15 @@ describe("Large session fixture", () => {
 	});
 });
 
+describe("prepareCompaction with nothing to summarize", () => {
+	it("returns undefined when every message is kept, so no call summarizes an empty conversation", () => {
+		resetEntryCounter();
+		const question = createMessageEntry(createUserMessage("A question far larger than the model reads at once."));
+		const failed = createMessageEntry({ ...createAssistantMessage(""), stopReason: "error", errorMessage: "prompt is too long" } as AssistantMessage);
+		expect(prepareCompaction([question, failed], DEFAULT_COMPACTION_SETTINGS)).toBeUndefined();
+	});
+});
+
 // ============================================================================
 // LLM integration tests (skipped without API key)
 // ============================================================================

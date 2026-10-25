@@ -65,10 +65,10 @@ const readSkillSchema = Type.Object({
 	name: Type.String({ description: "Name of an enabled skill from the room's enabled-skills index. Names only — paths are not accepted." }),
 });
 
-type TextToolResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined };
+type TextToolResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined; isError?: boolean };
 
 function refusal(text: string, details?: Record<string, unknown>): TextToolResult {
-	return { content: [{ type: "text", text }], details };
+	return { content: [{ type: "text", text }], details, isError: true };
 }
 
 export interface ReadSkillTelemetry {

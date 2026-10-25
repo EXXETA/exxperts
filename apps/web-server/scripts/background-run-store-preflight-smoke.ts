@@ -221,6 +221,31 @@ try {
 	assert(activeTurnPreflight.status === "deferred" && activeTurnPreflight.reason === "active_turn_in_flight", "running active turn should defer preflight");
 	assert(getPersistentAgentRuntimeState(resumeRoomId).activeThreadId === resumeThreadId, "active-turn preflight must not mutate active thread");
 	finishPersistentAgentTurn(resumeRoomId, resumeThreadId, { turnId: runningTurn.turnId, terminalReason: "completed" });
+	// An unreadable state file is not "this room went on in another window".
+	const resumeStateFile = path.join(tempAgentsRoot, resumeRoomId, "runtime", "state.json");
+	const resumeState = fs.readFileSync(resumeStateFile, "utf-8");
+	fs.writeFileSync(resumeStateFile, "{ not json");
+	const unreadableLine = "The room could not read its own files, so your message was not sent. Nothing was lost. Try again; if it repeats, restart exxperts.";
+	try {
+		beginPersistentAgentTurn(resumeRoomId, resumeThreadId, { turnId: "synthetic-unreadable-state-turn", connectionId: "synthetic-ws" });
+		throw new Error("a turn with an unreadable state file must not start");
+	} catch (error) {
+		assert((error as Error).message === unreadableLine, `an unreadable state file says so, not "moved", got: ${(error as Error).message}`);
+	}
+	fs.writeFileSync(resumeStateFile, resumeState);
+	// So does the conversation's own record, in place of a developer's words.
+	const resumeThreadFile = path.join(tempAgentsRoot, resumeRoomId, "runtime", "threads", `${resumeThreadId}.json`);
+	const resumeThread = fs.readFileSync(resumeThreadFile, "utf-8");
+	fs.writeFileSync(resumeThreadFile, "{ not json");
+	try {
+		beginPersistentAgentTurn(resumeRoomId, resumeThreadId, { turnId: "synthetic-unreadable-thread-turn", connectionId: "synthetic-ws" });
+		throw new Error("a turn with an unreadable conversation record must not start");
+	} catch (error) {
+		assert((error as Error).message === unreadableLine && (error as { code?: string }).code === "room_files_unreadable", `an unreadable conversation record says the room could not read its own files, got: ${(error as Error).message}`);
+	}
+	fs.writeFileSync(resumeThreadFile, resumeThread);
+	const readableAgain = beginPersistentAgentTurn(resumeRoomId, resumeThreadId, { turnId: "synthetic-readable-again-turn", connectionId: "synthetic-ws" });
+	finishPersistentAgentTurn(resumeRoomId, resumeThreadId, { turnId: readableAgain.turnId, terminalReason: "completed" });
 
 	const checkpointRoomId = createRoom("Background Preflight Checkpoint Boundary Room");
 	const checkpointThreadId = "postcp_background_0001";

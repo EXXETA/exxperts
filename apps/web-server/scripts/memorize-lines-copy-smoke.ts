@@ -140,6 +140,43 @@ check("a sign-in that is missing names where to sign in", () => {
 	assert(!formatters.includes("Sign in again, then"), "no sign-in remedy without its place");
 });
 
+check("a paused Memorize card offers no Try again where it is sure to fail; the way that works comes first", () => {
+	const notice = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "model-notice.tsx"), "utf8");
+	assert(/export function retryCanHelp\(cause: string, quotaWay\?: QuotaWay, gatewayFind\?: GatewayFind\): boolean \{\s*if \(cause === "quota"\) return quotaWay !== undefined && quotaOffersTryAgain\(quotaWay\);\s*if \(cause === "gateway-not-found"\) return gatewayFind === "model-listed";\s*return cause !== "signed-out" && cause !== "not-offered" && cause !== "not-on-account" && cause !== "region-or-plan" && cause !== "gateway-refused" && cause !== "gateway-not-found" && cause !== "too-small";/.test(notice), "one rule for every memory screen: not on the account, the region or plan, a gateway's refusal and its not-found unless the model is listed included, and a spent quota whose way on or reset is unknown");
+	// Every memory screen takes its ways on from one hook, with the stop's quota and its reset, and shows them with one
+	// button row; memory-ways-on-smoke pins what each screen offers per cause, and that taking a way brings Try again back.
+	const screen = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "absorb-run-screen.tsx"), "utf8");
+	const review = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "review-screen.tsx"), "utf8");
+	for (const [name, source, uses] of [["notice", notice, 1], ["Review card", review, 2], ["Memorize card", screen, 1]] as const) {
+		const hooks = source.match(/useMemoryWaysOn\((?:notice\.detail, notice\.quotaWay|(?:stop|outage)\?\.cause, (?:stop|outage)\?\.quotaWay),/g) ?? [];
+		assert(hooks.length === uses && !/useRetryOffer|offer\.took/.test(source), `${name}: the ways on come from the one hook, reading the stop's quota and its reset`);
+	}
+});
+
+check("while a wait line shows, the first read does not also promise how long it usually takes", () => {
+	const reads = app.match(/This usually takes (?:under a minute|a minute or two)/g) ?? [];
+	assert(reads.length === 4, `the two first reads keep their usual line, got ${reads.length}`);
+	const guarded = app.match(/\$\{callWait \? "" : " This usually takes (?:under a minute|a minute or two)\."\}/g) ?? [];
+	assert(guarded.length === 4, `each is dropped while the wait line shows, got ${guarded.length}`);
+});
+
+check("error lines on the memory screens are red, in light and dark", () => {
+	const css = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "styles.css"), "utf8");
+	const dark = css.slice(css.indexOf(":root,\n:root[data-theme=\"dark\"] {"), css.indexOf(":root[data-theme=\"light\"] {"));
+	const light = css.slice(css.indexOf(":root[data-theme=\"light\"] {"), css.indexOf("}", css.indexOf(":root[data-theme=\"light\"] {")));
+	assert(/--danger: var\(--error\);/.test(dark) && /--danger: var\(--error\);/.test(light), "--danger is the theme's error colour in both themes");
+	assert(/\.checkpoint-proposal-error \{[^}]*var\(--danger\)/.test(css), "the error line reads it");
+});
+
+check("one way back to the rooms on the saved, unavailable and error screens", () => {
+	for (const shell of ["function ReviewWorkflowShell(", "function AbsorbWorkflowShell("]) {
+		const start = app.indexOf(shell);
+		const header = app.slice(start, app.indexOf("</header>", start));
+		assert(/\) : bodyReturns \|\| state\.step === "assessment"/.test(header), `${shell} the header gives no second exit where the page has its own`);
+	}
+	assert(app.includes('const bodyReturns = state.step === "unavailable" || (state.step === "saved" && Boolean(state.approvalResult)) || state.step === "error";') && app.includes('const bodyReturns = (state.step === "unavailable" && Boolean(availability)) || (state.step === "saved" && Boolean(state.approvalResult && state.run)) || state.step === "error";'), "the header knows exactly when the page shows its own way back");
+});
+
 check("an update that stopped shows no raw error; the cause goes to the console", () => {
 	const screen = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "absorb-run-screen.tsx"), "utf8");
 	const failed = screen.slice(screen.indexOf("export function AbsorbRunFailedScreen"));

@@ -56,8 +56,17 @@ async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promis
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-function assertNoPathLeak(value: unknown, label: string, blockedPaths: string[]): void {
-	const serialized = JSON.stringify(value);
+// On this computer a saved folder's view carries the path the person chose, in
+// its root's `path`, and nothing else does: that one field is checked, then
+// left out of the search for any other path.
+function assertNoPathLeak(value: unknown, label: string, blockedPaths: string[], savedRoot?: string): void {
+	let shown = value;
+	if (savedRoot !== undefined) {
+		const roots: any[] = (value as any)?.policy?.roots ?? [];
+		assert(roots.length === 1 && roots[0].path === savedRoot, `${label}: the view carries the saved folder's path, got ${JSON.stringify(roots)}`);
+		shown = { ...(value as any), policy: { ...(value as any).policy, roots: roots.map(({ path: _path, ...root }) => root) } };
+	}
+	const serialized = JSON.stringify(shown);
 	for (const blockedPath of blockedPaths) {
 		assert(!serialized.includes(blockedPath), `${label}: response must not leak absolute path ${blockedPath}`);
 	}
@@ -131,14 +140,14 @@ try {
 	assert(putDefault.body?.policy?.nativePiFilesystemToolsEnabled === true, "Local files default should expose native Pi filesystem tools");
 	assert(putDefault.body?.policy?.bashEnabled === false, "Local files default should keep bash disabled");
 	assert(putDefault.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep,write,edit", "Local files default should expose fixed W5 tool set");
-	assertNoPathLeak(putDefault.body, "PUT default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+	assertNoPathLeak(putDefault.body, "PUT default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 	assert(fs.existsSync(defaultPath), "PUT should write runtime/workspace-default.json");
 	assert(!fs.existsSync(sentinelSidecarPath), "PUT default must not create workspace-policies/room_default.json");
 
 	getDefault = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`);
 	assert(getDefault.status === 200, `saved default GET should succeed, got ${getDefault.status}`);
 	assert(getDefault.body?.policy?.rootCount === 1, "saved default GET should return redacted policy view");
-	assertNoPathLeak(getDefault.body, "GET saved default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+	assertNoPathLeak(getDefault.body, "GET saved default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 	assert(Array.isArray(getDefault.body?.warnings) && getDefault.body.warnings.length === 0, "saved default GET with existing folder should return no warnings");
 
 	// Migrated/renamed workspace: the granted folder no longer exists on this machine.
@@ -147,9 +156,9 @@ try {
 	assert(getMissingRoot.status === 200, `missing-folder GET should still succeed, got ${getMissingRoot.status}`);
 	assert(getMissingRoot.body?.policy?.rootCount === 1, "missing-folder GET should keep the saved policy");
 	const missingWarnings: string[] = getMissingRoot.body?.warnings ?? [];
-	assert(missingWarnings.some((warning) => warning.includes("was not found on this machine")), `missing-folder GET should warn, got ${JSON.stringify(missingWarnings)}`);
+	assert(missingWarnings.some((warning) => warning.endsWith("was not found on this computer. Pick it again in Edit workspace, or another folder, to give the room its tools back.")), `missing-folder GET should warn, got ${JSON.stringify(missingWarnings)}`);
 	assert(missingWarnings.some((warning) => warning.includes("Smoke Workspace")), "missing-folder warning should name the workspace by its safe label");
-	assertNoPathLeak(getMissingRoot.body, "GET missing-folder default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+	assertNoPathLeak(getMissingRoot.body, "GET missing-folder default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 	fs.mkdirSync(workspaceRoot, { recursive: true });
 	const getRestoredRoot = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`);
 	assert((getRestoredRoot.body?.warnings ?? []).length === 0, "restored-folder GET should clear the warning");
@@ -161,7 +170,7 @@ try {
 	assert(noRootUpdate.status === 200, `PUT no-root default update should succeed, got ${noRootUpdate.status}: ${JSON.stringify(noRootUpdate.body)}`);
 	assert(noRootUpdate.body?.policy?.workspaceAccessMode === "localFiles", "no-root default update should preserve existing workspace access mode when omitted");
 	assert(noRootUpdate.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep,write,edit", "no-root Local files update should keep fixed W5 tools");
-	assertNoPathLeak(noRootUpdate.body, "PUT no-root default update", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+	assertNoPathLeak(noRootUpdate.body, "PUT no-root default update", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 
 	const enableBashNoRoot = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
@@ -172,7 +181,7 @@ try {
 	assert(enableBashNoRoot.body?.policy?.allowedToolNames?.length === 0, "bash enable update should allow ordinary Local files tools to be all off");
 	assert(enableBashNoRoot.body?.policy?.bashEnabled === true, "bash enable update should expose explicit bash enabled");
 	assert(enableBashNoRoot.body?.policy?.writeEnabled === false, "bash without writer tools must not report write capability — bash reach is its own flag");
-	assertNoPathLeak(enableBashNoRoot.body, "PUT no-root bash enable", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+	assertNoPathLeak(enableBashNoRoot.body, "PUT no-root bash enable", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 
 	const invalidLocalFilesToolSelection = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
@@ -246,7 +255,7 @@ try {
 	assert(liveResolution.policy?.roots?.[0]?.realpath === fs.realpathSync.native(changedWorkspaceRoot), "active thread should resolve the CHANGED default root");
 	const changedDefaultJson = fs.readFileSync(defaultPath, "utf-8");
 	assert(changedDefaultJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "room default should be updated to changed workspace root");
-	assertNoPathLeak(changedDefault.body, "PUT changed default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot]);
+	assertNoPathLeak(changedDefault.body, "PUT changed default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot], changedWorkspaceRoot);
 	// A deliberate per-conversation override (differing content) survives the
 	// next default change and keeps winning for its thread.
 	const overrideRaw = { ...currentDefaultRaw, policyId: "prcp_deliberate_override_fixture", conversationId: legacyThreadId, bashEnabled: false, workspaceAccessMode: "bounded", toolSelection: { kind: "custom", allowedToolNames: ["ls", "read"] }, allowedToolNames: ["ls", "read"] };
@@ -312,7 +321,7 @@ try {
 	assert(!fs.existsSync(noDefaultSidecarPath), "live default set must not create a thread sidecar");
 	const firstLiveResolution = resolvePersistentRoomCapabilityPolicy(agentId, noDefaultThreadId, { persistentAgentsRoot: tempAgentsRoot });
 	assert(firstLiveResolution.source === "room-default", "running thread should resolve the newly set default from its next message");
-	assertNoPathLeak(firstDefaultSet.body, "first live default set", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot]);
+	assertNoPathLeak(firstDefaultSet.body, "first live default set", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot], workspaceRoot);
 	const clearedLive = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "DELETE" });
 	assert(clearedLive.status === 200 && clearedLive.body?.deleted === true, "clearing the live default should succeed");
 	assert(resolvePersistentRoomCapabilityPolicy(agentId, noDefaultThreadId, { persistentAgentsRoot: tempAgentsRoot }).source === "none", "running thread should resolve to no workspace after the clear");

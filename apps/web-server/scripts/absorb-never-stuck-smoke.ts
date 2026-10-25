@@ -372,6 +372,8 @@ await section("sort-outage", async () => {
 	const signedOut: AbsorbRunGenerate = async () => { throw new ModelUnreachableError("signed-out", MODEL); };
 	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: signedOut, probe: probeAnswers, now: RUN_CLOCK }).runId);
 	assert(done.state === "ready" && done.stop?.kind === "outage" && done.stop.cause === "signed-out" && !(done.sorted ?? []).length, `the sort stops the run with the notice and sorts nothing, got ${JSON.stringify({ state: done.state, stop: done.stop, sorted: done.sorted })}`);
+	// The stop names the gateway as AI setup does, so the card never shows its id.
+	assert((done.stop as { gateway?: string }).gateway === "Synthetic Gateway", `the stop names the gateway, got ${JSON.stringify(done.stop)}`);
 	// Sign in, then Try again: the resume sorts the notes first.
 	run.resumeAbsorbRun(room.agentId, done.runId, MODEL, new Date(), { generate: async () => ({ text: "m-0101: Billing" }) });
 	const resumed = await settle(room.agentId, done.runId);
@@ -521,25 +523,68 @@ await section("dropped-words", async () => {
 // blip (a content refusal) is asked again after the short pause, as before.
 await section("blip-wait", async () => {
 	setAbsorbFoldRetryPauseForTests(20);
-	run.setAbsorbFoldRateLimitPauseForTests?.(600);
 	try {
 		const SERVICE_UNAVAILABLE = 'Codex error: {"type":"error","error":{"type":"service_unavailable_error","code":null,"message":"Unable to verify model access right now. Please retry.","param":null},"sequence_number":2}';
 		const SERVER_ERROR = 'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request.","param":null}}';
 		const REFUSAL = "400 invalid_request_error: The response was filtered due to the prompt triggering content management policy";
 		for (const [n, message] of ["WebSocket error", SERVICE_UNAVAILABLE, SERVER_ERROR, "read ECONNRESET", REFUSAL].entries()) {
+			const refuses = message === REFUSAL;
+			// A slow machine only makes a pause longer, so a pause is told by its
+			// floor: a blip's retry comes after the long one, and a refusal's well
+			// before a long one it never takes.
+			const longPauseMs = refuses ? 30_000 : 600;
+			run.setAbsorbFoldRateLimitPauseForTests?.(longPauseMs);
 			const room = createRoom(`Blip Room ${n}`, [page("RC-0001", "Blip", "BLIP-POINT")]);
-			// The model fails, and does not answer the probe either, for 300 ms after its first failure.
-			let blipUntil = 0;
-			const blipping = () => Date.now() < blipUntil;
+			// The blip fails the first call only; the refusal fails every call, and the probe gets no answer.
 			const calls: Array<{ id: string; prompt: string }> = [];
-			const generate = scripted({ "RC-0001": () => { if (blipUntil === 0) blipUntil = Date.now() + 300; if (blipping()) throw providerError(message); return answer("BLIP-POINT"); } }, calls);
-			const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate, probe: async (...args) => (blipping() ? probeFails(...args) : probeAnswers(...args)), now: RUN_CLOCK }).runId);
-			if (message === REFUSAL) assert(done.stop?.kind === "outage" && view(done, "RC-0001").outcome !== "folded", `a content refusal is asked again after the short pause, got "${view(done, "RC-0001").outcome}"`);
-			else assert(!done.stop && view(done, "RC-0001").outcome === "folded" && calls.length === 2, `a blip is waited out and the page folds with no notice: ${message.slice(0, 40)}, got "${view(done, "RC-0001").outcome}"${done.stop ? " and a stop" : ""} after ${calls.length} call(s)`);
+			const callTimes: number[] = [];
+			let probes = 0;
+			const generate = scripted({ "RC-0001": (attempt) => { callTimes.push(Date.now()); if (refuses || attempt === 1) throw providerError(message); return answer("BLIP-POINT"); } }, calls);
+			const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate, probe: async (...args) => { probes += 1; return probeFails(...args); }, now: RUN_CLOCK }).runId);
+			const pausedMs = callTimes.length === 2 ? callTimes[1] - callTimes[0] : NaN;
+			if (refuses) assert(done.stop?.kind === "outage" && view(done, "RC-0001").outcome !== "folded" && calls.length === 2 && probes === 1 && pausedMs < 10_000, `a content refusal is asked again after the short pause, then the probe: got "${view(done, "RC-0001").outcome}" after ${calls.length} call(s), ${probes} probe(s) and a ${pausedMs} ms pause`);
+			else assert(!done.stop && view(done, "RC-0001").outcome === "folded" && calls.length === 2 && probes === 0 && pausedMs >= longPauseMs - 5, `a blip is waited out and the page folds with no notice: ${message.slice(0, 40)}, got "${view(done, "RC-0001").outcome}"${done.stop ? " and a stop" : ""} after ${calls.length} call(s), ${probes} probe(s) and a ${pausedMs} ms pause`);
 		}
 	} finally {
 		setAbsorbFoldRetryPauseForTests(0);
 		run.setAbsorbFoldRateLimitPauseForTests?.(0);
+	}
+});
+
+// A gateway's bare 403 met by the probe, or by a sort call, is the gateway
+// refusing, as chat reads it: the card offers the gateway's key.
+const forbidden = (): never => { throw providerError("HTTP 403 Forbidden"); };
+await section("gateway-bare-403-probe", async () => {
+	const folded = createRoom("Probe 403 Room", [page("RC-0001", "Odd", "ODD-POINT")]);
+	const probed = await settle(folded.agentId, startAbsorbRun({ agentId: folded.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => { throw providerError("an odd failure"); } }, []), probe: async () => forbidden(), now: RUN_CLOCK }).runId);
+	assert(probed.stop?.cause === "gateway-refused", `the probe's bare 403 stops the run on the gateway refusing, got ${JSON.stringify(probed.stop)}`);
+});
+await section("gateway-bare-403-sort", async () => {
+	const sorting = createRoom("Sort 403 Room", []);
+	fs.writeFileSync(sorting.l1bPath, fs.readFileSync(sorting.l1bPath, "utf-8").replace("## Active Items", "### Unsorted\n\n<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->\n- Invoices go out on the first working day.\n\n## Active Items"));
+	const sorted = await settle(sorting.agentId, startAbsorbRun({ agentId: sorting.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: async () => forbidden(), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(sorted.stop?.cause === "gateway-refused", `a sort call's bare 403 stops the run on the gateway refusing, got ${JSON.stringify(sorted.stop)}`);
+});
+
+// Each cause stops the run with the stop the card reads, whether a page's call (as the shared patience hands it on)
+// or the one-time sort met it: the cause, the key, why it was not reached, who can lift a spent limit, and the
+// gateway's name, as Review's run builds it.
+await section("stop-per-cause", async () => {
+	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
+	const cases: Array<[string, ConstructorParameters<typeof ModelUnreachableError>[0], string, AbsorbRunProbe, string]> = [
+		["a spent quota", "quota", '429 {"error":{"code":"insufficient_quota","type":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."}}', probeAnswers, '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"quota","quotaWay":{"kind":"gateway","provider":"Synthetic Gateway"},"gateway":"Synthetic Gateway"}'],
+		["a refused key", "signed-out", '401 {"error":{"code":"invalid_api_key","type":"invalid_request_error","message":"Incorrect API key provided."}}', probeAnswers, '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"signed-out","key":"refused","gateway":"Synthetic Gateway"}'],
+		["a gateway's 403", "gateway-refused", "HTTP 403 Forbidden", async () => forbidden(), '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"gateway-refused","key":"refused","gateway":"Synthetic Gateway"}'],
+		["an unreached model", "not-answering", "fetch failed: ECONNREFUSED", probeFails, '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"not-answering","unreached":"connection","gateway":"Synthetic Gateway"}'],
+		["a busy model", "still-busy", '429 {"error":{"type":"rate_limit_error","message":"Rate limit reached"}}', probeAnswers, '{"kind":"outage","model":{"provider":"openai-compatible","model":"gpt-5.5"},"cause":"busy","gateway":"Synthetic Gateway"}'],
+	];
+	for (const [label, detail, words, probe, expected] of cases) {
+		const folded = createRoom(`Stop Room ${label}`, [page("RC-0001", "Stop", "STOP-POINT")]);
+		const onFold = await settle(folded.agentId, startAbsorbRun({ agentId: folded.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => { throw new ModelUnreachableError(detail, MODEL, providerError(words)); } }, []), probe, now: RUN_CLOCK }).runId);
+		const sorting = createRoom(`Stop Sort Room ${label}`, []);
+		fs.writeFileSync(sorting.l1bPath, fs.readFileSync(sorting.l1bPath, "utf-8").replace("## Active Items", "### Unsorted\n\n<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->\n- Invoices go out on the first working day.\n\n## Active Items"));
+		const onSort = await settle(sorting.agentId, startAbsorbRun({ agentId: sorting.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: async () => { throw providerError(words); }, probe, now: RUN_CLOCK }).runId);
+		assert(JSON.stringify(onFold.stop) === expected && JSON.stringify(onSort.stop) === expected, `${label}: the stop, got ${JSON.stringify(onFold.stop)} on a page and ${JSON.stringify(onSort.stop)} on the sort`);
 	}
 });
 

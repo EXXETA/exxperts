@@ -14,10 +14,6 @@ export type AppearancePreference = ThemeMode | "system";
 const APP_VERSION = __APP_VERSION__;
 const GITHUB_URL = "https://github.com/EXXETA/exxperts";
 
-export function firstWordOfLabel(label: string): string {
-	return label.split(" ")[0] || label;
-}
-
 export type ProductSidebarActive = "home" | "ai-setup" | "remote" | "dashboard" | "connectors" | "memory" | "skills";
 
 /**

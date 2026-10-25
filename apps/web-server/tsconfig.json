@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "esModuleInterop": true,
     "strict": true,
+    "noUnusedLocals": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
   },

@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-app",
-  "version": "0.14.4",
+  "version": "0.14.5",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -25,7 +25,6 @@
   ],
   "overrides": {
     "@hono/node-server": "^2.0.5",
-    "shell-quote": "^1.11.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "basic-ftp": "6.2.1"
   },
@@ -42,6 +41,7 @@
     "apps/web-ui/dist",
     "apps/web-ui/src/model-names.ts",
     "apps/web-ui/src/sign-in-failure.ts",
+    "apps/web-ui/src/turn-failure-line.ts",
     "runtime/packages/ai/dist",
     "runtime/packages/ai/package.json",
     "runtime/packages/agent/dist",
@@ -50,7 +50,7 @@
     "runtime/packages/coding-agent/package.json",
     "runtime/packages/tui/dist",
     "runtime/packages/tui/package.json",
-    "docs",
+    "docs/*.md",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -115,14 +115,13 @@
     "@types/node": "^20.0.0",
     "@typescript/native-preview": "7.0.0-dev.20260120.1",
     "typescript": "^5.5.0",
-    "vite": "^6.4.3"
+    "vite": "^6.4.5"
   },
   "engines": {
     "node": ">=20.6.0"
   },
   "allowScripts": {
     "@google/genai": true,
-    "@parcel/watcher": true,
     "canvas": true,
     "esbuild": true,
     "fsevents": true,

@@ -471,11 +471,6 @@ function findJobIndex(store: PersistentRoomScheduleStore, selector: PersistentRo
 	throw new Error(`Scheduled prompt not found: ${selector.name}.`);
 }
 
-export function findPersistentRoomScheduleJob(roomId: unknown, selector: PersistentRoomScheduleJobSelector): PersistentRoomScheduleJob {
-	const store = readPersistentRoomScheduleStore(roomId);
-	return store.jobs[findJobIndex(store, selector)];
-}
-
 export function addPersistentRoomScheduleJob(roomIdRaw: unknown, input: AddPersistentRoomScheduleJobInput): PersistentRoomScheduleJob {
 	const roomId = validatePersistentRoomScheduleRoomId(roomIdRaw);
 	const store = readPersistentRoomScheduleStore(roomId);

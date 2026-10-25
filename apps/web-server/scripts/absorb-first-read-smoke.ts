@@ -1,9 +1,10 @@
 // The first read never blocks Memorize: it is fitted to the Memory model's
-// window, a failed, cut or too long one gives "None." with one reason, a
-// failed window lookup reads as unknown, the run starts on a missing or too
-// long first read, and the fold is not told to follow an assessment it does
-// not have. Every section can run alone (ONLY=<name>), so each behaviour is its
-// own red-first command against the base.
+// window, a failed, cut or too long one gives "None." with one reason, an
+// unreachable Memory model gives its notice instead, a failed window lookup
+// reads as unknown, the run starts on a missing or too long first read, and
+// the fold is not told to follow an assessment it does not have. Every section
+// can run alone (ONLY=<name>), so each behaviour is its own red-first command
+// against the base.
 //
 // Offline: no server, no provider, no network, no port.
 
@@ -148,6 +149,17 @@ await section("failed", async () => {
 	assert(text.includes("first read missing: failed"), `the diagnostics record says why, got ${written.length} record(s)`);
 });
 
+// A Memory model that cannot be reached is no missing first read: the error
+// goes up, so the page shows the one notice with its ways out, as on Review.
+await section("unreachable", async () => {
+	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
+	const room = createRoom("Unreachable First Read Room", 2, 200, 3);
+	const outcome = await buildAbsorbAssessment(room.agentId, MODEL, async (): Promise<AbsorbGenerateResult> => {
+		throw new ModelUnreachableError("not-answering", MODEL);
+	}).then((read) => read, (error: unknown) => error);
+	assert(outcome instanceof ModelUnreachableError, `an unreachable Memory model rejects the first read with its notice, got ${JSON.stringify(outcome)}`);
+});
+
 // With no first read, the answer still lists the conversations waiting, from
 // their headings, one per line with its date; a first read that came back lists none.
 await section("waiting-list", async () => {
@@ -174,6 +186,17 @@ await section("waiting-list", async () => {
 });
 
 // The run starts on a missing or too long first read.
+// "None" under Needs your judgment is no question: nothing asks the person to answer it.
+await section("none-judgment", async () => {
+	const { parseAbsorbAssessment } = await import("../src/absorb-consolidation.js");
+	for (const none of ["- None", "- None.", "None", "* none"]) {
+		const parsed = parseAbsorbAssessment(FIRST_READ.replace("### Needs your judgment\nNone\n", `### Needs your judgment\n${none}\n`));
+		assert(parsed.fields.needsJudgment.length === 0, `"${none}" under Needs your judgment is no item, got ${JSON.stringify(parsed.fields.needsJudgment)}`);
+	}
+	const asked = parseAbsorbAssessment(FIRST_READ.replace("### Needs your judgment\nNone\n", "### Needs your judgment\n- Keep the Nordwind floor price?\n"));
+	assert(asked.fields.needsJudgment.length === 1, "a real question stays");
+});
+
 await section("propose", async () => {
 	assert(parseAbsorbRunProposeRequest({}).assessmentMarkdown === "None.", "a run sent no first read folds with none");
 	assert(parseAbsorbRunProposeRequest({ assessmentMarkdown: "   " }).assessmentMarkdown === "None.", "a blank first read is none");

@@ -92,6 +92,8 @@ function storedZip(name: string, text: string): Buffer {
 const REFUSAL = "looks like a secret file or the app's own data";
 const READ_ONLY = "can be read but not changed by rooms";
 const LEFT_OUT = "left out: secret files or the app's own data.";
+// find and grep cannot count what they never walked into, so they say what was not searched instead of a count.
+const NOT_SEARCHED = "Secret files and the app's own data were not searched.";
 
 try {
 	const project = path.join(home, "project");
@@ -332,6 +334,20 @@ try {
 		assert(fs.readFileSync(path.join(project, ".mcp.json"), "utf8") === "kindmark .mcp.json\n", "refused writes must leave .mcp.json alone");
 	} else console.log("SKIPPED: the .mcp.json. cases (only Windows opens .mcp.json. as .mcp.json)");
 	await refusedWith("read", { path: "~/.zshrc" }, REFUSAL, "the home folder's .zshrc");
+	// With the terminal off the room cannot run a command, so the refusals offer none.
+	const terminalOffTools = new Map(createPersistentRoomWorkspaceTools(policy, { localFilesCwd: project, terminalOn: () => false }).map((offTool) => [String(offTool.name), offTool as any]));
+	for (const [name, params, words, label] of [
+		["read", { path: "~/.config/mcp/mcp.json" }, REFUSAL, "the shared connector settings"],
+		["write", { path: "fresh-mcp/.mcp.json", content: "x" }, READ_ONLY, "a new .mcp.json"],
+	] as const) {
+		let error = "";
+		try {
+			await terminalOffTools.get(name).execute(`smoke-off-${name}`, params, undefined, undefined, {} as any);
+		} catch (caught) {
+			error = (caught as Error).message;
+		}
+		assert(error.includes(words) && !error.includes("terminal command") && error.includes("Tell the person"), `${name} ${label} with the terminal off must be refused with no command offered, got ${JSON.stringify(error)}`);
+	}
 	await refusedWith("read", { path: "~/.ZSHRC" }, REFUSAL, "the home folder's .zshrc in another case");
 	await refusedWith("read", { path: "~/.npmrc" }, REFUSAL, "the home folder's .npmrc");
 	await refusedWith("write", { path: "~/.npmrc", content: "x" }, REFUSAL, "the home folder's .npmrc");
@@ -356,17 +372,17 @@ try {
 		assert(!grepKinds.error, `grep ~ must work: ${grepKinds.error}`);
 		for (const [rel, label] of kindClosed) assert(!grepKinds.text.includes(`kindmark ${rel}`), `grep must leave out the ${label}`);
 		for (const [rel, label] of [...kindOpen, ...kindReadOnly]) assert(grepKinds.text.includes(`kindmark ${rel}`), `grep must keep ${label}`);
-		assert(grepKinds.text.trimEnd().endsWith(LEFT_OUT), `grep ~ must end by saying what it left out, got ${JSON.stringify(grepKinds.text.slice(-300))}`);
+		assert(grepKinds.text.trimEnd().endsWith(`\n\n${NOT_SEARCHED}`), `grep ~ must end by saying what was not searched, got ${JSON.stringify(grepKinds.text.slice(-300))}`);
 		const grepGit = await run("grep", { pattern: "kindmark", path: ".git" });
 		assert(grepGit.text.includes("kindmark .git/modules/lib/HEAD") && grepGit.text.includes("hooks/post-checkout") && grepGit.text.includes("modules/lib/config"), `grep in .git must search its hooks and config too, got ${JSON.stringify(grepGit.text)}`);
-		assert(!grepGit.text.includes(LEFT_OUT), `grep in .git leaves nothing out, so it must add no line, got ${JSON.stringify(grepGit.text.slice(-300))}`);
+		assert(!grepGit.text.includes(NOT_SEARCHED), `grep in .git leaves nothing out, so it must add no line, got ${JSON.stringify(grepGit.text.slice(-300))}`);
 	}
 	if (getToolPath("fd")) {
 		const findKinds = await run("find", { pattern: "*", path: "~" });
 		const findLines = findKinds.text.split("\n");
 		for (const [rel, label] of kindClosed) assert(!findLines.includes(rel.replace(/^~\//, "")), `find must leave out the ${label}`);
 		for (const [rel, label] of [...kindOpen, ...kindReadOnly]) assert(findKinds.text.includes(rel.replace(/^~\//, "")), `find must keep ${label}`);
-		assert(findKinds.text.trimEnd().endsWith(LEFT_OUT), `find ~ must end by saying what it left out, got ${JSON.stringify(findKinds.text.slice(-300))}`);
+		assert(findKinds.text.trimEnd().endsWith(`\n\n${NOT_SEARCHED}`), `find ~ must end by saying what was not searched, got ${JSON.stringify(findKinds.text.slice(-300))}`);
 	}
 
 	// ---- a .git file: read stays open, write and edit are refused ----------
@@ -482,14 +498,18 @@ try {
 		for (const homeOnly of [".npmrc", ".zshrc"]) assert(!findAll.text.split("\n").includes(homeOnly) && findAll.text.split("\n").includes(`project/${homeOnly === ".npmrc" ? ".npmrc" : ".git/config"}`), `find ~ must leave out the home folder's ${homeOnly} and keep the project's files`);
 		assert(findAll.text.includes("project/notes.md") && findAll.text.includes("project/.env.example"), "find must keep normal files and templates");
 		const findEnv = await run("find", { pattern: ".env*" });
-		assert(JSON.stringify(findEnv.text.split("\n").filter((line) => line.startsWith(".env")).sort()) === JSON.stringify([".env.dist", ".env.example"]) && findEnv.text.trimEnd().endsWith(LEFT_OUT), `find .env* must show only the templates and say what it left out, got ${JSON.stringify(findEnv.text)}`);
+		assert(JSON.stringify(findEnv.text.split("\n").filter((line) => line.startsWith(".env")).sort()) === JSON.stringify([".env.dist", ".env.example"]) && findEnv.text.trimEnd().endsWith(NOT_SEARCHED), `find .env* must show only the templates and say what was not searched, got ${JSON.stringify(findEnv.text)}`);
 		const findClean = await run("find", { pattern: "*", path: "docs" });
-		assert(findClean.text.includes("environ") && !findClean.text.includes("left out"), `find in a folder with nothing closed must add no line, got ${JSON.stringify(findClean.text)}`);
+		assert(findClean.text.includes("environ") && !findClean.text.includes(NOT_SEARCHED), `find in a folder with nothing closed must add no line, got ${JSON.stringify(findClean.text)}`);
 		await refused("find", { pattern: "*", path: "~/.exxperts" }, "in the app's folder");
 		const findBulk = await run("find", { pattern: "*.pem", path: bulkDir, limit: 10 });
 		assert(findBulk.text.startsWith("The first 10 results were all left out"), `find must not claim no files when hidden ones used up the limit, got ${JSON.stringify(findBulk.text)}`);
+		// fd's walk order varies, so only what holds in any order is checked: a walk into the
+		// app's folder would count its 60 room files, the only ones of that name, and leave them out.
 		const findLimited = await run("find", { pattern: "*", path: "~", limit: 15 });
-		assert(findLimited.text.includes("project/") && !findLimited.text.startsWith("The first"), `the app's folder must not use up find's limit, got ${JSON.stringify(findLimited.text)}`);
+		assert(!findLimited.text.split("\n").some((line) => line.startsWith(".exxperts")), `find with a limit must not show the app's folder, got ${JSON.stringify(findLimited.text)}`);
+		const findAppNamed = await run("find", { pattern: "room-*.json", path: "~", limit: 15 });
+		assert(findAppNamed.text.startsWith("No files found") && !findAppNamed.text.includes("left out"), `the app's folder must not use up find's limit, got ${JSON.stringify(findAppNamed.text)}`);
 	} else {
 		console.log("SKIPPED: the find cases (fd is not installed here, and smokes never download it)");
 	}
@@ -500,11 +520,11 @@ try {
 		assert(!/(^|\n)\.(npmrc|zshrc):/.test(grepAll.text), `grep ~ must leave out the home folder's .npmrc and .zshrc, got ${JSON.stringify(grepAll.text.slice(0, 600))}`);
 		assert(grepAll.text.includes("project/notes.md:1") && grepAll.text.includes("project/.env.example:1") && grepAll.text.includes("project/.git/HEAD:1"), `grep must keep normal files, templates and .git, got ${JSON.stringify(grepAll.text)}`);
 		assert(grepAll.text.includes("project/.git/config:") && grepAll.text.includes("project/.git/hooks/pre-commit:1") && grepAll.text.includes(".gitconfig:"), `grep must search git hooks and settings now, got ${JSON.stringify(grepAll.text.slice(0, 600))}`);
-		assert(grepAll.text.trimEnd().endsWith(LEFT_OUT), `grep ~ must end by saying what it left out, got ${JSON.stringify(grepAll.text.slice(-300))}`);
+		assert(grepAll.text.trimEnd().endsWith(NOT_SEARCHED), `grep ~ must end by saying what was not searched, got ${JSON.stringify(grepAll.text.slice(-300))}`);
 		const grepGlob = await run("grep", { pattern: "needle", glob: ".env" });
-		assert(grepGlob.text.startsWith("No matches found") && grepGlob.text.trimEnd().endsWith(`2 entries ${LEFT_OUT}`), `grep with a .env glob must find nothing and say it left out the two .env files, got ${JSON.stringify(grepGlob.text)}`);
+		assert(grepGlob.text === `Nothing found in the files this room can open.\n\n${NOT_SEARCHED}`, `grep with a .env glob must not say "No matches found" while it skipped the two .env files, got ${JSON.stringify(grepGlob.text)}`);
 		const grepClean = await run("grep", { pattern: "kindmark", path: "docs" });
-		assert(grepClean.text.includes("environ:1") && !grepClean.text.includes("left out"), `grep in a folder with nothing closed must add no line, got ${JSON.stringify(grepClean.text)}`);
+		assert(grepClean.text.includes("environ:1") && !grepClean.text.includes(NOT_SEARCHED), `grep in a folder with nothing closed must add no line, got ${JSON.stringify(grepClean.text)}`);
 		await refused("grep", { pattern: "needle", path: ".env" }, "a .env path");
 		await refused("grep", { pattern: "needle", path: "~/.exxperts" }, "the app's folder");
 		for (const [label, searchPath] of [["a hidden file with 200,000 matches", "."], ["the app's folder with 200,000 matches", "~"]] as const) {
@@ -571,15 +591,15 @@ try {
 	assert(lsKeys.text.split("\n").includes("x.key/") && closedNames.every((name) => !lsKeys.text.split("\n").includes(name)) && lsKeys.text.trimEnd().endsWith(`${closedNames.length} entries ${LEFT_OUT}`), `ls must leave out every closed .key file and count them, got ${JSON.stringify(lsKeys)}`);
 	if (getToolPath("fd")) {
 		const findDecks = await run("find", { pattern: "*.key", path: "~/decks" });
-		assert(findDecks.text.includes("deck.key") && findDecks.text.includes("deck-file.key") && !findDecks.text.includes("left out"), `find *.key must list both decks, got ${JSON.stringify(findDecks)}`);
+		assert(findDecks.text.includes("deck.key") && findDecks.text.includes("deck-file.key") && !findDecks.text.includes(NOT_SEARCHED), `find *.key must list both decks, got ${JSON.stringify(findDecks)}`);
 		const findKeys = await run("find", { pattern: "*.key", path: "~/keys" });
-		assert(closedNames.every((name) => !findKeys.text.split("\n").includes(name)) && findKeys.text.trimEnd().endsWith(LEFT_OUT), `find *.key must leave out the keys and say so, got ${JSON.stringify(findKeys)}`);
+		assert(closedNames.every((name) => !findKeys.text.split("\n").includes(name)) && findKeys.text.trimEnd().endsWith(NOT_SEARCHED), `find *.key must leave out the keys and say so, got ${JSON.stringify(findKeys)}`);
 	}
 	if (getToolPath("rg")) {
 		const grepDecks = await run("grep", { pattern: "keynoteword", path: "~/decks" });
-		assert(grepDecks.text.includes("deck.key/Metadata/Properties.plist:1") && grepDecks.text.includes("acme.key/notes.md:1") && !grepDecks.text.includes("left out"), `grep must reach the words inside the decks, got ${JSON.stringify(grepDecks)}`);
+		assert(grepDecks.text.includes("deck.key/Metadata/Properties.plist:1") && grepDecks.text.includes("acme.key/notes.md:1") && !grepDecks.text.includes(NOT_SEARCHED), `grep must reach the words inside the decks, got ${JSON.stringify(grepDecks)}`);
 		const grepKeys = await run("grep", { pattern: "needle", path: "~/keys" });
-		assert(!grepKeys.text.includes("needle") && grepKeys.text.trimEnd().endsWith(LEFT_OUT), `grep must leave out the keys and say so, got ${JSON.stringify(grepKeys)}`);
+		assert(!grepKeys.text.includes("needle") && grepKeys.text.trimEnd().endsWith(NOT_SEARCHED), `grep must leave out the keys and say so, got ${JSON.stringify(grepKeys)}`);
 	}
 	// A zip named `*.key` opens whatever it holds, as any zip does: the room
 	// gets the zip's bytes.

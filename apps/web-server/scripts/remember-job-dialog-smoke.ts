@@ -1,4 +1,5 @@
-// Remember in the browser, as a job on the server: the dialog follows a
+// Remember in the browser, as a job on the server: a note typed in the dialog
+// stays through a reconnect after the server restarts; the dialog follows a
 // Remember that started before a reload (the job reads on, and entering the
 // room opens the dialog in its reading state), shows the proposal when the
 // job ends, Discard deletes the kept proposal on the server, and Cancel stops
@@ -176,6 +177,22 @@ try {
 		}, agentId);
 		let conversationId = await activeConversation();
 		const progress = () => authedFetch(`${baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(conversationId)}`).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+
+		// 0. A note typed in Remember stays through a restart of the server while the page stays open: the room reconnects, and the dialog and the note are as they were.
+		await openDialog();
+		const note = dialog.locator(".checkpoint-remember-field textarea");
+		const typed = "Keep the date we agreed for the launch.";
+		await note.fill(typed);
+		let roomSockets = 0;
+		page.on("websocket", (socket) => { if (socket.url().includes("persistentAgentId=")) roomSockets += 1; });
+		await stopSmokeServer(server);
+		startServer();
+		await waitUntil(() => fetch(`${baseUrl}/healthz`).then((r) => r.ok).catch(() => false), "the server is back");
+		await waitUntil(() => roomSockets > 0, "the room reconnects", 45_000);
+		await page.waitForTimeout(1000);
+		assert(await dialog.isVisible() && await note.inputValue() === typed, `the typed note is still in Remember after the reconnect, got ${await dialog.isVisible() ? JSON.stringify(await note.inputValue()) : "no dialog"}`);
+		await note.fill("");
+		console.log("  ok  a note typed in Remember stays through a reconnect after the server restarts");
 
 		// 1. Generate, then reload while it reads: the job reads on.
 		await openDialog();
@@ -474,7 +491,10 @@ try {
 		await page.waitForTimeout(1500);
 		assert(await dialog.count() === 0 && await page.locator("textarea").count() === 0, "Escape on the full room's page goes Home: no dialog, no message box");
 		assert(await page.locator(".system-line.error").count() === 0 && await page.getByText(/activeThread|non-resumable|thread is closed|persistent-agent/).count() === 0, "no red line and no engine words after Escape");
-		assert(await page.locator(".persistent-agent-card").filter({ hasText: "Remember Room" }).getByText(/memorize now/i).count() === 1, "Home's card says the room is full");
+		// Home reads the room's state after it opens; under a loaded run that lands later than the pause above.
+		const fullCard = page.locator(".persistent-agent-card").filter({ hasText: "Remember Room" });
+		await fullCard.getByText(/memorize now/i).first().waitFor({ timeout: 10000 }).catch(() => undefined);
+		assert(await fullCard.getByText(/memorize now/i).count() === 1, "Home's card says the room is full");
 		assert(await page.locator(".persistent-agent-card").filter({ hasText: "Remember Room" }).getByText("Memorize from Maintain to start a new conversation.", { exact: true }).isVisible(), "the card says the way on in plain sight, not only in a tooltip");
 		assert(toClosed.length === 0, `nothing is sent to the closed conversation, got ${toClosed.join(" | ")}`);
 		(await import("../src/persistent-room-maintenance-settings.js")).writePersistentRoomMaintenanceSettings(agentId, { quickCheckpointAutoApply: false });

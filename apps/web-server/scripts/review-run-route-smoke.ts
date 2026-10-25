@@ -324,7 +324,7 @@ try {
 	const status = await requestJson(`${room}/review/status`);
 	assert(status.status === 200, `GET review/status should return 200, got ${status.status}: ${JSON.stringify(status.body)}`);
 	assert(status.body.available === true && !status.body.reason, `a room with notes should be able to review, got ${JSON.stringify(status.body)}`);
-	assert(status.body.topics === FIXTURE_TOPICS.length + 1, `the status should count every topic that holds a note, got ${JSON.stringify(status.body.topics)}`);
+	assert(status.body.topics === FIXTURE_TOPICS.length, `the status should count the titled topics that hold a note, got ${JSON.stringify(status.body.topics)}`);
 	assert(status.body.notes === FIXTURE_TOPICS.length * NOTES_PER_TOPIC + 2, `the status should count every note, got ${JSON.stringify(status.body.notes)}`);
 	assert(status.body.budget?.overBudget === true && status.body.budget.budgetTokens === MIN_BUDGET_TOKENS, `the status should measure this memory against the room's own budget, got ${JSON.stringify(status.body.budget)}`);
 	assert(status.body.recommendedDepth === "tidy", `a memory over its limit should be offered the deeper tidy first, got ${JSON.stringify(status.body.recommendedDepth)}`);

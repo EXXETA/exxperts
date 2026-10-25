@@ -3,7 +3,8 @@
 // saved in another window."); when this window's own save landed and opening
 // the fresh conversation fails, Home keeps the plain "Saved." line; and when
 // the first answer to Save was lost on the way back, the page finds it saved
-// by itself and shows its saved page. Offline: one synthetic provider.
+// by itself and shows its saved page. The dialog never asks for an estimate
+// of the empty conversation a save leaves behind. Offline: one synthetic provider.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -150,6 +151,8 @@ try {
 		const dismissWhatsNew = async (p: typeof page) => { const dismiss = p.locator(".whats-new-close"); if (await dismiss.count()) await dismiss.click(); };
 		await dismissWhatsNew(page);
 		const homeLine = page.locator(".home-resume-status");
+		const refusedEstimates: string[] = [];
+		page.on("response", (response) => { if (response.url().includes("/checkpoint/estimate") && response.status() >= 400) refusedEstimates.push(`${response.status()} ${response.url()}`); });
 		const activeConversation = (id: string) => authedFetch(`${baseUrl}/api/persistent-agents/${encodeURIComponent(id)}/status`).then(async (r) => (await r.json()).activeThread?.threadId as string);
 
 		// Enters the room from Home, has one exchange, and opens Remember's review on the entry.
@@ -222,6 +225,9 @@ try {
 		await lostDialog.getByText("Memory updated").waitFor({ timeout: 15000 });
 		await page.unroute("**/checkpoint/approve");
 		console.log("  ok  this window's own save whose answer was lost: its saved page shows");
+		await page.waitForTimeout(1000);
+		assert(refusedEstimates.length === 0, `the dialog asks no estimate of the conversation a save leaves behind, got ${JSON.stringify(refusedEstimates)}`);
+		console.log("  ok  no estimate is asked once a save is under way or done");
 		await ctx.close();
 	} finally {
 		await browser.close();

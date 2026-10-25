@@ -300,9 +300,3 @@ export async function updateSearxngOnBoot(repoRoot: string, configuredBaseUrl: s
 	}
 	return startSearxngSetup(repoRoot, "update");
 }
-
-/** Test seam: forget any finished run so a smoke can assert from a clean slate. */
-export function resetSearxngSetupForTests() {
-	current = null;
-	last = { phase: "idle", baseUrl: null, message: null, running: false };
-}

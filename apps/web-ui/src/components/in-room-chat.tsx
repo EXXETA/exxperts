@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
-import { Approval, confirmApprovalLabels } from "./Approval";
-import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
+import { Approval, confirmApprovalLabels, declinesSaidOnCards } from "./Approval";
+import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type FailureLineActions, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
 import { useEscapeKey } from "./use-escape-key";
 import { SpinnerIcon } from "./icons";
@@ -93,6 +93,8 @@ export interface InRoomChatShellViewProps {
 	onOpenTaskArtifact?: (taskId: string, relativePath: string) => void;
 	/** Taste pass: a message's attachment chip opens that file in the viewer, like its Files row. */
 	attachmentAccess?: MessageAttachmentAccess;
+	/** What the newest failure line's buttons do. */
+	failureLineActions?: FailureLineActions;
 	aboveComposerSlot?: ReactNode;
 }
 
@@ -135,6 +137,13 @@ export interface ConnectionStopped {
 	onMemorize?: () => void;
 	/** A window the room moved on from: join the room's conversation. */
 	onReload?: () => void;
+	/** The room stopped on its key or sign-in: the notice carries the failure lines' mark. */
+	failed?: true;
+}
+
+/** Whether the stopped notice shows: with the connection up, or once reconnecting gave up. */
+export function stoppedNoticeShows(stopped: ConnectionStopped | undefined, connected: boolean, reconnectState: "idle" | "reconnecting" | "failed"): boolean {
+	return Boolean(stopped) && (connected || reconnectState === "failed");
 }
 
 function bottomDistance(el: HTMLElement): number {
@@ -359,10 +368,13 @@ function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: {
 	// ways on, and the room carries on once one of them is taken.
 	// It takes the workspace nudge's panel, in the same place, so the two
 	// read as one family and stack cleanly.
-	if (stopped && (connected || reconnectState === "failed")) {
+	if (stopped && stoppedNoticeShows(stopped, connected, reconnectState)) {
 		return (
 			<div className="room-workspace-nudge room-model-notice" role="status">
-				<span className="room-workspace-nudge-text">{stopped.line}</span>
+				<span className={`room-workspace-nudge-text${stopped.failed ? " with-failure-mark" : ""}`}>
+					{stopped.failed && <span className="failure-mark" aria-hidden="true" />}
+					{stopped.failed ? <span>{stopped.line}</span> : stopped.line}
+				</span>
 				<div className="room-workspace-nudge-actions">
 					{stopped.onChooseModel && <button type="button" className="rs-btn" onClick={stopped.onChooseModel}>Choose another model</button>}
 					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onSignIn}>{stopped.signInLabel ?? "Sign in"}</button>}
@@ -409,6 +421,7 @@ interface TranscriptItemsProps {
 	busy: boolean;
 	/** The user message whose turn holds the answer space (see groupIntoTurns). */
 	reservedTurnId: string | null;
+	failureLineActions?: FailureLineActions;
 }
 
 /**
@@ -427,9 +440,12 @@ function renderTranscript(
 	pendingConsultIds: TranscriptItemsProps["pendingConsultIds"],
 	onOpenTaskArtifact: TranscriptItemsProps["onOpenTaskArtifact"],
 	attachmentAccess: TranscriptItemsProps["attachmentAccess"],
+	failureLineActions: TranscriptItemsProps["failureLineActions"],
 ): IndexedNode[] {
 	const copyTargets = replyCopyTargets(items, busy);
 	const keyboardApprovalId = soleKeyboardApproval(items)?.requestId ?? null;
+	const newestFailureId = newestFailureLineId(items);
+	const saidOnCards = declinesSaidOnCards(items);
 	const rendered: IndexedNode[] = [];
 	for (let index = 0; index < items.length; index++) {
 		const it = items[index];
@@ -454,11 +470,24 @@ function renderTranscript(
 			) : it.kind === "task" ? (
 				<TaskThreadItem key={it.id} item={it} onOpenTaskArtifact={onOpenTaskArtifact} />
 			) : (
-				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} />
+				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} saidOnCard={saidOnCards.has(it.id)} newestFailure={it.id === newestFailureId} failureActions={it.id === newestFailureId ? failureLineActions : undefined} />
 			),
 		});
 	}
 	return rendered;
+}
+
+/**
+ * The newest failure line: the last one, with nothing the person sent or the
+ * model answered after it. Every other failure line folds.
+ */
+function newestFailureLineId(items: ChatItem[]): string | null {
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind !== "system") return null;
+		if (item.level === "error") return item.id;
+	}
+	return null;
 }
 
 /**
@@ -473,7 +502,7 @@ function soleKeyboardApproval(items: ChatItem[]): Extract<ChatItem, { kind: "app
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
 		if (item.kind === "user") break;
-		if (item.kind !== "approval" || item.done) continue;
+		if (item.kind !== "approval" || item.done || item.unanswered) continue;
 		if (found || item.uiKind !== "confirm") return null;
 		found = item;
 	}
@@ -538,6 +567,7 @@ const TranscriptItems = memo(function TranscriptItems({
 	showThinkingIndicator,
 	busy,
 	reservedTurnId,
+	failureLineActions,
 }: TranscriptItemsProps) {
 	const thinking = showThinkingIndicator ? (
 		<div key="thinking-row" className="thinking-row" role="status" aria-label="thinking">
@@ -547,7 +577,7 @@ const TranscriptItems = memo(function TranscriptItems({
 	if (empty) return <>{emptySlot ?? null}{thinking}</>;
 	const nodes: IndexedNode[] = renderItem
 		? items.map((it, index) => ({ index, node: renderItem(it, index, items) }))
-		: renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess);
+		: renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess, failureLineActions);
 	return <>{groupIntoTurns(items, nodes, thinking, reservedTurnId)}</>;
 });
 
@@ -864,6 +894,7 @@ export function InRoomChatShellView({
 	pendingConsultIds,
 	onOpenTaskArtifact,
 	attachmentAccess,
+	failureLineActions,
 	aboveComposerSlot,
 }: InRoomChatShellViewProps) {
 	const messagesElRef = useRef<HTMLDivElement | null>(null);
@@ -1154,6 +1185,7 @@ export function InRoomChatShellView({
 								showThinkingIndicator={showThinkingIndicator}
 								busy={busy}
 								reservedTurnId={reservedTurnId}
+								failureLineActions={failureLineActions}
 							/>
 						</div>
 						{showJumpToLatest && (

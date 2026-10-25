@@ -706,6 +706,9 @@ export function prepareCompaction(
 		}
 	}
 
+	// Nothing before the kept messages and no earlier summary: a call would summarize an empty conversation.
+	if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0 && !previousSummary) return undefined;
+
 	// Extract file operations from messages and previous compaction
 	const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
 

@@ -27,14 +27,16 @@
  *                      { type: "effort", level, supported }
  *                        (what an effort frame actually took hold as)
  *                      { type: "error", message: string }
- *                      { type: "turn_reattach", turnId, conversationId, settled, userText?, anchorItemId?, startedAt? }
+ *                      { type: "turn_reattach", turnId, conversationId, settled, userText?, anchorItemId?, startedAt?, now }
  *                        (sent right after "ready" when this session
  *                        stepped back into a room whose detached turn is still
  *                        cooking or just landed; the whole turn's event frames
  *                        replay immediately after it, then live frames continue.
  *                        anchorItemId names the last persisted item at TURN
  *                        START: everything after it is this turn's debris, null
- *                        means the thread was empty then, absent means unknown)
+ *                        means the thread was empty then, absent means unknown;
+ *                        now is the server's clock, so a page whose clock differs
+ *                        dates the replayed steps by its own)
  *                      { type: "turn_reattach_replay_done", turnId }
  *                        (closes the replay window opened by turn_reattach —
  *                        every frame between the two is catch-up the client
@@ -65,19 +67,20 @@ import { migrateBuiltInAiProfiles } from "./built-in-ai-profile-migration.js";
 import { deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
 import { exportMaintenanceDiagnostics, listMaintenanceDiagnostics, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, MAINTENANCE_DIAGNOSTICS_KEEP } from "./maintenance-diagnostics.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, conversationMovedError, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, fingerprintL1bSource, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, beginRememberGeneration, buildCheckpointProposal, checkpointProposalStillFresh, estimateCheckpointRead, getRememberGeneration, REMEMBER_ALREADY_GENERATING_MESSAGE, REMEMBER_WORKER_MAX_OUTPUT_TOKENS, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, refreshEmptyPersistentAgentThreadBootSnapshot, refreshEmptyPersistentAgentThreadModel, saveWithOpenConversationCheck, emptyPersistentAgentThreadModelTarget, persistentAgentThreadFollowsConversationPick, switchPersistentAgentThreadModel, estimatePersistentAgentThreadContext, SWITCH_WHILE_REMEMBERING_MESSAGE, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError, RECENT_CONTEXT_BLOCK_CAP } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertRememberReadsOpenConversation, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, fingerprintL1bSource, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, beginRememberGeneration, buildCheckpointProposal, checkpointProposalStillFresh, estimateCheckpointRead, getRememberGeneration, REMEMBER_ALREADY_GENERATING_MESSAGE, REMEMBER_WORKER_MAX_OUTPUT_TOKENS, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, refreshEmptyPersistentAgentThreadBootSnapshot, refreshEmptyPersistentAgentThreadModel, saveWithOpenConversationCheck, emptyPersistentAgentThreadModelTarget, persistentAgentThreadFollowsConversationPick, switchPersistentAgentThreadModel, estimatePersistentAgentThreadContext, SWITCH_WHILE_REMEMBERING_MESSAGE, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError, RECENT_CONTEXT_BLOCK_CAP } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
 	normalizePersistentRoomWorkspaceToolSelectionInput,
 	persistentRoomBlockedToolLeaks,
 } from "./persistent-room-tool-policy.js";
-import { assertPersistentRoomWorkspaceDefaultMutable, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
+import { assertPersistentRoomWorkspaceDefaultMutable, type PersistentRoomCapabilityPolicy, persistentRoomSettingsNotAppliedFrame, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS, overMemoryBudget, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { settleMemoryBudget, waitForMemoryRoomTurn } from "./memory-entries-store.js";
 import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashApprovalGuard } from "./persistent-room-bash-approval.js";
 import { migratePersistentRoomBashAutoApproveDefaults, readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
 import { applyShellLookupTestSwitch, createPersistentRoomShellMissingExtension, PERSISTENT_ROOM_SHELL_MISSING_SENTENCE, persistentRoomShellFound } from "./persistent-room-shell-missing.js";
+import { createTurnStepLog, landedTextAfter } from "./persistent-room-turn-steps.js";
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
 import { createRoomModelCatalog, providerSignsIn, taggedRecommendation, memoryBudgetNeedsLargerModelSentence, memoryModelHoldsBudget, MemoryModelTooSmallError, memoryModelTooSmallSentence, parseModelLock, readRoomModels, rememberSaveMemoryModels, resolveAiDefault, resolveRoomModel, ROOM_MODEL_TASKS, RoomModelUnavailableError, roomModelUnavailableError, writeAiDefaults, writeRoomModels, type RoomModelCatalog, type RoomModelNames, type RoomModelResolution, type RoomModelTask } from "./room-models.js";
 import { credentialGoneWords, providerCredentialClause } from "./model-not-offered.js";
@@ -89,7 +92,7 @@ import { approvePersistentRoomSkillExecution, computeSkillStatuses, disablePersi
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
 import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool, userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
 import { buildSpecialistSessionPlan, ingestShelfInputs, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
-import { PersistentRoomShelfError, absorbTaskArtifactsIntoShelf, allocateShelfFilename, buildShelfManifestSection, commitReviseArtifactsOntoShelf, commitShelfFileDelete, healShelfMaintenanceAtBoot, listShelfFiles, listShelfFilesWithOrigin, persistentRoomShelfDirPath, renameShelfFile, replayShelfRenameJournals, resolveShelfFilePath, sanitizeShelfFilename, stageShelfFileDelete, sweepExpiredShelfTrash, undoShelfFileDelete, validateShelfFilename, isShelfRelativePath, shelfFilenameFromRelativePath, type ShelfReviseConflict } from "./persistent-room-shelf.js";
+import { PersistentRoomShelfError, absorbTaskArtifactsIntoShelf, allocateShelfFilename, buildShelfManifestSection, commitReviseArtifactsOntoShelf, commitShelfFileDelete, healShelfMaintenanceAtBoot, listShelfFilesWithOrigin, persistentRoomShelfDirPath, renameShelfFile, replayShelfRenameJournals, resolveShelfFilePath, sanitizeShelfFilename, stageShelfFileDelete, sweepExpiredShelfTrash, undoShelfFileDelete, validateShelfFilename, type ShelfReviseConflict } from "./persistent-room-shelf.js";
 import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
 import { reviseConflictNotice } from "./revise-conflict-notice.js";
 import { SHELF_READ_MAX_FILE_BYTES, cachedShelfPageCount, readShelfFileText, sniffShelfFileBuffer } from "./persistent-room-shelf-reading.js";
@@ -100,12 +103,13 @@ import { appendTaskLedgerExport, clearTaskLedgerRecordRemoved, createTaskLedgerR
 import { conversationForgotten, eraseForgottenTask } from "./forget-erase.js";
 import { abortSpecialistTask, bindSpecialistSink, emitSpecialistDelta, registerSpecialistTask, removeSpecialistTask, runningSpecialistCount, sendSpecialistFrame, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
 import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "./specialist-task-store-gc.js";
-import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
+import { getSpecialistTemplate } from "./specialist-templates.js";
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
-import { DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, persistentAgentModelLocksEqual, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
+import { DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, persistentAgentModelLocksEqual, getAvailablePersistentAgentAiProfiles, getPersistentAgentAiProfile, getPersistentRoomModelLocks, isPersistentAgentAiProfileId, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
 import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, effectiveGatewayModel, parseGatewayContextWindow, parseGatewayDetectedSnapshot, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayModelDetected, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
+import { forgetGatewayModelFind, gatewayModelFind } from "./gateway-model-find.js";
 import { discoverGatewayModels, GatewayDiscoveryError, isNonChatGatewayMode, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
 import { resolveGatewayDeclarationsRefreshOptionsFromEnv, startGatewayDeclarationsRefreshLoop, type GatewayDeclarationsRefreshLoopHandle } from "./openai-compatible-gateway-refresh.js";
 import { readRoomOrder, ROOM_ORDER_SAVE_FAILED_SENTENCE, roomOrderPayload, saveRoomOrder, type HiddenRooms } from "./room-order-store.js";
@@ -154,7 +158,7 @@ import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import toolResultAgingExt, { readAgedToolResultMarker } from "../../../pi-package/extensions/tool-result-aging/index.js";
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { AddPersistentRoomScheduleJobInput, PersistentRoomScheduleJob, PersistentRoomScheduleSummary, PersistentRoomScheduleType, UpdatePersistentRoomScheduleJobInput } from "../../../pi-package/extensions/schedule-prompt/index.js";
-import { ensureProductAppStateRoot, ensureProductAppUserDirs, productAppStatePath, productAppStateRoot, stateHome } from "../../../pi-package/product-state-paths.js";
+import { ensureProductAppStateRoot, ensureProductAppUserDirs, productAppStatePath, stateHome } from "../../../pi-package/product-state-paths.js";
 import { createRemoteModeManager, isAllowedTunnelPeerAddress, isRemoteTestModeEnabled } from "./remote-mode.js";
 import { createRemoteDeviceStore, REMOTE_DEVICE_TTL_MS } from "./remote-devices.js";
 import { classifyRemoteRoute } from "./remote-route-policy.js";
@@ -165,7 +169,9 @@ import { agentSkillsDir, computeSkillFilesDigest, localSkillProvenance, migrateL
 import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeFinding } from "./skills-import.js";
 import { fetchRepoCheckout, getCheckout, installCheckoutCleanup, loadFeaturedSource, parseSkillFrontmatter as parseFrontmatter, readRepoCandidate, registerCheckout, removeCheckout, resolveFeaturedSources, resolveRepoSource, scanRepoSkills, vendorRepoSkill, isMissingToolMessage } from "./skills-repo-fetch.js";
 import JSZip from "jszip";
-import { appendUsage, resolveUsageAuthType } from "./usage-log.js";
+import { answerlessCallMovedNothing, appendUsage, emptyAnswer, resolveUsageAuthType, usageMovedNothing } from "./usage-log.js";
+import { keepAppTurnFailure, lastShownUserText, returnedPromptOf, settleReturnedPrompt, stepBackFromFailedPrompt, type ReturnedPrompt } from "./failed-prompt-step-back.js";
+import { lastUserItemIsScheduledPrompt } from "./persistent-room-background-execution.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
 import { importHistoricalSessionUsage } from "./usage-import.js";
 import { buildMemoryAskContext, withoutMemoryIds, buildMemoryDigest, buildMemoryOverview, buildRoomMemory, buildRoomMemoryHistory, listMemoryConversations, MEMORY_EVENT_DIFF_KINDS, readConversationTranscript, readMemoryArea, readMemoryEventDiff, readMemoryNotesView, readMemorySnapshotAt, searchMemory } from "./memory-api.js";
@@ -174,17 +180,20 @@ import { registerReviewAssessRoutes } from "./review-assess-routes.js";
 import { undoMemorySave } from "./memory-undo.js";
 import { withRoomSaveLock } from "./memory-commit.js";
 import { memoryCallCacheRetention, type MemoryCallKind } from "./memory-call-cache.js";
-import { clearKeptDiscussion, firstReadOnce, keepDiscussionTurns } from "./memorize-discussion-keep.js";
+import { askerLeftSignal, cancelFirstRead, clearKeptDiscussion, firstReadAsk, firstReadOnce, keepDiscussionTurns } from "./memorize-discussion-keep.js";
 import { cancelRememberJob, discardRememberJob, dropKeptProposal, getRememberJob, rememberCancelledReply, rememberJobSettled, startRememberJob, takeRestartedRemember } from "./remember-job.js";
 import { countRememberPartNotes } from "./remember-parts-cache.js";
 import { absorbRunStatusFields, approveAbsorbRun, cancelAbsorbRun, chooseAbsorbRunBeside, editAbsorbRunEntry, getAbsorbRun, keepAbsorbRunEntries, moveAbsorbRunSortedNote, parseAbsorbRunProposeRequest, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, ABSORB_PROBE_PROMPT, ABSORB_PROBE_TIMEOUT_MS, type AbsorbRunApprovalResponse } from "./absorb-run.js";
-import { callWithPatience, failedTurnKey, failureWords, MODEL_CALL_IDLE_TIMEOUT_MS, ModelUnreachableError, notOfferedLine, notOnAccountLine, roomCallWait, withRoomCallWait, type PatienceWait } from "./model-call-causes.js";
+import { answerStarted, callWithPatience, compactionFailureOf, quotaWayOf, failedMessageError, failedTurnCredential, failureCodesOf, failureWords, forgetKeyRefusal, keyRefusalOf, keyRefusedSetupSentence, MODEL_CALL_IDLE_TIMEOUT_MS, noteKeyOutcome, type KeyRefusal, ModelUnreachableError, notOfferedLine, notOnAccountLine, providerFailureLogFields, retryFailureOf, roomCallWait, turnFailureOf, withRoomCallWait, type PatienceWait } from "./model-call-causes.js";
 import { FOLD_TRIGGER_PROMPT } from "./absorb-ops.js";
 import { registerReviewRunRoutes } from "./review-run-routes.js";
 import { hasActiveReviewRun } from "./review-run.js";
 import { REVIEW_TRIGGER_PROMPT } from "./review-ops.js";
 import { searxngSetupStatus, startSearxngSetup, updateSearxngOnBoot } from "./searxng-setup.js";
 import { isSharedServer, serverHooks } from "./server-hooks.js";
+import { SERVER_STOPPING_CODE, SERVER_STOPPING_SENTENCE, STOP_CUT_ANSWER_SENTENCE, STOP_QUESTIONS_SENTENCE, answerAlreadyEnded, installServerStop, refuseWhileStopping, serverStopping, stopRefuses, trackLiveConnection, trackRunningWork } from "./server-stop.js";
+import { abortSpecialistTasksInAllRooms, runningSpecialistCountInAllRooms } from "./persistent-room-specialist-registry.js";
+import { countPersistentAgentTurnsInFlight } from "./persistent-agents.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
@@ -343,6 +352,8 @@ const detachedCookingTurnHandles = new Map<string, DetachedCookingTurnHandle>();
 // note. 12 minutes is deliberately far above any legitimate single turn while
 // still bounded. Env override exists for tests only.
 const DETACHED_TURN_DEADLINE_MS = Number(process.env.EXXETA_DETACHED_TURN_DEADLINE_MS ?? "") || 12 * 60_000;
+// A turn waits for the runtime's shortening after an overflow at most this long, so a summary that never ends cannot hold the conversation.
+const OVERFLOW_RECOVERY_CEILING_MS = 4 * 60_000;
 // The reattach replay buffer is byte-capped. A turn whose
 // frames exceed this stops buffering, frees what it held, and marks itself
 // replay-unavailable: a reattach then gets the honest room_cooking bounce (the
@@ -539,6 +550,10 @@ class TokenRedactingLogController extends LogController {
 // token query value, so the /auth/session exchange never lands a usable
 // token in dev logs (production logs at warn and skips request lines anyway).
 const app = Fastify({
+	// Room ids reach 120 characters; the default of 100 answered 414 for them.
+	maxParamLength: 256,
+	// A request reaching a closing server goes through the stop's door (server-stop.ts), never the framework's bare 503.
+	return503OnClosing: false,
 	logController: new TokenRedactingLogController(),
 	logger: {
 		level: LOG_LEVEL,
@@ -724,6 +739,15 @@ app.addHook("onRequest", async (req, reply) => {
 // Nothing with side effects may run before it (a preParsing or preValidation hook, a writing body parser).
 const guardRequest = serverHooks().guardRequest;
 if (guardRequest) app.addHook("preHandler", async (req, reply) => guardRequest(req, reply));
+// A stopping server (server-stop.ts): /healthz answers 503, and requests that start work are refused with the code.
+// Callback style, so a server that is not stopping adds no await to any request
+// (one more async hook here empties the body of reply.callNotFound()'s 404).
+app.addHook("preHandler", (req, reply, done) => {
+	if (!serverStopping()) return done();
+	if (req.routeOptions.url === "/healthz") return void reply.code(503).send({ ok: false, code: SERVER_STOPPING_CODE });
+	if (stopRefuses(req.method, req.routeOptions.url)) return void refuseWhileStopping(reply);
+	done();
+});
 
 app.get("/healthz", async () => ({ ok: true, persona: process.env.EXXETA_PERSONA ?? "business" }));
 
@@ -1313,10 +1337,10 @@ function persistentRoomWorkspaceErrorPayload(error: unknown): { statusCode: numb
 // so the running conversation follows the live default from its next message;
 // a sidecar that differs from the default is a deliberate per-conversation
 // override and stays authoritative.
-function guardActiveThreadBeforeWorkspaceDefaultMutation(status: ReturnType<typeof getUsablePersistentAgentStatusForNormalUse>): void {
+function guardActiveThreadBeforeWorkspaceDefaultMutation(status: ReturnType<typeof getUsablePersistentAgentStatusForNormalUse>, action: "Save" | "Clear"): void {
 	const activeThread = status.activeThread;
 	if (!activeThread) return;
-	assertPersistentRoomWorkspaceDefaultMutable(activeThread);
+	assertPersistentRoomWorkspaceDefaultMutable(activeThread, action);
 	releasePersistentRoomThreadWorkspaceMirror(status.id, activeThread.threadId);
 }
 
@@ -2254,7 +2278,7 @@ function mergeLandedAnswerTailIntoClientItems(agentId: string, threadId: string,
 	try { existing = getPersistentAgentThread(agentId, threadId); } catch { return incoming; }
 	const existingItems: any[] = existing?.items ?? [];
 	const landedAssistants = existingItems.filter((item: any) => item?.kind === "assistant" && String(item?.id ?? "").startsWith("detached-assistant-"));
-	if (landedAssistants.length === 0) return incoming;
+	if (landedAssistants.length === 0 && !existingItems.some((item: any) => String(item?.id ?? "").startsWith("detached-step-"))) return incoming;
 	const incomingIds = new Set(incoming.map((item: any) => String(item?.id ?? "")));
 	let merged: any[] = [...incoming];
 	for (const landed of landedAssistants) {
@@ -2281,7 +2305,37 @@ function mergeLandedAnswerTailIntoClientItems(agentId: string, threadId: string,
 				merged.push(userSibling);
 			}
 		}
+		// The landed turn's steps come back with it, finished, in place of the page's own copies after its last prompt.
+		const lastUser = merged.map((item: any) => item?.kind).lastIndexOf("user");
+		const landedSteps = existingItems.filter((item: any) => String(item?.id ?? "").startsWith(`detached-step-${landedId.slice("detached-assistant-".length)}-`));
+		if (landedSteps.length > 0) merged = [...merged.filter((item: any, index: number) => index <= lastUser || item?.kind !== "tool"), ...landedSteps];
 		merged.push(landed);
+	}
+	// A landing with steps and no answer is landed content too: its steps come back the same way, after their prompt.
+	const stepTurnOf = (item: any) => String(item?.id ?? "").replace(/-\d+$/, "");
+	for (const stepTurn of new Set(existingItems.filter((item: any) => String(item?.id ?? "").startsWith("detached-step-")).map(stepTurnOf))) {
+		const landedSteps = existingItems.filter((item: any) => stepTurnOf(item) === stepTurn);
+		if (landedAssistants.some((landed: any) => String(landed.id) === `detached-assistant-${stepTurn.slice("detached-step-".length)}`) || landedSteps.some((step: any) => incomingIds.has(String(step.id)))) continue;
+		const before = existingItems.slice(0, existingItems.indexOf(landedSteps[0]));
+		const prompt = [...before].reverse().find((item: any) => item?.kind === "user");
+		// With no prompt before them, the steps go after the newest message, as they always did.
+		if (!prompt) {
+			const lastUser = merged.map((item: any) => item?.kind).lastIndexOf("user");
+			merged = [...merged.filter((item: any, index: number) => index <= lastUser || item?.kind !== "tool"), ...landedSteps];
+			continue;
+		}
+		// Anchored on the turn's own prompt (by id, else the same text as often as before it), so a later message never takes its steps.
+		const sameText = (item: any) => item?.kind === "user" && normalizedThreadAnswerText(item?.text) === normalizedThreadAnswerText((prompt as any).text);
+		const byText = merged.filter(sameText)[before.filter(sameText).length - 1];
+		let anchor = merged.findIndex((item: any) => item?.kind === "user" && String(item?.id ?? "") === String((prompt as any).id ?? ""));
+		if (anchor < 0 && byText) anchor = merged.indexOf(byText);
+		if (anchor < 0) { merged.push(prompt); anchor = merged.length - 1; }
+		let end = merged.findIndex((item: any, index: number) => index > anchor && item?.kind === "user");
+		if (end < 0) end = merged.length;
+		const stretch = merged.slice(anchor + 1, end);
+		// The page's own finished copies of these steps already stand for them; a running or stopped copy never does.
+		if (landedSteps.every((step: any) => stretch.some((item: any) => item?.kind === "tool" && item.status !== "running" && item.status !== "stopped" && item.name === step.name && JSON.stringify(item.args ?? {}) === JSON.stringify(step.args ?? {})))) continue;
+		merged = [...merged.slice(0, anchor + 1), ...stretch.filter((item: any) => item?.kind !== "tool"), ...landedSteps, ...merged.slice(end)];
 	}
 	return merged;
 }
@@ -2517,6 +2571,15 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+// Whether this request may carry a full path from this computer: only a page
+// on this computer, decided here per request, so a remote device or a shared
+// server never receives one.
+function requestGetsLocalPaths(req: FastifyRequest): boolean {
+	return !(req as any).exxRemoteDevice && !isSharedServer();
+}
+function workspacePolicyViewFor(req: FastifyRequest, policy: PersistentRoomCapabilityPolicy) {
+	return persistentRoomCapabilityPolicyView(policy, { withPaths: requestGetsLocalPaths(req) });
+}
 app.get("/api/persistent-agents/:id/workspace-policy", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
@@ -2530,7 +2593,7 @@ app.get("/api/persistent-agents/:id/workspace-policy", async (req, reply) => {
 			agentId: id,
 			conversationId,
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE },
-			policy: policy ? persistentRoomCapabilityPolicyView(policy) : null,
+			policy: policy ? workspacePolicyViewFor(req, policy) : null,
 		};
 	} catch (e) {
 		const payload = persistentRoomWorkspaceErrorPayload(e);
@@ -2840,7 +2903,7 @@ app.get("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 		return {
 			agentId: id,
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE },
-			policy: policy ? persistentRoomCapabilityPolicyView(policy) : null,
+			policy: policy ? workspacePolicyViewFor(req, policy) : null,
 			warnings: missingPersistentRoomWorkspaceRootWarnings(policy),
 			// Looked up afresh on every read: the pane asks again when it opens.
 			shellMissingNote: persistentRoomShellFound(policy?.roots[0]?.path ?? REPO_ROOT) ? null : PERSISTENT_ROOM_SHELL_MISSING_SENTENCE,
@@ -2877,19 +2940,19 @@ app.put("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 			});
 		} else {
 			const existingDefault = readPersistentRoomDefaultCapabilityPolicy(id);
-			if (!existingDefault) throw new Error("Workspace root is required.");
+			if (!existingDefault) throw new Error("Choose a folder for this room.");
 			const workspaceAccessMode = normalizePersistentRoomWorkspaceAccessModeInput(body.workspaceAccessMode, { defaultMode: existingDefault.workspaceAccessMode });
 			const toolSelection = Object.prototype.hasOwnProperty.call(body, "toolSelection")
 				? normalizePersistentRoomWorkspaceToolSelectionInput(body.toolSelection, { defaultToStandard: true, workspaceAccessMode })
 				: undefined;
 			policy = updatePersistentRoomCapabilityPolicyWorkspaceSettings(existingDefault, { workspaceAccessMode, ...(toolSelection ? { toolSelection } : {}), ...(Object.prototype.hasOwnProperty.call(body, "bashEnabled") ? { bashEnabled: body.bashEnabled === true } : {}) });
 		}
-		guardActiveThreadBeforeWorkspaceDefaultMutation(status);
+		guardActiveThreadBeforeWorkspaceDefaultMutation(status, "Save");
 		writePersistentRoomDefaultCapabilityPolicy(policy);
 		return {
 			agentId: id,
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE },
-			policy: persistentRoomCapabilityPolicyView(policy),
+			policy: workspacePolicyViewFor(req, policy),
 			warnings: [],
 		};
 	} catch (e) {
@@ -2902,7 +2965,7 @@ app.delete("/api/persistent-agents/:id/workspace-default", async (req, reply) =>
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const id = status.id;
-		guardActiveThreadBeforeWorkspaceDefaultMutation(status);
+		guardActiveThreadBeforeWorkspaceDefaultMutation(status, "Clear");
 		const result = deletePersistentRoomDefaultCapabilityPolicy(id);
 		return {
 			agentId: id,
@@ -2946,7 +3009,7 @@ app.post("/api/persistent-agents/:id/workspace/validate", async (req, reply) => 
 			agentId: id,
 			conversationId,
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE },
-			policy: persistentRoomCapabilityPolicyView(policy),
+			policy: workspacePolicyViewFor(req, policy),
 			warnings,
 		};
 	} catch (e) {
@@ -2982,13 +3045,16 @@ app.post("/api/persistent-agents/:id/absorb/assess", async (req, reply) => {
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
+		// The page's Cancel for its own ask: the one thing that ends a first read.
+		if ((req.body as any)?.cancel === true) return { cancelled: cancelFirstRead(createPersistentAgentInstance(id).rootDir, "memorize", firstReadAsk(req.body)) };
 		const modelLock = roomMemoryModelForUpkeep(id);
 		const retryFeedback = parseAssessmentRetryFeedback((req.body as any)?.retryFeedback);
 		const instance = createPersistentAgentInstance(id);
-		// Asked again for a new read (Reassess): the kept one and its discussion go.
-		if (retryFeedback) clearKeptDiscussion(instance.rootDir);
-		// One first read per memory and model: kept for a reload, joined by a second tab.
-		return await firstReadOnce(instance.rootDir, modelLock, fingerprintL1bSource(instance.readL1b()).value, () => buildAbsorbAssessment(id, modelLock, async (prompt, modelLock) => withRoomCallWait(id, "absorb", (onWait) => runPatientMemoryWorker(id, prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { onWait }, true)), { resolveModelWindow: consultModelWindow, retryFeedback }), { fresh: Boolean(retryFeedback) });
+		// Asked again for a new read (Read again): the kept one and its discussion go.
+		const fresh = Boolean(retryFeedback) || (req.body as any)?.fresh === true;
+		if (fresh) clearKeptDiscussion(instance.rootDir);
+		// One first read per memory and model: kept for a reload, joined by a second tab or a reloaded page, ended only by Cancel.
+		return await firstReadOnce(instance.rootDir, modelLock, fingerprintL1bSource(instance.readL1b()).value, (signal) => buildAbsorbAssessment(id, modelLock, async (prompt, modelLock) => withRoomCallWait(id, "absorb", (onWait) => runPatientMemoryWorker(id, prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { callKind: "first-read", onWait, signal }, true)), { resolveModelWindow: consultModelWindow, retryFeedback }), { fresh, ask: firstReadAsk(req.body), signal: askerLeftSignal(reply.raw) });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -3000,7 +3066,7 @@ app.post("/api/persistent-agents/:id/absorb/discuss", async (req, reply) => {
 		const id = status.id;
 		const modelLock = roomMemoryModelForUpkeep(id);
 		const body = (req.body ?? {}) as any;
-		const turn = await buildAbsorbDiscussionTurn({ ...body, agentId: id }, modelLock, async (prompt, modelLock) => withRoomCallWait(id, "absorb", (onWait) => runPatientMemoryWorker(id, prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion response now.", "absorb discussion worker produced no text", { onWait }, true)), { resolveModelWindow: consultModelWindow });
+		const turn = await buildAbsorbDiscussionTurn({ ...body, agentId: id }, modelLock, async (prompt, modelLock) => withRoomCallWait(id, "absorb", (onWait) => runPatientMemoryWorker(id, prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion response now.", "absorb discussion worker produced no text", { callKind: "discussion", onWait }, true)), { resolveModelWindow: consultModelWindow });
 		// The discussion as it stands, kept beside its first read for a reload.
 		keepDiscussionTurns(createPersistentAgentInstance(id).rootDir, String(body?.source?.l1bFingerprint?.value ?? ""), [...(Array.isArray(body?.messages) ? body.messages : []), { role: "user", content: String(body?.userMessage ?? "").trim() }, turn.message], turn.tokenBudget);
 		return turn;
@@ -3014,7 +3080,7 @@ app.post("/api/persistent-agents/:id/absorb/discuss/signoff", async (req, reply)
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const modelLock = roomMemoryModelForUpkeep(id);
-		return await buildAbsorbDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, modelLock, async (prompt, modelLock) => withRoomCallWait(id, "absorb", (onWait) => runPatientMemoryWorker(id, prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion signoff handoff now.", "absorb discussion signoff worker produced no text", { onWait }, true)), { resolveModelWindow: consultModelWindow });
+		return await buildAbsorbDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, modelLock, async (prompt, modelLock) => withRoomCallWait(id, "absorb", (onWait) => runPatientMemoryWorker(id, prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion signoff handoff now.", "absorb discussion signoff worker produced no text", { callKind: "discussion", onWait }, true)), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -3027,7 +3093,7 @@ registerReviewAssessRoutes(app, {
 	reviewRunActive: (agentId) => hasActiveReviewRun(agentId),
 	errorReply: (reply, error) => persistentAgentNormalUseErrorReply(reply, error),
 	modelLock: (agentId) => roomMemoryModelForUpkeep(agentId),
-	generate: (agentId, prompt, modelLock, options) => withRoomCallWait(agentId, "review", (onWait) => runPatientMemoryWorker(agentId, prompt, modelLock, resolveAbsorbModel, "review worker", "Produce the Review first read now.", "the Review worker produced no text", { ...options, callKind: "first-read", onWait }, true)),
+	generate: (agentId, prompt, modelLock, options) => withRoomCallWait(agentId, "review", (onWait) => runPatientMemoryWorker(agentId, prompt, modelLock, resolveAbsorbModel, "review worker", "Produce the Review first read now.", "the Review worker produced no text", { callKind: "first-read", ...options, onWait }, true)),
 	resolveModelWindow: (modelLock) => consultModelWindow(modelLock),
 });
 /** The calls a Memorize run makes; a run a restart left behind gets them again at Continue. */
@@ -3037,7 +3103,7 @@ function absorbRunCalls(id: string): Pick<Parameters<typeof startAbsorbRun>[0], 
 		// The fold has its own probe for the end of the patience (absorb-run-pages.ts), so a spent failure is handed back to it; a first call that cannot connect asks the probe here.
 		generate: (prompt, modelLock, options) => runPatientMemoryWorker(id, prompt, modelLock, resolveAbsorbModel, "memorize fold worker", FOLD_TRIGGER_PROMPT, "the fold worker produced no text", { ...options, callKind: "fold" }, "first-call"),
 		// The tiny fixed question that tells a page's failure from an outage.
-		probe: (prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "memorize probe worker", prompt, "the probe worker produced no text", { agent: id, kind: "upkeep" }, options),
+		probe: (prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "memorize probe worker", prompt, "the probe worker produced no text", { agent: id, kind: "upkeep" }, { ...options, callKind: "probe" }),
 	};
 }
 // Memorize v2: propose no longer drafts. It starts a RUN — the server folds the
@@ -3250,9 +3316,10 @@ async function runRememberJob(id: string, conversationId: string, request: Recor
 					cacheRetention: memoryCallCacheRetention(callKind),
 				});
 			} catch (error) {
-				// A failed call is paid for too.
+				// A failed call is paid for too, when it moved tokens.
+				logProviderCallFailed({ room: id, callKind, provider: modelLock.provider, model: modelLock.model }, error);
 				const usage = (error as { usage?: Parameters<typeof recordWorkerUsage>[3] })?.usage;
-				if (usage) recordWorkerUsage(id, "upkeep", modelLock, usage, callKind);
+				if (usage && !usageMovedNothing(usage)) recordWorkerUsage(id, "upkeep", modelLock, usage, callKind);
 				throw error;
 			}
 			recordWorkerUsage(id, "upkeep", modelLock, workerResult.usage, callKind);
@@ -3291,7 +3358,7 @@ app.post("/api/persistent-agents/:id/checkpoint/propose", { bodyLimit: 16 * 1024
 		const body = (req.body ?? {}) as any;
 		const { id, conversationId, runtimeCwd } = rememberRoomAndConversation(req, body.conversationId);
 		// Only the room's open conversation is remembered: a window the room moved on from is told so.
-		if (getPersistentAgentRuntimeState(id).activeThreadId !== conversationId) throw conversationMovedError();
+		assertRememberReadsOpenConversation(id, conversationId);
 		// Remember runs on the room's memory model; a model the client names is ignored.
 		const { model: _clientModel, background, ...request } = body;
 		const started = startRememberJob(id, conversationId, (signal) => runRememberJob(id, conversationId, request, runtimeCwd, signal));
@@ -3503,7 +3570,7 @@ app.post("/api/auth/login", async (req, reply) => {
 	const provider = String((req.body as { provider?: unknown } | null)?.provider ?? "").trim();
 	if (!provider) return reply.code(400).send({ error: "provider is required" });
 	try {
-		return await startProviderLogin(provider);
+		return await startProviderLogin(provider, () => forgetKeyRefusal(provider));
 	} catch (e) {
 		const statusCode = e instanceof ProviderAuthError ? e.statusCode : 500;
 		return reply.code(statusCode).send({ error: (e as Error).message });
@@ -3519,6 +3586,7 @@ app.post("/api/auth/logout", async (req, reply) => {
 	if (!provider) return reply.code(400).send({ error: "provider is required" });
 	try {
 		logoutProvider(provider);
+		forgetKeyRefusal(provider);
 		return { ok: true };
 	} catch (e) {
 		const statusCode = e instanceof ProviderAuthError ? e.statusCode : 500;
@@ -3534,8 +3602,10 @@ app.post("/api/auth/api-key", async (req, reply) => {
 	const key = typeof body.key === "string" ? body.key : "";
 	if (!provider) return reply.code(400).send({ error: "provider is required" });
 	try {
-		const notice = await checkProviderApiKey(provider, key);
+		const notice = await checkProviderApiKey(provider, key, (failure) => logProviderCallFailed({ callKind: "key-check", provider }, failure));
 		saveProviderApiKey(provider, key);
+		forgetKeyRefusal(provider);
+		forgetGatewayModelFind(provider);
 		// Never echo the key back.
 		return { ok: true, provider, ...(notice ? { notice } : {}) };
 	} catch (e) {
@@ -3641,6 +3711,8 @@ type PersistentAgentAiProfileDiagnostic = {
 		configured: boolean;
 		source?: string;
 		label?: string;
+		/** The service refused the saved key, or found the sign-in gone, at the last call; `ready` still says only that it is set up. */
+		keyRefused?: KeyRefusal;
 	};
 	active: boolean;
 	ready: boolean;
@@ -4043,6 +4115,11 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 	const issues: string[] = [];
 
 	if (!providerAuth.configured) issues.push(`${profile.label} provider is not connected.`);
+	// A sign-in gone is shown only on a stored sign-in: the same provider can hold a key instead.
+	const refusal = providerAuth.configured ? keyRefusalOf(profile.providerId) : undefined;
+	const keyRefused = refusal === "signed-out" && registry.authStorage.get(profile.providerId)?.type !== "oauth" ? undefined : refusal;
+	const keyRefusedSentence = keyRefused ? keyRefusedSetupSentence(keyRefused) : null;
+	if (keyRefusedSentence) issues.push(keyRefusedSentence);
 	for (const model of requiredModels) {
 		if (!model.present) issues.push(`Mapped model not found: ${model.provider}/${model.model}.`);
 		else if (!model.authConfigured) issues.push(`Mapped model provider is not connected: ${model.provider}/${model.model}.`);
@@ -4065,10 +4142,11 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 			configured: providerAuth.configured,
 			source: providerAuth.source,
 			label: providerAuth.label,
+			...(keyRefused ? { keyRefused } : {}),
 		},
 		active: profileId === activeProfileId,
 		ready,
-		message: ready ? null : `${profile.label} profile setup needed`,
+		message: keyRefusedSentence ?? (ready ? null : `${profile.label} profile setup needed`),
 		issues,
 		requiredModels,
 		processes: {
@@ -4332,9 +4410,10 @@ async function runIsolatedLifecycleWorker<TModelLock extends { provider: string;
 			...(options?.callKind ? { cacheRetention: memoryCallCacheRetention(options.callKind) } : {}),
 		});
 	} catch (error) {
-		// A failed call is paid for too: what it used before it failed is recorded.
+		// A failed call is paid for too: what it used before it failed is recorded, when it moved tokens.
+		logProviderCallFailed({ room: attribution?.agent, callKind: options?.callKind, provider: modelLock.provider, model: modelLock.model }, error);
 		const usage = (error as { usage?: Parameters<typeof recordWorkerUsage>[3] })?.usage;
-		if (attribution && usage) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, usage, options?.callKind);
+		if (attribution && usage && !usageMovedNothing(usage)) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, usage, options?.callKind);
 		throw error;
 	}
 	if (attribution) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, result.usage, options?.callKind);
@@ -4718,7 +4797,9 @@ function saveGatewayEverywhere(gateway: OpenAiCompatibleGateway, key: string, is
 	}
 	writeOpenAiCompatibleGateway(gateway);
 	if (!isNew && key) saveProviderApiKey(gateway.providerId, key);
+	if (key) forgetKeyRefusal(gateway.providerId);
 	forgetGatewayProviderLabel(gateway.providerId);
+	forgetGatewayModelFind(gateway.providerId);
 }
 
 /** The code a refusal carries when a new address needs its own key: the edit form says it at the key field. */
@@ -4906,6 +4987,8 @@ function gatewayDeleteHandler(gatewayId: string, reply: any) {
 		return reply.code(500).send({ error: (e as Error).message });
 	}
 	forgetGatewayProviderLabel(gateway.providerId);
+	forgetKeyRefusal(gateway.providerId);
+	forgetGatewayModelFind(gateway.providerId);
 	// The explicit choice pointed at this gateway: drop it, so the state follows
 	// the signed-in provider instead of reporting an unknown profile forever.
 	if (readSavedPersistentAgentAiProfileId() === gatewayId) clearSavedPersistentAgentAiProfileState();
@@ -5906,6 +5989,12 @@ function recordUsage(row: UsageRow): void {
 	appendUsage(row, (message) => app.log.warn(message));
 }
 
+/** One log line per failed provider call, codes only (providerFailureLogFields); none for a cancelled one. */
+function logProviderCallFailed(call: { room?: string; callKind?: string; provider: string; model?: string }, error: unknown): void {
+	const fields = providerFailureLogFields(error, call.provider);
+	if (fields) app.log.warn({ ...call, ...fields }, "provider call failed");
+}
+
 /**
  * Account a background worker turn (memory upkeep, HiveMind) to the ledger.
  * The worker just completed against modelLock, so the provider was
@@ -6747,6 +6836,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		terminalReason?: PersistentWebTurnTerminalReason;
 		abortPromise?: Promise<void>;
 		promptSettled: boolean;
+		/** Set when a server stop ended the turn: its end events carry it, and a landing after its person left uses the cut answer's sentence. */
+		stoppedByServer?: true;
 	};
 	let activePersistentWebTurn: ActivePersistentWebTurn | null = null;
 	// Detach instead of abort: a disconnect while a turn is in
@@ -6760,6 +6851,9 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// handler owns landing the finished answer, releasing the room lock and
 	// disposing the session.
 	let detachedFromClient = false;
+	// Set when the client left during a server stop after the answer had ended,
+	// while the runtime's post-turn work still ran: the person watched it end.
+	let leftAfterAnswerEndedInStop = false;
 	// Post-stream tail: thread answers are client-
 	// authored and the debounced persist rearms on every reveal tick, so the
 	// first write carrying the answer lands ~500ms after the LAST tick. A turn
@@ -6768,10 +6862,12 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// finishPersistentAgentTurn, preserving the no-turn-in-flight write order),
 	// is what the close handler needs to land the answer server-side when the
 	// client dies inside that window. Per-connection closure state, cleared
-	// when the next turn begins; error/cancel settles never set it.
+	// when the next turn begins; error/cancel settles never set it, except a
+	// turn a server stop ended, which sets it for its partial and marks it
+	// `stoppedByServer`, so the partial lands as cut.
 	// `startedAt` and `settledAt` stamp the landed items with the turn's own
 	// times, not the moment the close handler ran.
-	type SettledTurnLandingSnapshot = { turnId: string; finalAssistantText: string; anchorItemId: string | null | undefined; userText: string; startedAt?: number; settledAt: number };
+	type SettledTurnLandingSnapshot = { turnId: string; finalAssistantText: string; anchorItemId: string | null | undefined; userText: string; startedAt?: number; settledAt: number; stepLog?: ReturnType<typeof createTurnStepLog>; stoppedByServer?: true };
 	let settledTurnLandingSnapshot: SettledTurnLandingSnapshot | null = null;
 	// The turn's user-authored prompt text, kept through settle: the consent
 	// variable (activeTurnUserAuthoredText) is deliberately nulled the moment
@@ -6929,15 +7025,37 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		sawAssistantAfterToolResult: boolean;
 		usedRetrievalTools: boolean;
 		finalAssistantText: string;
+		/** The answer's text before a failed attempt the runtime is asking again. */
+		retryFrom?: string;
 	} = { toolCalls: [], toolResults: [], toolNameById: new Map(), sawToolResult: false, sawAssistantAfterToolResult: false, usedRetrievalTools: false, finalAssistantText: "" };
+	// Kept apart from the trace, which the tool-turn recovery resets before a landing reads it.
+	let turnSteps = createTurnStepLog();
 
 	// Skills MR-5 telemetry (spec §5): bodies read via read_skill, surfaced per
 	// turn. Mutated by the tool, reported + reset when the next turn's trace opens.
 	const persistentRoomSkillTelemetry = { reads: 0, bodyChars: 0 };
 	// The condense-failure notice is said once per turn (a turn may attempt twice).
 	let lastCompactionNoticeCause: string | undefined;
+	// The runtime's own overflow recovery (shorten, then ask again) ends after the turn does; true when it will ask again,
+	// or when the turn was left, stopped or waited too long while it ran: the message then stays where it is.
+	let overflowRecovery: Promise<boolean> | undefined;
+	let endOverflowRecovery: ((askAgain: boolean) => void) | undefined;
+	// The person stopped or left during the shortening: its cancelled end says nothing.
+	let overflowRecoveryStopped = false;
+	// Ends the wait and the runtime's shortening with it, so the runtime never asks the model again behind a freed conversation.
+	const stopOverflowRecovery = (quiet: boolean): void => {
+		if (!endOverflowRecovery) return;
+		overflowRecoveryStopped = quiet;
+		endOverflowRecovery(true);
+		endOverflowRecovery = undefined;
+		try { (session as any)?.abortCompaction?.(); } catch (error) { app.log.warn({ err: error }, "stopping the overflow shortening failed"); }
+	};
+	// A spent quota's retry is stopped after the runtime let the failed attempt go from its list: the turn still ended failed.
+	let stoppedForQuota = false;
 	const resetTurnTrace = () => {
 		lastCompactionNoticeCause = undefined;
+		overflowRecovery = undefined;
+		stoppedForQuota = false;
 		if (persistentRoomSkillTelemetry.reads > 0) {
 			app.log.info({ agentId: persistentAgentIdForSession, skillReads: persistentRoomSkillTelemetry.reads, skillBodyChars: persistentRoomSkillTelemetry.bodyChars }, "persistent-room turn read skill bodies");
 			streamTrace.note("skill_reads", { reads: persistentRoomSkillTelemetry.reads, bodyChars: persistentRoomSkillTelemetry.bodyChars });
@@ -7010,6 +7128,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			return Promise.resolve((sessionToAbort as any).abort?.()).then(() => undefined);
 		}
 		setActivePersistentWebTurnTerminalReason(reason);
+		stopOverflowRecovery(true);
 		try { markPersistentAgentTurnCancelling(persistentAgentIdForSession, persistentConversationId, reason); } catch (error) { app.log.warn({ err: error }, "failed to mark persistent-room turn cancelling"); }
 		if (!turn.abortPromise) {
 			turn.abortPromise = (async () => {
@@ -7032,6 +7151,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		}
 		if (sessionDisposed) return;
 		sessionDisposed = true;
+		stopOverflowRecovery(true);
 		try { (sessionToDispose as any).dispose?.(); } catch {}
 	};
 
@@ -7042,7 +7162,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// leave save); the landed text carries the WHOLE turn, so trailing
 	// assistant items after the last user item are superseded, not additional.
 	// Parked as standby so the launcher offers Resume, like a scheduled run.
-	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason, options: { watchedByAdopter?: boolean; snapshot?: SettledTurnLandingSnapshot } = {}): void => {
+	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason, options: { watchedByAdopter?: boolean; snapshot?: SettledTurnLandingSnapshot; handedBack?: boolean } = {}): void => {
 		const current = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
 		if (!current || current.state === "closed") return;
 		// `watchedByAdopter` means a session stepped back in and
@@ -7053,10 +7173,16 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// (the adopter watched the live error), no standby parking (the room is
 		// open), no unseen marker (the answer was seen landing).
 		const watched = options.watchedByAdopter === true;
-		const finalText = (options.snapshot ? options.snapshot.finalAssistantText : turnTrace.finalAssistantText).trim();
+		// A message handed back to the box took its failed attempts with it: their partial text is no answer to land.
+		const finalText = options.handedBack ? "" : (options.snapshot ? options.snapshot.finalAssistantText : turnTrace.finalAssistantText).trim();
 		const safeTurnId = turnId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 96);
 		let items = [...(current.items ?? [])];
-		if (finalText) {
+		// A snapshot outlives its turn, so it says itself whether the stop cut it.
+		const stopCut = options.snapshot ? options.snapshot.stoppedByServer === true : activePersistentWebTurn?.turnId === turnId && activePersistentWebTurn.stoppedByServer === true;
+		// A turn with no answer keeps its steps too: they say what became of a question nobody answered.
+		// A handed-back message is back in the box, so its attempts' steps (a call cut off mid-stream reads as "stopped") are no record of it.
+		const landedSteps = options.handedBack ? [] : (options.snapshot ? options.snapshot.stepLog : turnSteps)?.items(`detached-step-${safeTurnId}`) ?? [];
+		if (finalText || landedSteps.length > 0) {
 			// Supersede anchored on the last item the file held at TURN START
 			// (same fix as the client's reattach supersede): only items the
 			// cooking turn itself produced are debris. Anchoring on the last
@@ -7104,15 +7230,17 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			if (!tailHasUser && anchorUserText) {
 				items.push({ kind: "user", id: `detached-user-${safeTurnId}`, text: anchorUserText, ...(typeof turnStartedAt === "number" ? { ts: turnStartedAt } : {}) });
 			}
-			items.push({ kind: "assistant", id: `detached-assistant-${safeTurnId}`, text: finalText, streaming: false, ts: options.snapshot ? options.snapshot.settledAt : Date.now() });
+			items.push(...landedSteps);
+			if (finalText) items.push({ kind: "assistant", id: `detached-assistant-${safeTurnId}`, text: finalText, streaming: false, ts: options.snapshot ? options.snapshot.settledAt : Date.now() });
 			// A partial that landed because the turn FAILED (provider error, or
 			// the detach watchdog hit its deadline) must not read as a finished
 			// answer to someone opening the room later.
-			if (terminalReason === "failed" && !watched) {
-				items.push({ kind: "system", id: `detached-partial-${safeTurnId}`, text: "This response could not be fully finished after you left the room. Send the message again if something is missing.", level: "error" });
+			if (finalText && terminalReason === "failed" && !watched) {
+				items.push({ kind: "system", id: `detached-partial-${safeTurnId}`, text: stopCut ? STOP_CUT_ANSWER_SENTENCE : "This response could not be fully finished after you left the room. Send the message again if something is missing.", level: "error" });
 			}
-		} else if (terminalReason === "failed" && !watched) {
-			items.push({ kind: "system", id: `detached-failure-${safeTurnId}`, text: "The response could not be finished after you left the room. Send the message again to retry.", level: "error" });
+		}
+		if (!finalText && terminalReason === "failed" && !watched && !options.handedBack) {
+			items.push({ kind: "system", id: `detached-failure-${safeTurnId}`, text: stopCut ? STOP_CUT_ANSWER_SENTENCE : "The response could not be finished after you left the room. Send the message again to retry.", level: "error" });
 		}
 		// A dialog that came up with nobody in the room was answered with a safe
 		// default so the turn could keep going. Say that in the transcript
@@ -7407,6 +7535,9 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// frame) go through here so they are recorded for a reattach replay and,
 	// while an adopter is inside, forwarded to its socket instead of this one.
 	const sendTurnFrame = (msg: unknown) => {
+		// A turn a server stop ended says so on its end events.
+		const turnEvent = (msg as { type?: unknown; event?: { type?: unknown } } | null)?.event;
+		if (activePersistentWebTurn?.stoppedByServer && (msg as { type?: unknown }).type === "event" && (turnEvent?.type === "message_end" || turnEvent?.type === "agent_end")) msg = { ...(msg as object), event: { ...turnEvent, stoppedByServer: true } };
 		if (activePersistentWebTurn && !turnReplayOverflowed) {
 			let frameBytes = 0;
 			try { frameBytes = JSON.stringify(msg).length; } catch {}
@@ -7434,7 +7565,34 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// them into the transcript: a decline the user never saw must not depend on
 	// the answer mentioning it.
 	const autoDeclinedQuestions = createPersistentRoomAutoDeclinedQuestionLog();
-	const uiContext = createWebUiContext(send, (question) => autoDeclinedQuestions.note(question));
+	// The stop tells the model its own sentence; the away log is for a person who left, before the stop or during it.
+	let declinedByStop = false;
+	const uiContext = createWebUiContext(send, (question) => { if (!declinedByStop) autoDeclinedQuestions.note(question); });
+	// A server stop (server-stop.ts) tells this connection once, ends its running turn
+	// marked as the stop's, and closes it with 1001. Released at the close, or, for a
+	// turn that goes on after the close, once that turn has landed.
+	const turnRunsForStop = (): boolean => !!(activePersistentWebTurn && !activePersistentWebTurn.promptSettled);
+	const releaseLiveConnectionForStop = trackLiveConnection({
+		notify: () => {
+			send({ type: "server_stopping" });
+			if (turnRunsForStop()) {
+				if (!detachedFromClient) declinedByStop = true;
+				uiContext.detach(STOP_QUESTIONS_SENTENCE);
+			}
+		},
+		endTurn: () => {
+			if (!turnRunsForStop() || !activePersistentWebTurn) return;
+			// An answer that already ended is left to finish while the runtime's post-turn work runs: it is not cut.
+			if (answerAlreadyEnded((session as any)?.agent?.state?.messages)) return;
+			activePersistentWebTurn.stoppedByServer = true;
+			void abortActivePersistentWebTurn("failed");
+		},
+		close: () => {
+			try { socket.close(1001); } catch {}
+		},
+	});
+	// Attached before the first await, so a connection that closes during its bind, or whose bind fails, is released too.
+	socket.on("close", () => { if (!turnKeepsCookingOnClose()) releaseLiveConnectionForStop(); });
 
 	const bindSession = async () => {
 		// Rooms set the active-agent marker to the room id; the permissions
@@ -7494,6 +7652,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			? createPersistentRoomWorkspaceTools(persistentRoomCapabilityPolicy, {
 				localFilesCwd: persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT),
 				skillsFolder: () => (persistentRoomTerminalOn() ? agentSkillsDir() : null),
+				terminalOn: persistentRoomTerminalOn,
 			})
 			: [];
 		if (persistentRoomWorkspaceToolsEnabled) {
@@ -7563,6 +7722,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// user-initiated task_iterate frame (§5 amendment) — same slot hygiene,
 		// same task_* event family, taskId always server-generated in the plan.
 		const launchSpecialistTaskForSession = (plan: SpecialistSessionPlan): { ok: true } | { ok: false; reason: string; plain?: true } => {
+			if (serverStopping()) return { ok: false, reason: SERVER_STOPPING_SENTENCE, plain: true };
 			if (runningSpecialistCount(persistentAgentIdForSession) >= WEB_TASK_CAP) return { ok: false, reason: `the specialist limit (${WEB_TASK_CAP}) is reached` };
 			// Resolve the model BEFORE claiming the slot: this closure's contract
 			// with the delegate tool is "must not throw", and a selection failure
@@ -8167,9 +8327,34 @@ ${lines.join("\n")}`;
 			// Turn frames route through the reattach-aware sender, so a
 			// session stepping back in can replay them and then receive the rest.
 			// A turn refused for a key's credential carries the key's state, so the room names it.
-			const ended = event?.type === "message_end" ? (event.message as { stopReason?: string; provider?: string; errorMessage?: string }) : undefined;
-			const credentialKey = ended?.stopReason === "error" ? failedTurnKey(String(ended.provider ?? ""), String(ended.errorMessage ?? "")) : undefined;
-			sendTurnFrame({ type: "event", event: credentialKey ? { ...projectAgentEventForWebClient(event), credentialKey } : projectAgentEventForWebClient(event) });
+			const ended = event?.type === "message_end" ? (event.message as { stopReason?: string; provider?: string; model?: string; errorMessage?: string; content?: unknown; timestamp?: number }) : undefined;
+			// The status and error type the runtime kept beside the words, read where the words name nothing.
+			const codes = failureCodesOf(ended ?? (event?.type === "auto_retry_start" ? event : undefined));
+			const credential = ended?.stopReason === "error" ? failedTurnCredential(String(ended.provider ?? ""), String(ended.errorMessage ?? ""), codes) : undefined;
+			const credentialKey = credential === "signed-out" ? undefined : credential;
+			if (ended?.provider && ended.stopReason !== "aborted") noteKeyOutcome(String(ended.provider), ended.stopReason === "error" ? credential : "answered", ended.timestamp);
+			// A spent quota will not come back within the runtime's retries: they are stopped once its wait starts, and the usage-limit line stays.
+			const quotaStopsRetry = (words: string) => turnFailureOf(words, false, "", false, codes) === "quota";
+			if (event?.type === "auto_retry_start" && quotaStopsRetry(String((event as any).errorMessage ?? ""))) {
+				stoppedForQuota = true;
+				queueMicrotask(() => session?.abortRetry());
+				return;
+			}
+			// Every failed turn and every retry carries its cause, so the room says what happened in plain words.
+			const failure = ended && emptyAnswer(ended) ? "empty-answer" : ended?.stopReason === "error" ? turnFailureOf(String(ended.errorMessage ?? ""), ((session as any)?.retryAttempt ?? 0) > 0, String(ended.provider ?? ""), answerStarted(ended.content), codes) : event?.type === "auto_retry_start" ? retryFailureOf(String((event as any).errorMessage ?? ""), codes) : undefined;
+			if (ended?.stopReason === "error") logProviderCallFailed({ room: persistentAgentIdForSession, callKind: "chat", provider: String(ended.provider ?? ""), model: ended.model }, failedMessageError(String(ended.errorMessage ?? ""), codes));
+			// A gateway's bare "not found": its line is said at once, and worded again once the gateway's model list says why.
+			if (failure === "gateway-not-found" && ended) {
+				const notFound = { provider: String(ended.provider ?? ""), model: String(ended.model ?? "") };
+				void gatewayModelFind(notFound.provider, notFound.model).then((find) => sendTurnFrame({ type: "gateway_not_found", find, model: notFound }));
+			}
+			// A retry names the model it asks again, so a page that joins mid-retry names it too.
+			const retryModel = event?.type === "auto_retry_start" && (session as any)?.model ? { provider: String((session as any).model.provider ?? ""), model: String((session as any).model.id ?? "") } : undefined;
+			// A failed attempt the runtime asks again: its end draws no line and its run's end keeps Stop, since the retry announces itself just after.
+			// Only the attempt that ends the turn says why; a spent quota's retry is stopped above, so its line stays.
+			const lastAttempt = event?.type === "agent_end" ? [...event.messages].reverse().find((message) => message.role === "assistant") : event?.type === "message_end" && ended?.stopReason === "error" ? event.message : undefined;
+			const retrying = lastAttempt?.role === "assistant" && session?.retriesAfter(lastAttempt) === true && !(ended && quotaStopsRetry(String(ended.errorMessage ?? "")));
+			sendTurnFrame({ type: "event", event: credentialKey || failure || retryModel || retrying ? { ...projectAgentEventForWebClient(event), ...(credentialKey ? { credentialKey } : {}), ...(failure ? { failure } : {}), ...(retryModel ? { model: retryModel } : {}), ...(failure === "quota" ? { quotaWay: quotaWayOf(String(ended?.provider ?? ""), String(ended?.errorMessage ?? "")) } : {}), ...(retrying ? { retrying: true } : {}) } : projectAgentEventForWebClient(event) });
 			// A failed auto-compaction used to vanish here: the client ignores the
 			// event, nothing was logged, and the room quietly paid for the same
 			// summary again on every later turn. Say it once per attempt. This is
@@ -8177,30 +8362,57 @@ ${lines.join("\n")}`;
 			// turn on the client (busy off, stream flushed), and the runtime
 			// re-checks compaction at the START of every later prompt, where that
 			// would unlock the composer mid-turn.
+			if (event.type === "compaction_start" && (event as any).reason === "overflow") {
+				overflowRecoveryStopped = false;
+				overflowRecovery = new Promise((resolve) => {
+					const end = (askAgain: boolean) => resolve(askAgain);
+					endOverflowRecovery = end;
+					// At the ceiling nobody stopped it, so a failed shortening says so as usual.
+					setTimeout(() => { if (endOverflowRecovery === end) stopOverflowRecovery(false); }, OVERFLOW_RECOVERY_CEILING_MS).unref();
+				});
+			}
+			if (event.type === "compaction_end" && (event as any).reason === "overflow") {
+				endOverflowRecovery?.(Boolean((event as any).result) && Boolean((event as any).willRetry));
+				endOverflowRecovery = undefined;
+				const stoppedQuietly = overflowRecoveryStopped;
+				overflowRecoveryStopped = false;
+				if (stoppedQuietly && ((event as any).aborted || (event as any).errorMessage)) {
+					app.log.info({ agentId: persistentAgentIdForSession }, "overflow shortening stopped with its turn");
+					return;
+				}
+			}
 			if (event.type === "compaction_end" && (event as any).errorMessage) {
 				const compactionError = String((event as any).errorMessage);
 				app.log.warn({ agentId: persistentAgentIdForSession, reason: (event as any).reason, err: compactionError }, "auto-compaction failed");
-				// The runtime's own label ("Auto-compaction failed: ") is kept in
-				// the log and dropped from the line, which already says what failed.
-				const compactionCause = compactionError.replace(/^(?:Auto-compaction|Compaction|Context overflow recovery) failed: /, "");
-				// A turn may attempt to condense twice (before and after); the same
-				// cause is said once per turn, while every attempt is still logged.
-				if (compactionCause === lastCompactionNoticeCause) return;
-				lastCompactionNoticeCause = compactionCause;
+				// The runtime's words stay in the log. A turn may try to condense twice
+				// (before and after); the line is said once per turn.
+				if (lastCompactionNoticeCause !== undefined) return;
+				lastCompactionNoticeCause = compactionError;
+				const compactionModel = (session as any)?.model;
+				const compactionProvider = String(compactionModel?.provider ?? "");
+				// The summary call's own cause: a size problem keeps the room's words, any other cause (a rate limit, a lost connection) the chat's line for it.
+				const read = compactionFailureOf(compactionError, compactionProvider);
 				sendTurnFrame({
 					type: "ui_request",
 					kind: "notify",
 					id: `compaction_${Date.now().toString(36)}`,
-					message: `The room could not condense its conversation history: ${compactionCause}. Your memory is unchanged. Remember, then continue: the next conversation starts from what was remembered. Or continue on a model with a larger output limit in Room settings, Model.`,
 					level: "error",
+					// What the page words its failure row from: the cause, the provider's words for Details, and whether a message failed for it (overflow) or an answer had landed (threshold).
+					failure: read.failure ?? "could-not-shorten",
+					reason: (event as any).reason,
+					summaryCut: read.summaryCut,
+					...(compactionModel ? { model: { provider: compactionProvider, model: String(compactionModel.id ?? "") } } : {}),
+					...(read.words ? { words: read.words } : {}),
+					...(read.failure === "quota" ? { quotaWay: quotaWayOf(compactionProvider, read.words ?? "") } : {}),
 				});
 			}
 			if (event.type === "message_end" && (event as any).message?.role === "assistant") {
 				const msg = (event as any).message;
+				turnSteps.note(msg);
 				const text = textFromParts(msg.content);
-				if (text) {
-					turnTrace.finalAssistantText = [turnTrace.finalAssistantText, text].filter(Boolean).join("\n\n");
-				}
+				const landed = landedTextAfter({ text: turnTrace.finalAssistantText, retryFrom: turnTrace.retryFrom }, text, retrying);
+				turnTrace.finalAssistantText = landed.text;
+				turnTrace.retryFrom = landed.retryFrom;
 				if (turnTrace.sawToolResult && text) turnTrace.sawAssistantAfterToolResult = true;
 				if (Array.isArray(msg.content)) {
 					for (const part of msg.content) {
@@ -8214,7 +8426,7 @@ ${lines.join("\n")}`;
 					}
 				}
 				const u = msg.usage;
-				if (u) {
+				if (u && !answerlessCallMovedNothing(msg)) {
 					const toolsUsed = turnTrace.toolCalls.map((t) => t.name).filter(Boolean);
 					const currentModel = (session as any)?.model;
 					const modelLabel = currentModel ? webChatModelLabel(currentModel.provider, currentModel) : undefined;
@@ -8225,6 +8437,7 @@ ${lines.join("\n")}`;
 			}
 			if (event.type === "message_end" && (event as any).message?.role === "toolResult") {
 				const msg = (event as any).message;
+				turnSteps.note(msg);
 				const toolCallId = msg.toolCallId ? String(msg.toolCallId) : "";
 				const name = String(msg.toolName ?? (toolCallId ? turnTrace.toolNameById.get(toolCallId) : undefined) ?? "tool");
 				turnTrace.sawToolResult = true;
@@ -8236,10 +8449,16 @@ ${lines.join("\n")}`;
 	};
 
 	const maybeAutoSummarizeToolTurn = async () => {
-		if (!session || autoSummaryRunning) return;
+		// The recovery is a fresh paid turn, and a stopping server's exit would end it.
+		if (!session || autoSummaryRunning || serverStopping()) return;
 		const turnTerminalReason = activePersistentWebTurn?.terminalReason;
 		if (turnTerminalReason && turnTerminalReason !== "completed") {
 			app.log.info({ activeOwner, reason: "turn_not_completed", turnTerminalReason }, "tool-turn recovery skipped");
+			return;
+		}
+		// A failed message does not end the turn as failed; asking the failing model again only fails again.
+		if (([...session.messages].reverse().find((message) => message.role === "assistant") as { stopReason?: string } | undefined)?.stopReason === "error") {
+			app.log.info({ activeOwner, reason: "last_message_failed" }, "tool-turn recovery skipped");
 			return;
 		}
 		if (!turnTrace.sawToolResult) {
@@ -8335,12 +8554,17 @@ ${lines.join("\n")}`;
 			await session!.prompt(lines.join("\n"));
 		} finally {
 			autoSummaryRunning = false;
+			try { keepAppTurnFailure(session as any); } catch {}
 		}
 	};
 
 	try {
 		await bindSession();
-		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, session) });
+		// A message left unanswered while the app was not running (it stopped mid-retry) goes back too.
+		// A scheduled run that failed before its turns were marked is told by its item id.
+		const threadItemsAtOpen = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items;
+		const returnedAtOpen = (getPersistentAgentActiveTurnState(persistentAgentIdForSession, persistentConversationId).state === "idle" && !lastUserItemIsScheduledPrompt(threadItemsAtOpen) ? await stepBackFromFailedPrompt(session as any, { shown: lastShownUserText(threadItemsAtOpen) }) : undefined) ?? returnedPromptOf(session as any);
+		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, session), ...(returnedAtOpen ? { returnedPrompt: returnedAtOpen } : {}) });
 	} catch (e) {
 		if (e instanceof PersistentAgentMemoryOverflowError || e instanceof RoomModelUnavailableError || (e as { code?: unknown })?.code === "provider_signed_out") {
 			// Named so the client can stand its reconnect loop down: redialing
@@ -8455,7 +8679,7 @@ ${lines.join("\n")}`;
 					send({ type: "error", code: "room_displaced", message: "This room is now open in another window." });
 				},
 			});
-			send({ type: "turn_reattach", turnId: cooking.turnId, conversationId: persistentConversationId, settled: !adopted, ...(cooking.userText ? { userText: cooking.userText } : {}), ...(cooking.anchorItemId !== undefined ? { anchorItemId: cooking.anchorItemId } : {}), ...(typeof cooking.startedAt === "number" ? { startedAt: cooking.startedAt } : {}) });
+			send({ type: "turn_reattach", turnId: cooking.turnId, conversationId: persistentConversationId, settled: !adopted, ...(cooking.userText ? { userText: cooking.userText } : {}), ...(cooking.anchorItemId !== undefined ? { anchorItemId: cooking.anchorItemId } : {}), ...(typeof cooking.startedAt === "number" ? { startedAt: cooking.startedAt } : {}), now: Date.now() });
 			for (const frame of cooking.bufferedTurnFrames()) send(frame);
 			// Close the replay window before any live frame can follow (this
 			// whole block is synchronous, so the agent cannot interleave): the
@@ -8566,8 +8790,16 @@ ${lines.join("\n")}`;
 			send({ type: "effort", ...roomEffortStatusPayload(persistentAgentIdForSession, session, msg.level) });
 			return;
 		}
-		if (!session && msg.type !== "prompt") return;
-		if (msg.type === "prompt") {
+		if (!session && msg.type !== "prompt" && msg.type !== "continue") return;
+		// "continue": Try again under a failed answer that stayed on screen. The
+		// model answers the conversation's last message again, which is not sent
+		// a second time (AgentSession.continueAfterFailure).
+		if (msg.type === "prompt" || msg.type === "continue") {
+			const continuing = msg.type === "continue";
+			if (serverStopping()) {
+				send({ type: "error", code: SERVER_STOPPING_CODE, message: SERVER_STOPPING_SENTENCE });
+				return;
+			}
 			// Workspace settings apply from the next message: when the room's
 			// effective workspace policy changed since this session was built
 			// (default set/changed/cleared mid-conversation), rebuild the session
@@ -8644,12 +8876,25 @@ ${lines.join("\n")}`;
 						reportRebindRefusal(e);
 						return;
 					}
-					send({ type: "error", message: `failed to apply updated room settings: ${(e as Error).message}` });
+					app.log.warn({ err: e }, "persistent room settings rebind failed");
+					send({ type: "error", ...persistentRoomSettingsNotAppliedFrame(e, isSharedServer(), requestGetsLocalPaths(req)) });
 					return;
 				}
 			}
 			if (!session) return;
+			// The rebind awaits, and a stop can begin meanwhile.
+			if (serverStopping()) {
+				send({ type: "error", code: SERVER_STOPPING_CODE, message: SERVER_STOPPING_SENTENCE });
+				return;
+			}
+			// The conversation moved on from the failed answer (another window, or a step back this page never showed): the page sends the message again instead.
+			if (continuing && !session.canContinueAfterFailure()) {
+				send({ type: "error", code: "nothing_to_continue" });
+				return;
+			}
 			let persistentTurnId: string | undefined;
+			let returnedPrompt: ReturnedPrompt | undefined;
+			let leafBeforePrompt: string | null | undefined;
 			try {
 				const startedTurn = beginPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { connectionId });
 				if (!startedTurn.turnId) throw new Error("persistent-agent turn id was not created");
@@ -8659,6 +8904,7 @@ ${lines.join("\n")}`;
 				// post-stream landing snapshot must not fire against it.
 				settledTurnLandingSnapshot = null;
 				resetTurnTrace();
+				turnSteps = createTurnStepLog();
 				// A fresh turn owns a fresh replay buffer, and records the
 				// supersede anchor: the last item the thread file held BEFORE this
 				// turn produced anything (the client's debounced persist of this
@@ -8694,7 +8940,8 @@ ${lines.join("\n")}`;
 					const storedRoomEffortChoice = readPersistentRoomEffortChoice(persistentAgentIdForSession);
 					if (storedRoomEffortChoice) applyRoomEffortToSession(session, storedRoomEffortChoice);
 				}
-				const userText = String(msg.text ?? "");
+				// A continued turn has no new text: no consent for delegate auto-dispatch, no prompt to land, nothing to hand back.
+				const userText = continuing ? "" : String(msg.text ?? "");
 				// Consent scope for delegate auto-dispatch: only what the USER typed
 				// this turn — never the model-written handoff blocks or app-written
 				// attachment notes the client prepends to the wire text.
@@ -8706,13 +8953,15 @@ ${lines.join("\n")}`;
 				// queue now, atomically with the consume, so a crash or a reordered
 				// client save can never re-queue an already-sent block. Best-effort:
 				// never let it break the turn.
-				try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
+				if (!continuing) try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
 				preparePromptDiagnosticsTurn("user");
 				// The session read the sign-ins when it bound; one made since (after
 				// a turn failed on a key that no longer worked) is read now, so this
 				// message runs on it. One file read per message.
 				try { session!.modelRegistry.authStorage.reload(); } catch (error) { app.log.warn({ err: error }, "reading the sign-ins before the turn failed"); }
-				await session!.prompt(withPersistentRoomRestoredLiveThreadContext(userText));
+				leafBeforePrompt = (session as any).sessionManager?.getLeafId?.();
+				if (continuing) await session!.continueAfterFailure();
+				else await session!.prompt(withPersistentRoomRestoredLiveThreadContext(userText));
 				// Consent dies with the answer: everything after this line (event
 				// flush, auto-summarize recovery prompt) runs tools in the same
 				// session and must never be able to auto-dispatch on this turn's
@@ -8721,22 +8970,48 @@ ${lines.join("\n")}`;
 				autoDispatchBudgetRemaining = 0;
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("completed");
 				await flushSessionEvents();
+				// A message the model could not answer goes back to the person (failed-prompt-step-back.ts); after Stop, only one no attempt answered.
+				// A message the runtime is about to ask again, once it shortened the conversation, stays where it is.
+				const askedAgain = overflowRecovery ? await overflowRecovery : false;
+				overflowRecovery = undefined;
+				if (session === sessionAtPromptStart && !askedAgain) returnedPrompt = await stepBackFromFailedPrompt(session as any, { stopped: activePersistentWebTurn?.terminalReason === "cancelled" || activePersistentWebTurn?.stoppedByServer === true, shown: userText });
+				// A message handed back to the box got no answer, and a turn whose last attempt failed did not finish, whatever stayed above:
+				// either ends failed, never as a finished response.
+				const lastMessage = sessionAtPromptStart?.agent.state.messages.at(-1);
+				const endedFailed = stoppedForQuota || (lastMessage?.role === "assistant" && lastMessage.stopReason === "error");
+				if ((returnedPrompt || endedFailed) && activePersistentWebTurn?.turnId === persistentTurnId && activePersistentWebTurn.terminalReason === "completed") activePersistentWebTurn.terminalReason = "failed";
 				// A detached turn skips the auto-summarize recovery prompt: it is a
 				// rescue for a user watching a thin answer, and nobody is watching.
 				// A turn that did not finish cleanly skips it too: after Stop, the
 				// tool-only shape IS the cancellation, not a missing answer, and the
-				// recovery would start a fresh paid turn the user just declined.
-				if (!detachedFromClient && session === sessionAtPromptStart && activePersistentWebTurn?.terminalReason === "completed") {
+				// recovery would start a fresh paid turn the user just declined. So
+				// does one the runtime asks again itself, which would race it.
+				if (!detachedFromClient && !askedAgain && session === sessionAtPromptStart && activePersistentWebTurn?.terminalReason === "completed") {
 					await maybeAutoSummarizeToolTurn();
 				}
 			} catch (e) {
+				// Sent while an answer is still running: only this window hears of it, and the running turn is left alone.
+				if ((e as any)?.code === "turn_running" && !persistentTurnId) {
+					send({ type: "error", code: "turn_running", message: (e as Error).message });
+					return;
+				}
 				promptDiagnosticsPendingTurn = undefined;
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("failed");
+				// A room that can't read its own files says so with its code, so the page can put the message back.
+				if ((e as any)?.code === "room_files_unreadable") {
+					sendTurnFrame({ type: "error", message: (e as Error).message, code: "room_files_unreadable" });
+					return;
+				}
 				// The turn's failure frame belongs to the turn stream, so a
 				// session that stepped back in sees it live (or in the replay).
 				// A window the room moved on from: the room keeps the message and offers Reload.
-				const credentialKey = failedTurnKey(String((session as any)?.model?.provider ?? ""), (e as Error).message);
+				const credential = failedTurnCredential(String((session as any)?.model?.provider ?? ""), (e as Error).message);
+				const credentialKey = credential === "signed-out" ? undefined : credential;
+				noteKeyOutcome(String((session as any)?.model?.provider ?? ""), credential, activePersistentWebTurn?.startedAt);
 				sendTurnFrame({ type: "error", message: (e as Error).message, ...(credentialKey ? { credentialKey } : {}), ...((e as any)?.code === "conversation_moved" ? { code: "conversation_moved" } : {}) });
+				// Refused before the message reached the conversation (no key at all): the room said why, and only typed text goes back in the box.
+				const typedOnly = userAuthoredPromptText(String(msg.text ?? ""));
+				if ((e as any)?.code !== "conversation_moved" && leafBeforePrompt !== undefined && (session as any)?.sessionManager?.getLeafId?.() === leafBeforePrompt && typedOnly.trim() && typedOnly.trim() === String(msg.text ?? "").trim()) returnedPrompt = { text: typedOnly.trim(), notice: true };
 			} finally {
 				// Clear the consent text only for a turn that actually began: a
 				// CONCURRENT prompt frame that 409s at beginPersistentAgentTurn never
@@ -8747,6 +9022,8 @@ ${lines.join("\n")}`;
 					const turn = activePersistentWebTurn?.turnId === persistentTurnId ? activePersistentWebTurn : null;
 					if (turn) turn.promptSettled = true;
 					try { finishPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { turnId: persistentTurnId, terminalReason: turn?.terminalReason ?? "failed" }); } catch {}
+					// After the finish, so the message it hands back can be sent at once.
+					if (returnedPrompt) sendTurnFrame({ type: "prompt_returned", ...returnedPrompt });
 					// Land the detached outcome right after the turn-state finish:
 					// writePersistentAgentThread asserts no turn is in flight (the
 					// same order scheduled background execution uses). New
@@ -8761,9 +9038,10 @@ ${lines.join("\n")}`;
 					// the buffer kept for its settled replay. Watched: adopted, or a
 					// newer session on this very conversation (mid-bind included),
 					// which decides only how the answer lands (no parking, no unseen
-					// marker for a conversation somebody is inside).
+					// marker for a conversation somebody is inside), or a person who
+					// watched the answer end before the stop closed the connection.
 					const adoptedByLiveSession = !!(cookingHandle && cookingHandle.adopterConnectionId);
-					const watchedByAdopter = adoptedByLiveSession || newerSessionWatchesThisConversation();
+					const watchedByAdopter = adoptedByLiveSession || newerSessionWatchesThisConversation() || leftAfterAnswerEndedInStop;
 					if (cookingHandle) {
 						// Settle the handle FIRST, synchronously with the landing:
 						// a connection consulting the registry after this line binds
@@ -8772,17 +9050,21 @@ ${lines.join("\n")}`;
 						if (detachedCookingTurnHandles.get(persistentAgentIdForSession) === cookingHandle) detachedCookingTurnHandles.delete(persistentAgentIdForSession);
 					}
 					if (detachedFromClient) {
-						try { landDetachedTurnOutcome(persistentTurnId, turn?.terminalReason ?? "failed", { watchedByAdopter }); } catch (error) { app.log.warn({ err: error }, "failed to land detached persistent-room turn outcome"); }
+						// A message the step back handed back says its own line on the way in.
+						try { landDetachedTurnOutcome(persistentTurnId, turn?.terminalReason ?? "failed", { watchedByAdopter, handedBack: returnedPrompt?.id !== undefined }); } catch (error) { app.log.warn({ err: error }, "failed to land detached persistent-room turn outcome"); }
 					}
 					// Post-stream tail: a turn that ran to its COMPLETED end with
 					// the client still attached has its answer only client-side
 					// until the debounced persist fires. Snapshot what a close-time
 					// landing would need; detached turns just landed above, and
-					// error/cancel settles keep today's behavior.
-					if (!detachedFromClient && turn?.terminalReason === "completed") {
+					// error/cancel settles keep today's behavior, except a turn a
+					// server stop ended, whose partial the page may never save. A
+					// message handed back to the box lands nothing: its failed
+					// attempts went with it.
+					if (!detachedFromClient && returnedPrompt === undefined && (turn?.terminalReason === "completed" || (turn?.terminalReason === "failed" && turn.stoppedByServer === true))) {
 						const settledFinalText = turnTrace.finalAssistantText.trim();
 						settledTurnLandingSnapshot = settledFinalText
-							? { turnId: persistentTurnId, finalAssistantText: settledFinalText, anchorItemId: turnStartAnchorItemId, userText: currentTurnUserTextForLanding, ...(typeof activePersistentWebTurn?.startedAt === "number" ? { startedAt: activePersistentWebTurn.startedAt } : {}), settledAt: Date.now() }
+							? { turnId: persistentTurnId, finalAssistantText: settledFinalText, anchorItemId: turnStartAnchorItemId, userText: currentTurnUserTextForLanding, ...(typeof activePersistentWebTurn?.startedAt === "number" ? { startedAt: activePersistentWebTurn.startedAt } : {}), settledAt: Date.now(), stepLog: turnSteps, ...(turn?.terminalReason === "failed" && turn.stoppedByServer === true ? { stoppedByServer: true as const } : {}) }
 							: null;
 						// The client can leave between the last frame and this settle
 						// (the turn already read "completed", so the close handler did
@@ -8799,6 +9081,7 @@ ${lines.join("\n")}`;
 					// only when nobody is inside; a live adopter keeps it as its
 					// ordinary session lock, released by ITS close handler.
 					if (detachedFromClient) {
+						releaseLiveConnectionForStop();
 						clearDetachedTurnDeadline();
 						detachedCookingRooms.delete(persistentAgentIdForSession);
 						if (persistentRoomLiveSessions.get(persistentAgentIdForSession) === liveSessionHandle) persistentRoomLiveSessions.delete(persistentAgentIdForSession);
@@ -8834,6 +9117,8 @@ ${lines.join("\n")}`;
 					if (!keepReplayBufferForPendingClaim) releaseTurnFrameBuffer();
 				}
 			}
+		} else if (msg.type === "returned_prompt_handled") {
+			if (session && getPersistentAgentActiveTurnState(persistentAgentIdForSession, persistentConversationId).state === "idle") await settleReturnedPrompt(session as any, msg.kept === true);
 		} else if (msg.type === "abort") {
 			// Stop after a reattach cancels the ADOPTED turn, which runs in
 			// the detaching connection's closure, through the same cancelling
@@ -8851,8 +9136,13 @@ ${lines.join("\n")}`;
 			if (!consultId) return;
 			// §8.6: overflow must reach the client as a DISTINGUISHABLE error (a
 			// machine-readable `code`), so the card can render the "no longer fits"
-			// state without string-matching the message. Other errors carry no code.
+			// state without string-matching the message. The stop's refusal carries
+			// its own code; other errors carry none.
 			const consultError = (message: string, code?: string) => send({ type: "consult_error", consultId, message, ...(code ? { code } : {}) });
+			if (serverStopping()) {
+				consultError(SERVER_STOPPING_SENTENCE, SERVER_STOPPING_CODE);
+				return;
+			}
 			// Start gate: a consult may not start while this room is answering.
 			// (The reverse is allowed — prompts process normally during a consult.)
 			// An adopted cooking turn counts as answering too.
@@ -8866,6 +9156,7 @@ ${lines.join("\n")}`;
 			}
 			const consult: ActiveWebConsult = { consultId, abortController: new AbortController(), stoppedByUser: false };
 			activeWebConsult = consult;
+			const releaseConsultForStop = trackRunningWork("consult", () => consult.abortController.abort());
 			let consulted: { room: string; model: PersistentAgentModelLock } | undefined;
 			try {
 				const targetStatus = getPersistentAgentStatusForMaintenance(String(msg.targetRoomId ?? "").trim());
@@ -8932,6 +9223,7 @@ ${lines.join("\n")}`;
 					consultError(refused || (e as Error).message);
 				}
 			} finally {
+				releaseConsultForStop();
 				if (activeWebConsult === consult) activeWebConsult = null;
 			}
 		} else if (msg.type === "consult_abort") {
@@ -8949,6 +9241,10 @@ ${lines.join("\n")}`;
 			if (!taskId) return;
 			abortSpecialistTask(persistentAgentIdForSession, taskId);
 		} else if (msg.type === "task_iterate") {
+			if (serverStopping()) {
+				send({ type: "task_iterate_result", ok: false, reason: SERVER_STOPPING_SENTENCE, code: SERVER_STOPPING_CODE });
+				return;
+			}
 			// Iterate chip-chat: the ONE client-initiated
 			// delegation path. The brief is USER-authored (typed under the open file, in the viewer's footer)
 			// and the click IS the approval, the D7 shape (export precedent):
@@ -9095,7 +9391,9 @@ ${lines.join("\n")}`;
 		try {
 			const persisted = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
 			if (persisted && persisted.state !== "closed" && !threadItemsCarryAssistantText(persisted.items, closeLandingSnapshot.finalAssistantText)) {
-				landDetachedTurnOutcome(closeLandingSnapshot.turnId, "completed", { snapshot: closeLandingSnapshot, watchedByAdopter: newerSessionWatchesThisConversation() });
+				// A partial the stop cut lands as cut: the stop's line, parked, marked unseen. Only a newer session inside the conversation watches it.
+				const stopCut = closeLandingSnapshot.stoppedByServer === true;
+				landDetachedTurnOutcome(closeLandingSnapshot.turnId, stopCut ? "failed" : "completed", { snapshot: closeLandingSnapshot, watchedByAdopter: (!stopCut && serverStopping()) || newerSessionWatchesThisConversation() });
 			}
 		} catch (error) {
 			app.log.warn({ err: error }, "failed to land the settled turn answer on close");
@@ -9119,7 +9417,10 @@ ${lines.join("\n")}`;
 		// thread file, then releases the lock and disposes the session.
 		if (turnKeepsCookingOnClose()) {
 			detachedFromClient = true;
+			// Still detached, so the lock, the stop's wait and the landing stay with the turn; it lands as watched, as a settled answer closed by the stop does.
+			leftAfterAnswerEndedInStop = serverStopping() && answerAlreadyEnded((session as any)?.agent?.state?.messages);
 			detachedCookingRooms.add(persistentAgentIdForSession);
+			declinedByStop = false;
 			uiContext.detach("The user left the room while this response was being written, so interactive questions cannot be answered right now. Proceed with your best judgment and finish the task; anything that strictly needs the user's approval must be left undone and mentioned in your answer.");
 			armDetachedTurnDeadline();
 			// Register the reattach handle, so a session stepping
@@ -9212,7 +9513,10 @@ ${lines.join("\n")}`;
 		// LOSES the race merges in the PUT handler instead of clobbering. When
 		// a newer connection already took the room over (reload), the landing
 		// still writes the answer but keeps the room's state and records no
-		// marker, exactly like a watched adopter landing.
+		// marker, exactly like a watched adopter landing. While the server
+		// stops, the close is the stop's, or comes in its wait after the page
+		// watched the answer end, so the landing counts as watched too; a
+		// partial the stop cut does not, since it lands as cut.
 		landSettledTurnIfUnpersisted();
 		void disposeSessionAfterAbortIfNeeded("disconnect_cancelled").catch((error) => {
 			app.log.warn({ err: error }, "persistent-room disconnect cleanup failed");
@@ -10283,14 +10587,16 @@ let schedulerPreflightLoopHandle: ReturnType<typeof startPersistentRoomScheduleP
 let schedulerExecutionLoopHandle: ReturnType<typeof startScheduledPromptBackgroundExecutionLoop> | null = null;
 let gatewayDeclarationsRefreshHandle: GatewayDeclarationsRefreshLoopHandle | null = null;
 
-app.addHook("onClose", async () => {
+// The loops that start work, stopped at the server's close and at the start of a server stop.
+const stopBackgroundLoops = (): void => {
 	schedulerExecutionLoopHandle?.stop();
 	schedulerExecutionLoopHandle = null;
 	schedulerPreflightLoopHandle?.stop();
 	schedulerPreflightLoopHandle = null;
 	gatewayDeclarationsRefreshHandle?.stop();
 	gatewayDeclarationsRefreshHandle = null;
-});
+};
+app.addHook("onClose", async () => stopBackgroundLoops());
 
 // Rooms that had bash before the approval card ran commands without asking;
 // the one-time grant preserves that. A failed sweep only means rooms ask.
@@ -10354,6 +10660,19 @@ app.listen({ port: PORT, host: "127.0.0.1" })
 			save: (gateway) => saveGatewayEverywhere(gateway, "", false),
 			logger: app.log,
 		}, gatewayDeclarationsRefreshOptions);
+		// The graceful stop on SIGTERM and SIGINT (server-stop.ts). The scheduler's
+		// loops are kept here, so a tick still running is seen after their handles clear.
+		const schedulerLoopsForStop = [schedulerPreflightLoopHandle, schedulerExecutionLoopHandle].filter((loop) => loop !== null);
+		installServerStop({
+			app,
+			sharedServer: isSharedServer(),
+			waitSeconds: serverHooks().stopWaitSeconds,
+			turnsRunning: countPersistentAgentTurnsInFlight,
+			specialistTasksRunning: runningSpecialistCountInAllRooms,
+			abortSpecialistTasks: abortSpecialistTasksInAllRooms,
+			schedulerTickRunning: () => schedulerLoopsForStop.some((loop) => loop.isRunning()),
+			stopLoops: stopBackgroundLoops,
+		});
 	})
 	.catch((err: NodeJS.ErrnoException) => {
 		if (err?.code === "EADDRINUSE") {
