@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "smoke:room-permissions-ui": "tsx --tsconfig tsconfig.json src/components/room-permissions-ui-smoke.tsx"
   },
   "dependencies": {
     "mermaid": "^11.16.0",

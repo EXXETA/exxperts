@@ -91,6 +91,30 @@ export function ChevronDownIcon({ size = 14 }: { size?: number } = {}) {
 	);
 }
 
+/** Expands a compact field into its larger editor. */
+export function ExpandIcon({ size = 10 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M6 2H2v4" />
+			<path d="M2 2l4 4" />
+			<path d="M10 14h4v-4" />
+			<path d="M14 14l-4-4" />
+		</Icon>
+	);
+}
+
+/** Closes the larger editor back into its compact field. */
+export function CollapseIcon({ size = 10 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M6 6H2V2" />
+			<path d="M2 2l4 4" />
+			<path d="M10 10h4v4" />
+			<path d="M14 14l-4-4" />
+		</Icon>
+	);
+}
+
 /** The one spinner: a quarter arc turning on a faint track, drawn as SVG. */
 export function SpinnerIcon({ size = 14 }: { size?: number } = {}) {
 	return (

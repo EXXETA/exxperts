@@ -54,8 +54,20 @@ try {
 		assert(message.includes('echo "hello approval"'), "card must show the command");
 		assert(message.indexOf(FENCE_LINE) < message.indexOf('echo "hello approval"'), "the command must render below the fence, never above it");
 		assert(message.includes("Runs in: /tmp/room-workspace"), "card must name the working directory when the context has one");
-		assert(message.includes("You can auto-approve bash for this room in Workspace settings."), "card must mention the auto-approve setting");
-		assert(message.indexOf("You can auto-approve bash") < message.indexOf(FENCE_LINE), "the app-drawn facts must sit above the fence");
+		assert(message.includes("For commands without a matching permission rule, you can auto-approve bash in Workspace settings."), "unmatched card must identify the scope of auto-approve");
+		assert(message.indexOf("For commands without a matching permission rule") < message.indexOf(FENCE_LINE), "the app-drawn facts must sit above the fence");
+	}
+	{
+		const { ctx, confirms } = makeCtx();
+		const guard = approval.createPersistentRoomBashApprovalGuard({
+			isAutoApproved: () => true,
+			resolvePermission: () => ({ action: "ask", pattern: "git *" }),
+		});
+		assert((await guard.beforeBashCall("git status", ctx)).allow && confirms.length === 1, "matching ask must show a card despite auto-approve");
+		const message = confirms[0].message;
+		assert(message.includes("This command matches an ask rule in permissions.json; Workspace auto-approve does not override it."), "ask card must identify rule precedence");
+		assert(message.indexOf("This command matches an ask rule") < message.indexOf(FENCE_LINE), "rule explanation stays above the anti-spoof fence");
+		assert(message.includes(FENCE_LINE) && message.indexOf(FENCE_LINE) < message.indexOf("git status"), "ask card preserves the command fence");
 	}
 	{
 		// A context without a cwd omits the facts line instead of faking one.

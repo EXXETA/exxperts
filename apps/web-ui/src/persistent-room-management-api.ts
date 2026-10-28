@@ -1,4 +1,5 @@
-import { apiFetch } from "./api";
+import { apiFetch, redirectToSignInOn401 } from "./api";
+import { parsePermissionsResponse, type RoomPermissionsResponse } from "./bash-rules";
 import type { ArchivedPersistentAgentSummary, PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentLifecycleCounts, PersistentAgentPurgeBusyReason, PersistentAgentPurgeResponse, PersistentAgentRenameResponse, PersistentAgentRestoreResponse } from "./types";
 
 const PURGE_BUSY_REASONS: readonly PersistentAgentPurgeBusyReason[] = ["room_lock", "turn_in_flight", "detached_cooking", "specialist_running"];
@@ -185,6 +186,32 @@ export function updatePersistentRoomBashSettings(agentId: PersistentAgentId, upd
 		},
 		"Failed to save bash approval settings."
 	);
+}
+
+export async function fetchPersistentRoomPermissions(agentId: PersistentAgentId): Promise<RoomPermissionsResponse> {
+	const response = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/permissions`);
+	redirectToSignInOn401(response);
+	const text = await response.text();
+	if (!response.ok) {
+		let payload: unknown = text;
+		try { payload = JSON.parse(text); } catch { /* Plain-text error. */ }
+		throw new Error(parsePersistentRoomManagementError(payload, "Failed to load permission rules."));
+	}
+	return parsePermissionsResponse(text);
+}
+
+export async function updatePersistentRoomPermissions(agentId: PersistentAgentId, body: string): Promise<RoomPermissionsResponse> {
+	const response = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/permissions`, {
+		method: "PUT", headers: { "Content-Type": "application/json" }, body,
+	});
+	redirectToSignInOn401(response);
+	const text = await response.text();
+	if (!response.ok) {
+		let payload: unknown = text;
+		try { payload = JSON.parse(text); } catch { /* Plain-text error. */ }
+		throw new Error(parsePersistentRoomManagementError(payload, "Failed to save permission rules."));
+	}
+	return parsePermissionsResponse(text);
 }
 
 // ── Skills MR-5: per-room skill enablement (spec §4/§5) ──────────────────────

@@ -56,6 +56,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import Fastify, { LogController, type FastifyRequest } from "fastify";
@@ -79,6 +80,7 @@ import { MEMORY_BUDGET_DEFAULT_TOKENS, MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_M
 import { settleMemoryBudget, waitForMemoryRoomTurn } from "./memory-entries-store.js";
 import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashApprovalGuard } from "./persistent-room-bash-approval.js";
 import { migratePersistentRoomBashAutoApproveDefaults, readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
+import { parseRoomPermissionsInput, readRoomPermissions, resolveRoomPermission, writeRoomPermissions } from "./persistent-room-permissions.js";
 import { applyShellLookupTestSwitch, createPersistentRoomShellMissingExtension, PERSISTENT_ROOM_SHELL_MISSING_SENTENCE, persistentRoomShellFound } from "./persistent-room-shell-missing.js";
 import { createTurnStepLog, landedTextAfter } from "./persistent-room-turn-steps.js";
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
@@ -2725,6 +2727,63 @@ app.put("/api/persistent-agents/:id/bash-settings", async (req, reply) => {
 		return { agentId: status.id, settings };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.get("/api/persistent-agents/:id/permissions", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		return readRoomPermissions(status.id);
+	} catch (error) {
+		return persistentAgentNormalUseErrorReply(reply, error);
+	}
+});
+// Preserve the source order of numeric-looking rule keys: JSON.parse would
+// reorder those keys before the last-match-wins rules reach the store.
+app.put("/api/persistent-agents/:id/permissions", {
+	preParsing: (req, _reply, payload, done) => {
+		if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers["content-type"] ?? "")) return done(null, payload);
+		const chunks: Buffer[] = [];
+		let received = 0;
+		let oversized = false;
+		payload.on("data", (chunk: Buffer) => {
+			received += chunk.length;
+			if (received > 64 * 1024) oversized = true;
+			else chunks.push(chunk);
+		});
+		payload.on("error", (error) => done(error));
+		payload.on("end", () => {
+			if (oversized) {
+				const error = new Error("request body is too large") as Error & { statusCode: number };
+				error.statusCode = 413;
+				return done(error);
+			}
+			const raw = Buffer.concat(chunks).toString("utf8");
+			(req as typeof req & { rawPermissionsJson?: string }).rawPermissionsJson = raw;
+			const replacement = Buffer.from(raw);
+			done(null, Object.assign(Readable.from(replacement), { receivedEncodedLength: replacement.length }));
+		});
+	},
+	bodyLimit: 64 * 1024,
+}, async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	let status;
+	try {
+		status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+	} catch (error) {
+		return persistentAgentNormalUseErrorReply(reply, error);
+	}
+	let document;
+	try {
+		document = parseRoomPermissionsInput((req as typeof req & { rawPermissionsJson?: string }).rawPermissionsJson ?? req.body);
+	} catch (error: any) {
+		return reply.code(400).send({ error: error?.message ?? "invalid permissions" });
+	}
+	try {
+		return writeRoomPermissions(status.id, document);
+	} catch (error) {
+		app.log.error({ err: error }, "room permissions could not be saved");
+		return reply.code(500).send({ error: "permissions could not be saved" });
 	}
 });
 // The model per room: what the room talks with and what does its memory work.
@@ -7959,6 +8018,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// the room's LIVE enabled set (hash-verified) on every call.
 		const persistentRoomSkillTools = [createReadSkillTool({
 			agentId: persistentAgentId,
+			checkPermission: (name) => resolveRoomPermission(readRoomPermissions(persistentAgentId), "skill", name),
 			// The tool verifies the pinned manifest hash and returns the defanged
 			// body; both come from one manifest read, so verified and served bytes
 			// can never diverge.
@@ -8217,6 +8277,7 @@ ${lines.join("\n")}`;
 			// here, in the live web bind: background, scheduled, and specialist
 			// runs never construct the guard (they never get bash either).
 			createPersistentRoomBashApprovalExtension(createPersistentRoomBashApprovalGuard({
+				resolvePermission: (command) => resolveRoomPermission(readRoomPermissions(persistentAgentId), "bash", command),
 				// Fresh read on every bash call (like the read_skill exposure
 				// gate): flipping the room's auto-approve setting applies to the
 				// very next command, no rebind. An unreadable file asks.
