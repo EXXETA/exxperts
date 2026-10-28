@@ -150,6 +150,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/persistent-agents/:id/memory/archive": "read",
 	"GET /api/persistent-agents/:id/memory/history": "read",
 	"GET /api/persistent-agents/:id/bash-settings": "read",
+	"GET /api/persistent-agents/:id/permissions": "read",
 	"GET /api/persistent-agents/:id/models": "read",
 	// How a Remember would read the open conversation (one pass or N parts):
 	// counts and a model name, no transcript text.
@@ -250,6 +251,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	// Auto-approving bash removes the per-command consent step entirely, so
 	// only the computer's own keyboard may grant it.
 	"PUT /api/persistent-agents/:id/bash-settings": "local",
+	"PUT /api/persistent-agents/:id/permissions": "local",
 	"PUT /api/persistent-agents/:id/mcp-connectors": "local",
 	"PUT /api/persistent-agents/:id/skill-settings": "local",
 	"PUT /api/persistent-agents/:id/workspace-default": "local",

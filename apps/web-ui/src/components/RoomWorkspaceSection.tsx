@@ -1,9 +1,12 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { bashRowsError, serializeDocumentWithBashRows, type BashRuleRow, type RoomPermissionsResponse } from "../bash-rules";
+import { fetchPersistentRoomPermissions, updatePersistentRoomPermissions } from "../persistent-room-management-api";
 import type { PersistentAgentStatus, PersistentRoomCapabilityPolicyView, PersistentRoomWorkspaceAccessMode } from "../types";
 import { chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchPersistentRoomWorkspaceDefault, savePersistentRoomWorkspaceDefault } from "../persistent-room-workspace-api";
 import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 import { PaneHeader } from "./pane-header";
 import { confirmDialog } from "./confirm-dialog";
+import { BashRulesEditor } from "./BashRulesEditor";
 import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
 
 const BOUNDED_WORKSPACE_TOOL_OPTIONS = [
@@ -129,7 +132,7 @@ function WorkspaceButtons({ line, lineId, children }: { line: PaneLine | null; l
 	);
 }
 
-function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetWorkspace, sharedServer, shellMissingNote }: { policy: PersistentRoomCapabilityPolicyView | null; warnings: string[]; setupDisabled: boolean; onSetWorkspace: () => void; sharedServer: boolean; shellMissingNote: string | null }) {
+function WorkspaceDefaultPolicySummary({ policy, warnings, bashRuleCount, setupDisabled, onSetWorkspace, sharedServer, shellMissingNote }: { policy: PersistentRoomCapabilityPolicyView | null; warnings: string[]; bashRuleCount: number; setupDisabled: boolean; onSetWorkspace: () => void; sharedServer: boolean; shellMissingNote: string | null }) {
 	const currentRoot = policy?.roots[0] ?? null;
 	// A shared server is no one's own computer: its folders are not offered to
 	// rooms, so there is nothing to set and no invitation to set it.
@@ -200,9 +203,10 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 				{isLocalFiles && !folderMissing && (
 					<div className="settings-row">
 						<span className="settings-row-label">Bash</span>
-						<span className="settings-row-value">{policy.bashEnabled ? "On" : "Off"}</span>
+						<span className="settings-row-value">{policy.bashEnabled ? (bashRuleCount ? `On · ${bashRuleCount} rules` : "On") : "Off"}</span>
 					</div>
 				)}
+				{policy.workspaceAccessMode === "bounded" && <div className="settings-row"><span className="settings-row-label">Access</span><span className="settings-row-value">Bounded workspace</span></div>}
 			</div>
 			{honestyNote && <p className="settings-help">{honestyNote}</p>}
 			{isLocalFiles && policy.bashEnabled && shellMissingNote && <p className="settings-help workspace-shell-missing">{shellMissingNote}</p>}
@@ -239,6 +243,14 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 	// The server's own shell lookup (Windows without Git finds none); asked
 	// again each time the editor opens, so it goes once Git is installed.
 	const [shellMissingNote, setShellMissingNote] = useState<string | null>(null);
+	const [permissions, setPermissions] = useState<RoomPermissionsResponse | null>(null);
+	const [draftBashRules, setDraftBashRules] = useState<BashRuleRow[]>([]);
+	const [permissionsError, setPermissionsError] = useState<string | null>(null);
+	const [permissionsLoading, setPermissionsLoading] = useState(false);
+	const permissionsRequest = useRef(0);
+	const permissionsDraftChanged = useRef(false);
+	const currentRoomId = useRef(status.id);
+	currentRoomId.current = status.id;
 	const [error, setError] = useState<PaneLine | null>(null);
 	const [message, setMessage] = useState<string | null>(null);
 	// The outcome line renders below the (tall) edit form inside a scrolling
@@ -273,11 +285,15 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 	const baselineAccessMode = policy?.workspaceAccessMode ?? "localFiles";
 	const baselineToolNames = draftToolNamesForPolicy(policy);
 	const baselineBashEnabled = policy?.workspaceAccessMode === "localFiles" && policy?.bashEnabled === true;
+	const baselineBashRules = permissions?.bashRows ?? [];
+	const rulesDirty = JSON.stringify(draftBashRules) !== JSON.stringify(baselineBashRules);
+	const rulesShown = draftAccessMode === "localFiles" && draftBashEnabled;
 	const dirty = editing && (
 		draftRootChanged ||
 		draftAccessMode !== baselineAccessMode ||
 		draftBashEnabled !== baselineBashEnabled ||
-		[...draftToolNames].sort().join(",") !== [...baselineToolNames].sort().join(",")
+		[...draftToolNames].sort().join(",") !== [...baselineToolNames].sort().join(",") ||
+		rulesDirty
 	);
 
 	useEffect(() => {
@@ -292,6 +308,12 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 
 	useEffect(() => {
 		let cancelled = false;
+		permissionsRequest.current++;
+		permissionsDraftChanged.current = false;
+		setPermissions(null);
+		setDraftBashRules([]);
+		setPermissionsError(null);
+		setPermissionsLoading(false);
 		setPolicy(null);
 		setWarnings([]);
 		setEditing(false);
@@ -300,6 +322,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 		setDraftToolNames([...ALL_LOCAL_FILES_TOOL_NAMES]);
 		setDraftBashEnabled(false);
 		setShellMissingNote(null);
+		setSaving(false);
 		setMessage(null);
 		setLoadFailed(false);
 		if (!canManageWorkspace) {
@@ -315,6 +338,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 				setPolicy(response.policy);
 				setWarnings(response.warnings ?? []);
 				setShellMissingNote(response.shellMissingNote || null);
+				if (response.policy?.workspaceAccessMode === "localFiles" && response.policy.bashEnabled) void loadPermissions();
 			})
 			.catch(() => {
 				if (!cancelled) setLoadFailed(true);
@@ -322,8 +346,35 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 			.finally(() => {
 				if (!cancelled) setLoading(false);
 			});
-		return () => { cancelled = true; };
+		return () => { cancelled = true; permissionsRequest.current++; };
 	}, [canManageWorkspace, status.exists, status.id, loadAttempt]);
+
+	async function loadPermissions(): Promise<void> {
+		const roomId = status.id;
+		const request = ++permissionsRequest.current;
+		setPermissionsLoading(true);
+		setPermissionsError(null);
+		setPermissions(null);
+		if (!permissionsDraftChanged.current) setDraftBashRules([]);
+		try {
+			const response = await fetchPersistentRoomPermissions(roomId);
+			if (request !== permissionsRequest.current || roomId !== currentRoomId.current) return;
+			if (response.error) {
+				setPermissions(null);
+				setPermissionsError(response.error);
+				return;
+			}
+			setPermissions(response);
+			if (!permissionsDraftChanged.current) setDraftBashRules(response.bashRows);
+		} catch (e) {
+			if (request === permissionsRequest.current && roomId === currentRoomId.current) {
+				setPermissions(null);
+				setPermissionsError((e as Error).message || "Failed to load permission rules.");
+			}
+		} finally {
+			if (request === permissionsRequest.current && roomId === currentRoomId.current) setPermissionsLoading(false);
+		}
+	}
 
 	// Save and close in the unsaved question: the editor's own save.
 	useRegisteredSave(registerSave, saveWorkspaceDefault);
@@ -344,6 +395,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 	async function saveWorkspaceDefault(): Promise<boolean> {
 		if (saving) return false;
 		// The saved path left as it is keeps the saved folder: only a new folder is sent.
+		const roomId = status.id;
 		const root = draftRoot.trim() === savedPath ? "" : draftRoot.trim();
 		if (!root && !policy) {
 			setError({ text: "Choose a folder for this room workspace.", at: "folder" });
@@ -355,22 +407,52 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 		const toolSelection = allToolsSelected && selectedToolNames.length === activeToolNames.length
 			? { kind: "standard" as const, allowedToolNames: [...activeToolNames] }
 			: { kind: "custom" as const, allowedToolNames: selectedToolNames };
+		if (rulesDirty) {
+			if (permissionsLoading || !permissions || permissionsError) {
+				setError({ text: "Permission rules could not be loaded. Fix runtime/permissions.json before saving Bash rule changes.", at: "pane" });
+				return false;
+			}
+			const validationError = bashRowsError(draftBashRules);
+			if (validationError) { setError({ text: validationError, at: "pane" }); return false; }
+		}
+		permissionsRequest.current++;
+		setPermissionsLoading(false);
 		setSaving(true);
 		setError(null);
 		setMessage(null);
 		try {
-			const response = await savePersistentRoomWorkspaceDefault(status.id, {
+			const response = await savePersistentRoomWorkspaceDefault(roomId, {
 				root: root || undefined,
 				workspaceAccessMode: draftAccessMode,
 				toolSelection,
 				bashEnabled: draftAccessMode === "localFiles" && draftBashEnabled,
 			});
+			if (roomId !== currentRoomId.current) return false;
 			setPolicy(response.policy);
 			setWarnings(response.warnings ?? []);
 			setDraftRoot("");
 			setDraftAccessMode(response.policy?.workspaceAccessMode ?? "localFiles");
 			setDraftToolNames(draftToolNamesForPolicy(response.policy));
 			setDraftBashEnabled(response.policy?.workspaceAccessMode === "localFiles" && response.policy?.bashEnabled === true);
+			if (rulesDirty) {
+				try {
+					const latest = await fetchPersistentRoomPermissions(roomId);
+					if (roomId !== currentRoomId.current) return false;
+					if (latest.error) throw new Error(latest.error);
+					const updated = await updatePersistentRoomPermissions(roomId, serializeDocumentWithBashRows(latest, draftBashRules));
+					if (roomId !== currentRoomId.current) return false;
+					if (updated.error) throw new Error(updated.error);
+					setPermissions(updated);
+					setDraftBashRules(updated.bashRows);
+				} catch (e) {
+					if (roomId !== currentRoomId.current) return false;
+					setError({ text: `Workspace policy saved (including Bash access), but the Bash rules were not: ${(e as Error).message || "Failed to save permission rules."} Bash may already be active under previous rules or default approval behavior.`, at: "pane" });
+					return false;
+				}
+			}
+			permissionsDraftChanged.current = false;
+			if (!rulesDirty && !rulesShown) setDraftBashRules(permissions?.bashRows ?? []);
+			if (response.policy?.workspaceAccessMode === "localFiles" && response.policy.bashEnabled && !rulesDirty && (permissions === null || !rulesShown)) void loadPermissions();
 			setEditing(false);
 			setMessage("Saved.");
 			return true;
@@ -378,7 +460,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 			showRefusal(e, "Couldn't save the workspace. Try again.");
 			return false;
 		} finally {
-			setSaving(false);
+			if (roomId === currentRoomId.current) setSaving(false);
 		}
 	}
 
@@ -406,6 +488,10 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 			setDraftAccessMode(policy?.workspaceAccessMode ?? "localFiles");
 			setDraftToolNames(draftToolNamesForPolicy(policy));
 			setDraftBashEnabled(policy?.workspaceAccessMode === "localFiles" && policy?.bashEnabled === true);
+			permissionsRequest.current++;
+			setPermissionsLoading(false);
+			permissionsDraftChanged.current = false;
+			setDraftBashRules(permissions?.bashRows ?? []);
 			setError(null);
 			setMessage(null);
 			return;
@@ -414,6 +500,9 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 		setDraftAccessMode(policy?.workspaceAccessMode ?? "localFiles");
 		setDraftToolNames(draftToolNamesForPolicy(policy));
 		setDraftBashEnabled(policy?.workspaceAccessMode === "localFiles" && policy?.bashEnabled === true);
+		permissionsDraftChanged.current = false;
+		setDraftBashRules(permissions?.bashRows ?? []);
+		void loadPermissions();
 		setEditing(true);
 		void fetchPersistentRoomWorkspaceDefault(status.id).then((response) => setShellMissingNote(response.shellMissingNote || null), () => {});
 		setError(null);
@@ -428,23 +517,30 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 			danger: true,
 		});
 		if (!ok) return;
+		const roomId = status.id;
 		setSaving(true);
 		setError(null);
 		setMessage(null);
 		try {
-			const response = await clearPersistentRoomWorkspaceDefault(status.id);
+			const response = await clearPersistentRoomWorkspaceDefault(roomId);
+			if (roomId !== currentRoomId.current) return;
 			setPolicy(null);
 			setWarnings(response.warnings ?? []);
 			setDraftRoot("");
 			setDraftAccessMode("localFiles");
 			setDraftToolNames([...ALL_LOCAL_FILES_TOOL_NAMES]);
 			setDraftBashEnabled(false);
+			permissionsRequest.current++;
+			setPermissionsLoading(false);
+			permissionsDraftChanged.current = false;
+			setDraftBashRules(permissions?.bashRows ?? []);
 			setEditing(false);
 			setMessage(response.deleted ? "Folder removed." : "This room had no folder saved.");
 		} catch (e) {
+			if (roomId !== currentRoomId.current) return;
 			showRefusal(e, "Couldn't clear the workspace. Try again.");
 		} finally {
-			setSaving(false);
+			if (roomId === currentRoomId.current) setSaving(false);
 		}
 	}
 
@@ -477,7 +573,6 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 		<div className="room-workspace-section">
 			<PaneHeader
 				title="Workspace"
-				line="The folder this room works in, and what it may do there."
 				actions={editing ? (
 					<WorkspaceButtons line={buttonsLine} lineId={buttonsLineId}>
 						{dirty && <span className="workspace-unsaved-hint">Unsaved changes</span>}
@@ -493,13 +588,8 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 			/>
 			<div className="workspaces-room-body">
 				{loading ? <p className="settings-empty">Loading…</p> : loadFailed ? (
-					<div className="settings-rows">
-						<div className="settings-row">
-							<span className="settings-row-sub">Couldn't load this room's workspace.</span>
-							<button className="rs-btn" type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Try again</button>
-						</div>
-					</div>
-				) : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} setupDisabled={!canManageWorkspace || saving} onSetWorkspace={startOrCancelEditing} sharedServer={sharedServer} shellMissingNote={shellMissingNote} />}
+					<div className="settings-rows"><div className="settings-row"><span className="settings-row-sub">Couldn't load this room's workspace.</span><button className="rs-btn" type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Try again</button></div></div>
+				) : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} bashRuleCount={permissionsError ? 0 : (permissions?.bashRows.length ?? 0)} setupDisabled={!canManageWorkspace || saving} onSetWorkspace={startOrCancelEditing} sharedServer={sharedServer} shellMissingNote={shellMissingNote} />}
 				{editing && (
 					<form id="workspace-editor-form" className="workspaces-default-form" onSubmit={(event) => void submitWorkspaceDefault(event)}>
 						<div className="settings-rows">
@@ -562,15 +652,21 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 											<label className="settings-row">
 												<span className="settings-row-main">
 													<span className="settings-row-label">Bash</span>
-													<span className="settings-row-sub">Lets the room run commands on this computer, like a terminal. Off by default. Whether each command asks you first is set at the top of the chat.</span>
-													{shellMissingNote && <span className="settings-row-sub workspace-shell-missing">{shellMissingNote}</span>}
+									<span className="settings-row-sub">Lets the room run commands on this computer, like a terminal. Off by default. Whether each command asks you first is set at the top of the chat.</span>
+									{shellMissingNote && <span className="settings-row-sub workspace-shell-missing">{shellMissingNote}</span>}
 												</span>
 												<input className="workspaces-tool-switch" type="checkbox" checked={draftBashEnabled} disabled={saving} onChange={() => { setDraftBashEnabled((current) => !current); setError(null); setMessage(null); }} aria-label="Bash shell access" />
 											</label>
 										)}
 									</div>
-								))}
+							))}
 							</div>
+							{draftAccessMode === "localFiles" && draftBashEnabled}
+							{rulesShown && (
+								<section className="settings-group" aria-label="Bash permissions">
+									{permissionsLoading ? <p className="settings-help">Loading Bash rules…</p> : permissionsError ? <div className="workspaces-error">{permissionsError} Fix runtime/permissions.json to edit rules.</div> : permissions ? <BashRulesEditor rows={draftBashRules} onChange={(rows) => { permissionsDraftChanged.current = true; setDraftBashRules(rows); setError(null); setMessage(null); }} disabled={saving} idPrefix={`bash-rule-${status.id}`} /> : null}
+								</section>
+							)}
 							{draftHonestyNote && <p className="settings-help">{draftHonestyNote}</p>}
 							{draftAccessMode === "bounded" && <p className="settings-help">Bash is available in Full access mode.</p>}
 						</div>

@@ -206,12 +206,14 @@ Rooms get tools through a per-room policy rather than a global grant:
   with no write tools and no Bash says it is read-only
   ([`workspace-and-bash.md`](workspace-and-bash.md)).
 - **Bash**: Full access only, off by default. Each command shows an
-  approval card with the exact command before it runs; the "Bash:
-  asks" / "Bash: auto" chip in the chat header switches a room to run
-  without asking, and auto can only be enabled at the computer, never
-  from a remote device. Rooms that had Bash before the card existed
-  were switched to auto once, at upgrade, so their behavior did not
-  change; every room since starts at asks.
+  approval card with the exact command before it runs unless a room
+  permission rule allows or denies it first. The "Bash: asks" / "Bash:
+  auto" chip in the chat header decides when no rule matches, and auto
+  can only be enabled at the computer, never from a remote device. Bash
+  rules are edited below its switch in Room settings; skill rules are
+  edited in the room's `runtime/permissions.json` only. Rooms that had
+  Bash before the card existed were switched to auto once, at upgrade,
+  so their behavior did not change; every room since starts at asks.
 - **`fetch_url`**: HTTP fetching with SSRF defenses (private-range and
   redirect protection).
 - **Web search**: built in via DuckDuckGo; local SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries ([`web-search.md`](web-search.md)).
@@ -229,7 +231,8 @@ Rooms get tools through a per-room policy rather than a global grant:
   exxperts store and from the cross-tool `~/.agents/skills` directory
   shared with other agent tools (read-only on our side); wherever a
   skill lives, a room only uses it after you review and enable it
-  there, and an edited skill must be re-reviewed.
+  there, and an edited skill must be re-reviewed. A room permission rule
+  can ask before loading one or block it, but cannot enable it.
 - **Consult**: a room can ask another room a question via @-mention in
   chat; the consulted room answers read-only from its own memory and
   context.
@@ -242,6 +245,34 @@ fence is enforced: a tool that is supposed to be blocked fails the
 session loudly instead of slipping through. None of it is an OS
 sandbox; the security boundary is the localhost-only server and your
 approval gates, not process isolation.
+
+Live web conversations read each room's
+`~/.exxperts/app/personalized-agents/<id>/runtime/permissions.json` on
+every skill read or Bash call. For example:
+
+```json
+{
+  "permission": {
+    "skill": { "*": "ask", "trusted-skill": "allow" },
+    "bash": { "*": "ask", "git status*": "allow", "rm *": "deny" }
+  }
+}
+```
+
+`permission` or either category can also be a single `"ask"`, `"allow"`
+or `"deny"`. Patterns match the skill name or submitted command text:
+`*` means zero or more characters, `?` exactly one, and everything else
+is literal. The last matching rule in file order wins; duplicate JSON
+keys follow `JSON.parse`, so the last value wins. Without a matching
+rule, enabled and unchanged skills load as before, and Bash follows the
+chat-header asks/auto setting. An unreadable or invalid file denies both
+until fixed. Rules cannot grant a disabled tool, enable an unreviewed
+skill or bypass its hash check. Scheduled and detached background runs
+remain unchanged, without Bash or `read_skill`.
+
+Bash rules are not a sandbox: `git status; rm -rf x` matches
+`git status*`. Use narrow `allow` patterns, not broad shell-command
+prefixes; see [`workspace-and-bash.md`](workspace-and-bash.md#room-permission-rules).
 
 Where your file goes: when you attach a file to a room, it is stored
 on your machine under that room's own folder; it is not uploaded

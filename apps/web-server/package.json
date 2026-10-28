@@ -78,6 +78,8 @@
     "smoke:artifact-route": "tsx scripts/artifact-route-smoke.ts",
     "smoke:delegate-task": "tsx scripts/delegate-task-smoke.ts",
     "smoke:bash-approval": "tsx scripts/bash-approval-smoke.ts",
+    "smoke:room-permissions": "tsx scripts/room-permissions-smoke.ts",
+    "smoke:room-permissions-api": "tsx scripts/room-permissions-api-smoke.ts",
     "smoke:specialist-handoff": "tsx scripts/specialist-handoff-smoke.ts",
     "smoke:specialist-runtime": "tsx scripts/specialist-runtime-smoke.ts",
     "smoke:static-security-headers": "tsx scripts/static-security-headers-smoke.ts",
@@ -100,7 +102,8 @@
     "fastify": "^5.12.1",
     "jszip": "^3.10.1",
     "pdfjs-dist": "5.4.394",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yaml": "^2.8.2"
   },
   "optionalDependencies": {
     "@napi-rs/canvas": "^0.1.81"

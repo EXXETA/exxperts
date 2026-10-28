@@ -2,17 +2,17 @@
  * Per-command bash approval for live Full-access rooms.
  *
  * Bash is the one tool whose blast radius is the whole machine, so a live
- * room session pauses every bash call on an approval card in the chat unless
- * the room has been explicitly told to stop asking (the per-room auto-approve
- * setting, default off). The card rides the existing delegate-approval
+ * room session applies permission rules before each bash call. A matching
+ * deny blocks, allow proceeds, and ask pauses on an approval card; without a
+ * rule the per-room auto-approve setting (default off) decides whether to ask.
+ * The card rides the existing delegate-approval
  * machinery end to end: `ctx.ui.confirm` → `ui_request`/`ui_response` frames →
  * the web client's Approval card, whose `───` fence chrome renders the
  * model-written command as unverified text.
  *
  * Deliberately dependency-light (no imports from index.ts): the guard takes
- * its one live dependency — the current auto-approve answer — as a closure,
- * so it stays unit-testable and background/scheduled sessions simply never
- * construct it.
+ * live permission and auto-approve readers as closures, so it stays
+ * unit-testable and background/scheduled sessions never construct it.
  */
 
 import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "./room-approval-titles.js";
@@ -37,6 +37,8 @@ export interface CreatePersistentRoomBashApprovalGuardOptions {
 	 * with no session rebind.
 	 */
 	isAutoApproved: () => boolean;
+	/** Read live on every call. null = no rule applies; isAutoApproved decides. */
+	resolvePermission?: (command: string) => { action: "ask" | "allow" | "deny"; pattern: string | null } | null;
 }
 
 const COMMAND_PREVIEW_MAX_CHARS = 1_200;
@@ -44,7 +46,12 @@ const COMMAND_PREVIEW_MAX_CHARS = 1_200;
 export function createPersistentRoomBashApprovalGuard(options: CreatePersistentRoomBashApprovalGuardOptions): PersistentRoomBashApprovalGuard {
 	return {
 		async beforeBashCall(command: string, ctx: PersistentRoomBashApprovalContext | undefined): Promise<PersistentRoomBashApprovalDecision> {
-			if (options.isAutoApproved()) return { allow: true };
+			const match = options.resolvePermission?.(String(command ?? "")) ?? null;
+			if (match?.action === "deny") {
+				return { allow: false, reason: `Blocked by this room's permission rules in permissions.json${match.pattern ? ` (\`${match.pattern}\`)` : ""}. Do not run it or retry variants of it unless the user asks.` };
+			}
+			if (match?.action === "allow") return { allow: true };
+			if (!match && options.isAutoApproved()) return { allow: true };
 			if (!ctx?.hasUI) {
 				return { allow: false, reason: "Running commands requires the interactive room UI; there is no user here to approve them." };
 			}
@@ -62,7 +69,9 @@ export function createPersistentRoomBashApprovalGuard(options: CreatePersistentR
 				PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE,
 				[
 					...(cwd ? [`Runs in: ${cwd}`] : []),
-					"You can auto-approve bash for this room in Workspace settings.",
+					match?.action === "ask"
+						? "This command matches an ask rule in permissions.json; Workspace auto-approve does not override it."
+						: "For commands without a matching permission rule, you can auto-approve bash in Workspace settings.",
 					"",
 					// Anti-spoof separator: everything below is the room model's own
 					// text appended after the app-drawn facts above; a command that
@@ -74,6 +83,11 @@ export function createPersistentRoomBashApprovalGuard(options: CreatePersistentR
 			);
 			if (!approved) {
 				return { allow: false, reason: "The user declined this command. Do not run it or retry variants of it unless the user asks." };
+			}
+			// A rule may have changed while the approval card was open.
+			const currentMatch = options.resolvePermission?.(commandText) ?? null;
+			if (currentMatch?.action === "deny") {
+				return { allow: false, reason: `Blocked by this room's permission rules in permissions.json${currentMatch.pattern ? ` (\`${currentMatch.pattern}\`)` : ""}. Do not run it or retry variants of it unless the user asks.` };
 			}
 			return { allow: true };
 		},

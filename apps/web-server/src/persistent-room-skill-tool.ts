@@ -104,6 +104,8 @@ export interface CreateReadSkillToolOptions {
 	telemetry?: ReadSkillTelemetry;
 	/** Absent = no execution exposure ever (the pre-feature behavior). */
 	resolveExecutionExposure?: SkillExecutionExposureResolver;
+	/** Called only after every existing check passed. Absent = always allowed. */
+	checkPermission?: (name: string) => { action: "ask" | "allow" | "deny"; pattern: string | null } | null;
 }
 
 /**
@@ -112,7 +114,7 @@ export interface CreateReadSkillToolOptions {
  * refusal (never a throw): the model should relay why the body is unavailable.
  */
 export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDefinition<any, any> {
-	const { agentId, lookupSkill, telemetry, resolveExecutionExposure } = options;
+	const { agentId, lookupSkill, telemetry, resolveExecutionExposure, checkPermission } = options;
 	return {
 		name: READ_SKILL_TOOL_NAME,
 		label: "read enabled skill",
@@ -120,7 +122,7 @@ export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDe
 			"Read the full instruction body of a skill the user has enabled for this room. Takes the skill's name from the enabled-skills index; paths are not accepted. The body is returned as adopted user-approved instructions with provenance — it is not the room's own knowledge.",
 		promptSnippet: "Read the body of an enabled skill by name",
 		parameters: readSkillSchema,
-		execute: async (_toolCallId: string, params: { name: string }): Promise<TextToolResult> => {
+		execute: async (_toolCallId: string, params: { name: string }, _signal?: unknown, _onUpdate?: unknown, ctx?: any): Promise<TextToolResult> => {
 			const name = String(params?.name ?? "").trim();
 			if (!isValidSkillName(name)) {
 				return refusal(`"${name}" is not a valid skill name. Use a name from the enabled-skills index.`, { outcome: "invalid-name" });
@@ -145,6 +147,21 @@ export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDe
 					`Skill "${name}" changed since the user enabled it (its content no longer matches the reviewed version). It is disabled pending re-review: the user must review and re-enable it in the room settings before it can be read.`,
 					{ outcome: "hash-mismatch" },
 				);
+			}
+			const match = checkPermission?.(name) ?? null;
+			if (match?.action === "deny") {
+				return refusal(`Skill "${name}" is blocked by this room's permission rules in permissions.json${match.pattern ? ` (\`${match.pattern}\`)` : ""}. Do not retry it unless the user asks.`, { outcome: "permission-denied" });
+			}
+			if (match?.action === "ask") {
+				const approved = ctx?.hasUI && ctx.ui ? await ctx.ui.confirm(
+					"Load this skill?",
+					["The room wants to read an enabled skill's instructions.", "", "─── Skill name (requested by the room's model) ───", name].join("\n"),
+				) : false;
+				if (!approved) return refusal(`The user declined loading skill "${name}". Do not retry it unless the user asks.`, { outcome: "permission-declined" });
+				const currentMatch = checkPermission?.(name) ?? null;
+				if (currentMatch?.action === "deny") {
+					return refusal(`Skill "${name}" is blocked by this room's permission rules in permissions.json${currentMatch.pattern ? ` (\`${currentMatch.pattern}\`)` : ""}. Do not retry it unless the user asks.`, { outcome: "permission-denied" });
+				}
 			}
 			const body = defangSkillBody(found.body);
 			if (telemetry) {
