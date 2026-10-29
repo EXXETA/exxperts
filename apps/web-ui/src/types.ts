@@ -176,6 +176,27 @@ export interface PersistentRoomWorkspaceDefaultResponse {
 	shellMissingNote?: string | null;
 }
 
+export interface PersistentRoomWorkspaceTreeEntry {
+	name: string;
+	relativePath: string;
+	kind: "directory" | "file" | "symlink";
+	bytes: number | null;
+	mtimeMs: number | null;
+	extension?: string;
+}
+
+export interface PersistentRoomWorkspaceTreeResponse {
+	available: boolean;
+	source: "thread" | "room-default" | "none";
+	rootLabel: string | null;
+	path: string;
+	entries: PersistentRoomWorkspaceTreeEntry[];
+	nextCursor: string | null;
+	truncated: boolean;
+	omitted: { denied: number; unreadable: number; special: number };
+	reason?: "workspace_unavailable" | "workspace_missing";
+}
+
 export type SystemChooseFolderResponse =
 	| { supported: true; cancelled: false; path: string }
 	| { supported: true; cancelled: true; path: null };

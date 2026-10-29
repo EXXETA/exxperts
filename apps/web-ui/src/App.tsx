@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Sidebar } from "./components/Sidebar";
+import { RoomWorkspaceTree } from "./components/RoomWorkspaceTree";
 import { AssetsPanel } from "./components/assets-panel";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
 import { ToastStack, type ToastView } from "./components/toast-stack";
@@ -3844,6 +3845,10 @@ export function App() {
 		if (!persistentChat) setRoomSettingsOpen(false);
 	}, [persistentChat]);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const composerTextInsertionRef = useRef<((text: string) => void) | null>(null);
+	const registerComposerTextInsertion = useCallback((insertText: ((text: string) => void) | null) => {
+		composerTextInsertionRef.current = insertText;
+	}, []);
 	const attachFileInputRef = useRef<HTMLInputElement>(null);
 	const workbenchRef = useRef<HTMLDivElement>(null);
 
@@ -10061,6 +10066,12 @@ export function App() {
 					appearance={appearance}
 					onSetAppearance={setAppearance}
 					onSettings={openSettings}
+					workspaceTreeSlot={persistentChat ? <RoomWorkspaceTree
+						key={`${persistentChat.agentId}:${persistentChat.conversationId}`}
+						agentId={persistentChat.agentId}
+						conversationId={persistentChat.conversationId}
+						onInsertPath={(relativePath) => composerTextInsertionRef.current?.(relativePath)}
+					/> : undefined}
 					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} onDeleteFile={(row, fileName) => requestFileDelete(row, fileName)} onRenameFile={(row, fileName, newName) => void renameFileRow(row, fileName, newName)} /> : undefined}
 				/>
 			}
@@ -10150,6 +10161,7 @@ export function App() {
 			stopDisabled={persistentRoomCancelling || (persistentRoomInFlight && !connected)}
 			stopLabel="Stop"
 			textareaRef={textareaRef}
+			registerComposerTextInsertion={registerComposerTextInsertion}
 			composerPlaceholder={persistentRoomCancelling ? "Stopping current response…" : roomWorkingForChrome ? "Working… Stop before sending another message" : `Ask ${activeDisplay}…`}
 			sendUnavailable={!connected || roomInFlightForChrome || closedByFullSave || roomMovedOn}
 			initialDraftValue={composerPrefill || undefined}

@@ -124,6 +124,8 @@ With two or more rooms, Home shows a **Sort** control at the top right. Choose *
 
 In the room's settings, set a **workspace folder** and pick an access mode. **Full access** works with files like you do, in the folder and beyond. **Bounded workspace** carries the same Read, List, Find, Search, Write and Edit tools fenced to that folder; with write tools on it can edit files there, not only add new ones. Each tool is a toggle, and whether the room can change files follows from what you enabled: with no write tools and no Bash the room says it is read-only. Bash is off by default and Full access only; when on, it asks before each command with a card that shows the command. Details: [Workspace and Bash](workspace-and-bash.md).
 
+In persistent rooms, the left sidebar's **Arbeitsordner** tree lists readable paths from the active thread's workspace. Expand folders, then drag a file into the composer to insert its workspace-relative path (keyboard activation of a file entry inserts it too). The tree never reads or uploads file contents.
+
 macOS note: if the workspace is in a protected folder (Documents, Desktop, Downloads, iCloud Drive), macOS may block directory listing for the terminal that launched Exxperts. Check from that same terminal:
 
 ```bash
