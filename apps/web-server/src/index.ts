@@ -105,7 +105,7 @@ import { abortSpecialistTask, bindSpecialistSink, emitSpecialistDelta, registerS
 import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "./specialist-task-store-gc.js";
 import { getSpecialistTemplate } from "./specialist-templates.js";
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
-import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
+import { createPersistentRoomWorkspaceTools, listPersistentRoomWorkspaceTreeDirectory } from "./persistent-room-workspace-tools.js";
 import { DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, persistentAgentModelLocksEqual, getAvailablePersistentAgentAiProfiles, getPersistentAgentAiProfile, getPersistentRoomModelLocks, isPersistentAgentAiProfileId, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
 import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, effectiveGatewayModel, parseGatewayContextWindow, parseGatewayDetectedSnapshot, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayModelDetected, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
@@ -2595,6 +2595,25 @@ app.get("/api/persistent-agents/:id/workspace-policy", async (req, reply) => {
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE },
 			policy: policy ? workspacePolicyViewFor(req, policy) : null,
 		};
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+app.get("/api/persistent-agents/:id/workspace-tree", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const query = (req.query ?? {}) as any;
+		const conversationId = String(query.conversationId ?? "").trim();
+		if (!conversationId) throw new Error("conversationId is required");
+		const effective = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, conversationId);
+		return await listPersistentRoomWorkspaceTreeDirectory(
+			effective.policy,
+			effective.source,
+			query.path === undefined ? "." : String(query.path),
+			query.cursor === undefined ? undefined : String(query.cursor),
+		);
 	} catch (e) {
 		const payload = persistentRoomWorkspaceErrorPayload(e);
 		return reply.code(payload.statusCode).send(payload.body);

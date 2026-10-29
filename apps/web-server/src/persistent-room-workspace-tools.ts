@@ -343,8 +343,8 @@ function validateWorkspaceRelativeInput(rawPath: string, purpose: GuardPurpose):
 	return normalized || ".";
 }
 
-function createRuntime(policy: PersistentRoomCapabilityPolicy): WorkspaceToolPolicyRuntime | null {
-	if (!isPersistentRoomWorkspaceToolBundleEnabled(policy) || policy.modes.read !== true || policy.roots.length < 1) return null;
+function createRuntime(policy: PersistentRoomCapabilityPolicy, options: { requireToolBundle?: boolean } = {}): WorkspaceToolPolicyRuntime | null {
+	if ((options.requireToolBundle !== false && !isPersistentRoomWorkspaceToolBundleEnabled(policy)) || policy.modes.read !== true || policy.roots.length < 1) return null;
 	const root = policy.roots[0];
 	if (!root) return null;
 	const rootRealpath = safeRealpath(root.realpath) ?? safeRealpath(root.path);
@@ -378,8 +378,9 @@ export function resolvePersistentRoomWorkspacePath(
 	policy: PersistentRoomCapabilityPolicy,
 	rawPath: string,
 	purpose: GuardPurpose,
+	options: { requireToolBundle?: boolean } = {},
 ): PersistentRoomWorkspaceToolGuardResult {
-	const runtime = createRuntime(policy);
+	const runtime = createRuntime(policy, options);
 	if (!runtime) throw new PersistentRoomWorkspaceToolError("workspace_unavailable", "No selected workspace is available for this room.");
 	const normalizedInput = validateWorkspaceRelativeInput(rawPath, purpose);
 	assertPolicyPathAllowed(normalizedInput, runtime, purpose === "write");
@@ -613,6 +614,141 @@ async function listWorkspace(policy: PersistentRoomCapabilityPolicy, input: Work
 		details.entryLimitReached = limit;
 	}
 	return toolResult(text, details);
+}
+
+export interface PersistentRoomWorkspaceTreeEntry {
+	name: string;
+	relativePath: string;
+	kind: "directory" | "file" | "symlink";
+	bytes: number | null;
+	mtimeMs: number | null;
+	extension?: string;
+}
+
+export interface PersistentRoomWorkspaceTreeResponse {
+	available: boolean;
+	source: "thread" | "room-default" | "none";
+	rootLabel: string | null;
+	path: string;
+	entries: PersistentRoomWorkspaceTreeEntry[];
+	nextCursor: string | null;
+	truncated: boolean;
+	omitted: { denied: number; unreadable: number; special: number };
+	reason?: "workspace_unavailable" | "workspace_missing";
+}
+
+const WORKSPACE_TREE_PAGE_SIZE = 500;
+const WORKSPACE_TREE_ENTRY_CAP = 10_000;
+
+function workspaceTreeError(statusCode: number, code: string, message: string): PersistentRoomWorkspaceToolError & { statusCode: number } {
+	return Object.assign(new PersistentRoomWorkspaceToolError(code, message), { statusCode });
+}
+
+export async function listPersistentRoomWorkspaceTreeDirectory(
+	policy: PersistentRoomCapabilityPolicy | null,
+	source: PersistentRoomWorkspaceTreeResponse["source"],
+	rawPath: string,
+	rawCursor?: string,
+): Promise<PersistentRoomWorkspaceTreeResponse> {
+	const relativePath = validateWorkspaceRelativeInput(rawPath, "list");
+	const offset = rawCursor === undefined ? 0 : Number(rawCursor.slice(3));
+	if (rawCursor !== undefined && (!/^v1:(0|[1-9]\d{0,4})$/.test(rawCursor) || offset > WORKSPACE_TREE_ENTRY_CAP)) {
+		throw workspaceTreeError(400, "invalid_cursor", "Invalid workspace tree cursor.");
+	}
+	const empty = (reason: NonNullable<PersistentRoomWorkspaceTreeResponse["reason"]>): PersistentRoomWorkspaceTreeResponse => ({
+		available: false,
+		source,
+		rootLabel: null,
+		path: relativePath,
+		entries: [],
+		nextCursor: null,
+		truncated: false,
+		omitted: { denied: 0, unreadable: 0, special: 0 },
+		reason,
+	});
+	if (!policy || policy.modes.read !== true || policy.roots.length === 0) return empty("workspace_unavailable");
+	const runtime = createRuntime(policy, { requireToolBundle: false });
+	if (!runtime) return empty("workspace_missing");
+
+	let target: PersistentRoomWorkspaceToolGuardResult;
+	try {
+		const parentPath = relativePath === "." ? "." : path.posix.dirname(relativePath);
+		assertNoSymlinkAncestors(runtime, parentPath);
+		target = resolvePersistentRoomWorkspacePath(policy, relativePath, "list", { requireToolBundle: false });
+		if (!target.lstat.isDirectory() || !target.stat.isDirectory()) {
+			throw workspaceTreeError(404, "not_directory", "Directory not found in selected workspace.");
+		}
+	} catch (error) {
+		if (error instanceof PersistentRoomWorkspaceToolError) {
+			if (error.code === "workspace_unavailable") return empty("workspace_missing");
+			const statusCode = error.code === "blocked_by_policy" || error.code === "outside_workspace"
+				? 403
+				: error.code === "path_not_found" || error.code === "file_not_found" || error.code === "not_writable"
+					? 404
+					: 400;
+			throw Object.assign(error, { statusCode });
+		}
+		throw workspaceTreeError(500, "workspace_tree_failed", "Workspace directory could not be checked.");
+	}
+
+	let directoryEntries: fs.Dirent[];
+	try {
+		directoryEntries = await fs.promises.readdir(target.realpath, { withFileTypes: true });
+	} catch {
+		throw workspaceTreeError(500, "workspace_tree_failed", "Workspace directory could not be read.");
+	}
+	const truncated = directoryEntries.length > WORKSPACE_TREE_ENTRY_CAP;
+	const omitted = { denied: 0, unreadable: 0, special: 0 };
+	const entries: PersistentRoomWorkspaceTreeEntry[] = [];
+	for (const entry of directoryEntries.slice(0, WORKSPACE_TREE_ENTRY_CAP)) {
+		const candidatePath = relativePath === "." ? entry.name : `${relativePath}/${entry.name}`;
+		if (entryBlockedByPolicy(entry.name, candidatePath, runtime)) {
+			omitted.denied++;
+			continue;
+		}
+		// shortcut: POSIX filenames containing backslashes cannot be addressed by the workspace path validator; add escaped-segment support before exposing them.
+		if (entry.name.includes("\\")) {
+			omitted.special++;
+			continue;
+		}
+		let stat: fs.Stats;
+		try {
+			stat = await fs.promises.lstat(path.join(target.realpath, entry.name));
+		} catch {
+			omitted.unreadable++;
+			continue;
+		}
+		if (stat.isSymbolicLink()) {
+			entries.push({ name: entry.name, relativePath: candidatePath, kind: "symlink", bytes: null, mtimeMs: null });
+		} else if (stat.isDirectory()) {
+			entries.push({ name: entry.name, relativePath: candidatePath, kind: "directory", bytes: null, mtimeMs: stat.mtimeMs });
+		} else if (stat.isFile()) {
+			entries.push({
+				name: entry.name,
+				relativePath: candidatePath,
+				kind: "file",
+				bytes: stat.size,
+				mtimeMs: stat.mtimeMs,
+				extension: path.extname(entry.name).toLowerCase() || undefined,
+			});
+		} else {
+			omitted.special++;
+		}
+	}
+	entries.sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory")
+		|| a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+		|| a.name.localeCompare(b.name));
+	const pageEnd = Math.min(offset + WORKSPACE_TREE_PAGE_SIZE, WORKSPACE_TREE_ENTRY_CAP);
+	return {
+		available: true,
+		source,
+		rootLabel: target.root.displayLabel || path.basename(target.rootRealpath),
+		path: target.relativePath,
+		entries: entries.slice(offset, pageEnd),
+		nextCursor: pageEnd < entries.length ? `v1:${pageEnd}` : null,
+		truncated,
+		omitted,
+	};
 }
 
 function findPatternMatcher(pattern: string): (relativeFilePath: string) => boolean {

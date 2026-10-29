@@ -1,5 +1,13 @@
 exxperts
 Copyright 2026 EXXETA AG
 
+Portions of apps/web-ui/src/components/RoomWorkspaceTree.tsx are adapted from
+Omnigent (commit da7555532be25cd127a3cdee8bf8bb32071932fb):
+https://github.com/omnigent-ai/omnigent/tree/da7555532be25cd127a3cdee8bf8bb32071932fb
+Copyright (2026) Databricks, Inc.
+
+This Software includes software developed at Databricks (https://www.databricks.com/)
+and its use is subject to the included LICENSE file.
+
 The bundled runtime under runtime/ is derived from Pi by Mario Zechner,
 licensed under the MIT License. See runtime/LICENSE and runtime/NOTICE.md.

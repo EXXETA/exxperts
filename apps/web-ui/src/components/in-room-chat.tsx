@@ -1,4 +1,6 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { insertTextAtSelection } from "../composer-text-insertion";
+import { WORKSPACE_PATH_DRAG_TYPE } from "./RoomWorkspaceTree";
 import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
 import { Approval, confirmApprovalLabels, declinesSaidOnCards } from "./Approval";
 import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type FailureLineActions, type MessageAttachmentAccess } from "./Message";
@@ -46,6 +48,7 @@ export interface InRoomChatShellViewProps {
 	composerAllowEmptySend?: boolean;
 	/** Image files pasted into the textarea are handed here to be staged. */
 	composerOnPasteFiles?: (files: File[]) => void;
+	registerComposerTextInsertion?: (insertText: ((text: string) => void) | null) => void;
 	connected: boolean;
 	/** Room auto-reconnect: "reconnecting" while backoff attempts run, "failed" once capped. */
 	reconnectState?: "idle" | "reconnecting" | "failed";
@@ -603,6 +606,7 @@ interface ComposerInputProps {
 	allowEmptySend?: boolean;
 	/** Files pasted into the textarea (images, documents alike) are handed here to be staged. */
 	onPasteFiles?: (files: File[]) => void;
+	registerTextInsertion?: (insertText: ((text: string) => void) | null) => void;
 	/** The sole pending yes/no card, answered by Enter and Escape while the composer is empty. */
 	keyboardApproval?: { approve: () => void; decline: () => void } | null;
 }
@@ -625,6 +629,7 @@ function ComposerInput({
 	stagingSlot,
 	allowEmptySend = false,
 	onPasteFiles,
+	registerTextInsertion,
 	keyboardApproval = null,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
@@ -702,7 +707,7 @@ function ComposerInput({
 		el.style.height = `${el.scrollHeight}px`;
 	}, [draft]);
 
-	// Restore the caret after a mention completion rewrote the draft.
+	// Restore the caret after a programmatic draft update.
 	useLayoutEffect(() => {
 		const el = textareaNodeRef.current;
 		if (!el || pendingCaretRef.current == null) return;
@@ -725,6 +730,22 @@ function ComposerInput({
 		setMentionDismissed(false);
 		setDraft(text);
 	}, [draft, caret]);
+
+	const insertComposerText = useCallback((text: string, selectionStart?: number, selectionEnd?: number) => {
+		const el = textareaNodeRef.current;
+		const start = selectionStart ?? el?.selectionStart ?? draft.length;
+		const end = selectionEnd ?? el?.selectionEnd ?? start;
+		const insertion = insertTextAtSelection(draft, text, start, end);
+		pendingCaretRef.current = insertion.caret;
+		setMentionDismissed(false);
+		setConsultGateNotice(null);
+		setDraft(insertion.value);
+	}, [draft]);
+
+	useEffect(() => {
+		registerTextInsertion?.(insertComposerText);
+		return () => registerTextInsertion?.(null);
+	}, [registerTextInsertion, insertComposerText]);
 
 	const submitDraft = useCallback(() => {
 		if (sendDisabled) return;
@@ -826,6 +847,17 @@ function ComposerInput({
 				onSelect={(e) => syncCaret(e.currentTarget)}
 				onKeyDown={handleComposerKeyDown}
 				onPaste={handleComposerPaste}
+				onDragOver={(event) => {
+					if (!Array.from(event.dataTransfer.types).includes(WORKSPACE_PATH_DRAG_TYPE)) return;
+					event.preventDefault();
+					event.dataTransfer.dropEffect = "copy";
+				}}
+				onDrop={(event) => {
+					const relativePath = event.dataTransfer.getData(WORKSPACE_PATH_DRAG_TYPE);
+					if (!relativePath) return;
+					event.preventDefault();
+					insertComposerText(relativePath, event.currentTarget.selectionStart, event.currentTarget.selectionEnd);
+				}}
 				placeholder={placeholder}
 				rows={2}
 				spellCheck={false}
@@ -874,6 +906,7 @@ export function InRoomChatShellView({
 	stopDisabled,
 	stopLabel,
 	textareaRef,
+	registerComposerTextInsertion,
 	composerPlaceholder,
 	sendUnavailable,
 	initialDraftValue,
@@ -1250,6 +1283,7 @@ export function InRoomChatShellView({
 								stagingSlot={composerStagingSlot}
 								allowEmptySend={composerAllowEmptySend}
 								onPasteFiles={composerOnPasteFiles}
+								registerTextInsertion={registerComposerTextInsertion}
 								keyboardApproval={keyboardApproval}
 							/>
 						</div>

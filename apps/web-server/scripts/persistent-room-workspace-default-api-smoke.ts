@@ -160,6 +160,7 @@ try {
 	assert(missingWarnings.some((warning) => warning.includes("Smoke Workspace")), "missing-folder warning should name the workspace by its safe label");
 	assertNoPathLeak(getMissingRoot.body, "GET missing-folder default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 	fs.mkdirSync(workspaceRoot, { recursive: true });
+	fs.writeFileSync(path.join(workspaceRoot, "thread-workspace-only.txt"), "");
 	const getRestoredRoot = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`);
 	assert((getRestoredRoot.body?.warnings ?? []).length === 0, "restored-folder GET should clear the warning");
 
@@ -239,6 +240,7 @@ try {
 	fs.writeFileSync(legacySidecarPath, JSON.stringify({ ...currentDefaultRaw, policyId: "prcp_legacy_mirror_fixture", conversationId: legacyThreadId }, null, 2) + "\n");
 	const changedWorkspaceRoot = path.join(tempHome, "workspace-default-api-changed");
 	fs.mkdirSync(changedWorkspaceRoot, { recursive: true });
+	fs.writeFileSync(path.join(changedWorkspaceRoot, "room-default-only.txt"), "");
 	const changedDefault = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
 		body: JSON.stringify({ root: changedWorkspaceRoot, displayLabel: "Changed Workspace", workspaceAccessMode: "bounded", mode: "read-only", bashEnabled: true }),
@@ -255,11 +257,21 @@ try {
 	assert(liveResolution.policy?.roots?.[0]?.realpath === fs.realpathSync.native(changedWorkspaceRoot), "active thread should resolve the CHANGED default root");
 	const changedDefaultJson = fs.readFileSync(defaultPath, "utf-8");
 	assert(changedDefaultJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "room default should be updated to changed workspace root");
+	const liveDefaultTree = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-tree?conversationId=${encodeURIComponent(legacyThreadId)}`);
+	assert(liveDefaultTree.status === 200 && liveDefaultTree.body.available === true && liveDefaultTree.body.source === "room-default", `tree should follow the effective room default, got ${liveDefaultTree.status}: ${JSON.stringify(liveDefaultTree.body)}`);
+	const liveDefaultPaths = new Set(liveDefaultTree.body.entries.map((entry: any) => entry.relativePath));
+	assert(liveDefaultPaths.has("room-default-only.txt") && !liveDefaultPaths.has("thread-workspace-only.txt"), "tree should list the active room-default workspace, not the released thread mirror");
+	assert(!JSON.stringify(liveDefaultTree.body).includes(tempHome), "tree response must not expose the absolute workspace path");
 	assertNoPathLeak(changedDefault.body, "PUT changed default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot], changedWorkspaceRoot);
 	// A deliberate per-conversation override (differing content) survives the
 	// next default change and keeps winning for its thread.
 	const overrideRaw = { ...currentDefaultRaw, policyId: "prcp_deliberate_override_fixture", conversationId: legacyThreadId, bashEnabled: false, workspaceAccessMode: "bounded", toolSelection: { kind: "custom", allowedToolNames: ["ls", "read"] }, allowedToolNames: ["ls", "read"] };
 	fs.writeFileSync(legacySidecarPath, JSON.stringify(overrideRaw, null, 2) + "\n");
+	const threadOverrideTree = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-tree?conversationId=${encodeURIComponent(legacyThreadId)}`);
+	assert(threadOverrideTree.status === 200 && threadOverrideTree.body.available === true && threadOverrideTree.body.source === "thread", `tree should use the effective thread override, got ${threadOverrideTree.status}: ${JSON.stringify(threadOverrideTree.body)}`);
+	const threadOverridePaths = new Set(threadOverrideTree.body.entries.map((entry: any) => entry.relativePath));
+	assert(threadOverridePaths.has("thread-workspace-only.txt") && !threadOverridePaths.has("room-default-only.txt"), "thread override should win over the room default in the tree");
+	assert(!JSON.stringify(threadOverrideTree.body).includes(tempHome), "thread tree response must not expose the absolute workspace path");
 	const changedAgain = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
 		body: JSON.stringify({ workspaceAccessMode: "bounded", mode: "read-only" }),

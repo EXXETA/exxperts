@@ -13,9 +13,12 @@ const {
 const {
 	createPersistentRoomWorkspaceTools,
 	isPersistentRoomWorkspaceToolPolicyEnabled,
+	listPersistentRoomWorkspaceTreeDirectory,
 	PersistentRoomWorkspaceToolError,
 	resolvePersistentRoomWorkspacePath,
 } = await import("../src/persistent-room-workspace-tools.js");
+const { classifyRemoteRoute } = await import("../src/remote-route-policy.js");
+const { insertTextAtSelection } = await import("../../web-ui/src/composer-text-insertion.js");
 // The same manager path the bounded grep uses to locate ripgrep.
 const { getToolPath } = await import("@exxeta/exxperts-runtime");
 
@@ -97,11 +100,14 @@ try {
 		fs.symlinkSync(path.join(outsideRoot, "outside.txt"), path.join(workspaceRoot, "outside-link.txt"));
 		fs.symlinkSync(path.join(outsideRoot, "outside.md"), path.join(workspaceRoot, "outside-link.md"));
 		fs.symlinkSync(outsideRoot, path.join(workspaceRoot, "outside-dir-link"), "dir");
-	} catch (error) {
+} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EPERM" && (error as NodeJS.ErrnoException).code !== "EACCES") throw error;
-	}
+}
+const pagingRoot = path.join(workspaceRoot, "paging");
+fs.mkdirSync(pagingRoot, { recursive: true });
+for (let index = 0; index < 501; index++) fs.writeFileSync(path.join(pagingRoot, `entry-${String(index).padStart(3, "0")}.txt`), "");
 
-	const policy = createPersistentRoomCapabilityPolicy({
+const policy = createPersistentRoomCapabilityPolicy({
 		agentId: agentId,
 		conversationId: "c_workspace_tools_smoke",
 		repoRoot,
@@ -111,8 +117,34 @@ try {
 		workspaceAccessMode: "bounded",
 		source: "manual",
 		now: new Date("2026-05-27T00:00:00.000Z"),
-	});
-	const legacyNoToolPolicy = { ...policy, allowedToolNames: [] };
+});
+const tree = await listPersistentRoomWorkspaceTreeDirectory(policy, "thread", ".");
+assert(tree.available && tree.source === "thread", "tree should use the readable thread workspace");
+assert(typeof tree.rootLabel === "string" && !path.isAbsolute(tree.rootLabel), "tree should expose only a non-absolute root label");
+assert(tree.entries.some((entry) => entry.relativePath === "README.md"), "tree should include readable project files");
+assert(tree.entries.some((entry) => entry.relativePath === ".gitignore"), "tree response should include hidden files for the UI toggle");
+assert(!tree.entries.some((entry) => [".git", ".env", ".env.local", "private.pem", "deploy.key", "id_rsa"].includes(entry.relativePath)), "tree should omit policy-denied and sensitive entries");
+assertNoAbsoluteLeak(tree, tmp, "workspace tree response");
+if (fs.existsSync(path.join(workspaceRoot, "outside-link.md"))) {
+	assert(tree.entries.some((entry) => entry.relativePath === "outside-link.md" && entry.kind === "symlink"), "tree should identify symlinks without following them");
+		if (fs.existsSync(path.join(workspaceRoot, "outside-dir-link"))) {
+			await expectReject(() => listPersistentRoomWorkspaceTreeDirectory(policy, "thread", "outside-dir-link"), tmp, "workspace tree symlink directory");
+		}
+}
+await expectReject(() => listPersistentRoomWorkspaceTreeDirectory(policy, "thread", "../outside"), tmp, "workspace tree traversal");
+const firstTreePage = await listPersistentRoomWorkspaceTreeDirectory(policy, "thread", "paging");
+assert(firstTreePage.entries.length === 500 && firstTreePage.nextCursor, "tree should paginate large directories");
+const secondTreePage = await listPersistentRoomWorkspaceTreeDirectory(policy, "thread", "paging", firstTreePage.nextCursor);
+assert(secondTreePage.entries.length === 1 && secondTreePage.nextCursor === null, "tree cursor should fetch the remaining entry");
+assert(new Set([...firstTreePage.entries, ...secondTreePage.entries].map((entry) => entry.relativePath)).size === 501, "tree pages should not repeat entries");
+await expectReject(() => listPersistentRoomWorkspaceTreeDirectory(policy, "thread", "paging", "v1:10001"), tmp, "invalid workspace tree cursor");
+const unavailableTree = await listPersistentRoomWorkspaceTreeDirectory(null, "none", ".");
+assert(!unavailableTree.available && unavailableTree.source === "none", "tree should be unavailable without an effective policy");
+assert(classifyRemoteRoute("GET", "/api/persistent-agents/:id/workspace-tree") === "read", "workspace tree route should be classified as read-only");
+const insertedText = insertTextAtSelection("Ask this file", "docs/guide.md", 4, 8);
+assert(insertedText.value === "Ask docs/guide.md file" && insertedText.caret === 4 + "docs/guide.md".length, "composer insertion should replace the selected text and place the caret after the path");
+
+const legacyNoToolPolicy = { ...policy, allowedToolNames: [] };
 	delete (legacyNoToolPolicy as any).toolSelection;
 	assert(!isPersistentRoomWorkspaceToolPolicyEnabled(legacyNoToolPolicy), "legacy MR5.5a policy with root but empty allowedToolNames must not activate workspace tools");
 	assert(createPersistentRoomWorkspaceTools(legacyNoToolPolicy).length === 0, "legacy MR5.5a policy should not create workspace tools");

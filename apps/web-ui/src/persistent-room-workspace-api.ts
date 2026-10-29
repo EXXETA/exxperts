@@ -2,6 +2,7 @@ import { apiFetch } from "./api";
 import type {
 	PersistentRoomWorkspaceDefaultInput,
 	PersistentRoomWorkspaceDefaultResponse,
+	PersistentRoomWorkspaceTreeResponse,
 	SystemChooseFolderResponse,
 } from "./types";
 
@@ -39,6 +40,18 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallba
 
 function workspaceDefaultUrl(agentId: string): string {
 	return `/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-default`;
+}
+
+export async function fetchPersistentRoomWorkspaceTree(
+	agentId: string,
+	conversationId: string,
+	path = ".",
+	cursor?: string,
+): Promise<PersistentRoomWorkspaceTreeResponse> {
+	const params = new URLSearchParams({ conversationId, path });
+	if (cursor !== undefined) params.set("cursor", cursor);
+	const url = `/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-tree?${params.toString()}`;
+	return fetchJson<PersistentRoomWorkspaceTreeResponse>(url, undefined, "Failed to load workspace files.");
 }
 
 export async function fetchPersistentRoomWorkspaceDefault(agentId: string): Promise<PersistentRoomWorkspaceDefaultResponse> {
