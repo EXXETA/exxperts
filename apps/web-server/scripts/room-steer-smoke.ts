@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
@@ -43,6 +44,9 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
+const { serverLaunchArgs } = createRequire(import.meta.url)(path.join(repoRoot, "bin", "lib", "server-entry.cjs")) as {
+	serverLaunchArgs: (root: string, options?: { tsxLoader?: boolean; env?: NodeJS.ProcessEnv }) => string[];
+};
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-steer-"));
 const home = path.join(tempRoot, "home");
@@ -192,11 +196,15 @@ try {
 
 	port = await freePort();
 	const startServer = async () => {
-		const started = spawn("npx", ["tsx", "src/index.ts"], {
-			shell: process.platform === "win32",
+		const env = { ...process.env, ...smokeHomeEnv(home), EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot, PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot, EXXPERTS_TEST_INTROSPECTION: "1" } as NodeJS.ProcessEnv;
+		delete env.EXXPERTS_SERVER_BUNDLE;
+		// The spawned process is the server itself, as on a shared server, so
+		// H2's SIGTERM reaches it alone: through npx and tsx's CLI the signal is
+		// relayed, and tsx's relay SIGKILLs a server busy for a moment during its stop.
+		const started = spawn(process.execPath, serverLaunchArgs(repoRoot, { tsxLoader: true, env }), {
 			...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 			cwd: webServerDir,
-			env: { ...process.env, ...smokeHomeEnv(home), EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot, PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot, EXXPERTS_TEST_INTROSPECTION: "1" } as NodeJS.ProcessEnv,
+			env,
 		});
 		serverProcess = started;
 		started.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));

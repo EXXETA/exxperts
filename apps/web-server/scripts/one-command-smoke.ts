@@ -159,6 +159,13 @@ try {
 			assert(dying.stderr.includes("The exxperts server stopped while starting (exit code 1).") && dyingText.includes("✗ runtime not built, the server will not start"), `the launcher's reason and the start checks follow, got:\n${dyingText}`);
 			assert(!hasStack(dyingText) && !dyingText.includes("Node.js v") && !/^\s*\^+\s*$/m.test(dyingText), `no stack and no crash dump, got:\n${dyingText}`);
 
+			// The same with no frames at all: Node then prints the error inspected
+			// ("[Error …] {", its fields) between the same excerpt and footer.
+			const frameless = run(path.join(clone, "bin", "exxperts.cjs"), ["--no-open", "--port", String(await freePort())], homeEnv(cloneHome, { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --stack-trace-limit=0`.trim() }));
+			const framelessText = frameless.stdout + frameless.stderr;
+			assert(frameless.status === 1 && /^Error \[ERR_MODULE_NOT_FOUND\]: Cannot find package '@exxeta\/no-such-package'/m.test(frameless.stderr) && frameless.stderr.includes("The exxperts server stopped while starting (exit code 1)."), `without frames, the server's error line and the launcher's reason are shown, got ${frameless.status}:\n${framelessText}`);
+			assert(!framelessText.includes("Node.js v") && !/^\s*\^+\s*$/m.test(framelessText) && !framelessText.includes("triggerUncaughtException") && !framelessText.includes("code: '"), `without frames, no crash dump either, got:\n${framelessText}`);
+
 			// The same, but the server dies only after the launcher has said the
 			// first start is slow: still no crash dump.
 			fs.writeFileSync(path.join(clone, "apps", "web-server", "src", "index.ts"), 'await new Promise((resolve) => setTimeout(resolve, 15_000));\nawait import("@exxeta/no-such-package");\n');

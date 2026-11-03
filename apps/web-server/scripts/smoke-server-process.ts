@@ -216,34 +216,51 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 	}
 }
 
+// Whether the spawned tree has ended: npx has exited, by a code or by a
+// signal, and on POSIX no process of its group is left. npx's exit alone is
+// not the server's: on Linux, sh (dash) runs tsx as a child instead of
+// exec'ing it, so npx dies by the SIGTERM at once while the server is still
+// running its graceful stop.
+function treeEnded(server: ChildProcessWithoutNullStreams & { pid: number }): boolean {
+	if (server.exitCode == null && server.signalCode == null) return false;
+	if (process.platform === "win32") return true;
+	try {
+		process.kill(-server.pid, 0);
+		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "EPERM";
+	}
+}
+
 // Stop the smoke's server without ever hanging: SIGTERM the tree, wait
-// bounded, escalate to SIGKILL. An unbounded wait-for-exit here is exactly
-// what turned one leaked server process into a 45-minute CI timeout. The
-// bound's timer is cleared once the server exits: left pending, it kept every
-// smoke alive for the full 10 s after a clean stop. A stop is printed: a
-// port clash after it may be a restart finding the old server still there,
-// which the runner must not retry away.
+// bounded for the whole tree to end, escalate to SIGKILL. An unbounded wait
+// here is exactly what turned one leaked server process into a 45-minute CI
+// timeout. Escalating as soon as npx alone exits would kill a server in the
+// middle of its own stop. The wait polls, so no timer is left pending after a
+// clean stop to keep the smoke alive. A stop is printed: a port clash after
+// it may be a restart finding the old server still there, which the runner
+// must not retry away.
 export async function stopSmokeServer(server: ChildProcessWithoutNullStreams | null | undefined): Promise<void> {
-	if (!server || server.exitCode != null || server.pid == null) return;
+	if (!server || server.pid == null) return;
+	const tree = server as ChildProcessWithoutNullStreams & { pid: number };
+	if (treeEnded(tree)) return;
 	console.error("smoke server stopped");
-	const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
 	const waitUpTo = async (ms: number) => {
-		let timer: NodeJS.Timeout | undefined;
-		await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
-		clearTimeout(timer);
+		const until = Date.now() + ms;
+		while (!treeEnded(tree) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
 	};
-	killTree(server.pid, "SIGTERM");
+	killTree(tree.pid, "SIGTERM");
 	await waitUpTo(10_000);
-	if (server.exitCode == null) {
-		killTree(server.pid, "SIGKILL");
+	if (!treeEnded(tree)) {
+		killTree(tree.pid, "SIGKILL");
 		await waitUpTo(5_000);
 	}
 }
 
 // Kill the smoke's server outright, so no stop runs: for a row that needs the
 // connection lost the way a crash or a power cut loses it. The tree gets
-// SIGKILL (taskkill /F on Windows), and the wait for its exit is bounded as
-// in stopSmokeServer, its timer cleared. Printed as a stop too, so the runner
+// SIGKILL (taskkill /F on Windows), and the wait for its exit is bounded,
+// its timer cleared. Printed as a stop too, so the runner
 // never retries a port clash after it.
 export async function killSmokeServer(server: ChildProcessWithoutNullStreams | null | undefined): Promise<void> {
 	if (!server || server.exitCode != null || server.pid == null) return;

@@ -60,16 +60,41 @@ function firstLine(err) {
 // fields and the "Node.js v.." footer gone.
 function withoutCrashDump(text) {
   const lines = text.split(/\r?\n/);
-  const firstFrame = lines.findIndex((line) => /^\s+at /.test(line));
-  if (firstFrame === -1) return text;
-  let message = firstFrame - 1;
-  while (message > 0 && !/^\S*(Error|Exception)\b/.test(lines[message])) message--;
+  const error = uncaughtError(lines);
+  if (!error) return text;
+  const { message } = error;
+  let { shown } = error;
   let start = message;
-  // Node's excerpt: "<file>:<line>", the source line, the caret, a blank line.
-  if (message >= 4 && lines[message - 1] === "" && /^\s*\^+\s*$/.test(lines[message - 2])) start = message - 4;
-  const requireStack = lines.indexOf("Require stack:", message);
-  const end = requireStack !== -1 && requireStack < firstFrame ? requireStack : firstFrame;
-  return [...lines.slice(0, start), ...lines.slice(message, end)].join("\n").trim();
+  // Node's excerpt: "<file>:<line>", the source line, the caret, then a blank
+  // line (Node 22 and later) or the error line right away (Node 20, which
+  // also prints a blank line above the excerpt).
+  const caret = lines[message - 1] === "" ? message - 2 : message - 1;
+  if (caret >= 2 && /^\s*\^+\s*$/.test(lines[caret])) start = lines[caret - 3] === "" ? caret - 3 : caret - 2;
+  const requireStack = shown.indexOf("Require stack:");
+  if (requireStack > 0) shown = shown.slice(0, requireStack);
+  return [...lines.slice(0, start), ...shown].join("\n").trim();
+}
+
+// The uncaught error in Node's crash text: the index of the line that names
+// it and the lines of its message, or null. With stack frames the message
+// runs from that line to the first frame. Without any (a stack trace limit
+// of 0), Node prints the error inspected, "[<name>: <message>]" and its
+// fields, above the "Node.js v.." footer; the brackets come off.
+function uncaughtError(lines) {
+  const firstFrame = lines.findIndex((line) => /^\s+at /.test(line));
+  if (firstFrame !== -1) {
+    let message = firstFrame - 1;
+    while (message > 0 && !/^\S*(Error|Exception)\b/.test(lines[message])) message--;
+    return { message, shown: lines.slice(message, firstFrame) };
+  }
+  if (!lines.some((line) => /^Node\.js v\d/.test(line))) return null;
+  const message = lines.findIndex((line) => /^\[\S*(Error|Exception)\b/.test(line));
+  const close = lines.findIndex((line, index) => index >= message && /\]( \{)?$/.test(line));
+  if (message === -1 || close === -1) return null;
+  const shown = lines.slice(message, close + 1);
+  shown[0] = shown[0].slice(1);
+  shown[shown.length - 1] = shown[shown.length - 1].replace(/\]( \{)?$/, "");
+  return { message, shown };
 }
 
 function loadDotenv(root) {
