@@ -17,7 +17,7 @@ import { sha256 } from "./skills-store.js";
  *   and provenance-wrapped. There is no filesystem handle and no path argument —
  *   name lookup only.
  * - Index freshness is TURN-scoped: the enabled-skills index rides the per-turn
- *   prompt assembly (index.ts), recomputed from the room's current effective
+ *   prompt assembly (room-socket.ts), recomputed from the room's current effective
  *   enabled set for every request — enabling a skill mid-session lists it on
  *   the very next message. The tool enforces the same LIVE effective set on
  *   every call, so index and enforcement can never disagree for longer than
@@ -91,7 +91,7 @@ export interface SkillExecutionExposure {
  * user-store skill, room policy allows bash, manual (never background) context,
  * clean unicode scan, and the room's execution approval pinned to the exact
  * files on disk right now. Any gate failing returns null and the body is served
- * exactly as before, path-free. The wiring in index.ts owns the gate chain;
+ * exactly as before, path-free. The wiring in room-socket.ts owns the gate chain;
  * this module only knows "exposed or not".
  */
 export type SkillExecutionExposureResolver = (name: string) => SkillExecutionExposure | null;

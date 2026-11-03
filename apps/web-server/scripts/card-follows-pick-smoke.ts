@@ -13,6 +13,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -78,15 +81,6 @@ const providers = http.createServer((req, res) => {
 		res.end();
 	});
 });
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];

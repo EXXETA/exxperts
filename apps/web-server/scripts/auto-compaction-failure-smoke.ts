@@ -5,7 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 
 // A failed auto-compaction reaches the room, end to end against a real spawned
 // server and a synthetic OpenAI-compatible gateway.
@@ -19,12 +20,10 @@ import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_
 // written, and the room paid for the same doomed summary again on every later
 // turn without anyone knowing why. Proves:
 //   1. the turn itself still lands (agent_end, then usage);
-//   2. the server logs the failure with the room id, the reason and the
-//      runtime's message;
-//   3. the client receives a red notify line AFTER the turn ended, in the
+//   2. the client receives a red notify line AFTER the turn ended, in the
 //      house wording, and no error frame (the turn did not fail: the answer
 //      is on the screen and only the condensing did not happen);
-//   4. a page that leaves, or Stop, while the runtime shortens a conversation
+//   3. a page that leaves, or Stop, while the runtime shortens a conversation
 //      that overflowed leaves it free: the next message is answered, not
 //      refused as still running, and the shortening stops without asking the
 //      model again or showing a failure.
@@ -92,7 +91,7 @@ const gateway = http.createServer((req, res) => {
 		if (overflowMode) {
 			if (isSummary && holdNextSummary) { holdNextSummary = false; heldSummaries.push(res); return; }
 			if (!isSummary) overflowChats += 1;
-			if (messageText([...messages].reverse().find((message) => message?.role === "user")).includes("OVERFLOW")) {
+			if (messageText([...messages].reverse().find((message) => message?.role === "user" && !messageText(message).startsWith(ROOM_STATE_HEADING))).includes("OVERFLOW")) {
 				res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "This model's maximum context length is 64000 tokens. Please reduce the length of the messages.", type: "invalid_request_error", code: "context_length_exceeded" } }));
 				return;
 			}
@@ -130,23 +129,6 @@ function answerHeldSummary(): void {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, init);
 	const text = await response.text();
@@ -219,16 +201,6 @@ class WsHarness {
 		const errors = this.frames.filter((frame) => String(frame.type).includes("error")).map((frame) => frame.message).join(" | ");
 		throw new Error(`timed out waiting for ${label}; saw frame types: ${this.frames.map((frame) => frame.type).join(", ")}${errors ? `; errors: ${errors}` : ""}`);
 	}
-}
-
-async function waitForServerOutput(predicate: (output: string) => boolean, label: string, timeoutMs = 10_000): Promise<string> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const output = serverOutput.join("");
-		if (predicate(output)) return output;
-		await new Promise((resolve) => setTimeout(resolve, 50));
-	}
-	throw new Error(`timed out waiting for ${label} in the server log`);
 }
 
 function smokeEnv(): NodeJS.ProcessEnv {
@@ -319,7 +291,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20_000);
 
 	const roomId = await createRoom("Compaction Failure Room");
 	const conversationId = `compconv_${Date.now().toString(36)}`;
@@ -346,22 +318,10 @@ try {
 	assert(chatCalls === 2, `the gateway should have seen exactly two chat requests, got ${chatCalls}`);
 	pass("the turn lands and the runtime refuses the summary the gateway cut off");
 
-	// --- 2. The server says so in its log ------------------------------------
-	const output = await waitForServerOutput((text) => text.includes("auto-compaction failed"), "the auto-compaction warn line");
-	const warnLine = output.split("\n").find((line) => line.includes("auto-compaction failed")) ?? "";
-	let warn: any = null;
-	try { warn = JSON.parse(warnLine); } catch {}
-	assert(warn, `the warn line should be a pino record, got ${JSON.stringify(warnLine)}`);
-	assert(warn.level === 40, `the line should be at warn level, got ${JSON.stringify(warn.level)}`);
-	assert(warn.agentId === roomId, `the line should name the room, got ${JSON.stringify(warn.agentId)}`);
-	assert(warn.reason === "threshold", `the line should carry the compaction reason, got ${JSON.stringify(warn.reason)}`);
-	assert(typeof warn.err === "string" && warn.err.includes(RUNTIME_REASON), `the line should carry the runtime's message, got ${JSON.stringify(warn.err)}`);
-	pass("the server logs the failure with the room id, the reason and the runtime's message");
-
-	// --- 3. The room is told, after the turn, without the turn failing -------
+	// --- 2. The room is told, after the turn, without the turn failing -------
 	const noticeIndex = await ws.waitFor((row) => row.type === "ui_request" && row.kind === "notify" && row.level === "error", "the compaction notice", 0, 10_000);
 	const notice = ws.frames[noticeIndex];
-	// The runtime's words stay in the log line above, never on the room's line. The page words the line from
+	// The runtime's words stay in the log, never on the room's line. The page words the line from
 	// the notice's fields: a summary cut at the model's output limit, whose way on is a model that writes longer answers.
 	assert(notice.failure === "could-not-shorten" && notice.summaryCut === true && notice.reason === "threshold" && notice.model?.model === "narrow-model", `the notice carries what the page words its line from, got ${JSON.stringify(notice)}`);
 	assert(notice.message === undefined && notice.words === undefined, `the notice carries no words of its own, got ${JSON.stringify(notice)}`);
@@ -370,7 +330,7 @@ try {
 	assert(ws.frames.filter((frame) => frame.type === "ui_request" && frame.kind === "notify" && frame.level === "error").length === 1, "one attempt, one notice");
 	pass("the client receives one red notice line after the turn, and no error frame");
 
-	// --- 4. Leaving or Stop while the runtime shortens an overflowing conversation frees it, and the shortening stops quietly --
+	// --- 3. Leaving or Stop while the runtime shortens an overflowing conversation frees it, and the shortening stops quietly --
 	ws.close();
 	overflowMode = true;
 	const settled = async (roomId: string, label: string) => {

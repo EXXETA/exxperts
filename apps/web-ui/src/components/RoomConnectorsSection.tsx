@@ -116,7 +116,7 @@ export function RoomConnectorsSection({ status, onOpenConnectors }: { status: Pe
 									<div className="room-skills-row-main">
 										<span className="room-skills-name-row">
 											<span className="room-skills-name">{entry.name}</span>
-											{entry.configured && <span className="room-skills-live">enabled</span>}
+											{entry.configured && <span className="room-skills-live">Enabled</span>}
 										</span>
 										{server && (
 											<span className="room-skills-desc" title={server.target}>

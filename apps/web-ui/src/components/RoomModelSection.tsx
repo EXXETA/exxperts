@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { credentialGoneWords, modelCredentialWords } from "../../../web-server/src/model-not-offered";
+import { credentialGoneWhy, credentialGoneWords, modelCredentialWords, providerCredentialClause, sharedCredentialState } from "../../../web-server/src/model-not-offered";
+import { providerAccountName } from "../../../web-server/src/model-not-on-account";
 import { modelDisplayName, modelOnProvider } from "../model-names";
-import { useRemoteClientContext } from "../remote-client-context";
-import { fetchRoomModelProviders, putRoomModels, switchConversationModel, switchRoomBusySentence, type ConversationSwitchNotice } from "../room-models-api";
+import { sharedServerRole, useRemoteClientContext } from "../remote-client-context";
+import { fetchRoomModelProviders, keyRefusalGone, keyRefusalMarks, putRoomModels, type KeyRefusal } from "../room-models-api";
 import type { PersistentAgentStatus, RoomModelLock, RoomModelLockView, RoomModelProviderView, RoomModelRowView, RoomModelsView, RoomModelTask } from "../types";
+import { offersCredentialButton } from "./model-notice";
 import { PaneHeader } from "./pane-header";
-import { RoomModelPicker } from "./room-model-picker";
+import { RoomModelPicker, useKeyRefusals } from "./room-model-picker";
 
 // Room settings, Model: what this room talks with, and what does its memory
 // work. Two rows. A row the room has not set inherits the default for new
@@ -14,12 +16,14 @@ import { RoomModelPicker } from "./room-model-picker";
 // the room's own pick, so the row follows the default again. A model that cannot run (its provider signed
 // out, or no longer offered), the room's own or the default, stays on the
 // picker with the reason under it, and the room waits: nothing runs in its
-// place until it is ready again or another is picked. A conversation pick applies to the next
-// conversation; while one with messages is open on another model, the pane
-// offers to switch it too.
+// place until it is ready again or another is picked. A model whose provider
+// refused the saved key at the last call (or found its sign-in gone) gets an
+// amber line under its row, with the way to AI setup when the caller can open
+// it, and is muted in the picker. A conversation pick is the default for new
+// conversations; an open one changes its own model in the message box.
 
 const MODEL_PANE_LINE = "What this room talks with, and what does its memory work.";
-const CONVERSATION_SUB = "The model this room talks with.";
+const CONVERSATION_SUB = "Default for new conversations.";
 const MEMORY_SUB = "Runs Remember, Memorize and Review.";
 /** A Memory model too small for this room's memory, greyed out in the picker (drafts). */
 const TOO_SMALL_REASON = "Too small for this room's memory";
@@ -27,10 +31,6 @@ const TOO_SMALL_LINE = "A Memory model must read all of this room's memory at on
 
 function lockOf(view: { provider: string; model: string } | null | undefined): RoomModelLock | null {
 	return view ? { provider: view.provider, model: view.model } : null;
-}
-
-function sameLock(a: RoomModelLock | null | undefined, b: RoomModelLock | null | undefined): boolean {
-	return !!a && !!b && a.provider === b.provider && a.model === b.model;
 }
 
 function lockName(lock: RoomModelLockView): string {
@@ -49,20 +49,51 @@ function unavailableSentence(row: RoomModelRowView, task: RoomModelTask): string
 		: `${what} is no longer offered. This room waits until you choose another ${task === "memory" ? "Memory model" : "model"}.`;
 }
 
-/** onSwitched: the open conversation continues on `model`, with the line the switch wrote (the pane closes). */
-export function RoomModelSection({ status, onRefresh, onSwitched }: { status: PersistentAgentStatus; onRefresh: () => void; onSwitched: (conversationId: string, model: RoomModelLockView, notice: ConversationSwitchNotice) => void }) {
+/**
+ * The amber line under a row whose provider's last call was refused for the
+ * saved credential, as the room's own notice words it: a refused key is the
+ * service's ("Anthropic did not accept the saved key"). `button` is the way to
+ * AI setup (Replace key, Sign in), null where this person has none there;
+ * `role` is sharedServerRole's.
+ */
+function refusedLine(lock: RoomModelLockView, refusal: KeyRefusal, role: "member" | "admin" | null): { text: string; button: string | null } {
+	const gone = keyRefusalGone(refusal);
+	const button = offersCredentialButton(role, gone === "signed-out") ? credentialGoneWords(gone).button : null;
+	const subject = (gone === "key-refused" || !button ? providerAccountName(lock.provider) : undefined) ?? lock.providerLabel;
+	const cause = gone === "key-no-workspace" ? `${lockName(lock)} ${credentialGoneWhy(gone)}` : role && !button ? `${subject} ${sharedCredentialState(gone)}` : providerCredentialClause(subject, gone);
+	return { text: `${cause}.${button ? "" : ` Choose another model${role === "member" ? ", or tell your admin" : ""}.`}`, button };
+}
+
+/**
+ * onOpenAiSetup: opens Settings, AI setup at a provider's row; without it, a refused key's line offers no Replace key.
+ */
+export function RoomModelSection({ status, onRefresh, onOpenAiSetup }: { status: PersistentAgentStatus; onRefresh: () => void; onOpenAiSetup?: (providerId: string) => void }) {
 	const remoteClient = useRemoteClientContext();
 	const readOnly = remoteClient.remote && remoteClient.capability !== "full";
+	const role = sharedServerRole(remoteClient);
 	const [providers, setProviders] = useState<RoomModelProviderView[]>([]);
 	// A failed read of the models to offer says why, with a way to ask again;
 	// the pickers wait meanwhile, since an empty list would say no provider is signed in.
 	const [providersError, setProvidersError] = useState<string | null>(null);
 	const [providersAsk, setProvidersAsk] = useState(0);
+	// Read again each time a picker opens, and when the person comes back to
+	// this window: a key replaced in another one clears the line under its row
+	// with nothing reopened.
+	const { refusals, refresh: refreshRefusals } = useKeyRefusals();
+	useEffect(() => {
+		const recheck = () => { if (document.visibilityState === "visible") refreshRefusals(); };
+		window.addEventListener("focus", recheck);
+		document.addEventListener("visibilitychange", recheck);
+		return () => {
+			window.removeEventListener("focus", recheck);
+			document.removeEventListener("visibilitychange", recheck);
+		};
+	}, [refreshRefusals]);
+	// "Choose another" opens its row's picker.
+	const [chooseAsk, setChooseAsk] = useState<Record<RoomModelTask, number>>({ conversation: 0, memory: 0 });
 	const [models, setModels] = useState<RoomModelsView | null>(status.models ?? null);
 	const [saving, setSaving] = useState<RoomModelTask | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [switching, setSwitching] = useState(false);
-	const [switchError, setSwitchError] = useState<string | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -77,22 +108,9 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 		if (status.models) setModels(status.models);
 	}, [status.models]);
 
-	const openConversationId = status.runtime.state !== "idle" ? status.runtime.activeThreadId : null;
-	const openConversationModel = lockOf(status.runtime.model);
-	const openHasMessages = status.activeThread?.hasUserVisibleTurns === true;
-	const conversationEffective = lockOf(models?.conversation.effective);
-	// Offered whenever a conversation with messages is open on another model
-	// than the row's, however the row got there (a pick now, one made before,
-	// a default that moved).
-	const canOfferSwitch = !!openConversationId && openHasMessages && !!conversationEffective && !sameLock(openConversationModel, conversationEffective);
-	// A scheduled run or the CLI working the room holds the switch back; the
-	// pane says so instead of offering a button the server would refuse.
-	const roomBusy = switchRoomBusySentence(status.activeLock);
-
 	async function save(task: RoomModelTask, lock: RoomModelLock | null) {
 		setSaving(task);
 		setError(null);
-		setSwitchError(null);
 		try {
 			const next = await putRoomModels(status.id, { [task]: lock });
 			setModels(next);
@@ -104,32 +122,20 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 		}
 	}
 
-	async function switchOpenConversation() {
-		if (!openConversationId || !conversationEffective) return;
-		setSwitching(true);
-		setSwitchError(null);
-		try {
-			const switched = await switchConversationModel(status.id, openConversationId, conversationEffective);
-			setModels(switched.models);
-			onRefresh();
-			onSwitched(openConversationId, switched.model, switched.notice ?? null);
-		} catch (e) {
-			setSwitchError((e as Error).message);
-		} finally {
-			setSwitching(false);
-		}
-	}
+	const marks = keyRefusalMarks(refusals);
 
 	function row(task: RoomModelTask, label: string, sub: string) {
 		const view = models?.[task];
 		const stored = lockOf(view?.stored);
-		const effective = lockOf(view?.effective);
 		const inherited = !stored;
 		const unavailable = view ? unavailableSentence(view, task) : null;
 		// The model the row is set to, even while it waits: never another.
-		const shown = unavailable ? lockOf(view?.chosen) : stored ?? effective;
+		const shownView = (unavailable ? view?.chosen : view?.stored ?? view?.effective) ?? null;
+		const shown = lockOf(shownView);
 		const fallback = view?.default ?? null;
 		const tooSmall = new Map((view?.tooSmall ?? []).map((lock) => [`${lock.provider}/${lock.model}`, TOO_SMALL_REASON]));
+		const refusal = shownView && !unavailable ? refusals.get(shownView.provider) : undefined;
+		const refused = shownView && refusal ? refusedLine(shownView, refusal, role) : null;
 		return (
 			<div className="settings-row room-model-row">
 				<div className="settings-row-main">
@@ -146,10 +152,25 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 						ariaLabel={`${label} model`}
 						unpickable={tooSmall}
 						unpickableLine={TOO_SMALL_LINE}
-						defaultChoice={fallback ? { name: lockName(fallback), reason: tooSmall.get(`${fallback.provider}/${fallback.model}`), onPick: () => void save(task, null) } : undefined}
+						providerMarks={marks}
+						defaultChoice={fallback ? { name: lockName(fallback), reason: tooSmall.get(`${fallback.provider}/${fallback.model}`), mark: marks.get(fallback.provider), onPick: () => void save(task, null) } : undefined}
+						openRequest={chooseAsk[task]}
+						onOpen={refreshRefusals}
 						onPick={(lock) => void save(task, lock)}
 					/>
 				</div>
+				{/* Under the whole row, so on a phone it follows the model button it is about. */}
+				{refused && shownView && (
+					<div className="room-model-refused" role="status">
+						<span>{refused.text}</span>
+						{!readOnly && (
+							<span className="room-model-refused-actions">
+								{refused.button && onOpenAiSetup && <button type="button" className="rs-btn" onClick={() => onOpenAiSetup(shownView.provider)}>{refused.button}</button>}
+								<button type="button" className="rs-btn" disabled={saving !== null || !models || providersError !== null} onClick={() => setChooseAsk((ask) => ({ ...ask, [task]: ask[task] + 1 }))}>Choose another</button>
+							</span>
+						)}
+					</div>
+				)}
 			</div>
 		);
 	}
@@ -161,19 +182,6 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 				{row("conversation", "Conversation", CONVERSATION_SUB)}
 				{row("memory", "Memory", MEMORY_SUB)}
 			</div>
-			{canOfferSwitch && (
-				<div className="room-model-switch">
-					{roomBusy ? (
-						<p className="room-model-switch-note">{roomBusy}</p>
-					) : (
-						<>
-							<p className="room-model-switch-note">The first answer after a switch reads the whole conversation again.</p>
-							<button type="button" className="rs-btn" disabled={switching || readOnly} onClick={() => void switchOpenConversation()}>{switching ? "Switching…" : "Switch the open conversation too"}</button>
-						</>
-					)}
-					{switchError && <p className="room-model-error" role="alert">{switchError}</p>}
-				</div>
-			)}
 			{providersError && (
 				<div className="room-model-error" role="alert">
 					{providersError}{" "}

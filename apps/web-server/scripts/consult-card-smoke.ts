@@ -12,7 +12,6 @@
 // Run: npm run smokes -- consult-card   (or tsx this file)
 
 import {
-	abbreviateFingerprint,
 	canFollowUp,
 	canTransferConsult,
 	consultHasDrift,
@@ -93,10 +92,6 @@ try {
 		{ type: "delta", consultId: "local_abc", delta: "def" },
 	]);
 	assert(midStream.state.text === "abcdef" && midStream.state.phase === "streaming", "deltas accumulate into the live view");
-
-	// fingerprint abbreviation for the footer meta
-	assert(abbreviateFingerprint(FINGERPRINT) === "sha256:ab12…9f4e", `fingerprint abbreviates to sha256:ab12…9f4e; got ${abbreviateFingerprint(FINGERPRINT)}`);
-	assert(abbreviateFingerprint(null) === null, "no fingerprint → null");
 
 	// ---- stale-id discipline ---------------------------------------------
 	// before start: an event with no active consult is dropped
@@ -252,7 +247,6 @@ try {
 
 	// ---- reset (teardown) ------------------------------------------------
 	assert(reduceConsult(happy.state, { type: "reset" }).state.phase === "none", "reset forgets everything (socket teardown)");
-	assert(createConsultState().exchanges.length === 0 && createConsultState().overflow === false, "fresh state starts with an empty stack and no overflow");
 
 	console.log("consult card reducer smoke passed");
 } catch (error) {

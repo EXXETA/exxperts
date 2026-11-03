@@ -19,7 +19,7 @@ function check(name: string, condition: boolean, detail?: unknown): void {
 
 const user = (id: string, text = "question"): ChatItem => ({ kind: "user", id, text });
 const assistant = (id: string, text: string, streaming?: boolean, ts?: number): ChatItem => ({ kind: "assistant", id, text, ...(streaming ? { streaming } : {}), ...(ts === undefined ? {} : { ts }) });
-const tool = (id: string, status: "running" | "done" | "error" | "stopped" = "done"): ChatItem => ({ kind: "tool", id, name: "read_file", args: {}, status });
+const tool = (id: string, status: "writing" | "running" | "done" | "error" | "stopped" = "done"): ChatItem => ({ kind: "tool", id, name: "read_file", args: {}, status });
 const system = (id: string): ChatItem => ({ kind: "system", id, text: "note" });
 
 // Text-only view of the targets: every case below that is about placement
@@ -72,6 +72,12 @@ expectTargets(
 expectTargets(
 	"a running tool holds the whole reply's button back",
 	[user("u1"), assistant("a1", "Looking."), tool("t1", "running")],
+	{},
+);
+
+expectTargets(
+	"a step the model is still writing holds the whole reply's button back",
+	[user("u1"), assistant("a1", "Looking."), tool("t1", "writing")],
 	{},
 );
 

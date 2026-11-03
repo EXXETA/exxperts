@@ -132,7 +132,7 @@ Compared with a `CLAUDE.md` or rules file you keep by hand, a room drafts each u
 <details>
 <summary>And three more</summary>
 
-- **HiveMind** answers one question from the memory of all your rooms, or the ones you pick, and names the room each fact came from.
+- **Ask your rooms** answers one question from the memory of all your rooms, or the ones you pick, and names the room each fact came from.
 - **Remote access** opens your rooms on your phone over your own private Tailscale network. It is off until you turn it on.
 - **The Wallet** shows what each room and model spends, measured on your computer.
 
@@ -173,7 +173,7 @@ Local model servers such as Ollama or LM Studio offer the same kind of address a
 - **Every other connection**, besides the list above:
   - Each saved gateway is asked for its model list and prices at start, once a day, and when a model is not found.
   - Sign-ins are refreshed with Anthropic, OpenAI or GitHub as needed. GitHub also serves Copilot's model list, the skills someone browses or imports, and ripgrep when a terminal install has none (the desktop app ships its own).
-  - **Health Check** and `exxperts doctor` test whether cdn.sheetjs.com can be reached when a source install lacks spreadsheet support, and reach the person's own search engine if one is set.
+  - **Health Check** tests whether cdn.sheetjs.com can be reached when a source install lacks spreadsheet support, and reach the person's own search engine if one is set.
   - Docker Hub, only if the local search engine is set up. A terminal install that builds from source downloads its npm packages and a headless Chromium.
   - Pages the person opens in a browser load their own resources.
   - Requests to OpenRouter name exxperts as the app.
@@ -204,7 +204,9 @@ curl -fsSL https://raw.githubusercontent.com/EXXETA/exxperts/main/install.sh | b
 irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
 ```
 
-Then run `exxperts web` and the app opens in your browser. Run the same line again to update. `exxperts doctor` checks your install and says how to fix what is missing.
+Then run `exxperts` and the app opens in your browser. Run the same line again to update.
+
+If it misbehaves, `exxperts doctor` checks the terminal install and prints the fix.
 
 <details>
 <summary>Requirements and other systems</summary>
@@ -226,7 +228,7 @@ Then run `exxperts web` and the app opens in your browser. Run the same line aga
 - **Use:** [Memory](docs/memory.md) · [Files and commands](docs/workspace-and-bash.md) · [Connectors](docs/mcp.md) · [Web search](docs/web-search.md) · [Wallet](docs/wallet.md)
 - **Trust:** [Security](SECURITY.md) · [What's new](CHANGELOG.md) · [All docs](docs/README.md)
 
-Stuck? Run **Health Check** in the desktop app, or `exxperts doctor`, and open an [issue](https://github.com/EXXETA/exxperts/issues) with what it says.
+Stuck? Run **Health Check** in the desktop app, or `exxperts doctor` on a terminal install, and open an [issue](https://github.com/EXXETA/exxperts/issues) with what it says.
 
 ## Contributing
 

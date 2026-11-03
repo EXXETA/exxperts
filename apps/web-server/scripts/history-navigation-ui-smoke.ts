@@ -10,6 +10,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -39,15 +42,6 @@ process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
 process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -100,7 +94,7 @@ try {
 
 		// Home, then the room: the room has its own address.
 		await card.waitFor({ timeout: 20000 });
-		await card.getByRole("button", { name: "Enter →" }).click();
+		await card.getByRole("button", { name: "Enter" }).click();
 		await waitUntil(inRoom, "the room is open");
 		assert((await hash()) === `#/room/${agentId}`, `the room's address names it, got ${await hash()}`);
 		console.log("  ok  a room has its own address");

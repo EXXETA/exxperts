@@ -370,10 +370,6 @@ function createRuntime(policy: PersistentRoomCapabilityPolicy): WorkspaceToolPol
 	};
 }
 
-export function isPersistentRoomWorkspaceToolPolicyEnabled(policy: PersistentRoomCapabilityPolicy | null | undefined): policy is PersistentRoomCapabilityPolicy {
-	return Boolean(policy && createRuntime(policy));
-}
-
 export function resolvePersistentRoomWorkspacePath(
 	policy: PersistentRoomCapabilityPolicy,
 	rawPath: string,

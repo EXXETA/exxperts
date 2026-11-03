@@ -78,7 +78,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.js";
 import { emitSessionShutdownEvent } from "./extensions/runner.js";
-import type { BashExecutionMessage, CustomMessage } from "./messages.js";
+import { type BashExecutionMessage, type CustomMessage, isRoomStateMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
@@ -302,6 +302,11 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	/**
+	 * Counts every agent run as it starts, the waits before a run (prompt's and Try again's hooks),
+	 * aborts and the close; an overflow retry scheduled before a change stands down.
+	 */
+	private _conversationTakeovers = 0;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -533,6 +538,7 @@ export class AgentSession {
 		// _processAgentEvent, slow earlier queued events can delay agent_end processing
 		// and waitForRetry() can miss the in-flight retry.
 		this._createRetryPromiseForAgentEnd(event);
+		if (event.type === "agent_start") this._conversationTakeovers++;
 
 		this._agentEventQueue = this._agentEventQueue.then(
 			() => this._processAgentEvent(event),
@@ -827,6 +833,7 @@ export class AgentSession {
 	 * only trips the AbortController, so dispose stays synchronous.
 	 */
 	dispose(): void {
+		this._conversationTakeovers++;
 		try {
 			this.agent.abort();
 		} catch {
@@ -1122,6 +1129,7 @@ export class AgentSession {
 				return;
 			}
 
+			this._conversationTakeovers++;
 			// Flush any pending bash messages before the new prompt
 			this._flushPendingBashMessages();
 
@@ -1224,41 +1232,65 @@ export class AgentSession {
 	 * leave what the model is sent (the session file keeps them, as the
 	 * runtime's own retry does), and the model continues from the message, or
 	 * from the last tool result, so a tool that already ran is not asked for
-	 * again. The system prompt is built for the turn as prompt() builds it;
-	 * messages a before_agent_start handler adds are left out, since they ride
-	 * beside a new user message.
+	 * again. The system prompt is built for the turn as prompt() builds it; of
+	 * the messages a before_agent_start handler adds, only room state is sent,
+	 * after the kept messages, since the others ride beside a new user message.
 	 */
 	async continueAfterFailure(): Promise<void> {
 		if (this.isStreaming) throw new Error("Agent is already processing.");
+		this._conversationTakeovers++;
 		const kept = this._withoutFailedAttempts();
 		if (!kept) throw new Error("No failed answer to continue from");
 		if (!this.model) throw new Error(formatNoModelSelectedMessage());
 		if (!this._modelRegistry.hasConfiguredAuth(this.model)) throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
-		const lastUser = [...kept].reverse().find((message) => message.role === "user");
+		const result = await this._emitBeforeAgentStartForContinuation(kept);
+		this.agent.state.systemPrompt = result?.systemPrompt ?? this._baseSystemPrompt;
+		this.agent.state.messages = kept;
+		this._appendRoomState(result?.messages);
+		await this.agent.continue();
+		await this.waitForRetry();
+	}
+
+	/** Runs before_agent_start for a turn that continues without a new user message, with the last user message's text as the prompt. */
+	private _emitBeforeAgentStartForContinuation(messages: AgentMessage[]) {
+		const lastUser = [...messages].reverse().find((message) => message.role === "user");
 		const promptText = typeof lastUser?.content === "string"
 			? lastUser.content
 			: (lastUser?.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("");
-		const result = await this._extensionRunner.emitBeforeAgentStart(promptText, undefined, this._baseSystemPrompt, this._baseSystemPromptOptions, this._contextPolicy);
-		this.agent.state.systemPrompt = result?.systemPrompt ?? this._baseSystemPrompt;
-		this.agent.state.messages = kept;
-		await this.agent.continue();
-		await this.waitForRetry();
+		return this._extensionRunner.emitBeforeAgentStart(promptText, undefined, this._baseSystemPrompt, this._baseSystemPromptOptions, this._contextPolicy);
+	}
+
+	/** Appends the room-state messages among a before_agent_start result's messages, saved as sendCustomMessage saves one; the other types are left out. */
+	private _appendRoomState(messages: Pick<CustomMessage, "customType" | "content" | "display" | "details">[] | undefined): void {
+		for (const message of messages ?? []) {
+			const appMessage: CustomMessage = { role: "custom", ...message, timestamp: Date.now() };
+			if (isRoomStateMessage(appMessage)) this._appendCustomMessage(appMessage);
+		}
 	}
 
 	/** The conversation without its trailing failed attempts; undefined when it does not end on one after a user message or a tool result. */
 	private _withoutFailedAttempts(): AgentMessage[] | undefined {
 		const messages = this.agent.state.messages;
+		// Room state sent after the message is not what the model answers, so the failed attempts may sit before, between and after copies of it; the copies stay.
+		const roomState: AgentMessage[] = [];
+		let failed = false;
 		let end = messages.length;
 		while (end > 0) {
 			const message = messages[end - 1];
+			if (isRoomStateMessage(message)) {
+				roomState.unshift(message);
+				end--;
+				continue;
+			}
 			if (message.role !== "assistant") break;
 			// An empty answer: a finished message with no text, no tool call and no output tokens.
 			const empty = message.stopReason === "stop" && !message.usage?.output && !message.content.some((part) => part.type === "toolCall" || (part.type === "text" && part.text.trim() !== ""));
 			if (message.stopReason !== "error" && !empty) break;
+			failed = true;
 			end--;
 		}
 		const last = messages[end - 1];
-		return end < messages.length && (last?.role === "user" || last?.role === "toolResult") ? messages.slice(0, end) : undefined;
+		return failed && (last?.role === "user" || last?.role === "toolResult") ? [...messages.slice(0, end), ...roomState] : undefined;
 	}
 
 	/**
@@ -1446,16 +1478,16 @@ export class AgentSession {
 		} else if (options?.triggerTurn) {
 			await this.agent.prompt(appMessage);
 		} else {
-			this.agent.state.messages.push(appMessage);
-			this.sessionManager.appendCustomMessageEntry(
-				message.customType,
-				message.content,
-				message.display,
-				message.details,
-			);
-			this._emit({ type: "message_start", message: appMessage });
-			this._emit({ type: "message_end", message: appMessage });
+			this._appendCustomMessage(appMessage);
 		}
+	}
+
+	/** Appends a custom message to the conversation and the session file without starting a turn. */
+	private _appendCustomMessage(message: CustomMessage): void {
+		this.agent.state.messages.push(message);
+		this.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+		this._emit({ type: "message_start", message });
+		this._emit({ type: "message_end", message });
 	}
 
 	/**
@@ -1536,6 +1568,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._conversationTakeovers++;
 		this.abortRetry();
 		this.agent.abort();
 		await this.agent.waitForIdle();
@@ -2157,8 +2190,18 @@ export class AgentSession {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
 
+				// The compaction may have removed every room-state copy, so the retry sends the current one.
+				// Another run, a turn asked for, an abort or the close while the hook runs takes over, and the retry then does nothing.
+				const takeovers = this._conversationTakeovers;
 				setTimeout(() => {
-					this.agent.continue().catch(() => {});
+					if (this._conversationTakeovers !== takeovers) return;
+					this._emitBeforeAgentStartForContinuation(this.agent.state.messages)
+						.then((hookResult) => {
+							if (this._conversationTakeovers !== takeovers) return;
+							this._appendRoomState(hookResult?.messages);
+							return this.agent.continue();
+						})
+						.catch(() => {});
 				}, 100);
 			} else if (this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.

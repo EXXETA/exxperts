@@ -1,11 +1,11 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 // Two state trees on one machine, and neither may write a byte into the other.
 //
@@ -112,23 +112,6 @@ function legEnv(profile: string | null): NodeJS.ProcessEnv {
 	return env;
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 30000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 // Room names are unique within a tree, so each leg brings its own: a repeated
 // name would 409 on the second standard leg and say nothing about leakage.
 let legCount = 0;
@@ -145,7 +128,7 @@ async function runWritingLeg(profile: string | null): Promise<void> {
 		env: legEnv(profile),
 	});
 	try {
-		await waitForServer(server);
+		await waitForServer(server, baseUrl, 30000);
 		// 1. The sign-in token: minted by the leg, into its own tree.
 		const tokenFile = path.join(tree, "app", "auth-token");
 		assert(fs.existsSync(tokenFile), `the leg must mint its token inside its own tree (${tokenFile})`);

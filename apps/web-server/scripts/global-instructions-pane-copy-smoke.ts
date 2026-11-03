@@ -19,7 +19,7 @@ process.env.USERPROFILE = tempHome;
 delete process.env.EXXPERTS_STATE_HOME;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
-const { globalOutcomeAfter, outcomeAfter, switchHint } = await import("../../web-ui/src/room-instructions-outcome.js");
+const { globalSavedLineAfter, outcomeAfter, savedLineAfter, switchHint } = await import("../../web-ui/src/room-instructions-outcome.js");
 // A namespace import: on a tree without the Clear and Undo helper this smoke fails at an assertion, not at the loader.
 const paneShared = await import("../../web-ui/src/components/instructions-pane-shared.js") as Record<string, unknown>;
 const { buildPersistentRoomCurrentInstructionsSection, composePersistentRoomInstructions, globalInstructionsPath, persistentRoomInstructionsPath, writeGlobalInstructions, writePersistentRoomInstructions, GLOBAL_INSTRUCTIONS_SECTION_HEADING } = await import("../src/persistent-room-instructions.js");
@@ -96,6 +96,11 @@ try {
 						assert(!claimsNextMessage, `${label}: an empty save says what is left, not a timing (${sentence})`);
 					}
 					if (!claimsOpenKeeps && action !== "saveEmpty" && !/No global instructions are written yet/.test(sentence)) assert(sentence === `${lead} Applies from the next message.`, `${label}: a plain row is the lead and the one timing sentence (${sentence})`);
+					// After a Save the pane shows "Saved · just now": the green line comes only when it says more than that.
+					if (action === "save" || action === "saveEmpty") {
+						const line = savedLineAfter(viewAfter, action);
+						assert(line === (sentence === "Saved. Applies from the next message." ? null : sentence), `${label}: the line after a save is ${JSON.stringify(line)} for the row ${JSON.stringify(sentence)}`);
+					}
 					if (changed) {
 						assert(claimsOpenKeeps === (section === ""), `${label}: the sentence about an open conversation must match the per-turn section (section ${section === "" ? "silent" : "speaks"}, sentence: ${sentence})`);
 						if (claimsNextMessage) assert(section !== "", `${label}: "next message" promised but the per-turn section is silent`);
@@ -124,15 +129,12 @@ try {
 			}
 		}
 	}
-	// The older-server shape: no global field at all reads as no global text.
-	assert(outcomeAfter({ instructions: { text: "", fingerprint: null, updatedAt: null } }, "saveEmpty") === "Saved. This room has no instructions of its own.", "an older server's view saves empty to nothing");
-	assert(outcomeAfter(null, "save") === "Saved. Applies from the next message.", "no view yet: the plain sentence");
 	// Settings → Instructions, from the same module: a save, then the empty save the server treats as a removal.
 	setFile(roomFile, "absent", roomText);
 	setFile(globalFile, "absent", globalText);
 	writePersistentRoomGlobalInstructionsEnabled(agentId, true);
-	assert(globalOutcomeAfter(writeGlobalInstructions(globalText).text) === "Saved. Applies from the next message." && freshBoot().hasGlobal, "a global save applies and boots");
-	assert(globalOutcomeAfter(writeGlobalInstructions("").text) === "Saved. There are no global instructions." && !freshBoot().hasLayer, "an empty global save leaves no global instructions");
+	assert(globalSavedLineAfter(writeGlobalInstructions(globalText).text) === null && freshBoot().hasGlobal, "a global save boots and shows no green line beside its \"Saved · just now\"");
+	assert(globalSavedLineAfter(writeGlobalInstructions("").text) === "Saved. There are no global instructions." && !freshBoot().hasLayer, "an empty global save leaves no global instructions and says so");
 	// Clear turns into Undo: the rule both panes share, as plain values.
 	type Box = { draft: string; remembered: string | null };
 	type BoxEvent = { type: "link" } | { type: "type"; value: string } | { type: "save" } | { type: "reload"; value: string };
@@ -172,6 +174,22 @@ try {
 	assert(link(editedBox, true)?.label === "Clear" && link(editedBox, true)?.disabled === true, "Clear is disabled while saving");
 	assert(link(clearedBox, true)?.label === "Undo" && link(clearedBox, true)?.disabled === true, "Undo is disabled while saving");
 	assert(link(emptyBox, true) === null, "no link while saving an empty box with nothing remembered");
+	// The counter under the box: "N / max" in every state, said in words to a screen reader,
+	// and the invisible-characters sentence beside it as its own line. The numbers are in
+	// this process's locale, as the pane writes them.
+	const n = (value: number) => value.toLocaleString();
+	type Measured = { counter: string; counterSpoken: string; over: number; controlsLine: string | null };
+	const measure = paneShared.measureInstructionsDraft as (draft: string, maxChars: number) => Measured;
+	const under = measure("x".repeat(142), 8000);
+	assert(under.counter === `142 / ${n(8000)}` && under.counterSpoken === `142 of ${n(8000)} characters` && under.over === 0 && under.controlsLine === null, `under the limit the counter reads "142 / ${n(8000)}", got ${JSON.stringify(under)}`);
+	const atLimit = measure("x".repeat(8000), 8000);
+	assert(atLimit.counter === `${n(8000)} / ${n(8000)}` && atLimit.counterSpoken === `${n(8000)} of ${n(8000)} characters` && atLimit.over === 0, `at the limit the counter is not over, got ${JSON.stringify(atLimit)}`);
+	const overLimit = measure("x".repeat(8100), 8000);
+	assert(overLimit.counter === `${n(8100)} / ${n(8000)}` && overLimit.counterSpoken === `${n(8100)} of ${n(8000)} characters, 100 over the limit` && overLimit.over === 100 && overLimit.controlsLine === null, `over the limit the counter reads "${n(8100)} / ${n(8000)}" and is said with how much over, got ${JSON.stringify(overLimit)}`);
+	const oneControl = measure("Answer\u0007 in German.", 8000);
+	assert(oneControl.controlsLine === "1 invisible control character, usually from a paste. Remove it to save." && oneControl.counter === `${"Answer in German.".length + 1} / ${n(8000)}`, `a pasted control character keeps the counter and adds its sentence, got ${JSON.stringify(oneControl)}`);
+	const twoControls = measure("A\u0007B\u0008C", 8000);
+	assert(twoControls.controlsLine === "2 invisible control characters, usually from a paste. Remove them to save.", `two control characters, got ${JSON.stringify(twoControls)}`);
 	console.log(`global-instructions pane copy smoke: ok (${checks} state/action combinations)`);
 } finally {
 	fs.rmSync(tempAgentsRoot, { recursive: true, force: true });

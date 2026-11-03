@@ -1,4 +1,4 @@
-// Room settings' Workspace pane, and the Skills pane's files line, say what
+// Room settings' Folder pane, and the Skills pane's files line, say what
 // the room really has, in the page against a real server: the tools in one
 // order and one access label; no tools reads as no tools; a long folder name
 // stays inside the pane; a folder that is gone says so in its own row and
@@ -26,6 +26,8 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Locator, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 import { sha256, writeSkillProvenance } from "../src/skills-store.js";
+import { waitEvery } from "./smoke-wait.js";
+import { closeBrowser, closeContext } from "./smoke-close-context.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -115,20 +117,22 @@ fs.writeFileSync(path.join(pairSkillDir, "scripts", "collect.py"), "print('colle
 fs.writeFileSync(path.join(pairSkillDir, "scripts", "render.py"), "print('render')\n", { mode: 0o600 });
 writeSkillProvenance(pairSkillDir, { source: "upload", importedAt: new Date().toISOString(), license: null, sha256: sha256(pairSkillManifest) });
 
-const STANDING_NOTE = "Changes apply from your next message, also in a conversation you already started.";
-const ANSWERING_LINE = "The room is answering. You can save when it has finished.";
-const CLEAR_ANSWERING_LINE = "The room is answering. You can change this when it has finished.";
+const ANSWERING_LINE = "Save when the room finishes answering.";
+const CLEAR_ANSWERING_LINE = "Change this when the room finishes answering.";
 const SERVER_ANSWERING_LINE = "The room is answering right now. Save again when it has finished; nothing was changed.";
-const GONE_FOLDER_LINE = "This folder was not found on this computer. Choose it again, or another one, in Edit\u00a0workspace.";
-const BASH_ROW_LINE = "Lets the room run commands on this computer, like a terminal. Off by default. Whether each command asks you first is set at the top of the chat.";
+const GONE_FOLDER_LINE = "This folder was not found on this computer.";
+const BASH_ROW_LINE = "Lets the room run commands on this computer, like a terminal.";
+const BOUNDED_HINT = "The room stays inside this folder.";
+const FULL_ACCESS_HINT = "The room works with files in this folder and beyond it, like you do.";
+const CLEAR_QUESTION = "The room can't use files until you choose a folder again, and its tool and Bash choices are reset.";
 const FULL_PATH_LINE = `Use the folder's full path, for example ${process.platform === "win32" ? "C:\\Users\\you\\Projects" : process.platform === "darwin" ? "/Users/you/Projects" : "/home/you/projects"}.`;
 const HIDDEN_PATH_LINE = "The full path stays on this computer and is not shown here.";
 const HOLDS_APP_DATA_LINE = "This folder contains exxperts' own data, so a room can't work in it. Choose a project folder instead, such as one in Documents.";
 
 // A folder's refusal starts at the folder box's left edge, under the box and every button beside
-// or under it, and ends at the buttons' right edge: it is not in the Folder label's column.
+// or under it, and ends at the buttons' right edge: it is not in the Location label's column.
 async function assertUnderFolderBox(folderRow: Locator, refusal: string): Promise<void> {
-	const box = await folderRow.getByLabel("Workspace folder path").boundingBox();
+	const box = await folderRow.getByLabel("Folder path").boundingBox();
 	const controls = await folderRow.locator(".workspace-folder-controls").boundingBox();
 	const line = await folderRow.getByText(refusal, { exact: true }).boundingBox();
 	const label = await folderRow.locator(".settings-row-label").boundingBox();
@@ -146,14 +150,7 @@ async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ stat
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 15_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(150, 15_000);
 
 async function createRoom(displayName: string): Promise<string> {
 	const created = await api("/api/persistent-agents", { method: "POST", body: JSON.stringify({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
@@ -166,7 +163,7 @@ async function saveWorkspace(agentId: string, body: Record<string, unknown>): Pr
 	assert(saved.status === 200, `the workspace is saved, got ${saved.status} ${JSON.stringify(saved.body)}`);
 }
 
-async function openPane(page: Page, roomName: string, paneName: "Workspace" | "Skills") {
+async function openPane(page: Page, roomName: string, paneName: "Folder" | "Skills") {
 	const card = page.locator(".persistent-agent-card").filter({ hasText: roomName });
 	await card.waitFor({ timeout: 10_000 });
 	await card.locator(".card-gear-btn").click();
@@ -262,34 +259,57 @@ try {
 		const only = process.env.ONLY;
 
 		// 1. One access label, the tools in the editor's order, one verb for setting the folder,
-		// one word for the computer, and a standing note that says only when changes apply.
+		// one word for the computer, and no closing note on when changes apply: every room setting
+		// applies from the next message, so the pane does not say it.
 		if (!only || only === "labels") {
-			const pane = await openPane(page, "Bounded Desk", "Workspace");
+			const pane = await openPane(page, "Bounded Desk", "Folder");
 			await pane.locator(".settings-row-tag").first().waitFor({ timeout: 10_000 });
 			const tag = await pane.locator(".settings-row-tag").first().textContent();
 			assert(tag === "Bounded", `a Bounded room's tag says Bounded, as the editor does, got ${tag}`);
 			const tools = await rowValue(pane, "Tools").textContent();
 			assert(tools === "Read, List, Find, Search, Write, Edit", `the tools read in the editor's order, got ${tools}`);
 			const text = await pane.innerText();
-			assert(text.includes(STANDING_NOTE), `the pane says when changes apply, got: ${text}`);
-			assert(!text.includes("saved while the room is answering"), `the standing note no longer warns about an answer that isn't running, got: ${text}`);
+			assert(!/next message|saved while the room is answering/.test(text), `the pane has no closing note on when changes apply, got: ${text}`);
 			await closeSettings(page);
 			const card = page.locator(".persistent-agent-card").filter({ hasText: "Empty Desk" });
-			await card.getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await card.getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			const nudge = page.locator(".room-workspace-nudge-text");
 			await nudge.waitFor({ timeout: 10_000 });
 			assert(await nudge.textContent() === "Set a folder so this room can read and write files.", `the room's nudge uses the pane's verb, got ${await nudge.textContent()}`);
 			await page.evaluate(() => { window.location.hash = "#/"; });
-			console.log("  ok  one label, one tool order, one verb, one note on when changes apply");
+			console.log("  ok  one label, one tool order, one verb, no closing note on when changes apply");
+		}
+
+		// 1b. The pane's words are short, so they fit: the edit button says Edit, each access hint is
+		// one sentence, and Clear's question says in one sentence what Clear leaves and resets.
+		if (!only || only === "short") {
+			const pane = await openPane(page, "Bounded Desk", "Folder");
+			const head = pane.locator(".pane-head");
+			await head.getByRole("button", { name: "Clear", exact: true }).waitFor({ timeout: 10_000 });
+			assert(await head.getByRole("button", { name: "Edit", exact: true }).count() === 1, `the edit button says Edit, got: ${await head.innerText()}`);
+			assert(await pane.locator(".settings-row-tag").first().getAttribute("title") === BOUNDED_HINT, `the Bounded tag's hint is one sentence, got ${await pane.locator(".settings-row-tag").first().getAttribute("title")}`);
+			await head.getByRole("button", { name: "Edit", exact: true }).click();
+			const access = pane.locator(".settings-row").filter({ has: page.locator(".settings-row-label", { hasText: /^Access$/ }) });
+			assert(await access.locator(".settings-row-sub").textContent() === BOUNDED_HINT, `the editor's Bounded hint is one sentence, got ${await access.locator(".settings-row-sub").textContent()}`);
+			assert(await pane.getByRole("radio", { name: "Full access" }).getAttribute("title") === FULL_ACCESS_HINT, `the Full access hint is one sentence, got ${await pane.getByRole("radio", { name: "Full access" }).getAttribute("title")}`);
+			await pane.getByRole("button", { name: "Cancel" }).click();
+			await head.getByRole("button", { name: "Clear", exact: true }).click();
+			const question = page.getByRole("alertdialog", { name: "Clear this room's folder?" });
+			await question.waitFor({ timeout: 10_000 });
+			assert((await question.innerText()).includes(CLEAR_QUESTION), `Clear's question names the reset in one sentence, got: ${await question.innerText()}`);
+			await question.getByRole("button", { name: "Cancel" }).click();
+			await question.waitFor({ state: "hidden", timeout: 10_000 });
+			await closeSettings(page);
+			console.log("  ok  the edit button says Edit, the access hints are short, and Clear's question names the reset");
 		}
 
 		// 2. A room with no tool at all is not called read-only.
 		if (!only || only === "notools") {
-			const pane = await openPane(page, "No Tools Desk", "Workspace");
+			const pane = await openPane(page, "No Tools Desk", "Folder");
 			await rowValue(pane, "Tools").waitFor({ timeout: 10_000 });
 			const text = await pane.innerText();
-			assert(text.includes("With no tools on, this room can't see or change files here."), `no tools reads as no tools, got: ${text}`);
-			assert(!text.includes("it can see files here"), "a room with no tools is never told it can see files");
+			assert(text.includes("With no tools on, the room can't see files here."), `no tools reads as no tools, got: ${text}`);
+			assert(!text.includes("can read files here"), "a room with no tools is never told it can read files");
 			await closeSettings(page);
 			console.log("  ok  no tools says the room can't see files");
 		}
@@ -298,7 +318,7 @@ try {
 		// name ends the full path and does not repeat beside it; on a remote device, which is sent no path,
 		// the name shows beside the tag, cut with "…", with the whole name in its tooltip.
 		if (!only || only === "long") {
-			const pane = await openPane(page, "Long Desk", "Workspace");
+			const pane = await openPane(page, "Long Desk", "Folder");
 			const shownPath = pane.locator(".workspace-folder-path");
 			await shownPath.waitFor({ timeout: 10_000 });
 			const paneBox = await pane.locator(".room-workspace-section").boundingBox();
@@ -326,7 +346,7 @@ try {
 				await remotePage.waitForLoadState("networkidle");
 				const close = remotePage.locator(".whats-new-close");
 				if (await close.count()) await close.click();
-				const remotePane = await openPane(remotePage, "Long Desk", "Workspace");
+				const remotePane = await openPane(remotePage, "Long Desk", "Folder");
 				const name = remotePane.locator(".workspace-folder-name");
 				await name.waitFor({ timeout: 10_000 });
 				const remotePaneBox = await remotePane.locator(".room-workspace-section").boundingBox();
@@ -338,7 +358,7 @@ try {
 				assert(await name.getAttribute("title") === path.basename(longFolder), "on a remote device the whole name is in the name's tooltip");
 				assert(await remotePane.locator(".workspace-folder-path").count() === 0, "on a remote device the row shows no path");
 			} finally {
-				await remoteContext.close();
+				await closeContext(remoteContext);
 			}
 			console.log("  ok  a long folder name stays inside the pane, once on this computer and beside the tag on a remote device");
 		}
@@ -346,19 +366,19 @@ try {
 		// 4. A folder that is gone says so in its own row, in place of the access, and lists no tools;
 		// no line under the pane repeats it; the editor says so too.
 		if (!only || only === "gone") {
-			const pane = await openPane(page, "Gone Desk", "Workspace");
+			const pane = await openPane(page, "Gone Desk", "Folder");
 			await rowValue(pane, "Tools").waitFor({ timeout: 10_000 });
 			assert(await rowValue(pane, "Tools").textContent() === "Off until the folder is found", `a gone folder's tools are off, got ${await rowValue(pane, "Tools").textContent()}`);
 			assert(await rowValue(pane, "Bash").count() === 0, "a gone folder shows no Bash row");
-			const folderRow = pane.locator(".settings-row").filter({ has: page.locator(".settings-row-label", { hasText: /^Folder$/ }) });
+			const folderRow = pane.locator(".settings-row").filter({ has: page.locator(".settings-row-label", { hasText: /^Location$/ }) });
 			const tag = await folderRow.locator(".settings-row-tag").textContent();
 			assert(tag === "Not found", `the Folder row's tag says Not found, in place of the access, got ${tag}`);
 			const line = await folderRow.locator(".settings-row-sub").textContent();
-			assert(line === GONE_FOLDER_LINE, `the Folder row says the folder was not found and where to choose it again, got ${line}`);
+			assert(line === GONE_FOLDER_LINE, `the Folder row says the folder was not found, got ${line}`);
 			assert(!(await folderRow.locator(".workspace-folder-name").evaluate((el) => el.scrollWidth > el.clientWidth)), "the folder's short name shows whole beside the longer line");
 			const summary = await pane.innerText();
 			assert(!summary.includes('The saved workspace folder "gone-soon"') && (await pane.locator("li").count()) === 0, `no line under the pane repeats it, got: ${summary}`);
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			const text = await pane.innerText();
 			assert(text.includes("gone-soon was not found on this computer. Pick it again, or another folder."), `the editor says the folder is gone, got: ${text}`);
 			await pane.getByRole("button", { name: "Cancel" }).click();
@@ -368,9 +388,9 @@ try {
 
 		// 5. Clear asks first, and says what happened in plain words.
 		if (!only || only === "clear") {
-			const pane = await openPane(page, "Clear Desk", "Workspace");
+			const pane = await openPane(page, "Clear Desk", "Folder");
 			await pane.getByRole("button", { name: "Clear" }).click();
-			const question = page.getByRole("alertdialog", { name: "Clear this room's workspace?" });
+			const question = page.getByRole("alertdialog", { name: "Clear this room's folder?" });
 			await question.waitFor({ timeout: 10_000 });
 			await question.getByRole("button", { name: "Cancel" }).click();
 			await page.waitForTimeout(400);
@@ -384,20 +404,20 @@ try {
 			console.log("  ok  Clear asks first");
 		}
 
-		// 6. A failed load says so and offers Try again, never "No workspace yet".
+		// 6. A failed load says so and offers Try again, never "No folder yet".
 		if (!only || only === "loadfail") {
 			let failing = true;
 			await page.route("**/api/persistent-agents/*/workspace-default", (route) => (failing && route.request().method() === "GET" ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Bad Request" }) }) : route.continue()));
-			const pane = await openPane(page, "Full Desk", "Workspace");
-			await pane.getByText("Couldn't load this room's workspace.").waitFor({ timeout: 10_000 });
+			const pane = await openPane(page, "Full Desk", "Folder");
+			await pane.getByText("Couldn't load this room's folder.").waitFor({ timeout: 10_000 });
 			const text = await pane.innerText();
-			assert(!text.includes("No workspace yet") && !text.includes("Bad Request"), `a failed load is not "No workspace yet" nor the raw error, got: ${text}`);
+			assert(!text.includes("No folder yet") && !text.includes("Bad Request"), `a failed load is not "No folder yet" nor the raw error, got: ${text}`);
 			// While the room's Bash is unknown, the skill's files line says only what is true.
 			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Skills/ }).first().click();
 			const unknownLine = page.locator(".room-settings-section:not([hidden]) .room-skill-files-row .settings-row-sub");
 			await unknownLine.waitFor({ timeout: 10_000 });
 			await waitUntil(async () => /^Allowed\. Its files? runs? only while this room's Bash is on\./.test(String(await unknownLine.textContent())), "the files line says only what is true while Bash is unknown");
-			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Workspace$/ }).first().click();
+			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 			failing = false;
 			await pane.getByRole("button", { name: "Try again" }).click();
 			await rowValue(pane, "Tools").waitFor({ timeout: 10_000 });
@@ -411,10 +431,10 @@ try {
 			const skills = await openPane(page, "Full Desk", "Skills");
 			const filesLine = skills.locator(".room-skill-files-row .settings-row-sub");
 			await filesLine.waitFor({ timeout: 10_000 });
-			await waitUntil(async () => /^Allowed\. Its (file runs|\d+ files run) only while this room's Bash is on; turn it on under Workspace\. /.test(String(await filesLine.textContent())), `with Bash off the files line says they run only with Bash on and where to turn it on, got ${await filesLine.textContent()}`);
-			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Workspace$/ }).first().click();
+			await waitUntil(async () => /^Allowed\. Its (file runs|\d+ files run) only while this room's Bash is on; turn it on under Folder\. /.test(String(await filesLine.textContent())), `with Bash off the files line says they run only with Bash on and where to turn it on, got ${await filesLine.textContent()}`);
+			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 			const pane = page.locator(".room-settings-section:not([hidden])");
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			await pane.getByLabel("Bash shell access").check();
 			await pane.getByRole("button", { name: "Save changes" }).click();
 			await pane.getByText("Saved.", { exact: true }).waitFor({ timeout: 10_000 });
@@ -426,8 +446,8 @@ try {
 
 		// 8. The editor's Bash row says what Bash is, in a person's words.
 		if (!only || only === "bashrow") {
-			const pane = await openPane(page, "Place Desk", "Workspace");
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			const pane = await openPane(page, "Place Desk", "Folder");
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			const bashLine = pane.locator("label.settings-row").filter({ has: page.getByLabel("Bash shell access") }).locator(".settings-row-sub").first();
 			assert(await bashLine.textContent() === BASH_ROW_LINE, `the editor's Bash row says what Bash is, got ${await bashLine.textContent()}`);
 			await pane.getByRole("button", { name: "Cancel" }).click();
@@ -440,11 +460,11 @@ try {
 		// the box there), a save's beside the buttons, a wait in the muted colour and any other
 		// refusal in red.
 		if (!only || only === "beside") {
-			const pane = await openPane(page, "Place Desk", "Workspace");
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			const pane = await openPane(page, "Place Desk", "Folder");
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			const head = pane.locator(".pane-head");
-			const folderRow = pane.locator(".settings-row").filter({ has: page.locator(".settings-row-label", { hasText: /^Folder$/ }) });
-			const folderBox = pane.getByLabel("Workspace folder path");
+			const folderRow = pane.locator(".settings-row").filter({ has: page.locator(".settings-row-label", { hasText: /^Location$/ }) });
+			const folderBox = pane.getByLabel("Folder path");
 			const save = pane.getByRole("button", { name: "Save changes" });
 			for (const [typed, refusal] of [["Projects/demo", FULL_PATH_LINE], [tempHome, HOLDS_APP_DATA_LINE]]) {
 				await folderBox.fill(typed);
@@ -470,7 +490,7 @@ try {
 			// Any other failed save shows beside the buttons too, in red.
 			await page.route("**/api/persistent-agents/*/workspace-default", (route) => (route.request().method() === "PUT" ? route.fulfill({ status: 500, body: "" }) : route.continue()));
 			await save.click();
-			const failLine = head.getByText("Couldn't save the workspace. Try again.", { exact: true });
+			const failLine = head.getByText("Couldn't save the folder. Try again.", { exact: true });
 			await failLine.waitFor({ timeout: 10_000 });
 			assert(await failLine.evaluate((el) => getComputedStyle(el).color) !== muted, "a failed save beside the buttons is in a refusal's colour");
 			await page.unroute("**/api/persistent-agents/*/workspace-default");
@@ -487,7 +507,7 @@ try {
 		// as soon as the answer has finished. Beside a greyed Clear the line says "change", not "save".
 		if (!only || only === "answering") {
 			const card = page.locator(".persistent-agent-card").filter({ hasText: "Busy Desk" });
-			await card.getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await card.getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			const composer = page.locator("textarea").first();
 			await composer.waitFor({ timeout: 15_000 });
 			const send = page.locator('button.send-btn[title="Send"]');
@@ -511,9 +531,9 @@ try {
 			await clear.click({ force: true, timeout: 2_000 }).catch(() => {});
 			await page.waitForTimeout(400);
 			assert(await page.getByRole("alertdialog").count() === 0, "a greyed Clear asks no question");
-			assert(await pane.getByRole("button", { name: "Edit workspace" }).isEnabled(), "Edit workspace stays open while the room answers");
+			assert(await pane.getByRole("button", { name: "Edit", exact: true }).isEnabled(), "Edit stays open while the room answers");
 
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			await pane.getByLabel("Bash shell access").check();
 			const saveChanges = pane.getByRole("button", { name: "Save changes" });
 			assert(await saveChanges.isDisabled(), "Save changes is greyed while the room answers");
@@ -543,7 +563,7 @@ try {
 			await waitUntil(() => heldAnswers.length > 0, "the room is answering again");
 			await page.locator(".stop-btn").first().waitFor({ timeout: 10_000 });
 			await page.evaluate(() => { window.location.hash = "#/"; });
-			const home = await openPane(page, "Busy Desk", "Workspace");
+			const home = await openPane(page, "Busy Desk", "Folder");
 			const homeClear = home.getByRole("button", { name: "Clear" });
 			await homeClear.waitFor({ timeout: 10_000 });
 			await waitUntil(async () => await homeClear.isDisabled(), "from Home, Clear is greyed while the room answers");
@@ -559,8 +579,8 @@ try {
 		// answering elsewhere; the refusal makes the page look again, so the buttons grey with the page's
 		// own line and come back by themselves once the answer has finished.
 		if (!only || only === "refused") {
-			const pane = await openPane(page, "Edge Desk", "Workspace");
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			const pane = await openPane(page, "Edge Desk", "Folder");
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			await pane.getByLabel("Bash shell access").check();
 			const head = pane.locator(".pane-head");
 			const saveChanges = pane.getByRole("button", { name: "Save changes" });
@@ -597,7 +617,7 @@ try {
 		// announced at once, and the server's wait line stays a quiet status.
 		if (!only || only === "heard") {
 			const card = page.locator(".persistent-agent-card").filter({ hasText: "Heard Desk" });
-			await card.getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await card.getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			const composer = page.locator("textarea").first();
 			await composer.waitFor({ timeout: 15_000 });
 			const send = page.locator('button.send-btn[title="Send"]');
@@ -613,7 +633,7 @@ try {
 			const clear = pane.getByRole("button", { name: "Clear" });
 			await clear.waitFor({ timeout: 10_000 });
 			assert(await describedBy(clear) === CLEAR_ANSWERING_LINE, `a greyed Clear carries its reason, got ${await describedBy(clear)}`);
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			await pane.getByLabel("Bash shell access").check();
 			const saveChanges = pane.getByRole("button", { name: "Save changes" });
 			assert(await describedBy(saveChanges) === ANSWERING_LINE, `a greyed Save changes carries its reason, got ${await describedBy(saveChanges)}`);
@@ -630,7 +650,7 @@ try {
 			assert(await describedBy(saveChanges) === null, "Save changes carries no reason once it works");
 			await page.route("**/api/persistent-agents/*/workspace-default", (route) => (route.request().method() === "PUT" ? route.fulfill({ status: 500, body: "" }) : route.continue()));
 			await saveChanges.click();
-			const failLine = head.getByText("Couldn't save the workspace. Try again.", { exact: true });
+			const failLine = head.getByText("Couldn't save the folder. Try again.", { exact: true });
 			await failLine.waitFor({ timeout: 10_000 });
 			assert(await failLine.getAttribute("role") === "alert", `a failed save beside the buttons is announced, got role ${await failLine.getAttribute("role")}`);
 			await page.unroute("**/api/persistent-agents/*/workspace-default");
@@ -663,7 +683,7 @@ try {
 				await waitUntil(async () => /^Allowed\. On a shared server, its file never runs\. /.test(String(await filesLine(skillName).textContent())), `one file on a shared server, got ${await filesLine(skillName).textContent()}`);
 				await waitUntil(async () => /^Allowed\. On a shared server, its 2 files never run\. /.test(String(await filesLine(pairSkillName).textContent())), `two files on a shared server, got ${await filesLine(pairSkillName).textContent()}`);
 			} finally {
-				await sharedContext.close();
+				await closeContext(sharedContext);
 			}
 			console.log("  ok  on a shared server, a skill's files line says they never run");
 		}
@@ -673,16 +693,16 @@ try {
 		// path in a box as wide as the row, at the path's end, and nothing unsaved; at 390 px a long path
 		// wraps inside the row and the page never scrolls sideways.
 		if (!only || only === "fullpath") {
-			const pane = await openPane(page, "Path Desk", "Workspace");
+			const pane = await openPane(page, "Path Desk", "Folder");
 			await rowValue(pane, "Tools").waitFor({ timeout: 10_000 });
-			const folderRow = pane.locator(".settings-row").filter({ has: page.locator(".settings-row-label", { hasText: /^Folder$/ }) });
+			const folderRow = pane.locator(".settings-row").filter({ has: page.locator(".settings-row-label", { hasText: /^Location$/ }) });
 			const shownPath = folderRow.locator(".workspace-folder-path");
 			assert(await shownPath.count() === 1 && await shownPath.textContent() === deepFolder, `the Folder row shows the folder's full path, got ${await folderRow.innerText()}`);
 			assert(!(await pane.innerText()).includes(HIDDEN_PATH_LINE), `no line says the path is not shown, got: ${await pane.innerText()}`);
 			assert(await folderRow.locator(".workspace-folder-name").count() === 0, `the folder's name does not repeat beside its path, got ${await folderRow.innerText()}`);
 			assert(await folderRow.locator(".settings-row-tag").textContent() === "Full access", `the access tag stays beside the path, got ${await folderRow.locator(".settings-row-tag").textContent()}`);
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
-			const folderBox = pane.getByLabel("Workspace folder path");
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
+			const folderBox = pane.getByLabel("Folder path");
 			assert(await folderBox.inputValue() === deepFolder, `Edit opens with the saved path in its box, got ${await folderBox.inputValue()}`);
 			assert(await pane.locator(".workspace-unsaved-hint").count() === 0, "the saved path in the box is not an unsaved change");
 			assert(await pane.getByRole("button", { name: "Keep saved folder" }).count() === 0, "the saved path in the box offers no Keep saved folder");
@@ -704,7 +724,7 @@ try {
 			assert(wideScroll.left >= wideScroll.max - 1, `the box opens at the path's end, got ${JSON.stringify(wideScroll)}`);
 			await pane.getByRole("button", { name: "Cancel" }).click();
 			await page.setViewportSize({ width: 390, height: 844 });
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
 			const narrowScroll = await boxScroll();
 			assert(narrowScroll.max > 0 && narrowScroll.left >= narrowScroll.max - 1, `at 390 px the box opens at the path's end, got ${JSON.stringify(narrowScroll)}`);
 			assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "the editor does not scroll sideways at 390 px");
@@ -725,10 +745,10 @@ try {
 		// 14b. A path the app puts in the box shows its end, as on open: one from Choose folder… (the system
 		// dialog stood in for) and the saved one put back by Keep saved folder; a keystroke never moves the box.
 		if (!only || only === "choosepath") {
-			const pane = await openPane(page, "Path Desk", "Workspace");
+			const pane = await openPane(page, "Path Desk", "Folder");
 			await rowValue(pane, "Tools").waitFor({ timeout: 10_000 });
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
-			const folderBox = pane.getByLabel("Workspace folder path");
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
+			const folderBox = pane.getByLabel("Folder path");
 			const boxScroll = async () => folderBox.evaluate((el) => ({ left: (el as HTMLInputElement).scrollLeft, max: (el as HTMLInputElement).scrollWidth - (el as HTMLInputElement).clientWidth }));
 			// Longer than the saved path, so the box's old place is not already its end.
 			const chosenFolder = path.join(longFolder, "Entwürfe und Fassungen für die Kunden im Herbst");
@@ -758,11 +778,11 @@ try {
 			console.log("  ok  a chosen or put-back path shows its end, and typing never moves the box");
 		}
 
-		// 15. A reload with unsaved workspace changes asks first.
+		// 15. A reload with unsaved folder changes asks first.
 		if (!only || only === "reload") {
-			const pane = await openPane(page, "Bounded Desk", "Workspace");
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
-			await pane.getByLabel("Workspace folder path").fill(projects);
+			const pane = await openPane(page, "Bounded Desk", "Folder");
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
+			await pane.getByLabel("Folder path").fill(projects);
 			let asked = false;
 			page.on("dialog", (dialog) => {
 				if (dialog.type() === "beforeunload") asked = true;
@@ -774,7 +794,7 @@ try {
 			console.log("  ok  a reload with unsaved changes asks first");
 		}
 	} finally {
-		await browser.close();
+		await closeBrowser(browser);
 	}
 	console.log("room workspace pane words smoke: ok");
 } catch (error) {

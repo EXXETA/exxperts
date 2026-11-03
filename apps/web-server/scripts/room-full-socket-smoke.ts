@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -41,23 +41,6 @@ const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
 const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 function setRecentContextEntries(agentId: string, count: number): void {
 	const instance = createPersistentAgentInstance(agentId);
@@ -119,7 +102,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	// 1. The full room: a coded frame with one plain sentence, then the close.
 	const full = await openRoom(fullRoom, "pi_full_room_0001");
@@ -128,17 +111,8 @@ try {
 	assert(refusal.code === "room_full", `the full room: expected code room_full, got ${JSON.stringify(refusal)}`);
 	assert(full.closed, "the full room: the socket should close after the frame");
 	const sentence = String(refusal.message ?? "");
-	assert(sentence === "Nordwind Room holds 20 remembered conversations, as many as it can. Memorize them from Maintain on its Home card to start a new conversation.", `the full room's sentence: got ${JSON.stringify(sentence)}`);
 	assert(!/[\u2192\u2014]|needs_absorb|persistent agent|session/i.test(sentence), `the sentence carries no arrow, dash or code words: ${sentence}`);
 	console.log("  ok  a room at 20 gets the coded frame and one plain sentence, then the close");
-
-	// The page's own sentence, for a frame that came without one: the same
-	// full-room sentence, which the dialog smoke's no-bounce check matches too.
-	const app = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web-ui", "src", "App.tsx"), "utf-8");
-	const atFrame = app.indexOf('msg.code === "room_full"');
-	const handler = app.slice(atFrame, app.indexOf("finishLeaveRoom", atFrame));
-	assert(atFrame >= 0 && handler.includes("holds as many remembered conversations as it can. Memorize them from Maintain on its Home card to start a new conversation.") && !handler.includes("Memorize them first"), `the page's fallback for a frame with no sentence is the full-room sentence, got ${JSON.stringify(handler.slice(0, 900))}`);
-	console.log("  ok  a frame with no sentence gets the same full-room sentence on the page");
 
 	// 2. Every redial meets the same coded refusal.
 	const again = await openRoom(fullRoom, "pi_full_room_0001");

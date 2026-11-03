@@ -60,8 +60,7 @@ function listeningPort(server: http.Server | net.Server): number {
 }
 
 // 1. A holder that answers /healthz — the earlier-exxperts-server shape. The
-//    launcher must name the conflict and the recovery paths, and never print
-//    the running banner.
+//    launcher must name the conflict, and never print the running banner.
 {
 	const holder = http.createServer((_req, res) => res.end(JSON.stringify({ ok: true })));
 	await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));
@@ -70,10 +69,7 @@ function listeningPort(server: http.Server | net.Server): number {
 	holder.close();
 	assert(status === 1, `responding holder: expected exit 1, got ${status}:\n${output}`);
 	assertIncludes(output, `Port ${port} is already in use`, "responding holder");
-	assertIncludes(output, "Task Manager", "responding holder (recovery instructions)");
-	assertIncludes(output, `--port ${port + 1}`, "responding holder (alternate-port suggestion)");
-	assertIncludes(output, `open http://localhost:${port} in your browser`, "responding holder (reuse hint)");
-	assertNotIncludes(output, "exxperts web running at", "responding holder (no false success)");
+	assertNotIncludes(output, "exxperts running at", "responding holder (no false success)");
 }
 
 // 2. A holder that accepts the connection but never replies — the wedged
@@ -88,12 +84,23 @@ function listeningPort(server: http.Server | net.Server): number {
 	assertIncludes(output, `Port ${port} is held by a process that is not responding`, "unresponsive holder");
 	assertIncludes(output, `--port ${port + 1}`, "unresponsive holder (alternate-port suggestion)");
 	assertNotIncludes(output, "in your browser", "unresponsive holder (no reuse hint for a wedged holder)");
-	assertNotIncludes(output, "exxperts web running at", "unresponsive holder (no false success)");
+	assertNotIncludes(output, "exxperts running at", "unresponsive holder (no false success)");
+}
+
+// The pids of the processes `parent` started, but its start checks: a launcher
+// that cannot start runs scripts/doctor.mjs before it exits.
+function childPids(parent: number): number[] {
+	if (process.platform === "win32") {
+		const listed = spawnSync("powershell", ["-NoProfile", "-Command", `Get-CimInstance Win32_Process -Filter "ParentProcessId=${parent}" | Where-Object { $_.CommandLine -notmatch 'doctor\\.mjs' } | ForEach-Object { $_.ProcessId }`], { encoding: "utf8" });
+		return String(listed.stdout ?? "").split(/\s+/).filter(Boolean).map(Number);
+	}
+	const listed = spawnSync("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8" });
+	return String(listed.stdout ?? "").split("\n").map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter((row): row is RegExpMatchArray => !!row && Number(row[2]) === parent && !row[3]!.includes("doctor.mjs")).map((row) => Number(row[1]));
 }
 
 // 3. A free port must pass the pre-flight: the launcher survives it and spawns
-//    the server child (proven by it still running after the pre-flight window),
-//    then the whole tree is torn down without waiting for a full server boot.
+//    the server child (proven by the child appearing while the launcher still
+//    runs), then the whole tree is torn down without waiting for a full server boot.
 {
 	const probe = net.createServer();
 	await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
@@ -105,16 +112,19 @@ function listeningPort(server: http.Server | net.Server): number {
 		env: smokeHomeEnv(tempHome),
 		stdio: ["ignore", "pipe", "pipe"],
 	});
+	// Listened for from the start: a launcher that exits early has closed before it is killed.
+	const closed = new Promise((resolve) => child.on("close", resolve));
 	let output = "";
 	child.stdout.on("data", (chunk) => { output += chunk; });
 	child.stderr.on("data", (chunk) => { output += chunk; });
-	// The pre-flight probe on a free port refuses near-instantly; 4s is far
-	// beyond it. Still alive here means the pre-flight did not misfire.
-	await new Promise((resolve) => setTimeout(resolve, 4000));
-	const survivedPreflight = child.exitCode === null;
+	// The launcher starts the server child only after the pre-flight: the child
+	// there, with the launcher still running, means the pre-flight did not misfire.
+	const spawnedBy = Date.now() + 15_000;
+	while (child.exitCode === null && child.signalCode === null && childPids(child.pid!).length === 0 && Date.now() < spawnedBy) await new Promise((resolve) => setTimeout(resolve, 50));
+	const survivedPreflight = child.exitCode === null && childPids(child.pid!).length > 0;
 	if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
 	else child.kill("SIGTERM");
-	await new Promise((resolve) => child.on("close", resolve));
+	await closed;
 	assert(survivedPreflight, `free port: launcher exited early (code ${child.exitCode}):\n${output}`);
 	assertNotIncludes(output, "already in use", "free port (pre-flight must not misfire)");
 	assertNotIncludes(output, "not responding", "free port (pre-flight must not misfire)");

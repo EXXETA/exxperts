@@ -9,3 +9,11 @@ reason = "xlsx prototype pollution, fixed upstream in 0.19.3. We ship 0.20.3 str
 [[IgnoredVulns]]
 id = "GHSA-5pgg-2g8v-p4x9"
 reason = "xlsx ReDoS, fixed upstream in 0.20.2. Same situation: we ship 0.20.3 from the vendor's CDN, which the npm-ecosystem advisory record cannot see."
+
+[[IgnoredVulns]]
+id = "GHSA-3g3m-2fjr-6pw4"
+reason = "glob keeps reading folders after its AbortSignal fires; fixed in 14.0.2. Our only glob call, a globSync in runtime/packages/coding-agent/src/core/package-manager.ts, passes no signal, so the abort branch never runs."
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+reason = "minimatch can blow up a crafted pattern with **/../ parts into heavy CPU work; fixed only in 11.0.1. That step runs only at optimizationLevel 2 or higher. Our own minimatch calls use the default level 1; glob uses level 2, but our one glob call expands file patterns from an installed package's manifest, and the web server never loads packages (its loaders drop the packages setting)."

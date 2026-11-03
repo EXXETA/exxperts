@@ -50,7 +50,9 @@
 // without the stop's line.
 //
 // On Windows a signal sent from another process is a forced kill, so the stop
-// cannot run there: the smoke says so and passes without starting anything.
+// cannot run there on a signal: the smoke says so and passes without starting
+// anything. The desktop app's stop message, which reaches the stop on every
+// platform, is server-stop-app-channel-smoke.ts's.
 //
 // Run: node --import tsx/esm apps/web-server/scripts/server-stop-smoke.ts
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -62,6 +64,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, type AuthedFetchInit } from "./smoke-server-process.js";
 import { SERVER_STOPPED_REASON, SERVER_STOPPING_CODE, SERVER_STOPPING_SENTENCE, STOP_CUT_ANSWER_SENTENCE, STOP_SCHEDULED_RUN_SENTENCE, installServerStop, serverStopping } from "../src/server-stop.js";
 
@@ -141,7 +144,8 @@ const gateway = http.createServer((req, res) => {
 			parsed = JSON.parse(body);
 		} catch {}
 		const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
-		const prompt = textOf([...messages].reverse().find((message) => message?.role === "user")?.content);
+		// The person's newest message: a room-state copy after it is the app's.
+		const prompt = textOf([...messages].reverse().find((message) => message?.role === "user" && !textOf(message.content).startsWith(ROOM_STATE_HEADING))?.content);
 		const toolResults = messages.filter((message) => message?.role === "tool").map((message) => textOf(message.content));
 		if (prompt.includes("[INTERNAL_RETRIEVAL_SYNTHESIS_REQUEST]") || prompt.includes("[INTERNAL_TOOL_SUMMARY_REQUEST]")) recoveryAsks.push(Date.now());
 		if (prompt.includes(BUSY)) {

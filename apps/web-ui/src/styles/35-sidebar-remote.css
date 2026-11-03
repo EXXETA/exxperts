@@ -1,0 +1,504 @@
+.sidebar-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 7px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.sidebar-toggle:hover,
+.sidebar-toggle:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+}
+/* One spot at the top left for both buttons, the open sidebar's (first in its
+   header, before the logo) and the floating one, so hiding and showing the
+   sidebar are two clicks in one place. In the browser it sits in the collapsed
+   topbar's left clearance. */
+.sidebar-header .sidebar-toggle,
+.product-sidebar-header .sidebar-toggle,
+.sidebar-toggle-floating {
+	position: fixed;
+	top: 8px;
+	left: 10px;
+	z-index: 40;
+}
+/* The mac app: on the window-button row, right of the traffic lights (x 18
+   to 78, centre y 25, in window points), above the drag strip and out of it.
+   The lights keep their size and place under page zoom, so the spot is set in
+   window points too: as far right of the green light as the lights are apart
+   (9), centred on its row, never above the window's top edge. What sits on
+   the toggle's row takes its spot from --mac-toggle-left and --mac-toggle-top. */
+html.desktop-app-mac {
+	--mac-toggle-left: calc(87px / var(--window-zoom, 1));
+	--mac-toggle-top: max(0px, calc(25px / var(--window-zoom, 1) - 14px));
+}
+html.desktop-app-mac .sidebar-header .sidebar-toggle,
+html.desktop-app-mac .product-sidebar-header .sidebar-toggle,
+html.desktop-app-mac .sidebar-toggle-floating {
+	top: var(--mac-toggle-top);
+	left: var(--mac-toggle-left);
+	-webkit-app-region: no-drag;
+}
+html:not(:has(.sidebar, .product-sidebar)) .sidebar-toggle-floating {
+	display: none;
+}
+html.sidebar-collapsed .app,
+html.sidebar-collapsed .landing-shell.with-product-sidebar {
+	/* Single column: display:none takes the sidebar out of grid flow, so a
+	   0-column template would slide the main content into the empty track. */
+	grid-template-columns: minmax(0, 1fr);
+}
+html.sidebar-collapsed .sidebar,
+html.sidebar-collapsed .product-sidebar {
+	display: none;
+}
+/* Collapsed in the browser, the content edge moves under the fixed toggle;
+   clear it (the desktop app gets its own traffic-light clearance in the
+   drag-strip block in 34-desktop-app.css). */
+html.sidebar-collapsed:not(.desktop-app-mac) .topbar {
+	padding-left: max(52px, var(--topbar-column-edge));
+}
+html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .landing) {
+	padding-left: 56px;
+}
+/* A maximized pane takes the chat column's place, and its header the top
+   left: it clears the toggle, and in the mac app the traffic lights too. */
+html.sidebar-collapsed .workbench.artifact-pane-maximized .artifact-viewer-head {
+	padding-left: 52px;
+}
+html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artifact-viewer-head {
+	padding-left: calc(var(--mac-toggle-left) + 42px);
+}
+
+
+/* The settings gear, a borderless quiet icon control like the sidebar toggle
+   at the top left (.sidebar-toggle-floating above). */
+.sidebar-footer-controls {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	/* Both footers are space-between rows that used to hold a connection label
+	   on the left and these controls on the right. Alone in the row,
+	   space-between put them flush LEFT: the gear jumped across the sidebar,
+	   and the config menu that anchors to it opened off the left edge of the
+	   window. Pinning them to the right keeps them where they have always sat,
+	   whatever else the row does or does not contain. */
+	margin-left: auto;
+}
+/* The config menu anchors to the footer controls, not the gear's own box. */
+.sidebar-footer-controls .sidebar-config {
+	position: static;
+}
+.sidebar-config-gear {
+	border: 0;
+	background: transparent;
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	color: var(--muted);
+	border-radius: 7px;
+}
+.sidebar-config-gear:hover,
+.sidebar-config-gear:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	border-color: transparent;
+}
+
+/* Remote access (Settings page + sidebar indicator) */
+.remote-hint-degraded {
+	color: var(--warning);
+}
+.remote-master-footnote {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12.5px;
+	line-height: 1.5;
+	max-width: 40rem;
+}
+/* Secondary explanations fold shut so a state reads as one calm line. */
+.remote-fold {
+	max-width: 40rem;
+}
+.remote-fold summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	list-style: none;
+	color: var(--muted);
+	font-size: 12.5px;
+	cursor: pointer;
+	width: fit-content;
+}
+.remote-fold summary::-webkit-details-marker {
+	display: none;
+}
+.remote-fold summary:hover,
+.remote-fold summary:focus-visible {
+	color: var(--fg);
+}
+.remote-fold[open] summary {
+	color: var(--fg-soft);
+	margin-bottom: 6px;
+}
+.remote-fold .remote-fold {
+	margin-top: 6px;
+}
+/* The serving address lives folded away: 13px code plus the copy control. */
+.remote-address {
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.remote-address code {
+	font-size: 13px;
+	word-break: break-all;
+}
+.remote-address .message-copy {
+	margin-top: 0;
+}
+.remote-on-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--success);
+	flex-shrink: 0;
+	align-self: center;
+}
+.remote-on-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border-soft));
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--success) 8%, transparent);
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 10px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.remote-on-pill:hover,
+.remote-on-pill:focus-visible {
+	color: var(--fg);
+	outline: none;
+	border-color: color-mix(in srgb, var(--success) 40%, var(--border-soft));
+}
+/* VPN deliberately off is a calm fact, not a warning: plain grey in both
+   themes (the vars resolve per theme), no amber nag. */
+.remote-on-pill.paused {
+	border-color: var(--border-soft);
+	background: transparent;
+	color: var(--muted);
+}
+.remote-on-pill.paused:hover,
+.remote-on-pill.paused:focus-visible {
+	border-color: var(--border);
+}
+.remote-on-pill.paused .remote-on-dot {
+	background: var(--muted);
+}
+/* Who is signed in, on a shared server: the footer's left slot, name over the
+   sign-out link. A long name is cut, never wrapped over the gear. */
+.signed-in-as {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1 1 0;
+}
+.signed-in-as-line {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	white-space: nowrap;
+}
+.signed-in-as-name {
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--fg-soft);
+}
+.signed-in-as-tag {
+	flex-shrink: 0;
+	border: 1px solid var(--border-soft);
+	border-radius: 999px;
+	padding: 0 6px;
+	font-size: var(--exx-font-size-xs);
+}
+.signed-in-as-out {
+	align-self: flex-start;
+	color: var(--muted);
+	text-decoration: underline;
+}
+.signed-in-as-out:hover,
+.signed-in-as-out:focus-visible {
+	color: var(--fg);
+	outline: none;
+}
+.menu-item-state {
+	color: var(--muted);
+	font-size: var(--exx-font-size-xs);
+}
+.remote-pairing-copy {
+	margin-bottom: 12px;
+	max-width: 40rem;
+}
+.remote-pairing-panel {
+	display: flex;
+	gap: 22px;
+	align-items: flex-start;
+	flex-wrap: wrap;
+	margin-top: 8px;
+}
+.remote-pairing-qr {
+	width: 140px;
+	height: 140px;
+	border-radius: 8px;
+	flex-shrink: 0;
+}
+/* Same footprint while a code is minting, so the panel never jumps. */
+.remote-pairing-qr-pending {
+	width: 140px;
+	height: 140px;
+	border-radius: 8px;
+	flex-shrink: 0;
+	background: color-mix(in srgb, var(--muted) 10%, transparent);
+}
+.remote-pairing-side {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 10px;
+	min-width: 0;
+	/* Grows beside the QR and only wraps under it when the pane is truly
+	   narrow (the settings pane is ~660px, so a fixed 34rem cap wrapped). */
+	flex: 1 1 260px;
+	max-width: 34rem;
+}
+.remote-pairing-side .remote-pairing-copy {
+	margin: 0;
+}
+.remote-pairing-url {
+	font-size: 12.5px;
+	color: var(--fg-soft);
+	word-break: break-all;
+}
+.remote-pairing-waiting {
+	margin: 0;
+	color: var(--muted);
+}
+.remote-pending-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px 14px;
+}
+.remote-pending-name {
+	font-weight: 600;
+	font-size: 14px;
+}
+.remote-pending-actions {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+}
+.remote-capability-seg {
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+.remote-capability-seg button {
+	background: transparent;
+	border: 0;
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 4px 10px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.remote-capability-seg button:hover,
+.remote-capability-seg button:focus-visible {
+	color: var(--fg);
+	outline: none;
+}
+.remote-capability-seg button.on {
+	background: var(--fg);
+	color: var(--bg);
+}
+.remote-capability-seg button:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+/* Device and room rows borrow the room-settings settings-row shape: label and hint
+   stacked on the left, controls as one quiet aligned group on the right. */
+.remote-device-armed {
+	color: var(--error);
+}
+.remote-device-actions {
+	display: flex;
+	gap: 14px;
+	align-items: center;
+	flex-shrink: 0;
+}
+/* While remote access is off or not serving, the room names read as
+   waiting; the choices keep full contrast, since they still work. */
+.remote-rooms-off .settings-row-label {
+	color: var(--muted);
+}
+/* The chosen room choice in dark: the shared quiet fill sits too close to
+   the dialog's surface to tell which side is chosen. */
+:root:not([data-theme="light"]) .remote-rooms .settings-segment.active {
+	background: color-mix(in srgb, var(--fg) 20%, var(--panel));
+}
+
+
+/* ================= Mobile pass (function-first) =================
+   One breakpoint for phone-sized screens. Scope: make every screen usable
+   and unbroken on a phone; the visual language stays exactly as it is.
+   Landing shells keep a compact always-visible top bar (a slim bar in grid
+   flow covers nothing); the in-room rail becomes an overlay drawer, closed
+   by default on first visit (sidebar-collapse.tsx). */
+@media (max-width: 760px) {
+	/* Landing top bar: one row - logo, nav scrolling sideways, controls.
+	   Replaces the tall stacked header the shared 760px block produced. */
+	.product-sidebar {
+		flex-direction: row;
+		align-items: center;
+		gap: 4px;
+		padding: 0;
+		border-bottom: 1px solid var(--exx-divider);
+	}
+	.product-sidebar-header {
+		padding: 10px 8px 10px 14px;
+	}
+	/* The mac app zoomed in to this width: the bar starts under the window's
+	   drag strip, so its buttons stay clickable and the logo clears the window
+	   buttons. */
+	html.desktop-app-mac .product-sidebar {
+		padding-top: 48px;
+	}
+	html.desktop-app-mac .product-sidebar-header {
+		min-height: 0;
+		padding: 10px 8px 10px 14px;
+	}
+	.product-sidebar .brand img.logo {
+		height: 20px;
+	}
+	.product-sidebar .product-nav {
+		display: flex;
+		flex-direction: row;
+		align-items: center;
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow-x: auto;
+		gap: 2px;
+		padding: 0 4px;
+		scrollbar-width: none;
+	}
+	.product-sidebar .product-nav::-webkit-scrollbar { display: none; }
+	.product-nav-section { display: contents; }
+	.product-nav-label { display: none; }
+	.product-sidebar .product-nav .list-btn {
+		white-space: nowrap;
+		width: auto;
+		flex: 0 0 auto;
+	}
+	/* A finger needs more than the tight desktop list's 32px: the top bar's
+	   and the room drawer's items keep a 40px box at this width. */
+	.product-sidebar .product-nav .list-btn,
+	.sidebar-primary-nav .list-btn {
+		padding-top: 10px;
+		padding-bottom: 10px;
+	}
+	.product-sidebar-footer {
+		padding: 4px 10px 4px 4px;
+		margin-left: auto;
+		/* A long name shrinks to an ellipsis here instead of pushing Settings off the bar. */
+		flex: 0 1 auto;
+		min-width: 0;
+		max-width: 60%;
+	}
+	/* The top bar stays even while "collapsed": hiding the only navigation
+	   behind a floating toggle helps nobody on a phone, and the bar is slim.
+	   The floating affordance is therefore redundant on these pages. */
+	html.sidebar-collapsed .product-sidebar { display: flex; }
+	/* minmax(0, 1fr), not 1fr: a bare 1fr track's automatic minimum is the
+	   items' min-content, which let one wide descendant push the whole shell
+	   past the viewport. */
+	.landing-shell.with-product-sidebar,
+	html.sidebar-collapsed .landing-shell.with-product-sidebar {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+	.product-sidebar, .landing { min-width: 0; }
+	html.sidebar-collapsed:has(.product-sidebar) .sidebar-toggle-floating { display: none; }
+	html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .landing) { padding-left: 16px; }
+	/* The collapse control is meaningless while the bar is forced visible. */
+	.product-sidebar-header .sidebar-toggle { display: none; }
+	.landing { padding: 20px 16px; }
+
+	/* In-room: the chat owns the full width. The rail, when opened, overlays
+	   as a drawer instead of squeezing the conversation into a sliver. */
+	.app { grid-template-columns: minmax(0, 1fr); }
+	.app > .sidebar {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		width: min(82vw, 320px);
+		z-index: 60;
+		border-right: 1px solid var(--border);
+		box-shadow: 0 0 40px rgba(0, 0, 0, 0.45);
+	}
+	.topbar { flex-wrap: wrap; row-gap: 4px; }
+	.messages { padding: 16px 14px 20px; }
+	/* In a browser tab env() is zero and the browser's own bar already
+	   clears the home indicator, so the composer sits near-flush with the
+	   bottom edge; the home-screen app gets the real inset on top. The
+	   composer box's own border supplies the visual separation. */
+	.composer { padding: 4px 10px calc(2px + env(safe-area-inset-bottom)); }
+
+	/* Rows that keep the desktop's one-line shape wrap instead of crushing
+	   their text columns. */
+	.ai-profile-row { flex-wrap: wrap; row-gap: 8px; }
+	/* Name and status keep the full line; the controls drop to their own row
+	   instead of crushing the text column into one word per line. */
+	.ai-profile-main { flex-basis: 100%; }
+	.ai-profile-side { margin-left: 0; }
+	/* In the dialog a profile stays one row: the controls keep the right
+	   edge and the name and status wrap beside them. */
+	.settings-overlay .ai-profile-row { flex-wrap: nowrap; }
+	.settings-overlay .ai-profile-main { flex-basis: auto; }
+	.settings-overlay .ai-profile-side { margin-left: auto; gap: 8px; }
+	.archived-room-row { flex-wrap: wrap; }
+	.remote-device-row {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
+	}
+}
+
+/* Remote rooms exposure section */
+.remote-rooms-copy {
+	margin-bottom: 4px;
+	max-width: 40rem;
+}
+

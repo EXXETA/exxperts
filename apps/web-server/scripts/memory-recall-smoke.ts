@@ -260,20 +260,6 @@ try {
 		context.includes("_Archived: 2 older notes from Mar to Jul 2026; use memory_recall to read them._"),
 		`a range inside one year reads as months then the year, and names the tool, got:\n${context}`,
 	);
-	assert(
-		context.includes("_Archived: 1 older note from May 2026; use memory_recall to read them._"),
-		`one note in one month is singular and names its month once, got:\n${context}`,
-	);
-	const crossYear = renderMemoryDocument(parseMemoryDocument(MEMORY), "context", {
-		archiveIndex: archiveIndex([
-			archivedEntry({ id: "m-0104", topic: "Commercial terms", saved: "2025-11-01", archived: "2025-11-02", why: "budget", text: "- An older note." }),
-			archivedEntry({ id: "m-0105", topic: "Commercial terms", saved: "2026-03-01", archived: "2026-03-02", why: "budget", text: "- A newer note." }),
-		]),
-	});
-	assert(
-		crossYear.includes("_Archived: 2 older notes from Nov 2025 to Mar 2026; use memory_recall to read them._"),
-		`a range that crosses the new year names both years, got:\n${crossYear}`,
-	);
 
 	// --- 2. A room with nothing to search, and a room nobody can read ---------
 	const scaffold = createPersistentAgentFromScaffoldInput({

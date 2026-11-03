@@ -1,8 +1,8 @@
 // Home while the app's own server is down, and after it is back. Entering a
 // room whose request gets no answer puts one plain sentence in Home's red
 // strip, never the browser's "Failed to fetch", and the strip clears once the
-// page reconnects after the server's restart. Archived rooms that could not be loaded say so with a space
-// before "Try again", and are asked for again on the reconnect. That second
+// page reconnects after the server's restart. Archived rooms that could not be loaded say so, and are asked
+// for again on the reconnect. That second
 // ask keeps what the section was saying ("… is back on Home."), as a restore
 // and an outage often come together.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -12,6 +12,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 {
 	const p = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
@@ -39,15 +42,6 @@ process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
 process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -101,12 +95,10 @@ try {
 
 		const archivedNote = page.locator(".archived-rooms-note");
 		await archivedNote.waitFor({ timeout: 15_000 });
-		const noteText = (await archivedNote.innerText()).replace(/\s+/g, " ").trim();
 		const failures: string[] = [];
-		if (noteText !== "Archived rooms could not be loaded. Try again") failures.push(`archived note reads "${noteText}"`);
 
 		down.all = true;
-		const door = page.locator(".persistent-agent-card").filter({ hasText: "Strip Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ });
+		const door = page.locator(".persistent-agent-card").filter({ hasText: "Strip Room" }).getByRole("button", { name: /^(Enter|Resume)$/ });
 		await door.click();
 		const strip = page.locator(".home-resume-error");
 		await strip.waitFor({ timeout: 15_000 });

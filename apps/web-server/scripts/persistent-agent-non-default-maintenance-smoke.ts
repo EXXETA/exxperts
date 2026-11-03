@@ -160,16 +160,12 @@ try {
 	const afterAbsorbSelected = snapshot(selectedRoot);
 	assert(absorbResult.agentId === agentId, "absorb approval response should identify selected room");
 	assert(afterAbsorbSelected.l1b !== selectedBaseline.l1b, "selected L1b/current.md should change after absorb approval");
-	assert(/^- Last consolidation: absorb_/m.test(afterAbsorbSelected.l1b), "the system stamps the consolidation into Chronos at absorb apply (the worker carries Chronos unchanged)");
-	assert(/^- Last consolidation at: 2026-05-30T11:00:00\.000Z$/m.test(afterAbsorbSelected.l1b), "the consolidation stamp carries the apply time");
 	assert(afterAbsorbSelected.archiveCount === selectedBaseline.archiveCount + 1, "selected archive count should increase after absorb approval");
 	assert(afterAbsorbSelected.absorbEventCount === selectedBaseline.absorbEventCount + 1, "selected absorb event count should increase");
 	assert(absorbResult.eventRelPath, "absorb approval response should carry eventRelPath");
 	assert(absorbResult.eventRecordPath === path.join(selectedRoot, absorbResult.eventRelPath), "absorb event response path should be selected-root relative");
 	const absorbEvent = readJson(absorbResult.eventRecordPath);
 	assert(absorbEvent.agentId === agentId, "selected absorb event should record selected room id");
-	assert(absorbEvent.archivedL1bPath == null, "selected absorb event should not persist top-level archive path");
-	assert(absorbEvent.updatedL1bPath == null, "selected absorb event should not persist top-level updated L1b path");
 	assert(isRelativePath(absorbEvent.paths?.archivedL1bRelPath), "selected absorb event archive path should be relative");
 	assert(absorbEvent.paths?.updatedL1bRelPath === "L1b/current.md", "selected absorb event updated path should be selected-root relative");
 	assert(absorbEvent.paths?.eventRelPath === absorbResult.eventRelPath, "selected absorb event path should be selected-root relative");

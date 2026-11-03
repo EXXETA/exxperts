@@ -50,6 +50,27 @@ export type ServerHooks = {
 	// How long a stop waits for running work, in seconds, asked when a stop
 	// begins (server-stop.ts); without it, or when it gives nothing, two seconds.
 	stopWaitSeconds?: () => number | undefined;
+	// Asked each time a room's stored workspace setting is read; when it gives
+	// true, every stored setting reads as none: no workspace tools, no terminal.
+	ignoresStoredWorkspaceSettings?: () => boolean;
+	// The options the server's own prompt calls pass to a session, asked at
+	// each call; without it, or when it gives nothing, the session's defaults.
+	// expandPromptTemplates false means a message that starts with "/" reaches
+	// the model as written instead of running a command.
+	promptOptions?: () => { readonly expandPromptTemplates?: boolean };
+	// How long a scheduled run's turn may take, in milliseconds, asked when a
+	// scheduler tick starts (scheduled-prompt-background-execution.ts); without
+	// it, or when it gives nothing, no limit.
+	scheduledRunLimitMs?: () => number | undefined;
+	// Whether a scheduled run whose lease ran out (the server ended while it
+	// ran) is run again, asked when a scheduler tick starts; without it, yes.
+	// No ends the run instead, unless its answer had already landed.
+	retriesInterruptedScheduledRuns?: () => boolean;
+	// Asked once per connector add (mcp-admin.ts), after the add's own checks,
+	// with the entry it would write; a sentence refuses the add with that
+	// sentence and nothing is written. Without it, or when it gives nothing,
+	// the add goes on as before.
+	connectorEntryRefusal?: (entry: Readonly<{ url?: string; command?: string; auth?: string | false }>) => string | undefined;
 };
 
 let registered: Readonly<ServerHooks> | null = null;

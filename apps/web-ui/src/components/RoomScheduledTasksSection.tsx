@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { fetchPersistentRoomBackgroundRuns } from "../persistent-room-background-runs-api";
-import { formatFriendlyRunReason, runShownStatus } from "../scheduled-run-reason";
+import { formatFriendlyRunReason, recentRunReason, runShownStatus } from "../scheduled-run-reason";
 import { fmtMemoryMoment } from "../memory-surface-copy";
+import { useRemoteClientContext } from "../remote-client-context";
 import {
 	createPersistentRoomSchedule,
 	deletePersistentRoomSchedule,
@@ -16,8 +17,11 @@ import {
 	formatFriendlyWhenForJob,
 	formatNativeTimeSummary,
 	formatScheduleRecurrenceDraftSummary,
+	formatWeeklyDaysAtTime,
 	inferScheduleRecurrenceDraftFromJob,
+	SCHEDULE_CANNOT_RUN_LINE,
 	SCHEDULE_CREATE_TYPE_AUTO,
+	scheduleCanRun,
 	validateScheduleRecurrenceDraft,
 } from "../persistent-room-schedule-presets";
 import type {
@@ -125,10 +129,10 @@ function formatRunStatus(status: PersistentRoomBackgroundRunView["status"]): str
 
 function formatRunScheduleLabel(run: PersistentRoomBackgroundRunView, jobsById: Map<string, PersistentRoomScheduleJob>): string {
 	const scheduleId = run.source.scheduleId;
-	if (!scheduleId) return "Unknown schedule";
+	if (!scheduleId) return "Unknown task";
 	const job = jobsById.get(scheduleId);
-	if (job) return job.name || `Schedule ${shortId(job.id)}`;
-	return `Deleted schedule ${shortId(scheduleId)}`;
+	if (job) return job.name || `Task ${shortId(job.id)}`;
+	return `Deleted task ${shortId(scheduleId)}`;
 }
 
 function isScheduledRun(run: PersistentRoomBackgroundRunView): boolean {
@@ -140,10 +144,6 @@ function formatRunTiming(run: PersistentRoomBackgroundRunView): string {
 	if (run.finishedAt) return `Finished ${formatTimestamp(run.finishedAt)}`;
 	if (run.startedAt) return `Started ${formatTimestamp(run.startedAt)}`;
 	return `Created ${formatTimestamp(run.createdAt)}`;
-}
-
-function shouldShowRunReason(run: PersistentRoomBackgroundRunView): boolean {
-	return run.status === "deferred" || run.status === "blocked" || run.status === "failed";
 }
 
 function getRunEventTimestamp(run: PersistentRoomBackgroundRunView): string {
@@ -189,15 +189,15 @@ function deriveOneTimeState(job: PersistentRoomScheduleJob, latestRun: Persisten
 		}
 	}
 	if (!job.enabled) return { label: "Disabled", tone: "disabled" };
-	if (!job.nextRunAt) return { label: "Scheduled once", tone: "default" };
+	if (!job.nextRunAt) return { label: "Scheduled once", tone: "success" };
 	const dueAt = new Date(job.nextRunAt).getTime();
 	if (!Number.isNaN(dueAt) && dueAt <= Date.now()) return { label: "Past due", tone: "warning" };
-	return { label: job.enabled ? "Scheduled once" : "Disabled", tone: job.enabled ? "default" : "disabled" };
+	return { label: job.enabled ? "Scheduled once" : "Disabled", tone: job.enabled ? "success" : "disabled" };
 }
 
 function deriveScheduleState(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): { label: string; tone: "default" | "disabled" | "success" | "warning" | "danger" } {
 	if (job.type === "once") return deriveOneTimeState(job, latestRun);
-	return { label: job.enabled ? "Enabled" : "Disabled", tone: job.enabled ? "default" : "disabled" };
+	return { label: job.enabled ? "Enabled" : "Disabled", tone: job.enabled ? "success" : "disabled" };
 }
 
 function isCompletedSuccessfulOneTimeSchedule(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): boolean {
@@ -252,7 +252,7 @@ function hasDraftBuildError<T extends object>(value: T | { error: string }): val
 function ScheduleSummary({ latestRun, nextDueAt, summary, enabledCount }: { latestRun: PersistentRoomBackgroundRunView | null; nextDueAt: string | null; summary: PersistentRoomScheduleSummary; enabledCount: number }) {
 	if (summary.totalCount === 0) return null;
 	const facts = [
-		`${pluralize(summary.totalCount, "schedule")} · ${enabledCount} enabled`,
+		`${pluralize(summary.totalCount, "task")} · ${enabledCount} enabled`,
 		nextDueAt ? `next due ${formatTimestamp(nextDueAt)}` : null,
 		latestRun ? `last run: ${formatRunStatus(runShownStatus(latestRun))}` : null,
 	].filter(Boolean);
@@ -266,6 +266,7 @@ function ScheduleSummary({ latestRun, nextDueAt, summary, enabledCount }: { late
 function ScheduleForm({
 	formId,
 	allowAutoType,
+	serverZone,
 	initialDraft,
 	saving,
 	error,
@@ -275,6 +276,7 @@ function ScheduleForm({
 	/** Set when the pane header carries Save and Cancel; the form then has none of its own. */
 	formId?: string;
 	allowAutoType: boolean;
+	serverZone: string | null;
 	initialDraft: ScheduleFormDraft;
 	saving: boolean;
 	error: string | null;
@@ -330,6 +332,7 @@ function ScheduleForm({
 			<div className="settings-rows">
 				<ScheduleRecurrenceEditor
 					allowAutoType={allowAutoType}
+					serverZone={serverZone}
 					disabled={saving}
 					recurrence={draft.recurrence}
 					onChange={(recurrence) => updateDraft((current) => ({ ...current, recurrence }))}
@@ -364,11 +367,14 @@ function ScheduleForm({
 
 function ScheduleRecurrenceEditor({
 	allowAutoType,
+	serverZone,
 	disabled,
 	recurrence,
 	onChange,
 }: {
 	allowAutoType: boolean;
+	/** A shared server's time zone, which its sentences name; null on the desktop, whose words say this computer's time. */
+	serverZone: string | null;
 	disabled: boolean;
 	recurrence: ScheduleRecurrenceDraft;
 	onChange: (recurrence: ScheduleRecurrenceDraft) => void;
@@ -434,6 +440,7 @@ function ScheduleRecurrenceEditor({
 
 	const dailyTimeSummary = formatNativeTimeSummary(recurrence.daily.time);
 	const weeklySummary = recurrence.mode === "weekly" ? formatScheduleRecurrenceDraftSummary(recurrence) : null;
+	const weeklyDaysAtTime = recurrence.mode === "weekly" ? formatWeeklyDaysAtTime(recurrence.weekly) : null;
 	const oneTimeAtSummary = formatNativeTimeSummary(recurrence.oneTime.at.time);
 
 	return (
@@ -451,7 +458,7 @@ function ScheduleRecurrenceEditor({
 				<label className="settings-row">
 					<span className="settings-row-main">
 						<span className="settings-row-label">At</span>
-						<span className="settings-row-sub">Every day at {dailyTimeSummary ?? "the selected time"}, in this computer's time.</span>
+						<span className="settings-row-sub">Every day at {dailyTimeSummary ?? "the selected time"}, {serverZone ? `in ${serverZone} time` : "in this computer's time"}.</span>
 					</span>
 					<input className="launcher-path-input room-schedules-time-input" type="time" value={recurrence.daily.time} onChange={(event) => setDailyTime(event.target.value)} required disabled={disabled} />
 				</label>
@@ -479,7 +486,7 @@ function ScheduleRecurrenceEditor({
 					<label className="settings-row">
 						<span className="settings-row-main">
 							<span className="settings-row-label">At</span>
-							<span className="settings-row-sub">{weeklySummary ? `${weeklySummary}, in this computer's time.` : "Choose the days this task should run."}</span>
+							<span className="settings-row-sub">{serverZone ? (weeklyDaysAtTime ? `${weeklyDaysAtTime}, in ${serverZone} time.` : "Choose the days this task should run.") : weeklySummary ? `${weeklySummary}, in this computer's time.` : "Choose the days this task should run."}</span>
 						</span>
 						<input className="launcher-path-input room-schedules-time-input" type="time" value={recurrence.weekly.time} onChange={(event) => setWeeklyTime(event.target.value)} required disabled={disabled} />
 					</label>
@@ -491,7 +498,7 @@ function ScheduleRecurrenceEditor({
 						<span className="settings-row-label">When</span>
 						<span className="settings-row-sub">
 							{recurrence.oneTime.mode === "at"
-								? `Runs once ${recurrence.oneTime.at.day} at ${oneTimeAtSummary ?? "the selected time"}, in this computer's time.`
+								? `Runs once ${recurrence.oneTime.at.day} at ${oneTimeAtSummary ?? "the selected time"}, ${serverZone ? "in your computer's time" : "in this computer's time"}.`
 								: "Runs once after the delay you set."}
 						</span>
 					</span>
@@ -532,13 +539,14 @@ function ScheduleRecurrenceEditor({
 							{allowAutoType && <option value={SCHEDULE_CREATE_TYPE_AUTO}>Auto</option>}
 							<option value="once">Once</option>
 							<option value="interval">Interval</option>
-							<option value="cron">Cron</option>
+							{/* Only a task saved as a cron pattern before shows it; nobody can choose it. */}
+							{recurrence.advanced.type === "cron" && <option value="cron" disabled>Cron</option>}
 						</select>
 					</label>
 					<label className="settings-row">
 						<span className="settings-row-main">
 							<span className="settings-row-label">Expression</span>
-							<span className="settings-row-sub">For example +30m, tomorrow at 7am, 2h or 0 0 7 * * *, read by this computer. Time zones cannot be set yet.</span>
+							<span className="settings-row-sub">{recurrence.advanced.type === "cron" && !scheduleCanRun({ type: "cron", schedule: recurrence.advanced.schedule }) ? SCHEDULE_CANNOT_RUN_LINE : serverZone ? `For example +30m, tomorrow at 7am or 2h, read in ${serverZone} time.` : "For example +30m, tomorrow at 7am or 2h, read by this computer. Time zones cannot be set yet."}</span>
 						</span>
 						<input className="launcher-path-input room-schedules-expression-input" value={recurrence.advanced.schedule} onChange={(event) => setAdvancedSchedule(event.target.value)} placeholder="+30m" required disabled={disabled} />
 					</label>
@@ -587,11 +595,11 @@ function RecentScheduledRunsSection({
 			</div>
 			{loading && <p className="settings-empty">Loading recent runs…</p>}
 			{error && <p className="workspaces-error">Could not load recent runs: {error}</p>}
-			{!loading && !error && scheduledRuns.length === 0 && <p className="settings-empty">Nothing has run yet. Runs appear here once a schedule fires.</p>}
+			{!loading && !error && scheduledRuns.length === 0 && <p className="settings-empty">Nothing has run yet. Runs appear here once a task runs.</p>}
 			{!loading && !error && scheduledRuns.length > 0 && (
 				<div className="room-schedules-run-list">
 					{scheduledRuns.map((run) => {
-						const reason = shouldShowRunReason(run) ? formatFriendlyRunReason(run) : null;
+						const reason = recentRunReason(run);
 						return (
 							<article className="room-schedules-run" key={run.runId}>
 								<div className="room-schedules-run-primary">
@@ -611,6 +619,7 @@ function RecentScheduledRunsSection({
 
 function ScheduleJobCard({
 	job,
+	serverZone,
 	confirmingDelete,
 	disabled,
 	editing,
@@ -626,6 +635,7 @@ function ScheduleJobCard({
 	onToggleEnabled,
 }: {
 	job: PersistentRoomScheduleJob;
+	serverZone: string | null;
 	confirmingDelete: boolean;
 	disabled: boolean;
 	editing: boolean;
@@ -665,11 +675,14 @@ function ScheduleJobCard({
 				{latestAttempt && <span>Last attempt: {latestAttempt}</span>}
 				{!hasFriendlyWhen && <span className="room-schedules-raw" title="Raw schedule expression">{formatScheduleType(job.type)} · <code>{job.schedule}</code></span>}
 			</div>
+			{/* While editing, the form's Expression row says it. */}
+			{!editing && !scheduleCanRun(job) && <p className="room-schedules-row-reason">{SCHEDULE_CANNOT_RUN_LINE}</p>}
 			{latestReason && latestRun?.status !== "succeeded" && <p className="room-schedules-row-reason">{latestReason}</p>}
 			{editing ? (
 				<ScheduleForm
 					key={job.id}
 					allowAutoType={false}
+					serverZone={serverZone}
 					initialDraft={jobToDraft(job)}
 					saving={savingEdit}
 					error={error}
@@ -682,12 +695,12 @@ function ScheduleJobCard({
 					{error && <p className="workspaces-error">{error}</p>}
 					<div className="room-schedules-job-actions">
 						<button className="rs-quiet" type="button" onClick={onEdit} disabled={actionDisabled}>Edit</button>
-						<button className="rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this schedule; the record stays" : "Turn this schedule back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
+						<button className="rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this task; it stays in the list" : "Turn this task back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
 						<button className="rs-quiet rs-quiet-danger" type="button" onClick={onRequestDelete} disabled={actionDisabled}>Delete</button>
 					</div>
 					{confirmingDelete && (
 						<div className="room-schedules-delete-confirm">
-							<p>Delete this schedule record? This only removes the saved record.</p>
+							<p>Delete this task? Its past runs stay in Recent runs.</p>
 							<div className="room-schedules-job-actions">
 								<button className="rs-quiet" type="button" onClick={onCancelDelete} disabled={deleting}>Cancel</button>
 								<button className="rs-quiet rs-quiet-danger" type="button" onClick={onConfirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
@@ -716,6 +729,8 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 	const [completedOneTimeOpen, setCompletedOneTimeOpen] = useState(false);
 	const [mutation, setMutation] = useState<ScheduleMutation>(null);
 	const summary = response?.summary ?? status.scheduleSummary;
+	const { sharedServer } = useRemoteClientContext();
+	const serverZone = sharedServer ? response?.timeZone ?? null : null;
 	const canLoadSchedules = status.exists;
 	const creating = mutation?.kind === "create";
 	const recentScheduledRuns = (runsResponse?.runs ?? []).filter(isScheduledRun);
@@ -785,7 +800,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 			const nextResponse = await createPersistentRoomSchedule(status.id, request);
 			setResponse(nextResponse);
 			setCreateOpen(false);
-			setMessage("Schedule saved.");
+			setMessage("Task saved.");
 		} catch (e) {
 			setCreateError((e as Error).message || "Failed to save scheduled task.");
 		} finally {
@@ -806,7 +821,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 			const nextResponse = await updatePersistentRoomSchedule(status.id, jobId, request);
 			setResponse(nextResponse);
 			setEditingJobId(null);
-			setMessage("Schedule updated.");
+			setMessage("Task updated.");
 		} catch (e) {
 			setJobError({ jobId, message: (e as Error).message || "Failed to update scheduled task." });
 		} finally {
@@ -821,7 +836,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 		try {
 			const nextResponse = await updatePersistentRoomSchedule(status.id, job.id, { enabled: !job.enabled });
 			setResponse(nextResponse);
-			setMessage(job.enabled ? "Schedule disabled." : "Schedule enabled.");
+			setMessage(job.enabled ? "Task disabled." : "Task enabled.");
 		} catch (e) {
 			setJobError({ jobId: job.id, message: (e as Error).message || "Failed to update scheduled task." });
 		} finally {
@@ -838,7 +853,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 			setResponse(nextResponse);
 			setConfirmDeleteJobId(null);
 			if (editingJobId === job.id) setEditingJobId(null);
-			setMessage("Schedule deleted.");
+			setMessage("Task deleted.");
 		} catch (e) {
 			setJobError({ jobId: job.id, message: (e as Error).message || "Failed to delete scheduled task." });
 		} finally {
@@ -870,7 +885,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 						}}
 						disabled={Boolean(mutation)}
 					>
-						Add schedule
+						New task
 					</button>
 				)}
 			/>
@@ -883,6 +898,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 				<ScheduleForm
 					formId="schedule-create-form"
 					allowAutoType
+					serverZone={serverZone}
 					initialDraft={emptyCreateDraft()}
 					saving={creating}
 					error={createError}
@@ -892,7 +908,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 			)}
 			{!loading && !error && !createOpen && response && response.jobs.length === 0 && <p className="settings-empty">No scheduled tasks yet.</p>}
 			{!loading && !error && response && response.jobs.length > 0 && activeScheduleRows.length === 0 && completedOneTimeRows.length > 0 && (
-				<p className="settings-empty">No active schedules. Completed one-time schedules are collapsed below.</p>
+				<p className="settings-empty">No active tasks. Completed one-time tasks are collapsed below.</p>
 			)}
 			{!loading && !error && response && activeScheduleRows.length > 0 && (
 				<div className="room-schedules-list">
@@ -900,6 +916,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 						<ScheduleJobCard
 							key={job.id}
 							job={job}
+							serverZone={serverZone}
 							latestRun={latestRun}
 							confirmingDelete={confirmDeleteJobId === job.id}
 							disabled={Boolean(editingJobId && editingJobId !== job.id)}
@@ -937,7 +954,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 						onClick={() => setCompletedOneTimeOpen((open) => !open)}
 					>
 						<span className="disclosure-chevron" aria-hidden="true" />
-						Completed one-time schedules ({completedOneTimeRows.length})
+						Completed one-time tasks ({completedOneTimeRows.length})
 					</button>
 					{completedOneTimeOpen && (
 						<div className="room-schedules-list">
@@ -945,6 +962,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 								<ScheduleJobCard
 									key={job.id}
 									job={job}
+									serverZone={serverZone}
 									latestRun={latestRun}
 									confirmingDelete={confirmDeleteJobId === job.id}
 									disabled={Boolean(editingJobId && editingJobId !== job.id)}

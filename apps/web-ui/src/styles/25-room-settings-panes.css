@@ -1,0 +1,454 @@
+.absorb-fast-path-note {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+}
+.room-maintenance-section {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+/* The theme's error red, a touch toward the text colour so it reads at 4.5:1 on the dark pane too. */
+.room-maintenance-error {
+	color: color-mix(in srgb, var(--error) 80%, var(--fg));
+	font-size: 12px;
+}
+/* The budget row: the slider and its value on the right, as wide as the
+   row leaves; on a phone the control takes its own line. */
+.memory-budget-control {
+	flex: 0 1 360px;
+	min-width: 200px;
+}
+.memory-budget-value {
+	color: var(--fg);
+	font-size: 13px;
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+}
+.memory-budget-slider {
+	flex: 1 1 auto;
+	min-width: 0;
+	accent-color: var(--exx-plan);
+	cursor: pointer;
+}
+.memory-budget-slider:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+.memory-budget-over {
+	color: var(--error);
+}
+
+/* Room settings → Memory: the entries and the archive, under the budget meter. */
+.room-memory-entries {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin-top: 22px;
+}
+.room-memory-entries .memory-archive-head {
+	margin-top: 22px;
+}
+/* The topics (and the open items) as rows of one list. */
+.memory-topic + .memory-topic {
+	border-top: 1px solid var(--exx-divider);
+}
+.memory-topic-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 9px 0;
+	width: 100%;
+	background: none;
+	border: none;
+	text-align: left;
+	cursor: pointer;
+	color: inherit;
+	font: inherit;
+	font-size: 14px;
+}
+.memory-topic-head .memory-topic-count {
+	margin-left: auto;
+}
+.memory-notes-search {
+	margin: 4px 0;
+	width: 100%;
+	font: inherit;
+	font-size: 13px;
+	color: var(--fg);
+	background: var(--bg-2);
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+	padding: 8px 12px;
+}
+.memory-notes-search::placeholder {
+	color: var(--muted);
+}
+.room-memory-history {
+	margin-top: 22px;
+}
+.memory-history-status {
+	margin: 10px 0 0;
+	color: var(--fg-soft);
+	font-size: 13px;
+}
+.memory-history-rows {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 2px;
+}
+.memory-history-row {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	padding: 7px 0;
+	font-size: 12.5px;
+}
+.memory-history-row + .memory-history-row {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
+}
+.memory-history-when {
+	flex: 0 0 104px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+.memory-history-what { color: var(--fg-soft); min-width: 0; }
+.memory-history-undone {
+	font-size: 10px;
+	color: var(--muted);
+}
+.memory-history-row :is(.rs-btn, .rs-quiet) { margin-left: auto; }
+/* The dialogs widen the gap beside a quiet action; a history row keeps its
+   own, or rows with Undo or What changed sit out of line with the rest. */
+.settings-dialog-pane .memory-history-row:has(> button.rs-quiet) { column-gap: 10px; }
+/* "What changed" sits at the row's end beside Undo, and its fold wraps to a
+   full-width line under the row on both surfaces. */
+.memory-history-row, .mem-hist-row { flex-wrap: wrap; }
+.memory-history-row :is(.rs-btn, .rs-quiet) ~ :is(.rs-btn, .rs-quiet) { margin-left: 0; }
+.mem-hist-row .memory-history-toggle { margin-left: auto; flex: 0 0 auto; }
+.memory-history-change { flex: 1 0 100%; min-width: 0; }
+.memory-history-change .mem-diff-note { color: var(--muted); font-size: 12.5px; }
+.memory-topic-count {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.memory-entries {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 2px;
+}
+.memory-topic .memory-entries {
+	padding-left: 18px;
+}
+/* A note: kind and date on the left, its small actions on the right, the
+   text below; a hairline above each note. */
+.memory-entry {
+	border-top: 1px solid var(--exx-divider);
+	padding: 12px 0;
+	display: grid;
+	gap: 5px;
+}
+.memory-entry-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.memory-entry-head .memory-entry-meta {
+	color: var(--muted);
+}
+.memory-entry-tools {
+	display: flex;
+	gap: 14px;
+	flex-shrink: 0;
+}
+/* The add-note form: labelled fields, Topic and Kind side by side, the
+   buttons at the foot on the right. */
+.settings-form-two {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	column-gap: 16px;
+}
+.settings-field {
+	display: grid;
+	gap: 4px;
+}
+.settings-field > span {
+	font-size: 13px;
+	color: var(--muted);
+}
+/* A form that opens inside a list ends with Cancel, then its primary
+   action, on one line at the right. */
+.settings-form-foot {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+.memory-entry-meta {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.memory-entry-saved,
+.memory-entry-origin {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.memory-entry-pin,
+.memory-entry-done {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--exx-plan, var(--fg));
+}
+.memory-entry-actions,
+.memory-entry-move,
+.memory-entry-confirm {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.memory-entry-confirm span {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.memory-entry-edit,
+.memory-entry-add {
+	display: grid;
+	gap: 10px;
+}
+/* One field style for the note forms: the text, the selects and the new
+   topic name all read as the same input, in both themes. */
+.memory-entry-edit textarea,
+.memory-entry-add textarea,
+.memory-entry-add select,
+.memory-entry-add input[type="text"],
+.memory-entry-move select,
+.memory-entry-move input[type="text"] {
+	font: inherit;
+	font-size: 13px;
+	color: var(--fg);
+	background: var(--bg-2);
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+	padding: 8px 10px;
+	width: 100%;
+}
+.memory-entry-add input[type="text"]::placeholder,
+.memory-entry-move input[type="text"]::placeholder,
+.memory-entry-add textarea::placeholder {
+	color: var(--muted);
+}
+/* Move's list and a new topic's name share one width, and the buttons follow
+   them on the line, wrapping below on a phone. */
+.memory-entry-move select,
+.memory-entry-move input[type="text"] {
+	width: 220px;
+	max-width: 100%;
+}
+/* The Memorize card's sorted notes: the topic reads apart from the note, and Move opens below it. */
+.absorb-run-sorted-topic {
+	color: var(--muted);
+}
+.absorb-run-sorted-row .memory-entry-move {
+	margin: 6px 0 8px;
+}
+
+/* A segmented choice (the workspace access mode, the schedule's mode): the
+   chosen option takes the quiet filled row colour. It never shrinks; the
+   label beside it does. */
+.settings-segments {
+	display: inline-flex;
+	flex-shrink: 0;
+	box-sizing: border-box;
+	height: 32px;
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+	overflow: hidden;
+}
+.settings-segment {
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: 13px;
+	padding: 0 12px;
+	white-space: nowrap;
+}
+.settings-segment + .settings-segment {
+	border-left: 1px solid var(--border-soft);
+}
+.settings-segment:hover:not(:disabled):not(.active) {
+	color: var(--fg);
+}
+.settings-segment:focus-visible {
+	color: var(--fg);
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
+.settings-segment.active {
+	background: var(--exx-active-muted-bg);
+	color: var(--fg);
+	cursor: default;
+}
+.settings-segment:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+
+/* Room settings: the workspace tools in two columns of rows. */
+.workspace-tool-columns {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	column-gap: 32px;
+	align-items: start;
+}
+
+/* Room settings: session / memento ------------------------------------ */
+.room-session-section {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+/* Both Instructions panes: Clear above the box, the box, then its counter
+   on the left and the save state and buttons on the right. */
+.room-instructions-section {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.room-instructions-textarea {
+	min-height: 220px;
+	resize: vertical;
+	font-size: 13px;
+	line-height: 1.5;
+}
+/* One button tall without buttons too, so the counter stays put when
+   Discard and Save appear. */
+.room-instructions-foot {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+	min-height: 32px;
+}
+/* Even-width digits: the counter keeps its width as the text crosses the
+   limit, so the buttons beside it stay put. */
+.room-instructions-count {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+.room-instructions-count.over {
+	color: var(--error);
+}
+.room-instructions-controls {
+	margin: 0;
+	color: var(--error);
+	font-size: 12px;
+	line-height: 1.4;
+}
+/* Above the box: "Show the global instructions" on the left (a room's pane
+   only) and Clear or Undo on the right, on a row of its own while the global
+   text is shown. One button tall when empty too, so the box does not move as
+   Clear comes and goes. */
+.room-instructions-box-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 32px;
+}
+.room-instructions-box-head .rs-btn {
+	margin-left: auto;
+}
+/* The buttons keep to the right, also when a narrow pane wraps them under the count. */
+.room-instructions-foot .rs-pane-actions {
+	margin-left: auto;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+/* "Unsaved changes" or "Saved · just now", beside the buttons it explains. */
+.room-instructions-state {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+}
+/* Under the "use the global instructions" row: the row above the box, with
+   the every-room text folded to one link, and that text read-only once shown. */
+.room-instructions-global {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.room-instructions-global-toggle {
+	margin-left: 0;
+	text-align: left;
+	font-size: 12px;
+}
+.room-instructions-global-text {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font: inherit;
+	font-size: 13px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--muted);
+	max-height: 260px;
+	overflow: auto;
+}
+.room-session-confirm {
+	display: grid;
+	gap: 10px;
+}
+
+/* Room settings: delete room ------------------------------------------ */
+.room-danger-note {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+	margin: 0;
+}
+.room-danger-note strong {
+	color: var(--fg);
+}
+.room-danger-confirm {
+	display: grid;
+	gap: 10px;
+}
+.room-danger-confirm-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+
+/* Room settings: schedules summary line -------------------------------- */
+.room-schedules-summary-fact {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+}
+.room-schedules-raw {
+	color: color-mix(in srgb, var(--muted) 75%, transparent);
+}
+.room-schedules-raw code {
+	font-size: 11px;
+}
+

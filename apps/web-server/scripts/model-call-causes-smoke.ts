@@ -31,7 +31,7 @@ import { IsolatedPersistentAgentWorkerTurnError } from "../src/persistent-agent-
 import { failureLineText, providerSentence, turnFailureLine as turnFailureParts } from "../../web-ui/src/turn-failure-line.js";
 // A chat line's text as it is first said, nothing of the message lost.
 const turnFailureLine = (...args: Parameters<typeof turnFailureParts>): string => failureLineText(turnFailureParts(...args), "lost");
-// The very function the page's Memory lines read a worker failure with (App.tsx, maintenanceCredentialLine).
+// The very function the page's Memory lines read a worker failure with (maintenance-errors.ts, maintenanceCredentialLine).
 import { signInFailed as pageSignInFailed } from "../src/model-not-offered.js";
 
 function assert(condition: unknown, message: string): asserts condition {

@@ -36,13 +36,14 @@ built on top in `apps/` and `pi-package/`.
 
 | Surface | Command | What it is |
 | --- | --- | --- |
-| Web app | `exxperts web` | The primary product: persistent rooms with the full memory lifecycle. |
-| CLI/TUI | `exxperts cli` | The coding workspace (ExxCode) with repo access; rooms are also reachable from the CLI. |
+| Desktop app | open the app | The product: persistent rooms with the full memory lifecycle, in its own window. |
+| Web app | `exxperts` | The same app in your browser, for Linux, Intel Macs, or a terminal install on Mac or Windows. |
 
 ## Anatomy of a room: the prompt layers
 
 A room's system prompt is assembled from four code-owned layers plus the
-user's optional instructions (in `apps/web-server/src/persistent-agents.ts`),
+user's optional instructions (in `apps/web-server/src/persistent-agent-constitution.ts` and
+`persistent-agent-boot.ts`),
 ordered deliberately: primacy for identity, recency for runtime state.
 
 | Layer | Content | Ownership | Updates |
@@ -206,9 +207,9 @@ Rooms get tools through a per-room policy rather than a global grant:
   with no write tools and no Bash says it is read-only
   ([`workspace-and-bash.md`](workspace-and-bash.md)).
 - **Bash**: Full access only, off by default. Each command shows an
-  approval card with the exact command before it runs; the "Bash:
-  asks" / "Bash: auto" chip in the chat header switches a room to run
-  without asking, and auto can only be enabled at the computer, never
+  approval card with the exact command before it runs; the "Ask
+  first" / "Auto" chip under the message box (inside it on a phone)
+  switches a room to run without asking, and auto can only be enabled at the computer, never
   from a remote device. Rooms that had Bash before the card existed
   were switched to auto once, at upgrade, so their behavior did not
   change; every room since starts at asks.
@@ -273,4 +274,4 @@ delete them.
 | `~/.exxperts/app/persistent-room-schedules/`, `background-runs/` | Schedules and their run history |
 | `~/.exxperts/app/usage.jsonl` | Token/cost usage log |
 | `~/.exxperts/app/web-search.json`, `searxng/` | Web-search configuration |
-| `~/.exxperts/agent/` | Embedded runtime state: provider auth, model registry, CLI sessions |
+| `~/.exxperts/agent/` | Embedded runtime state: provider auth, model registry |

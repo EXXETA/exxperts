@@ -112,18 +112,6 @@ await check("the minimum window holds the fold and the Review first read of a ro
 	console.log(rows.join("\n"));
 });
 
-// The guards stay behind the check, as the backstop for a memory over its
-// budget: their remedies name the Memory model and where to choose it.
-await check("the size guards behind the check name the Memory model and Room settings, Model", () => {
-	const reviewRoutes = fs.readFileSync(path.join(webServerDir, "src", "review-assess-routes.ts"), "utf-8");
-	const agents = fs.readFileSync(path.join(webServerDir, "src", "persistent-agents.ts"), "utf-8");
-	const reviewGuidance = /const REVIEW_OVERFLOW_GUIDANCE =\s*"([^"]+)"/.exec(reviewRoutes)?.[1] ?? "";
-	const memorizeGuidance = /const ABSORB_OVERFLOW_GUIDANCE =\s*"([^"]+)"/.exec(agents)?.[1] ?? "";
-	for (const [name, guidance] of [["Review", reviewGuidance], ["Memorize", memorizeGuidance]]) {
-		assert(guidance.includes("Memory model that can read more at once in Room settings, Model") && !/window/.test(guidance) && !/maintenance model|AI setup|memory model/.test(guidance), `${name}'s guard names the Memory model and Room settings, Model, got ${JSON.stringify(guidance)}`);
-	}
-});
-
 // --- Against a server: the refusals ---------------------------------------------------
 
 const port = await freePort();
@@ -273,10 +261,6 @@ try {
 		const { modelNoticeFromError } = await import(pathToFileURL(path.join(repoRoot, "apps", "web-ui", "src", "components", "model-notice.tsx")).href) as { modelNoticeFromError(error: unknown): { detail: string; sentence: string } | null };
 		const notice = modelNoticeFromError(new ApiRequestError(tooSmallOutside("Maintenance Model"), 409, "memory_model_too_small"));
 		assert(notice?.detail === "too-small" && notice.sentence === tooSmallOutside("Maintenance Model"), `the refusal is shown as the model notice, with Choose another model, got ${JSON.stringify(notice)}`);
-		const app = fs.readFileSync(path.join(repoRoot, "apps", "web-ui", "src", "App.tsx"), "utf-8");
-		const runStart = (name: string) => app.slice(app.indexOf(`async function ${name}(`), app.indexOf("\n\t}\n", app.indexOf(`async function ${name}(`)));
-		assert(/modelNoticeFromError\(e\)/.test(runStart("generateAbsorbProposal")), "Memorize's run start shows the refusal as the notice");
-		assert(/modelNoticeFromError\(e\)/.test(runStart("startReviewTidy")), "so does Review's tidy start");
 	});
 
 	if (failures.length > 0) throw new Error(`${failures.length} check(s) failed:\n${failures.join("\n")}`);

@@ -13,7 +13,7 @@
 // Run: node scripts/run-smokes.mjs web-search-settings
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,23 +47,6 @@ function smokeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 	env.EXXETA_HOME = repoRoot;
 	env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 	return { ...env, ...extra };
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
@@ -102,7 +85,7 @@ async function startServer(extraEnv: NodeJS.ProcessEnv = {}): Promise<void> {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20000);
 }
 
 try {

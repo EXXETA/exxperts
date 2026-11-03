@@ -6,6 +6,8 @@
 // only to the console.
 
 import type { CredentialKey } from "../../web-server/src/model-not-offered";
+import type { AwayLimitFailure } from "../../web-server/src/thread-items-by-id";
+import { STOP_CUT_ANSWER_SENTENCE, type TurnEndedBy } from "../../web-server/src/turn-ended-by";
 
 /** A model that could not be reached: over the internet, or at an address on this computer, where a local model's app answers. */
 export type Unreached = "connection" | "local-connection";
@@ -146,7 +148,7 @@ export function unreachedWayOn(where: Unreached, shared = false): string {
 
 /**
  * A failure line's words, the cause first. Where the failed message is comes right after the cause and before `wayOn`; a line with no
- * `wayOn` says where only once the message moved (still above, or back in the box), after all its words.
+ * `wayOn` says where only once the message stayed above, after all its words. A message back in the box is said by nothing: the box shows it.
  */
 export interface FailureLineParts {
 	cause: string;
@@ -159,7 +161,10 @@ export type SavedFailureLine = { text: string; parts?: FailureLineParts; details
 /** Where a failed message is: nothing of it lost, still above (Try again continues its turn), or back in the box. */
 export type MessageWhere = "lost" | "above" | "back";
 
-const WHERE_SENTENCE: Record<MessageWhere, string> = { lost: "Nothing was lost.", above: "Your message is still above.", back: "Your message is back in the box." };
+const WHERE_SENTENCE: Record<MessageWhere, string> = { lost: "Nothing was lost.", above: "Your message is still above.", back: "" };
+
+/** Where the message is as saved lines say it: older builds also said when a message was back in the box. */
+const SAVED_WHERE_SENTENCE: Record<MessageWhere, string> = { ...WHERE_SENTENCE, back: "Your message is back in the box." };
 
 /** A failure line's text, from its parts and where its message is. */
 export function failureLineText(parts: FailureLineParts, where: MessageWhere): string {
@@ -209,9 +214,14 @@ export function lineBeforeChooseModel(line: string): FailureLineParts {
 /**
  * A failure line's cause, kept with it: the server's, or what the provider's words said (the model not on the account, no longer offered,
  * the conversation and memory more than it reads at once, the message alone more than that, the conversation alone in a room with nothing
- * in memory, or a model that reads less than the window set for it).
+ * in memory, or a model that reads less than the window set for it), or an away limit that stopped a turn nobody watched.
  */
-export type FailureCause = TurnFailure | "not-on-account" | "message-over-window" | "conversation-over-window" | "window-set-larger" | "could-not-shorten";
+export type FailureCause = TurnFailure | "not-on-account" | "message-over-window" | "conversation-over-window" | "window-set-larger" | "could-not-shorten" | AwayLimitFailure;
+
+/** A stop by an away limit: Try again sends its message again, since a stopped answer is not one the runtime continues. */
+export function isAwayLimitStop(cause: FailureCause | undefined): boolean {
+	return cause === "away-no-progress" || cause === "away-time-limit";
+}
 
 /** The conversation and the room's memory are more than the model reads at once: Review shrinks memory, a larger model reads more. */
 export function overflowLine(modelName: string): FailureLineParts {
@@ -315,7 +325,7 @@ export interface FailureButtons {
 }
 
 // Try again only where trying now can work: never for credit, a plan whose reset is ahead or unknown, a model the account, region or plan lacks, a refusal or a request too long.
-const TRYING_AGAIN_CAN_WORK: ReadonlySet<FailureCause> = new Set<FailureCause>(["connection", "local-connection", "other", "cut-off", "empty-answer", "still-busy"]);
+const TRYING_AGAIN_CAN_WORK: ReadonlySet<FailureCause> = new Set<FailureCause>(["connection", "local-connection", "other", "cut-off", "empty-answer", "still-busy", "away-no-progress", "away-time-limit"]);
 const ANOTHER_MODEL_NAMED: ReadonlySet<FailureCause> = new Set<FailureCause>(["quota", "region-or-plan", "gateway-refused", "refused", "too-large", "empty-answer", "other", "not-on-account", "not-offered", "overflow", "message-over-window", "conversation-over-window", "window-set-larger", "could-not-shorten"]);
 
 /**
@@ -376,8 +386,66 @@ export function failureLineParts(line: { text: string; parts?: FailureLineParts 
 	return cut > 0 ? { cause: line.text.slice(0, cut).trim(), rest: line.text.slice(cut).trim() } : { cause: line.text.trim(), rest: "" };
 }
 
-/** The note Stop leaves; with the message back in the box, lineWithMessage adds that it is. */
-export const STOPPED_LINE = "Response interrupted by Stop.";
+/** The note Stop leaves. */
+export const STOPPED_LINE = "You stopped this answer.";
+
+/** The line under an answer the person's message cut (Cmd/Ctrl+Enter or Send now): they never pressed Stop. */
+export const STOPPED_FOR_NEXT_LINE = "Stopped here for your message.";
+
+/** Stop's note as older builds saved it: a saved thread still carries it, and it reads as Stop's note too. */
+const OLDER_STOPPED_LINE = "Response interrupted by Stop.";
+
+/** Whether a note is Stop's or a cut's, in this build's words or an older build's. */
+export function isStopLine(text: string): boolean {
+	return text === STOPPED_LINE || text === STOPPED_FOR_NEXT_LINE || text === OLDER_STOPPED_LINE;
+}
+
+/**
+ * An answer's text and the Stop note at its end, which the answer draws as its
+ * own muted line. The note is kept in the answer's text, as it is saved
+ * (`_note_` after a blank line, or the note alone when nothing was written).
+ */
+export function answerStopNote(text: string): { answer: string; stopLine: string | null } {
+	const trimmed = text.trimEnd();
+	if (isStopLine(trimmed)) return { answer: "", stopLine: shownStopLine(trimmed) };
+	const match = /\n\n_([^_\n]+)_$/.exec(trimmed);
+	if (match && isStopLine(match[1])) return { answer: trimmed.slice(0, match.index), stopLine: shownStopLine(match[1]) };
+	return { answer: text, stopLine: null };
+}
+
+/** A stop note as this build says it: an older build's Stop note reads as Stop's. */
+function shownStopLine(note: string): string {
+	return note === STOPPED_FOR_NEXT_LINE ? STOPPED_FOR_NEXT_LINE : STOPPED_LINE;
+}
+
+/** The server stop's line without its "send again": its first sentence, cut from the one saved line so both say the same. */
+const STOP_CUT_ANSWER_FIRST = STOP_CUT_ANSWER_SENTENCE.slice(0, STOP_CUT_ANSWER_SENTENCE.indexOf(". ") + 1);
+
+/**
+ * A line or answer as the page shows it once something follows it: a message
+ * sent after it, or queued or held messages waiting under it. The server
+ * stop's line, saved as its own line or as the last line of the cut answer,
+ * then leaves out "Send your message again if something is missing.": the
+ * person has carried on, and the sentence would read as if those messages
+ * were lost. Every other text, and the saved line, stay whole.
+ */
+export function withoutSendAgain(text: string): string {
+	if (text === STOP_CUT_ANSWER_SENTENCE) return STOP_CUT_ANSWER_FIRST;
+	const note = `_${STOP_CUT_ANSWER_SENTENCE}_`;
+	const trimmed = text.trimEnd();
+	return trimmed.endsWith(note) ? `${trimmed.slice(0, -note.length)}_${STOP_CUT_ANSWER_FIRST}_` : text;
+}
+
+/** The note a turn that ended early leaves on its answer, from the server's `endedBy`: the same words in every window that watched it. */
+export function turnEndedLine(endedBy: TurnEndedBy): string {
+	switch (endedBy) {
+		case "stop": return STOPPED_LINE;
+		case "next": return STOPPED_FOR_NEXT_LINE;
+		case "server-stop": return STOP_CUT_ANSWER_SENTENCE;
+		case "left": return "Response interrupted because you left the room.";
+		case "failed": return "Response interrupted.";
+	}
+}
 
 /** A message handed back by the server, with the cause and the model its last attempt ran on. */
 export interface ReturnedPromptFrame {
@@ -403,10 +471,19 @@ export function returnedFailureLine(modelName: string, returned: ReturnedPromptF
 }
 
 /** A message sent while the last answer was still running, put back in the box. A passing note: it goes once the turn is over and is never saved. */
-export const TURN_RUNNING_LINE = "The last answer is still finishing. Your message is back in the box; send it in a moment.";
+export const TURN_RUNNING_LINE = "The last answer is still finishing; send your message in a moment.";
+
+/** The note in older words: builds from before the note was kept out of saves wrote it into threads, and it goes on the way in too. */
+const OLDER_TURN_RUNNING_LINE = "The last answer is still finishing. Your message is back in the box; send it in a moment.";
+
+/** The line under an edit the server refused because the conversation moved on; the edit is in the box. */
+export const EDIT_REFUSED_LINE = "The conversation moved on, so this message can't be edited.";
+
+/** The refused edit's line as older builds saved it. */
+const OLDER_EDIT_REFUSED_LINE = "The conversation moved on, so this message can't be edited. Your text is in the message box.";
 
 export function isTurnRunningNote(item: { kind: string; text?: unknown }): boolean {
-	return item.kind === "system" && item.text === TURN_RUNNING_LINE;
+	return item.kind === "system" && (item.text === TURN_RUNNING_LINE || item.text === OLDER_TURN_RUNNING_LINE);
 }
 
 export function retryNoteLine(modelName: string, failure: RetryFailure | undefined): string {
@@ -494,9 +571,19 @@ const SAVED_OVERFLOW_LINE_DETAIL = /^(The model could not respond: the conversat
  * plan's reset is worded for now ("at 15:40" is false the next morning).
  */
 export function savedFailureLineShown<T extends SavedFailureLine>(line: T): T & SavedFailureLine {
-	const read = line.parts ? line : savedLineRead(line);
+	// A line whose message is back is worded again from its parts: older builds said so in its text.
+	const read = !line.parts ? savedLineRead(line) : line.messageBack ? { ...line, text: failureLineText(line.parts, "back") } : line;
 	if (read.failure !== "quota" || read.quotaWay?.kind !== "sign-in" || read.parts?.wayOn === undefined) return read;
 	return { ...read, ...failureLine({ ...read.parts, wayOn: quotaChatWayOn(read.quotaWay) }, read.messageAbove ? "above" : read.messageBack ? "back" : "lost") };
+}
+
+/**
+ * Any saved line of the room as it shows when the conversation opens: a failure line, and a line whose message went back in the box
+ * (a Stop line has no level; older builds said where in its words), as `savedFailureLineShown` reads them; a refused edit's in today's words.
+ */
+export function savedLineShown<T extends SavedFailureLine & { level?: string }>(line: T): T & SavedFailureLine {
+	if (line.text === OLDER_EDIT_REFUSED_LINE) return { ...line, text: EDIT_REFUSED_LINE };
+	return line.level === "error" || line.messageBack || line.text.includes(SAVED_WHERE_SENTENCE.back) ? savedFailureLineShown(line) : line;
 }
 
 function savedLineRead<T extends SavedFailureLine>(line: T): T & SavedFailureLine {
@@ -509,7 +596,7 @@ function savedLineRead<T extends SavedFailureLine>(line: T): T & SavedFailureLin
 	const overflow = SAVED_OVERFLOW_LINE_DETAIL.exec(line.text);
 	if (overflow) return { ...line, text: `${overflow[1]}${overflow[3]}`, ...details(overflow[2]) };
 	// Saved before its words were kept as fields: where the message is says where the cause ends.
-	const said = (Object.entries(WHERE_SENTENCE) as Array<[MessageWhere, string]>).map(([where, sentence]) => ({ where, at: line.text.indexOf(sentence), sentence })).filter(({ at }) => at > 0).sort((a, b) => a.at - b.at)[0];
+	const said = (Object.entries(SAVED_WHERE_SENTENCE) as Array<[MessageWhere, string]>).map(([where, sentence]) => ({ where, at: line.text.indexOf(sentence), sentence })).filter(({ at }) => at > 0).sort((a, b) => a.at - b.at)[0];
 	if (!said) return line;
 	const before = line.text.slice(0, said.at).trim();
 	const after = line.text.slice(said.at + said.sentence.length).trim();

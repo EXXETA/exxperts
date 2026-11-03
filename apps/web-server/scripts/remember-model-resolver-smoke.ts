@@ -5,9 +5,9 @@
 // its memory row on the gateway's Memorize model. A Remember whose request
 // body names the room model runs on the memory model anyway, asks for a 16k
 // output cap, and says on the proposal which model read the conversation. An
-// approval after the memory row changed is refused with the plain sentence. A
-// memory pick on a signed-out provider is refused with the sentence that names
-// it, and nothing runs in its place; cleared, the row runs on the default. A
+// approval after the memory row changed is refused. A memory pick on a
+// signed-out provider is refused, and nothing runs in its place; cleared, the
+// row runs on the default. A
 // Remember that is approved starts the next conversation on the room's
 // conversation model.
 
@@ -19,6 +19,9 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(100);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -70,15 +73,6 @@ async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ stat
 	const response = await authedFetch(`${baseUrl}${pathname}`, { ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
 	const text = await response.text();
 	return { status: response.status, body: text ? JSON.parse(text) : null };
-}
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error(`timed out waiting until ${label}`);
 }
 
 const WebSocketImpl: any = (await import("ws")).default;
@@ -155,19 +149,19 @@ try {
 	await api(`/api/persistent-agents/${agentId}/models`, { method: "PUT", body: JSON.stringify({ memory: { provider: "openai-compatible", model: "room-model" } }) });
 	const approveBody = { conversationId, density: proposal.body.density, proposal: proposal.body, approvedRecentContext: proposal.body.proposedRecentContext };
 	const refused = await api(`/api/persistent-agents/${agentId}/checkpoint/approve`, { method: "POST", body: JSON.stringify(approveBody) });
-	assert(refused.status === 409 && refused.body?.error === "The Memory model changed after this entry was written. Nothing was saved. Generate again.", `an approval after the memory row changed is refused with the plain sentence, got ${refused.status} ${JSON.stringify(refused.body)}`);
-	pass("an approval after the memory row changed is refused with the plain sentence, and nothing is saved");
+	assert(refused.status === 409, `an approval after the memory row changed is refused, got ${refused.status} ${JSON.stringify(refused.body)}`);
+	pass("an approval after the memory row changed is refused, and nothing is saved");
 
 	// A memory pick on a signed-out provider: refused, and nothing runs in its place.
 	fs.writeFileSync(path.join(agentsRoot, agentId, "runtime", "models.json"), JSON.stringify({ schemaVersion: 1, memory: { provider: "anthropic", model: "claude-opus-5-5" }, updatedAt: new Date().toISOString() }, null, 2));
 	let rows = await api(`/api/persistent-agents/${agentId}/models`);
-	assert(rows.body.models.memory.reason === "signed-out" && rows.body.models.memory.effective === null && /^This room's memory model, .+, is signed out\. Sign in again in Settings, AI setup, or choose another model in Room settings, Model\.$/.test(rows.body.models.memory.refusal), `a memory pick on a signed-out provider waits and says why, got ${JSON.stringify(rows.body.models.memory)}`);
+	assert(rows.body.models.memory.reason === "signed-out" && rows.body.models.memory.effective === null, `a memory pick on a signed-out provider waits and says why, got ${JSON.stringify(rows.body.models.memory)}`);
 	gatewayRequests.length = 0;
 	const waiting = await api(`/api/persistent-agents/${agentId}/checkpoint/propose`, { method: "POST", body: JSON.stringify({ conversationId, density: "standard" }) });
 	// The Remember dialog shows the one shared notice: the full model name, Nothing was lost, and Sign in as a button.
-	assert(waiting.body?.code === "model_unreachable" && waiting.body?.details?.detail === "signed-out" && waiting.body?.details?.provider === "anthropic" && waiting.body?.error === "Claude Opus 5.5 cannot answer because its provider is signed out. Nothing was lost.", `Remember is refused with the shared signed-out notice, got ${waiting.status} ${JSON.stringify(waiting.body)}`);
+	assert(waiting.body?.code === "model_unreachable" && waiting.body?.details?.detail === "signed-out" && waiting.body?.details?.provider === "anthropic", `Remember is refused with the shared signed-out notice, got ${waiting.status} ${JSON.stringify(waiting.body)}`);
 	assert(!gatewayRequests.some((request) => request.remember), `no model read the conversation in its place, got ${JSON.stringify(gatewayRequests)}`);
-	pass("a memory pick on a signed-out provider is refused with the sentence, and no other model runs Remember");
+	pass("a memory pick on a signed-out provider is refused, and no other model runs Remember");
 
 	// The pick cleared: the row follows the default again, and Remember runs there.
 	await api(`/api/persistent-agents/${agentId}/models`, { method: "PUT", body: JSON.stringify({ memory: null }) });

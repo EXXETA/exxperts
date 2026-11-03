@@ -1,0 +1,338 @@
+/* Agent creator ------------------------------------------------ */
+.creator-overlay {
+	position: fixed;
+	inset: 0;
+	background: var(--overlay-bg);
+	backdrop-filter: blur(10px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 60;
+	padding: 24px;
+}
+.creator-modal {
+	background: var(--bg);
+	border: 1px solid var(--fg);
+	border-radius: 14px;
+	max-width: 920px;
+	width: 100%;
+	max-height: 92vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+.creator-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 16px;
+	padding: 18px 22px;
+	border-bottom: 1px solid var(--border);
+}
+.creator-kicker {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--dim);
+	margin-bottom: 4px;
+}
+.creator-head h2 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	margin: 0;
+	font-size: 28px;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+.creator-body {
+	overflow-y: auto;
+	padding: 22px;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 18px;
+}
+.creator-section {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.creator-section-full { grid-column: 1 / -1; }
+.creator-section h3 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 16px;
+	font-weight: 700;
+	letter-spacing: -0.005em;
+	margin: 0;
+}
+.creator-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.creator-field-wide { width: 100%; }
+.creator-field span {
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--dim);
+}
+.creator-field input,
+.creator-field select,
+.creator-field textarea {
+	width: 100%;
+	background: var(--code-bg);
+	color: var(--code-fg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 10px 12px;
+	font-family: inherit;
+	font-size: 13px;
+}
+.creator-field textarea {
+	resize: vertical;
+	min-height: 160px;
+	font-family: var(--exx-font-mono);
+	line-height: 1.5;
+}
+.creator-field input:focus,
+.creator-field select:focus,
+.creator-field textarea:focus { outline: none; border-color: var(--fg); }
+.creator-note {
+	margin: 0;
+	font-size: 12px;
+	color: var(--muted);
+}
+.creator-checklist {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.creator-check {
+	display: flex;
+	gap: 10px;
+	align-items: flex-start;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px;
+	cursor: pointer;
+}
+.creator-check input { margin-top: 3px; accent-color: var(--fg); }
+.creator-check span { display: flex; flex-direction: column; gap: 2px; }
+.creator-check strong {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 14px;
+}
+.creator-check em {
+	font-style: normal;
+	font-size: 12px;
+	color: var(--muted);
+}
+.creator-validation {
+	border: 1px solid var(--error);
+	border-radius: 8px;
+	padding: 10px 12px;
+	color: var(--error);
+	font-size: 12px;
+	font-weight: 700;
+}
+.creator-preview {
+	margin: 0;
+	background: var(--code-bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 14px;
+	color: var(--code-fg);
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 360px;
+	overflow: auto;
+}
+.creator-foot {
+	border-top: 1px solid var(--border);
+	padding: 14px 22px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+	font-size: 12px;
+	color: var(--muted);
+}
+.creator-error { color: var(--error); }
+
+/* Agent details ------------------------------------------------- */
+.agent-details-overlay {
+	position: fixed;
+	inset: 0;
+	background: var(--overlay-bg);
+	backdrop-filter: blur(10px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 65;
+	padding: 24px;
+}
+.agent-details-modal {
+	background: var(--bg);
+	border: 1px solid var(--fg);
+	border-radius: 14px;
+	max-width: 860px;
+	width: 100%;
+	max-height: 90vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+.agent-details-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 16px;
+	padding: 18px 22px;
+	border-bottom: 1px solid var(--border);
+}
+.agent-details-kicker {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--dim);
+	margin-bottom: 4px;
+}
+.agent-details-head h2 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	margin: 0;
+	font-size: 28px;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+.agent-details-head p {
+	margin: 6px 0 0;
+	color: var(--muted);
+	max-width: 620px;
+}
+.agent-details-body {
+	overflow-y: auto;
+	padding: 22px;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 18px;
+}
+.agent-details-section {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.agent-details-section-full { grid-column: 1 / -1; }
+.agent-details-section h3 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 16px;
+	font-weight: 700;
+	letter-spacing: -0.005em;
+	margin: 0;
+}
+.agent-details-grid {
+	display: grid;
+	grid-template-columns: 120px 1fr;
+	gap: 8px 12px;
+	margin: 0;
+}
+.agent-details-grid-wide {
+	grid-template-columns: 1fr 1fr;
+}
+.agent-details-row {
+	display: grid;
+	grid-template-columns: 190px 1fr;
+	gap: 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 8px 10px;
+}
+.agent-details-grid dt,
+.agent-details-row dt {
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--dim);
+}
+.agent-details-grid dd,
+.agent-details-row dd {
+	margin: 0;
+	word-break: break-word;
+}
+.agent-details-note {
+	margin: 0;
+	font-size: 12px;
+	color: var(--muted);
+}
+.agent-details-purpose {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 700;
+}
+.agent-details-session-note {
+	margin: 0;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px 12px;
+	font-size: 12px;
+	font-weight: 700;
+}
+.agent-details-skill-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 12px;
+}
+.agent-details-skill-list span {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 8px 10px;
+}
+.agent-details-skill-list strong {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 13px;
+}
+.agent-details-preview {
+	margin: 0;
+	background: var(--code-bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 14px;
+	color: var(--code-fg);
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 260px;
+	overflow: auto;
+}
+.agent-details-foot {
+	border-top: 1px solid var(--border);
+	padding: 14px 22px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+	font-size: 12px;
+	color: var(--muted);
+}
+.agent-details-actions {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+
+.icon-btn:disabled,
+.icon-btn:disabled:hover {
+	cursor: not-allowed;
+	background: transparent;
+	color: var(--fg);
+	border-color: var(--border);
+}
+

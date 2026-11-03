@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import { detectTailnetAddress, isTailnetAddress } from "../src/remote-mode.js";
 
 // Pins remote mode's state machinery and its two structural invariants
@@ -41,10 +41,6 @@ for (const [address, expected] of [
 ] as const) {
 	assert(isTailnetAddress(address) === expected, `isTailnetAddress(${address}): expected ${expected}`);
 }
-// The env override must win over interface scanning (it is how this smoke
-// fakes a tailnet below).
-process.env.EXXPERTS_REMOTE_TEST_ADDRESS = "::1";
-assert(detectTailnetAddress() === "::1", "detectTailnetAddress must honor the test env override");
 delete process.env.EXXPERTS_REMOTE_TEST_ADDRESS;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -77,23 +73,6 @@ function spawnServer(tempHome: string, extraEnv: Record<string, string>): ChildP
 			...extraEnv,
 		},
 	});
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 // The tunnel listener may come up moments after healthz (boot-state apply is
@@ -137,7 +116,7 @@ try {
 	{
 		const home = makeTempHome();
 		server = watch(spawnServer(home, {}));
-		await waitForServer(server);
+		await waitForServer(server, baseUrl, 20000);
 
 		const off = await remoteStatus();
 		assert(off.enabled === false, "off: expected enabled false");
@@ -167,7 +146,7 @@ try {
 		const home = makeTempHome();
 		fs.writeFileSync(path.join(home, ".exxperts", "app", "remote-mode.json"), "{not json", { mode: 0o600 });
 		server = watch(spawnServer(home, {}));
-		await waitForServer(server);
+		await waitForServer(server, baseUrl, 20000);
 
 		const status = await remoteStatus();
 		assert(status.enabled === false, "malformed: expected enabled false");
@@ -185,7 +164,7 @@ try {
 		const home = makeTempHome();
 		const stateFile = path.join(home, ".exxperts", "app", "remote-mode.json");
 		server = watch(spawnServer(home, { EXXPERTS_REMOTE_TEST_ADDRESS: "::1" }));
-		await waitForServer(server);
+		await waitForServer(server, baseUrl, 20000);
 
 		const enable = await authedFetch(`${baseUrl}/api/remote/enable`, { method: "POST" });
 		assert(enable.status === 200, `enable: expected 200, got ${enable.status}`);
@@ -238,7 +217,7 @@ try {
 		// Boot with a persisted state file: the listener comes up by itself.
 		fs.writeFileSync(stateFile, `${JSON.stringify({ enabled: true, enabledAt: new Date().toISOString(), keepAwake: false })}\n`, { mode: 0o600 });
 		server = watch(spawnServer(home, { EXXPERTS_REMOTE_TEST_ADDRESS: "::1" }));
-		await waitForServer(server);
+		await waitForServer(server, baseUrl, 20000);
 		await waitForTunnel(true, "boot with state file");
 		const booted = await remoteStatus();
 		assert(booted.enabled === true && booted.address === "::1" && booted.stateFile === "valid", "boot with state file must serve the tunnel listener");

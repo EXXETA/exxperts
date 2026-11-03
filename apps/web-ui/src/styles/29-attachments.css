@@ -1,0 +1,239 @@
+/* ── Composer attachment staging (files UI slice) ──────────────────────────
+   The row above the textarea: visible proof the drop worked, the honest
+   parse state before the message commits, and ✕ to change your mind. A
+   picture is a thumbnail tile (the same grammar as the bubble thumbnails),
+   any other file a compact card with the bubble's type badge. Tiles and
+   cards share one wrapping row, bottom-aligned: a card is a third of the
+   tile's height, and sitting on the tile's bottom edge it reads as one
+   shelf resting on the textarea instead of a card floating mid-air beside
+   a tall picture; the tile's ✕ overhangs its top corner, where a
+   bottom-aligned card never reaches. */
+.composer-staged {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 8px;
+	/* Headroom for the tile's ✕, which overhangs the top edge by 8px. */
+	padding: 8px 8px 0 0;
+	margin: 0 0 8px;
+}
+.composer-staged-tile,
+.composer-staged-card {
+	position: relative;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	background: var(--exx-surface-inset);
+}
+.composer-staged-tile.failed,
+.composer-staged-card.failed {
+	border-color: var(--danger, #d33);
+}
+/* The image tile: a square card on the inset ground with the whole picture
+   CONTAINED inside it (a screenshot is never cropped to a corner). No overflow
+   clip on the tile itself — the ✕ must be free to overhang its corner — so the
+   frame inside carries the clip and the inner padding. */
+.composer-staged-tile {
+	display: block;
+	flex: none;
+	width: 120px;
+	height: 120px;
+	border-radius: 12px;
+}
+/* The frame is a button once the upload has landed (the picture opens the
+   viewer) and a plain span before that; both fill the tile identically. */
+.composer-staged-tile-frame {
+	display: block;
+	width: 100%;
+	height: 100%;
+	padding: 6px;
+	box-sizing: border-box;
+	border: 0;
+	border-radius: inherit;
+	background: none;
+	overflow: hidden;
+	color: inherit;
+	font: inherit;
+}
+button.composer-staged-tile-frame { cursor: pointer; }
+/* The same hover edge as a bubble thumbnail: this is the same act. */
+.composer-staged-tile:has(button.composer-staged-tile-frame:hover) { border-color: var(--exx-plan); }
+button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+.composer-staged-tile-img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+.composer-staged-tile.uploading .composer-staged-tile-img { opacity: .5; }
+.composer-staged-tile-busy {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: inherit;
+}
+.composer-staged-tile-alert {
+	position: absolute;
+	left: 4px;
+	bottom: 4px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--danger, #d33);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 16px;
+	text-align: center;
+}
+/* The document card: badge · name over a muted state line · ✕. */
+.composer-staged-card {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+	padding: 6px 8px;
+	font-size: 12px;
+}
+.composer-staged-card-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	line-height: 1.3;
+}
+.composer-staged-name {
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 200px;
+}
+.composer-staged-note {
+	color: var(--exx-text-muted);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 200px;
+}
+.composer-staged-card.failed .composer-staged-note {
+	color: var(--danger, #d33);
+}
+.composer-staged-remove {
+	flex: none;
+	border: none;
+	background: none;
+	color: var(--exx-text-muted);
+	cursor: pointer;
+	font-size: 12px;
+	padding: 0 2px;
+	line-height: 1;
+}
+.composer-staged-remove:hover {
+	color: var(--exx-text);
+}
+/* On a tile the ✕ is a round button riding the top-right corner, painted in
+   the composer box's own ground so it reads as sitting on the card's edge.
+   Always visible: a control that only appears on hover is invisible to touch
+   and easy to miss, and the corner placement keeps it off the picture. */
+.composer-staged-tile .composer-staged-remove {
+	position: absolute;
+	top: -8px;
+	right: -8px;
+	width: 22px;
+	height: 22px;
+	border: 1px solid var(--exx-border);
+	border-radius: 50%;
+	background: var(--panel-2);
+	color: var(--exx-text-muted);
+	font-size: 11px;
+	line-height: 1;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.composer-staged-tile .composer-staged-remove:hover {
+	color: var(--exx-text);
+	border-color: var(--exx-text);
+}
+.composer-attach-input {
+	display: none;
+}
+/* Attachment chips inside a sent user bubble — same grammar as task chips. */
+.user-attachment-strip {
+	margin-top: 6px;
+}
+/* An image attachment shows its picture above the chip strip: what the room
+   was shown, at a glance, capped in height so a tall screenshot never takes
+   the bubble over and never wider than the bubble. Rounded like the chips;
+   the click opens the viewer exactly as the chip does. */
+.user-attachment-thumbs {
+	display: flex;
+	flex-wrap: wrap;
+	/* Each picture keeps its own height: stretched to the tallest sibling, a
+	 * small image would paint as a strip. */
+	align-items: flex-start;
+	gap: 8px;
+	margin-top: 8px;
+}
+.user-attachment-thumb {
+	display: block;
+	min-width: 0;
+	max-width: 100%;
+	padding: 0;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	overflow: hidden;
+	background: transparent;
+	cursor: pointer;
+}
+.user-attachment-thumb:hover { border-color: var(--exx-plan); }
+.user-attachment-thumb:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+.user-attachment-thumb-img {
+	display: block;
+	width: auto;
+	height: auto;
+	max-width: 100%;
+	max-height: 160px;
+}
+/* The attachment chip in a message (taste pass): it opens the file in the
+   viewer, exactly as its Files row does, so it carries the same affordance as
+   any other chip. `openable` is the button form; the plain span stays for a
+   file that is gone — kept visible as the honest record that it rode with this
+   message, but muted and inert so it never promises a click it cannot keep. */
+.user-attachment-chip {
+	cursor: pointer;
+	font: inherit;
+	text-align: left;
+}
+.user-attachment-chip.gone,
+.user-attachment-chip:not(.openable) {
+	cursor: default;
+}
+.user-attachment-chip.gone {
+	opacity: .55;
+	border-style: dashed;
+}
+.user-attachment-chip.gone:hover { border-color: var(--exx-border-soft); }
+.user-attachment-chip.openable:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+/* Footer split (files UI slice): the spacer pushes the quiet snapshot actions
+   to the right of the one primary verb. */
+.asset-viewer-footer-spacer {
+	flex: 1;
+}
+/* Checkpoint honesty notices (§2.3) — never a gate, just the truth about a
+   running or un-entered consult. */
+.checkpoint-consult-notices {
+	margin: 4px 0 2px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12.5px;
+	color: var(--exx-text-muted);
+	border-left: 3px solid var(--exx-plan);
+	padding-left: 12px;
+}
+
+

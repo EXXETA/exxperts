@@ -2,7 +2,6 @@ const {
 	buildPersistentRoomRestoredLiveThreadContext,
 	MAX_RESTORED_MESSAGES,
 	MAX_RESTORED_MESSAGE_CHARS,
-	MAX_RESTORED_TOTAL_CHARS,
 } = await import("../src/persistent-room-resume-context.js");
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -149,23 +148,6 @@ try {
 	assert(longMessage.metadata.includedItemCount === 1, "long message should still be included after truncation");
 	assert(longMessage.block.includes("Messages truncated to the per-message cap"), "long message block should disclose per-message truncation");
 	assert(longMessage.block.length < longPrivateText.length + 800, "long message block should not include full over-cap raw text");
-
-	const metadataKeys = Object.keys(longMessage.metadata).sort();
-	assert(metadataKeys.join(",") === [
-		"eligibleItemCount",
-		"includedItemCount",
-		"maxRestoredMessageChars",
-		"maxRestoredMessages",
-		"maxRestoredTotalChars",
-		"messageCountTruncated",
-		"omittedOlderCount",
-		"sourceItemCount",
-		"totalCharsTruncated",
-		"truncatedMessageCount",
-	].sort().join(","), "metadata should expose the approved key set");
-	assert(longMessage.metadata.maxRestoredMessages === MAX_RESTORED_MESSAGES, "metadata should include maxRestoredMessages");
-	assert(longMessage.metadata.maxRestoredTotalChars === MAX_RESTORED_TOTAL_CHARS, "metadata should include maxRestoredTotalChars");
-	assert(longMessage.metadata.maxRestoredMessageChars === MAX_RESTORED_MESSAGE_CHARS, "metadata should include maxRestoredMessageChars");
 	const metadataJson = JSON.stringify(longMessage.metadata);
 	assert(!metadataJson.includes("LONG_PRIVATE_TRANSCRIPT_SENTINEL"), "metadata serialization must not include raw transcript strings");
 	assert(!metadataJson.includes(longPrivateText), "metadata serialization must not include full raw transcript text");

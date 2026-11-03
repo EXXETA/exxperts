@@ -39,13 +39,7 @@ const SETTINGS_LABEL = "exxperts.searxng.settings";
 
 const isWindows = process.platform === "win32";
 // How to invoke this helper, for messages — shell-appropriate per platform.
-// When bin/exxperts.cjs intercepts `exxperts setup search` it sets
-// EXXPERTS_SETUP=1 in this child's env; messages then name the product command
-// the user actually typed instead of repo-script paths that only exist in a
-// source checkout. Direct invocations keep the repo-script form.
-const SELF = process.env.EXXPERTS_SETUP === "1"
-	? "exxperts setup search"
-	: isWindows ? "node scripts\\searxng.mjs" : "./scripts/searxng";
+const SELF = isWindows ? "node scripts\\searxng.mjs" : "./scripts/searxng";
 
 // The container command: `docker` from any engine (Docker Desktop, OrbStack,
 // Colima, Rancher Desktop), else `podman`, which takes the same commands. If it
@@ -104,8 +98,8 @@ function usage(log = console.log) {
 
 Starts a local SearXNG container for exxperts web_search, writes generated
 SearXNG settings to ~/.exxperts/app/searxng/settings.yml, and writes the shared
-web-search config to ~/.exxperts/app/web-search.json (read by both the global
-\`exxperts\` command and the repo scripts). Just run \`start\`, then restart the app.
+web-search config to ~/.exxperts/app/web-search.json (read by the app). Just
+run \`start\`, then restart the app.
 \`update\` brings an existing, running container to the pinned image and settings.
 
 Environment:
@@ -268,9 +262,8 @@ async function waitUntilReady() {
 }
 
 // Write the web-search config into the shared product app state dir
-// (~/.exxperts/app) so the user does not have to hand-edit anything. Both the
-// global `exxperts` command and the repo `./scripts/exxperts-cli` read this same file,
-// and it survives reinstalls.
+// (~/.exxperts/app) so the user does not have to hand-edit anything. The app
+// reads this same file, and it survives reinstalls.
 //
 // Non-destructive about the BACKEND choice, which is the thing this command is
 // here to set: if somebody already chose one, it is left alone. It is not

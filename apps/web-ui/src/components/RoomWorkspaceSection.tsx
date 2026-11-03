@@ -83,8 +83,8 @@ const WRITER_TOOL_NAMES = new Set(["write", "edit"]);
 function workspaceHonestyNote(input: { toolNames: readonly string[]; localFiles: boolean; bashEnabled: boolean }): string | null {
 	if (input.toolNames.some((name) => WRITER_TOOL_NAMES.has(name))) return null;
 	if (input.localFiles && input.bashEnabled) return "Write tools are off, but Bash can still modify files.";
-	if (input.toolNames.length === 0) return "With no tools on, this room can't see or change files here.";
-	return "With this setup the room is read-only: it can see files here but cannot change anything.";
+	if (input.toolNames.length === 0) return "With no tools on, the room can't see files here.";
+	return "The room can read files here but not change them.";
 }
 
 function accessModeLabel(mode: PersistentRoomWorkspaceAccessMode): string {
@@ -93,14 +93,14 @@ function accessModeLabel(mode: PersistentRoomWorkspaceAccessMode): string {
 
 function accessModeHint(mode: PersistentRoomWorkspaceAccessMode): string {
 	return mode === "localFiles"
-		? "The room works with files like you do, in this folder and beyond it, and can create, edit and overwrite. Bash is available in this mode."
-		: "The room stays inside this folder. It can read everything here, and with write tools enabled it can create and edit files inside it.";
+		? "The room works with files in this folder and beyond it, like you do."
+		: "The room stays inside this folder.";
 }
 
 /** Why saving waits while the room answers: a turn finishes under the rules it started with. */
-export const ROOM_ANSWERING_SAVE_LINE = "The room is answering. You can save when it has finished.";
+export const ROOM_ANSWERING_SAVE_LINE = "Save when the room finishes answering.";
 // The same wait beside a greyed Clear, where nothing is being saved.
-const ROOM_ANSWERING_CHANGE_LINE = "The room is answering. You can change this when it has finished.";
+const ROOM_ANSWERING_CHANGE_LINE = "Change this when the room finishes answering.";
 
 // The server's codes for a folder it refuses: their lines show under the Folder row.
 const FOLDER_REFUSAL_CODES = new Set(["missing_root", "root_not_absolute", "root_not_found", "root_not_directory", "forbidden_root", "under_forbidden_root", "ancestor_of_forbidden_root"]);
@@ -138,7 +138,7 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 			<div className="settings-rows">
 				<div className="settings-row">
 					<div className="settings-row-main">
-						<span className="settings-row-label">No workspace</span>
+						<span className="settings-row-label">No folder</span>
 						<span className="settings-row-sub">On a shared server, rooms don't use a folder.</span>
 					</div>
 				</div>
@@ -150,10 +150,10 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 			<div className="settings-rows">
 				<div className="settings-row">
 					<div className="settings-row-main">
-						<span className="settings-row-label">No workspace yet</span>
-						<span className="settings-row-sub">Without a folder, this room can't read or write files, export documents, or run commands. Set a project folder to unlock file work.</span>
+						<span className="settings-row-label">No folder yet</span>
+						<span className="settings-row-sub">Choose a project folder to unlock file&nbsp;work.</span>
 					</div>
-					<button className="rs-btn" type="button" disabled={setupDisabled} onClick={onSetWorkspace}>Set workspace</button>
+					<button className="rs-btn" type="button" disabled={setupDisabled} onClick={onSetWorkspace}>Choose folder</button>
 				</div>
 			</div>
 		);
@@ -171,17 +171,15 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 	const isLocalFiles = policy.workspaceAccessMode === "localFiles";
 	const toolNames = folderMissing ? "Off until the folder is found" : workspaceToolsEnabled ? orderedWorkspaceToolNames(policy.allowedToolNames).map(formatWorkspaceToolName).join(", ") : "None";
 	const honestyNote = folderMissing ? null : workspaceHonestyNote({ toolNames: policy.allowedToolNames, localFiles: isLocalFiles, bashEnabled: policy.bashEnabled === true });
-	// The button's name stays on one line, so a narrow pane never ends the line on "workspace." alone.
-	const goneFolderLine = "This folder was not found on this computer. Choose it again, or another one, in Edit\u00a0workspace.";
 	return (
 		<div className="workspaces-policy-summary">
 			<div className="settings-rows">
 				<div className="settings-row">
 					<div className="settings-row-main">
-						<span className="settings-row-label">Folder</span>
+						<span className="settings-row-label">Location</span>
 						{(folderMissing || fullPath || showFolderClue) && (
 							<span className="settings-row-sub">
-								{folderMissing ? goneFolderLine : fullPath && <span className="workspace-folder-path">{pathWithBreaks(fullPath)}</span>}
+								{folderMissing ? "This folder was not found on this computer." : fullPath && <span className="workspace-folder-path">{pathWithBreaks(fullPath)}</span>}
 								{showFolderClue ? ` Folder: ${folderName}.` : ""}
 							</span>
 						)}
@@ -206,7 +204,6 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 			</div>
 			{honestyNote && <p className="settings-help">{honestyNote}</p>}
 			{isLocalFiles && policy.bashEnabled && shellMissingNote && <p className="settings-help workspace-shell-missing">{shellMissingNote}</p>}
-			<p className="settings-help">Changes apply from your next message, also in a conversation you already started.</p>
 		</div>
 	);
 }
@@ -227,7 +224,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 	// The native folder chooser opens a dialog on the computer; from a remote
 	// device that can only confuse (the server refuses it anyway), so the
 	// button hides and the typed-path input stands alone. On a shared server
-	// the folder is not set from here at all: Set workspace, Edit workspace
+	// the folder is not set from here at all: Choose folder, Edit
 	// and Clear are not offered, so the editor (folder, tools, Bash) never opens.
 	const remoteClient = useRemoteClientContext();
 	const sharedServer = remoteClient.sharedServer;
@@ -304,7 +301,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 		setLoadFailed(false);
 		if (!canManageWorkspace) {
 			setLoading(false);
-			setError({ text: status.exists ? "This room needs attention before its workspace can be managed." : "Create this room before assigning a workspace.", at: "pane" });
+			setError({ text: status.exists ? "This room needs attention before its folder can be changed." : "Create this room before choosing its folder.", at: "pane" });
 			return () => { cancelled = true; };
 		}
 		setLoading(true);
@@ -346,7 +343,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 		// The saved path left as it is keeps the saved folder: only a new folder is sent.
 		const root = draftRoot.trim() === savedPath ? "" : draftRoot.trim();
 		if (!root && !policy) {
-			setError({ text: "Choose a folder for this room workspace.", at: "folder" });
+			setError({ text: "Choose a folder for this room.", at: "folder" });
 			return false;
 		}
 		const activeToolNames = workspaceToolNamesForMode(draftAccessMode);
@@ -375,7 +372,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 			setMessage("Saved.");
 			return true;
 		} catch (e) {
-			showRefusal(e, "Couldn't save the workspace. Try again.");
+			showRefusal(e, "Couldn't save the folder. Try again.");
 			return false;
 		} finally {
 			setSaving(false);
@@ -422,8 +419,8 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 
 	async function clearWorkspaceDefault(): Promise<void> {
 		const ok = await confirmDialog({
-			title: "Clear this room's workspace?",
-			body: "The room can't use files until you set a folder again. Its tool and Bash choices are cleared too.",
+			title: "Clear this room's folder?",
+			body: "The room can't use files until you choose a folder again, and its tool and Bash choices are reset.",
 			confirmLabel: "Clear",
 			danger: true,
 		});
@@ -442,7 +439,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 			setEditing(false);
 			setMessage(response.deleted ? "Folder removed." : "This room had no folder saved.");
 		} catch (e) {
-			showRefusal(e, "Couldn't clear the workspace. Try again.");
+			showRefusal(e, "Couldn't clear the folder. Try again.");
 		} finally {
 			setSaving(false);
 		}
@@ -476,18 +473,18 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 	return (
 		<div className="room-workspace-section">
 			<PaneHeader
-				title="Workspace"
+				title="Folder"
 				line="The folder this room works in, and what it may do there."
 				actions={editing ? (
 					<WorkspaceButtons line={buttonsLine} lineId={buttonsLineId}>
 						{dirty && <span className="workspace-unsaved-hint">Unsaved changes</span>}
 						<button className="rs-btn" type="button" disabled={saving} onClick={startOrCancelEditing}>Cancel</button>
-						<button className="rs-btn rs-btn-primary" type="submit" form="workspace-editor-form" disabled={saving || answering} aria-describedby={heldReason}>{saving ? "Saving…" : policy ? "Save changes" : "Save workspace"}</button>
+						<button className="rs-btn rs-btn-primary" type="submit" form="workspace-editor-form" disabled={saving || answering} aria-describedby={heldReason}>{saving ? "Saving…" : policy ? "Save changes" : "Save folder"}</button>
 					</WorkspaceButtons>
 				) : policy && !sharedServer && !loadFailed && (
 					<WorkspaceButtons line={buttonsLine} lineId={buttonsLineId}>
-						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving || answering} aria-describedby={heldReason} title="Remove the saved workspace folder" onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
-						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} onClick={startOrCancelEditing}>Edit workspace</button>
+						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving || answering} aria-describedby={heldReason} title="Remove the saved folder" onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
+						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} onClick={startOrCancelEditing}>Edit</button>
 					</WorkspaceButtons>
 				)}
 			/>
@@ -495,7 +492,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 				{loading ? <p className="settings-empty">Loading…</p> : loadFailed ? (
 					<div className="settings-rows">
 						<div className="settings-row">
-							<span className="settings-row-sub">Couldn't load this room's workspace.</span>
+							<span className="settings-row-sub">Couldn't load this room's folder.</span>
 							<button className="rs-btn" type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Try again</button>
 						</div>
 					</div>
@@ -505,7 +502,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 						<div className="settings-rows">
 							<div className="settings-row">
 								<div className="settings-row-main">
-									<span className="settings-row-label">Folder</span>
+									<span className="settings-row-label">Location</span>
 									<span className="settings-row-sub">{savedFolderLabel ? (warnings.length > 0 ? `${savedFolderLabel} was not found on this computer. Pick it again, or another folder.` : `${savedFolderLabel}, saved. Pick another to change it.`) : "Pick the folder this room works in."}</span>
 								</div>
 								<div className="workspace-folder-field">
@@ -516,7 +513,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 											type="text"
 											value={draftRoot}
 											placeholder={savedFolderLabel ? "Or type a path" : "Type a folder path"}
-											aria-label="Workspace folder path"
+											aria-label="Folder path"
 											disabled={saving || choosingFolder}
 											onChange={(event) => { setDraftRoot(event.target.value); setError(null); setMessage(null); }}
 											// Enter accepts the folder and leaves Access and Tools to look at: saving stays a click.
@@ -539,7 +536,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 									<span className="settings-row-label">Access</span>
 									<span className="settings-row-sub">{accessModeHint(draftAccessMode)}</span>
 								</div>
-								<div className="settings-segments" role="radiogroup" aria-label="Workspace access mode">
+								<div className="settings-segments" role="radiogroup" aria-label="Folder access mode">
 									<button type="button" role="radio" aria-checked={draftAccessMode === "localFiles"} className={`settings-segment${draftAccessMode === "localFiles" ? " active" : ""}`} disabled={saving} title={accessModeHint("localFiles")} onClick={() => changeAccessMode("localFiles")}>Full access</button>
 									<button type="button" role="radio" aria-checked={draftAccessMode === "bounded"} className={`settings-segment${draftAccessMode === "bounded" ? " active" : ""}`} disabled={saving} title={accessModeHint("bounded")} onClick={() => changeAccessMode("bounded")}>Bounded</button>
 								</div>
@@ -555,14 +552,14 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onD
 										{group.tools.map((tool) => (
 											<label className="settings-row" key={tool.name}>
 												<span className="settings-row-label">{tool.label}</span>
-												<input className="workspaces-tool-switch" type="checkbox" checked={draftToolNames.includes(tool.name)} disabled={saving} onChange={() => toggleTool(tool.name)} aria-label={`${tool.label} workspace tool`} />
+												<input className="workspaces-tool-switch" type="checkbox" checked={draftToolNames.includes(tool.name)} disabled={saving} onChange={() => toggleTool(tool.name)} aria-label={`${tool.label} tool`} />
 											</label>
 										))}
 										{index === activeToolGroups.length - 1 && draftAccessMode === "localFiles" && (
 											<label className="settings-row">
 												<span className="settings-row-main">
 													<span className="settings-row-label">Bash</span>
-													<span className="settings-row-sub">Lets the room run commands on this computer, like a terminal. Off by default. Whether each command asks you first is set at the top of the chat.</span>
+													<span className="settings-row-sub">Lets the room run commands on this computer, like a terminal.</span>
 													{shellMissingNote && <span className="settings-row-sub workspace-shell-missing">{shellMissingNote}</span>}
 												</span>
 												<input className="workspaces-tool-switch" type="checkbox" checked={draftBashEnabled} disabled={saving} onChange={() => { setDraftBashEnabled((current) => !current); setError(null); setMessage(null); }} aria-label="Bash shell access" />

@@ -9,14 +9,13 @@
 // effect → task_error lands as an error with partial artifacts kept); the
 // single-slot started discipline (a second running task is dropped; a finished
 // card is superseded by a fresh delegation); minimize/open/dismiss; and the
-// pure helpers — route-URL derivation (incl. malformed → null), basename, and
-// the DECK/HTML/SVG kind label. Effects are asserted too.
+// pure helpers: route-URL derivation (incl. malformed → null) and basename.
+// Effects are asserted too.
 //
-// Run: npm run smoke:task-card   (or: node scripts/run-smokes.mjs task-card)
+// Run: node scripts/run-smokes.mjs task-card   (from the repo root)
 
 import {
 	artifactBasename,
-	artifactKindLabel,
 	createTaskState,
 	isSvgArtifact,
 	isTaskActive,
@@ -97,7 +96,7 @@ try {
 	]);
 	assert(midStream.state.tail === "abcdef" && midStream.state.phase === "running", "deltas accumulate into the tail");
 
-	// thumbnail lookup + kind labels for the done card
+	// thumbnail lookup for the done card
 	assert(thumbnailFor(happy.state, DECK.relativePath)?.slideCount === 7, "thumbnailFor finds the deck thumbnail");
 	assert(thumbnailFor(happy.state, SVG.relativePath) === null, "thumbnailFor returns null when no thumbnail matches");
 
@@ -198,13 +197,8 @@ try {
 	assert(taskArtifactUrl("tsk-x", "tasks/tsk-x/.thumbs/a.png") === null, "a dot-leading segment (server-internal) yields null");
 	assert(taskArtifactUrl("", "tasks//a.svg") === null, "an empty taskId yields null");
 
-	// ---- basename + kind label + svg predicate ---------------------------
+	// ---- basename + svg predicate ----------------------------------------
 	assert(artifactBasename("tasks/tsk-x/sub/a.svg") === "a.svg", "basename is the last path segment (never the store path)");
-	assert(artifactBasename("solo.html") === "solo.html", "basename of a bare name is itself");
-	assert(artifactKindLabel(".html", "deck") === "DECK", "html from the deck template reads DECK");
-	assert(artifactKindLabel("html", "chart-html") === "HTML", "html from another template reads HTML (dot optional)");
-	assert(artifactKindLabel(".svg", "deck") === "SVG", "svg reads SVG regardless of template");
-	assert(artifactKindLabel(".pdf", null) === "PDF", "an unknown extension reads its upper-cased self");
 	assert(isSvgArtifact(".svg") && isSvgArtifact("svg") && !isSvgArtifact(".html"), "isSvgArtifact detects svg (dot optional), rejects html");
 
 	// ---- reset (teardown) ------------------------------------------------

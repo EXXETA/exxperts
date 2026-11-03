@@ -2,7 +2,10 @@
 // browser: the room keeps its one socket (no second dial when the model
 // changes), the transcript shows the server's "Continued on" line once, and
 // the conversation saved on disk holds exactly one such line. The next
-// message goes out on the new model over the same socket.
+// message goes out on the new model over the same socket. A conversation whose
+// only message failed (its key refused) keeps its model too: "Choose another
+// model" on the notice opens the message box's model panel, which switches
+// it, and the message sent again runs on the new model.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -12,6 +15,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -46,6 +52,8 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 
 const CLAUDE = { provider: "fake-claude", model: "claude-fake" };
 const requests: Array<{ model: string }> = [];
+// While set, the Claude side refuses its key.
+let refuseClaude = false;
 
 function sse(res: http.ServerResponse, event: string | null, payload: unknown): void {
 	res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(payload)}\n\n`);
@@ -58,6 +66,11 @@ const providers = http.createServer((req, res) => {
 	req.on("end", () => {
 		const body = JSON.parse(raw || "{}");
 		requests.push({ model: String(body.model) });
+		if (refuseClaude && String(req.url ?? "").includes("/messages")) {
+			res.writeHead(401, { "content-type": "application/json" });
+			res.end(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }));
+			return;
+		}
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		const text = `Answer from ${body.model}.`;
 		if (String(req.url ?? "").includes("/messages")) {
@@ -78,13 +91,15 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
+// Picks a model in the model panel: open, to the models view when the panel
+// opens on the effort view, then the row.
+async function pickInPanel(page: import("playwright").Page, name: string, opened = false): Promise<void> {
+	if (!opened) await page.locator(".model-pick-trigger").first().click();
+	const panel = page.locator(".model-pick-panel");
+	await panel.waitFor({ timeout: 10000 });
+	const toModels = panel.locator(".model-pick-effort-model");
+	if (await toModels.count()) await toModels.click();
+	await panel.locator(".model-pick-row").filter({ hasText: name }).click();
 }
 
 let server: ChildProcessWithoutNullStreams | undefined;
@@ -110,6 +125,8 @@ try {
 	const roomModels = await import("../src/room-models.js");
 	const agentId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Switch UI Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 	roomModels.writeRoomModels(agentId, { conversation: CLAUDE });
+	const stuckId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Stuck Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
+	roomModels.writeRoomModels(stuckId, { conversation: CLAUDE });
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
@@ -132,7 +149,7 @@ try {
 		const dismiss = page.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
 
-		await page.locator(".persistent-agent-card").filter({ hasText: "Switch UI Room" }).getByRole("button", { name: "Enter →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Switch UI Room" }).getByRole("button", { name: "Enter" }).click();
 		const composer = page.locator("textarea").first();
 		await composer.waitFor({ timeout: 15000 });
 		// Send waits for the room's socket; its title says when it is there.
@@ -150,23 +167,8 @@ try {
 		const dialsBefore = roomDials.length;
 		assert(dialsBefore >= 1, "the room has its socket");
 
-		// Room settings, Model: pick GPT, then carry the open conversation over.
-		await page.getByRole("button", { name: "Room settings" }).click();
-		await page.waitForSelector(".settings-dialog", { timeout: 10000 });
-		await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Model$/ }).first().click();
-		await page.locator(".room-settings-section:not([hidden]) .room-model-row").first().locator(".room-model-pick").click();
-		await page.locator(".room-model-option").filter({ hasText: "GPT Fake" }).click();
-		const switchButton = page.getByRole("button", { name: "Switch the open conversation too" });
-		await switchButton.waitFor({ timeout: 10000 });
-		// The block says only what the click does, read before the click: the
-		// note above the button, no "next conversation" line.
-		const block = page.locator(".room-settings-section:not([hidden]) .room-model-switch");
-		const blockText = await block.innerText();
-		assert(!blockText.includes("Applies to your next conversation"), `the switch block has no next-conversation line, got ${JSON.stringify(blockText)}`);
-		const parts = await block.locator(":scope > *").evaluateAll((nodes) => nodes.map((node) => node.tagName === "BUTTON" ? "button" : String(node.textContent)));
-		assert(JSON.stringify(parts) === JSON.stringify(["The first answer after a switch reads the whole conversation again.", "button"]), `the note sits above the button and nothing else is there, got ${JSON.stringify(parts)}`);
-		await switchButton.click();
-		await page.waitForSelector(".settings-dialog", { state: "detached", timeout: 10000 });
+		// The model panel under the box: pick GPT for the open conversation.
+		await pickInPanel(page, "GPT Fake");
 		await page.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 10000 });
 		await page.waitForTimeout(1500);
 		assert(roomDials.length === dialsBefore, `the switch keeps the room's socket, got ${roomDials.length - dialsBefore} new dials`);
@@ -188,6 +190,37 @@ try {
 		}, "the conversation is saved with the second answer");
 		const lines = saved.filter((item) => item.kind === "system" && /^Continued on /.test(String(item.text)));
 		assert(lines.length === 1 && lines[0]!.text === "Continued on GPT Fake", `the saved conversation holds the server's line once, got ${JSON.stringify(lines)}`);
+		console.log("  ok  a conversation with messages switches over the same socket, and its next message runs on the new model");
+
+		// A conversation whose only message failed on its refused key.
+		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+		await page.waitForLoadState("networkidle");
+		await page.locator(".persistent-agent-card").filter({ hasText: "Stuck Room" }).getByRole("button", { name: "Enter" }).click();
+		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
+		// The room's ready frame (its context ring) is in: typed before it, the message would be cleared by the room's load.
+		await page.locator(".composer-context-pill:not(.composer-context-waiting)").first().waitFor({ timeout: 15000 });
+		const question = "A question the key refuses.";
+		refuseClaude = true;
+		const refusedBefore = requests.length;
+		await composer.fill(question);
+		await composer.press("Enter");
+		const notice = page.locator(".room-model-notice");
+		await notice.getByRole("button", { name: "Choose another model" }).waitFor({ timeout: 20000 });
+		refuseClaude = false;
+		assert(requests.length > refusedBefore && requests.slice(refusedBefore).every((request) => request.model === "claude-fake"), `the refused send went to Claude, got ${JSON.stringify(requests.slice(refusedBefore))}`);
+		const stuck = await (await authedFetch(`${baseUrl}/api/persistent-agents/${stuckId}/status`)).json() as { runtime?: { state?: string; activeThreadId?: string | null }; activeThread?: { hasUserVisibleTurns?: boolean; followsConversationPick?: boolean } };
+		assert(stuck.runtime?.state !== "idle" && stuck.runtime?.activeThreadId, `after the refused send the conversation is still open, got ${JSON.stringify(stuck.runtime)}`);
+		assert(stuck.activeThread?.followsConversationPick === false, `the failed conversation keeps its model, got ${JSON.stringify(stuck.activeThread)}`);
+		await notice.getByRole("button", { name: "Choose another model" }).click();
+		await pickInPanel(page, "GPT Fake", true);
+		await page.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 10000 });
+		// The message is back in the box: sent again, it runs on GPT.
+		await waitUntil(async () => (await composer.inputValue()) === question, "the refused message is back in the box");
+		const resentBefore = requests.length;
+		await composer.press("Enter");
+		await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
+		assert(requests.length > resentBefore && requests[requests.length - 1]?.model === "gpt-fake", `the message sent again runs on GPT, got ${JSON.stringify(requests.slice(resentBefore))}`);
+		console.log("  ok  a conversation whose only message failed: Choose another model opens the model panel, and the message sent again runs on the new model");
 		await ctx.close();
 	} finally {
 		await browser.close();

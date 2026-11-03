@@ -85,8 +85,9 @@ export function fetchArchivedPersistentRooms(): Promise<ArchivedPersistentAgentS
 	return fetchJson<ArchivedPersistentAgentSummary[]>("/api/persistent-agents/archived", undefined, "Failed to load archived rooms.");
 }
 
-export function fetchPersistentRoomLifecycleCounts(agentId: PersistentAgentId): Promise<{ agentId: PersistentAgentId; counts: PersistentAgentLifecycleCounts }> {
-	return fetchJson<{ agentId: PersistentAgentId; counts: PersistentAgentLifecycleCounts }>(
+/** `counts` is null when a part of the room could not be read: no number is better than a wrong 0. */
+export function fetchPersistentRoomLifecycleCounts(agentId: PersistentAgentId): Promise<{ agentId: PersistentAgentId; counts: PersistentAgentLifecycleCounts | null }> {
+	return fetchJson<{ agentId: PersistentAgentId; counts: PersistentAgentLifecycleCounts | null }>(
 		`/api/persistent-agents/${encodeURIComponent(agentId)}/lifecycle-counts`,
 		undefined,
 		"Failed to load room contents."

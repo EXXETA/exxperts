@@ -155,7 +155,7 @@ export {
 } from "./core/extensions/index.js";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.js";
-export { convertToLlm } from "./core/messages.js";
+export { convertToLlm, ROOM_STATE_CUSTOM_TYPE } from "./core/messages.js";
 export { ModelRegistry, stripJsonComments } from "./core/model-registry.js";
 export { defaultModelPerProvider } from "./core/model-resolver.js";
 export { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./core/provider-display-names.js";
@@ -163,6 +163,8 @@ export { BUILT_IN_MODEL_PROVIDERS, isApiKeyLoginProvider } from "./core/provider
 export { listGitHubCopilotModels } from "@exxeta/exxperts-ai/oauth";
 // The Anthropic API key provider, beside the Claude sign-in (see its note in the ai package).
 export { ANTHROPIC_API_KEY_PROVIDER, isDirectAnthropicProvider } from "@exxeta/exxperts-ai";
+// Pricing a usage, for embedders that reprice a stored turn by the same rule the runtime billed it with.
+export { calculateCost } from "@exxeta/exxperts-ai";
 // Model reasoning capability, for embedders that need to clamp a level to what
 // a model can actually do without going through the session setter (which also
 // writes the machine-wide default), and to show the dial the way the model's

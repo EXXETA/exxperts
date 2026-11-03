@@ -1,0 +1,649 @@
+.workspaces-section {
+	gap: 20px;
+}
+.workspaces-room-list {
+	display: grid;
+	gap: 14px;
+}
+.workspaces-room-row {
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	padding: 16px;
+	display: grid;
+	gap: 14px;
+}
+.workspaces-room-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+}
+.workspaces-room-header .persistent-agent-header h2 {
+	font-size: 20px;
+}
+.workspaces-room-body,
+.workspaces-policy-summary,
+.workspaces-default-form {
+	display: flex;
+	gap: 8px;
+}
+.workspaces-room-body,
+.workspaces-policy-summary,
+.workspaces-default-form {
+	flex-direction: column;
+}
+.workspaces-policy-summary {
+	gap: 6px;
+}
+.workspaces-root-title {
+	display: grid;
+	gap: 4px;
+}
+.workspaces-root-title strong {
+	font-size: 13px;
+	line-height: 1.35;
+}
+.workspaces-root-title span,
+.workspaces-redaction-note,
+.workspaces-success,
+.workspaces-error {
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.4;
+	margin: 0;
+}
+.workspaces-root-title span {
+}
+/* The folder row of the workspace editor: the box takes the row's width on
+   its own line under Folder and its sentence, so a long path shows as much as
+   the pane allows; the buttons sit at its end, and a line about the folder
+   sits under the box and its buttons, as wide as they are together. */
+.settings-row:has(> .workspace-folder-field) {
+	flex-wrap: wrap;
+	row-gap: 10px;
+}
+.workspace-folder-field {
+	flex: 1 0 100%;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.workspace-folder-controls {
+	min-width: 0;
+}
+/* The line takes the width of the box and buttons, never widens them. */
+.workspace-folder-line {
+	width: 0;
+	min-width: 100%;
+	text-wrap: pretty;
+	overflow-wrap: anywhere;
+}
+.workspace-folder-path-input {
+	flex: 1 1 220px;
+	min-width: 140px;
+	font-family: var(--exx-font-mono, monospace);
+	font-size: 12.5px;
+}
+.workspace-unsaved-hint {
+	color: var(--warning);
+	font-size: 12px;
+	font-weight: 600;
+}
+/* The workspace pane's buttons, with the line about them right under them:
+   a wait in the muted colour, a refusal in red. The line wraps at the
+   buttons' width instead of widening the header. */
+.workspace-buttons {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 6px;
+}
+.workspace-buttons-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.workspace-buttons-line {
+	width: 0;
+	min-width: 100%;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+	text-align: right;
+	text-wrap: balance;
+}
+.workspace-buttons-refusal {
+	color: var(--error);
+}
+.workspaces-tool-switch {
+	appearance: none;
+	width: 38px;
+	height: 22px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--muted) 18%, transparent);
+	position: relative;
+	flex: 0 0 auto;
+	cursor: pointer;
+	transition: background 140ms ease, border-color 140ms ease;
+}
+.workspaces-tool-switch::before {
+	content: "";
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--fg);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+	transition: transform 140ms ease, background 140ms ease;
+}
+.workspaces-tool-switch:checked {
+	background: var(--success);
+	border-color: var(--success);
+}
+.workspaces-tool-switch:checked::before {
+	background: #111111;
+	transform: translateX(16px);
+}
+/* In light a black knob reads as on: the knob is white in both states. */
+:root[data-theme="light"] .workspaces-tool-switch::before {
+	background: #ffffff;
+}
+.workspaces-tool-switch:disabled {
+	cursor: wait;
+	opacity: 0.65;
+}
+.workspaces-success { color: #6bc77a; }
+.workspaces-error { color: var(--error); }
+:root[data-theme="light"] .workspaces-page .workspaces-room-row {
+	background: color-mix(in srgb, var(--panel) 88%, var(--bg) 12%);
+	border-color: var(--border-soft);
+	box-shadow: 0 1px 0 color-mix(in srgb, var(--fg) 5%, transparent);
+}
+:root[data-theme="light"] .workspaces-page .workspaces-default-form {
+	border-top-color: var(--border-soft);
+}
+:root[data-theme="light"] .workspaces-page .launcher-path-input {
+	background: var(--bg-2);
+	border-color: var(--border-soft);
+	color: var(--fg);
+}
+.web-search-fallback-heading {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 12px;
+	color: var(--muted);
+	margin: 0;
+	font-weight: 500;
+}
+/* A path or a folder named in a row, in the code face as a quiet chip. */
+.settings-chip {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: bottom;
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	font-weight: 400;
+	padding: 2px 7px;
+	border-radius: 6px;
+	background: var(--bg-2);
+	color: var(--fg-soft);
+}
+/* A choice among rows (the web search engines): the radio first, then the
+   label and its subline. A row mid-save is dimmed rather than moved: the
+   value it shows is still the machine's until the machine says otherwise. */
+.settings-row.settings-row-choice {
+	justify-content: flex-start;
+	align-items: flex-start;
+	gap: 12px;
+}
+.settings-row.pending {
+	opacity: 0.6;
+}
+.web-search-pending-note {
+	color: var(--muted);
+	font-size: 12px;
+}
+/* Native radios render as dark filled discs in this theme, which reads as a
+   third state beside the chosen one: empty is empty, chosen is a dot. */
+.settings-row-choice input[type="radio"] {
+	appearance: none;
+	-webkit-appearance: none;
+	position: relative;
+	width: 16px;
+	height: 16px;
+	/* on the label's first line, whatever the subline below does */
+	margin: 3px 0 0;
+	border-radius: 50%;
+	border: 1.5px solid color-mix(in srgb, var(--fg) 38%, transparent);
+	background: transparent;
+	flex-shrink: 0;
+	cursor: pointer;
+}
+.settings-row-choice input[type="radio"]:checked {
+	border-color: var(--fg);
+}
+.settings-row-choice input[type="radio"]:checked::after {
+	content: "";
+	position: absolute;
+	inset: 3px;
+	border-radius: 50%;
+	background: var(--fg);
+}
+.settings-row-choice input[type="radio"]:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.settings-row-choice input[type="radio"]:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+.web-search-searxng {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.web-search-searxng-label {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.web-search-searxng input {
+	flex: 1 1 240px;
+	min-width: 0;
+}
+/* The starter belongs under the field, not squeezed in beside it. */
+.web-search-searxng-setup {
+	flex: 1 0 100%;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.web-search-searxng-status {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.web-search-searxng-status.failed {
+	color: var(--warning);
+}
+.web-search-env-note {
+	font-size: 12.5px;
+	margin: 0;
+}
+.configure-profile-model-option input[type="checkbox"],
+.add-provider-block input[type="checkbox"] {
+	accent-color: var(--fg);
+	cursor: pointer;
+}
+.ai-setup-copy {
+	color: var(--muted);
+	line-height: 1.55;
+}
+.ai-setup-flow,
+.ai-setup-manual-details {
+	display: grid;
+	gap: 18px;
+}
+.ai-setup-command-block {
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 14px;
+}
+.create-room-section.create-room-panel,
+.create-room-card.create-room-panel {
+	background: color-mix(in srgb, var(--panel) 82%, transparent);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-card);
+	box-shadow: 0 1px 0 color-mix(in srgb, var(--fg-soft) 5%, transparent);
+	display: grid;
+	gap: 18px;
+	max-width: 760px;
+	padding: 20px;
+}
+.create-room-section.create-room-panel {
+	border-bottom: 1px solid var(--border-soft);
+}
+.create-room-section-heading {
+	border-bottom: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+	padding-bottom: 14px;
+}
+.create-room-section-heading h2 {
+	letter-spacing: -0.01em;
+}
+.create-room-body {
+	display: grid;
+	gap: 18px;
+}
+.create-room-copy {
+	font-size: 13px;
+	margin: 0;
+	max-width: 580px;
+	color: var(--fg-soft);
+	line-height: 1.5;
+}
+.create-room-hint {
+	font-size: 12px;
+	margin-top: 4px;
+	max-width: 580px;
+	color: var(--muted);
+}
+.create-room-form {
+	display: grid;
+	gap: 16px;
+}
+.create-room-fields {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px 16px;
+}
+.create-room-field {
+	display: grid;
+	gap: 7px;
+	min-width: 0;
+}
+.create-room-field strong {
+	color: var(--fg-soft);
+	font-size: 12px;
+	letter-spacing: 0.01em;
+}
+.create-room-mode-field {
+	grid-column: 1 / -1;
+}
+.create-room-mode-options {
+	display: grid;
+	gap: 8px;
+}
+.create-room-mode-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	cursor: pointer;
+}
+.create-room-mode-option input {
+	margin-top: 3px;
+	flex-shrink: 0;
+	accent-color: var(--fg);
+}
+.create-room-mode-copy {
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 1.45;
+}
+.create-room-mode-copy strong {
+	color: var(--fg);
+	font-size: 13px;
+}
+.create-room-mode-note {
+	margin: 0;
+	color: var(--fg-soft);
+	font-size: 12px;
+}
+.create-room-input {
+	background: color-mix(in srgb, var(--bg-2) 88%, var(--panel) 12%);
+	min-height: 42px;
+	padding: 11px 12px;
+	transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.create-room-input:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--bg-2) 72%, var(--panel-2) 28%);
+	border-color: color-mix(in srgb, var(--fg-soft) 28%, var(--border-soft));
+}
+.create-room-input::placeholder {
+	color: var(--dim);
+}
+/* Plain colored sentences, no card: the boxed treatment read heavier than the
+ * form itself and the color already carries the meaning. */
+.create-room-message {
+	font-size: 13px;
+	font-weight: 700;
+	line-height: 1.35;
+	width: fit-content;
+}
+.create-room-message.error {
+	color: var(--error);
+}
+.create-room-message.success {
+	color: var(--success);
+}
+.create-room-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	padding-top: 2px;
+}
+.create-room-actions .landing-action,
+.create-room-section .create-room-actions .inline-action,
+.create-room-card .create-room-actions .inline-action {
+	font-size: 12px;
+	line-height: 1;
+	padding: 11px 16px;
+}
+.create-room-actions .landing-action {
+	min-width: 132px;
+	text-align: center;
+}
+.create-room-section .create-room-actions .inline-action,
+.create-room-card .create-room-actions .inline-action {
+	color: var(--muted);
+}
+.create-room-section .create-room-actions .inline-action:hover,
+.create-room-section .create-room-actions .inline-action:focus-visible,
+.create-room-card .create-room-actions .inline-action:hover,
+.create-room-card .create-room-actions .inline-action:focus-visible {
+	color: var(--fg);
+}
+.create-room-open-action {
+	margin-top: 2px;
+}
+@media (max-width: 720px) {
+	.create-room-section.create-room-panel,
+	.create-room-card.create-room-panel {
+		padding: 16px;
+	}
+	.create-room-fields {
+		grid-template-columns: 1fr;
+	}
+}
+.ai-setup-manual-details {
+	margin-top: 14px;
+}
+.ai-setup-support-note {
+	border-left: 2px solid #e8a838;
+	padding-left: 12px;
+}
+.ai-setup-status-pill {
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1;
+	padding: 7px 10px;
+	white-space: nowrap;
+}
+.ai-setup-status-pill.ready,
+.ai-setup-model-row em.ready,
+.ai-setup-provider-row em.ready {
+	color: #6bc77a;
+}
+.ai-setup-status-pill.missing,
+.ai-setup-model-row em.missing,
+.ai-setup-provider-row em.missing {
+	color: #e8a838;
+}
+.ai-setup-status-grid {
+	display: grid;
+	gap: 0;
+	border-top: 1px solid var(--border);
+}
+.ai-setup-status-row,
+.ai-setup-model-row,
+.ai-setup-provider-row,
+.ai-setup-auth-option {
+	border-bottom: 1px solid color-mix(in srgb, var(--fg) 28%, transparent);
+	padding: 12px 0;
+}
+.ai-setup-status-row {
+	display: grid;
+	grid-template-columns: 150px minmax(0, 1fr);
+	gap: 6px 18px;
+	align-items: baseline;
+}
+.ai-setup-status-row span,
+.ai-setup-status-row em,
+.ai-setup-model-row span,
+.ai-setup-provider-row span,
+.ai-setup-auth-option span,
+.ai-setup-section .cli-note {
+	color: var(--muted);
+	font-style: normal;
+}
+.ai-setup-status-row span {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+}
+.ai-setup-status-row strong,
+.ai-setup-status-row code,
+.ai-setup-status-row em {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.ai-setup-status-row code,
+.ai-setup-section code,
+.ai-setup-details pre {
+	font-family: var(--exx-font-mono);
+}
+.ai-setup-status-row em {
+	grid-column: 2;
+	font-size: 12px;
+}
+.ai-setup-block {
+	display: grid;
+	gap: 10px;
+}
+.ai-setup-block h3 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 13px;
+	margin: 0;
+}
+.ai-setup-model-rows,
+.ai-setup-provider-rows,
+.ai-setup-auth-options,
+.ai-setup-terminal-steps {
+	display: grid;
+	gap: 0;
+	border-top: 1px solid color-mix(in srgb, var(--fg) 28%, transparent);
+}
+.ai-setup-model-row,
+.ai-setup-provider-row,
+.ai-setup-auth-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 18px;
+}
+.ai-setup-model-row div,
+.ai-setup-provider-row div,
+.ai-setup-auth-option {
+	min-width: 0;
+	display: grid;
+	gap: 3px;
+}
+.ai-setup-model-row em,
+.ai-setup-provider-row em {
+	font-style: normal;
+	font-size: 11px;
+	font-weight: 700;
+	white-space: nowrap;
+}
+.ai-setup-checklist,
+.ai-setup-issues ul {
+	margin: 0;
+	padding-left: 20px;
+	line-height: 1.55;
+}
+.ai-setup-checklist li + li,
+.ai-setup-issues li + li {
+	margin-top: 6px;
+}
+.ai-setup-issues {
+	color: #e8a838;
+}
+.ai-setup-details {
+	border-top: 1px solid color-mix(in srgb, var(--fg) 28%, transparent);
+	padding-top: 12px;
+}
+.ai-setup-details summary {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	cursor: pointer;
+}
+.ai-setup-details pre {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font-size: 12px;
+	line-height: 1.45;
+	margin: 12px 0 0;
+	overflow-x: auto;
+	padding: 12px;
+}
+.ai-setup-command-block .cli-copy-action {
+	min-width: min(360px, 100%);
+}
+.ai-setup-section .inline-action {
+	font-size: 11px;
+	line-height: 1;
+	padding: 8px 12px;
+}
+.ai-setup-advanced {
+	display: grid;
+	gap: 20px;
+}
+.ai-setup-terminal-steps div {
+	border-bottom: 1px solid color-mix(in srgb, var(--fg) 28%, transparent);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 0;
+}
+.ai-setup-terminal-steps span {
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 12px;
+	font-weight: 700;
+	width: 22px;
+	height: 22px;
+	flex: 0 0 auto;
+}
+.launcher-path-row {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.launcher-path-input {
+	width: 100%;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	background: var(--bg-2);
+	color: var(--fg);
+	padding: 10px 11px;
+	font: inherit;
+}
+.launcher-path-input:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-color: var(--exx-focus);
+}

@@ -190,6 +190,54 @@ try {
 	const failedRows = loadUsage().filter((row) => row.agent === "room-failed");
 	assert(restarted?.rows === 1 && failedRows.length === 1 && failedRows[0].input === 900, `after a restart, only the paid failed call is a row, got ${restarted?.rows} imported: ${JSON.stringify(failedRows)}`);
 
+	// --- a gateway's model is the real model behind it, whatever it was saved as ---
+	// Rows as the ledger has always written them: the gateway's name before the
+	// dash, the saved model name after it. The dash is the label's own separator
+	// (splitProviderLabel in model-names.ts), spelled as its code point.
+	const label = (gateway: string, model: string) => `${gateway} \u2014 ${model}`;
+	const named = { agent: "room-names", persona: "business", authType: "api_key" as const, cacheRead: 0, cacheWrite: 0 };
+	// One gateway saves "Fast" for two models, a second gateway saves "Fast" for a
+	// third model and for one of the first gateway's, and a gateway saves a known
+	// family's model under a name of its own.
+	appendUsage({ ...named, ts: now - day, model: "kimi-k2.5", modelLabel: label("Work", "Fast"), provider: "gateway-work", input: 10, output: 1, cost: 0.4 });
+	appendUsage({ ...named, ts: now - day, model: "kimi-k2.5", modelLabel: label("Work", "Fast"), provider: "gateway-work", input: 20, output: 2, cost: 0.1 });
+	appendUsage({ ...named, ts: now - day, model: "glm-4.6", modelLabel: label("Work", "Fast"), provider: "gateway-work", input: 30, output: 3, cost: 0.07 });
+	appendUsage({ ...named, ts: now - day, model: "glm-4.6", modelLabel: label("Home", "Fast"), provider: "gateway-home", input: 40, output: 4, cost: 0.02 });
+	appendUsage({ ...named, ts: now - day, model: "deepseek.v3.2", modelLabel: label("Home", "Fast"), provider: "gateway-home", input: 50, output: 5, cost: 0.03 });
+	appendUsage({ ...named, ts: now - day, model: "claude-opus-4.8", modelLabel: label("Work", "Opus"), provider: "gateway-work", input: 1, output: 1, cost: 0.01 });
+	// A Bedrock gateway's region copies of one model are that model.
+	appendUsage({ ...named, ts: now - day, model: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0", modelLabel: label("Bedrock", "Sonnet EU"), provider: "gateway-bedrock", input: 1, output: 1, cost: 0.01 });
+	appendUsage({ ...named, ts: now - day, model: "anthropic.claude-sonnet-4-5-20250929-v1:0", modelLabel: label("Bedrock", "anthropic.claude-sonnet-4-5-20250929-v1:0"), provider: "gateway-bedrock", input: 1, output: 1, cost: 0.01 });
+	appendUsage({ ...named, ts: now - day, model: "anthropic.claude-opus-4-6-v1", modelLabel: label("Bedrock", "Claude Opus 4.6"), provider: "gateway-bedrock", input: 1, output: 1, cost: 0.01 });
+	appendUsage({ ...named, ts: now - day, model: "au.anthropic.claude-opus-4-6-v1", modelLabel: label("Bedrock", "Opus AU"), provider: "gateway-bedrock", input: 1, output: 1, cost: 0.01 });
+	appendUsage({ ...named, ts: now - day, model: "claude-opus-4-6", provider: "anthropic", input: 1, output: 1, cost: 0.01 });
+	// A known family through two providers, and a dated snapshot beside its undated name.
+	appendUsage({ ...named, ts: now - day, model: "claude-opus-4.8", modelLabel: label("GitHub Copilot", "Claude Opus 4.8"), provider: "github-copilot", authType: "oauth", input: 1, output: 1, cost: 0.01 });
+	appendUsage({ ...named, ts: now - day, model: "claude-sonnet-4-5-20250929", provider: "anthropic", input: 1, output: 1, cost: 0.01 });
+	appendUsage({ ...named, ts: now - day, model: "claude-sonnet-4-5", provider: "anthropic", input: 1, output: 1, cost: 0.01 });
+	const byName = await handlers.get("/api/usage")!({ query: {} });
+	const labels = JSON.stringify(byName.byModel.map((m: any) => m.label));
+	const modelNamed = (name: string) => byName.byModel.filter((m: any) => m.label === name);
+	const filterNamed = (name: string) => byName.models.filter((m: any) => m.label === name);
+	assert(modelNamed("Fast").length === 0 && filterNamed("Fast").length === 0 && modelNamed("Opus").length === 0, `no model reads as a name a gateway saved, got ${labels}`);
+	for (const [name, turns, tokens, cost, models] of [["Kimi K2.5", 2, 33, 0.5, ["kimi-k2.5"]], ["GLM 4.6", 2, 77, 0.09, ["glm-4.6"]], ["DeepSeek V3.2", 1, 55, 0.03, ["deepseek.v3.2"]]] as const) {
+		const row = modelNamed(name);
+		assert(row.length === 1 && row[0].turns === turns && row[0].tokens === tokens && Math.abs(row[0].cost - cost) < 1e-9, `${name} keeps its own turns, tokens and cost, got ${JSON.stringify(row)} among ${labels}`);
+		const filter = filterNamed(name);
+		assert(filter.length === 1 && filter[0].turns === turns, `the model filter offers ${name} once with its own turns, got ${JSON.stringify(byName.models)}`);
+		const scopedByName = await handlers.get("/api/usage")!({ query: { model: filter[0].id } });
+		assert(scopedByName.model === filter[0].id && scopedByName.totals.turns === turns && scopedByName.recent.every((r: any) => (models as readonly string[]).includes(r.model)), `filtering on ${name} shows only its own turns, got ${scopedByName.totals.turns}`);
+	}
+	const opus = modelNamed("Claude Opus 4.8");
+	assert(opus.length === 1 && opus[0].turns === 3, `a known family is one model through a key, a sign-in and a gateway, got ${JSON.stringify(opus)} among ${labels}`);
+	assert(modelNamed("Claude Sonnet 4.5 (29 Sep 2025)").length === 1 && modelNamed("Claude Sonnet 4.5").length === 1, `a dated snapshot reads with its date beside its undated name, got ${labels}`);
+	assert(modelNamed("Claude Sonnet 4.5 (29 Sep 2025)")[0].turns === 3 && modelNamed("Sonnet EU").length === 0, `a Bedrock gateway's region copies join the dated snapshot's row, got ${labels}`);
+	assert(modelNamed("Claude Opus 4.6").length === 1 && modelNamed("Claude Opus 4.6")[0].turns === 3, `Bedrock's Opus 4.6 ids join the Claude key's row, got ${labels}`);
+	// Recent turns name each turn's model as the Wallet's rows do.
+	const recentKimi = byName.recent.find((r: any) => r.model === "kimi-k2.5");
+	const recentSonnet = byName.recent.find((r: any) => r.model === "eu.anthropic.claude-sonnet-4-5-20250929-v1:0");
+	assert(recentKimi?.modelName === "Kimi K2.5" && recentSonnet?.modelName === "Claude Sonnet 4.5", `a recent turn carries its Wallet model name, got ${recentKimi?.modelName} and ${recentSonnet?.modelName}`);
+
 	console.log("usage ledger smoke passed");
 } finally {
 	fs.rmSync(tmp, { recursive: true, force: true });

@@ -140,6 +140,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/persistent-agents/:id/files/:name": "read",
 	"GET /api/persistent-agents/:id/tasks": "read",
 	"GET /api/persistent-agents/:id/threads/:threadId": "read",
+	"GET /api/persistent-agents/:id/threads/:threadId/model-options": "read",
 	"GET /api/persistent-agents/:id/schedules": "read",
 	"GET /api/persistent-agents/:id/maintenance-settings": "read",
 	// Numbers about this room's maintenance runs — no prompt, reply or memory

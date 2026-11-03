@@ -1,22 +1,17 @@
 // Smoke for the web-ui connection health reducer
 // (apps/web-ui/src/connection-health.ts).
 //
-// Each scenario is a script of things that happen to a socket, replayed twice:
-// once through a host that behaves the way this app used to, and once through
-// the host that ships. The "before" column is kept on purpose, because it IS
-// the reproduction: every scenario here is one where the old behaviour was
-// wrong, either by announcing trouble that did not exist or by staying silent
-// through trouble that did.
+// Each scenario is a script of things that happen to a socket, replayed
+// through the host that ships. Every scenario here is one where an older
+// host was wrong, either by announcing trouble that did not exist or by
+// staying silent through trouble that did:
 //
-// The two hosts differ in exactly the ways the fixes changed:
-//
-//   * The old host had no connect deadline, so a socket wedged in CONNECTING
-//     produced no event at all: no failure, no retry, no warning, forever.
-//   * The old rule treated reaching OPEN as recovery, so a server that
-//     accepted and dropped in the same breath restarted the grace window on
-//     every cycle and could flap all day in silence.
-//   * The old rule treated a deliberate swap as recovery too, so clicking
-//     between rooms against a dead server postponed the warning indefinitely.
+//   * A socket wedged in CONNECTING must still fail, through the connect
+//     deadline, and so warn.
+//   * Reaching OPEN is not recovery: a server that accepts and drops in the
+//     same breath must not restart the grace window on every cycle.
+//   * A deliberate swap is not recovery either: clicking between rooms
+//     against a dead server must not postpone the warning.
 //
 // Every warning time below is pinned to a literal, not recomputed from the
 // constants, so shortening a grace window fails the smoke instead of silently
@@ -28,17 +23,11 @@ import {
 	appendErrorLineOnce,
 	CONNECT_DEADLINE_MS,
 	createConnectionHealthState,
-	FIRST_CONNECT_GRACE_MS,
 	msUntilWarn,
 	OPEN_DWELL_MS,
 	reduceConnectionHealth,
-	RECONNECT_GRACE_MS,
 	type ConnectionHealthState,
 } from "../../web-ui/src/connection-health.js";
-
-// The constants the pinned expectations were computed from. If one of these
-// changes, every literal below has to be re-derived deliberately.
-const EXPECTED_CONSTANTS = { RECONNECT_GRACE_MS: 12_000, FIRST_CONNECT_GRACE_MS: 30_000, OPEN_DWELL_MS: 2_000, CONNECT_DEADLINE_MS: 10_000 };
 
 type SocketEvent =
 	/** The socket reached OPEN. */
@@ -64,43 +53,12 @@ interface Scenario {
 	expectWarnAt: number | null;
 	/** Whether the shipped host must be quiet again at the end. */
 	expectQuietAtEnd: boolean;
-	/** Exact ms at which the OLD host first warned, or null for never. */
-	oldWarnAt: number | null;
-	/** Whether the OLD host declared trouble at any point (the corner symptom). */
-	expectOldTrouble: boolean;
 }
 
 const TICK_MS = 250;
 
-/** The rule the corner indicator used: no socket open right now = say offline. */
-function oldRuleTrouble(open: boolean): boolean {
-	return !open;
-}
-
-// ── The old reducer, kept verbatim so the regressions stay reproducible ──────
-// Reaching OPEN cleared the run; a swap cleared it too. Nothing else differed.
-function reduceLegacy(state: ConnectionHealthState, action: { type: string; now: number }): ConnectionHealthState {
-	const grace = state.everOpen ? RECONNECT_GRACE_MS : FIRST_CONNECT_GRACE_MS;
-	const withWarn = (s: ConnectionHealthState, now: number): ConnectionHealthState => ({
-		...s,
-		warn: !s.open && s.unhealthySince !== null && s.failedAttempts >= 2 && now - s.unhealthySince >= (s.everOpen ? RECONNECT_GRACE_MS : FIRST_CONNECT_GRACE_MS),
-	});
-	void grace;
-	switch (action.type) {
-		case "opened":
-			return { open: true, everOpen: true, failedAttempts: 0, unhealthySince: null, warn: false };
-		case "swapped":
-			return { ...state, open: false, failedAttempts: 0, unhealthySince: null, warn: false };
-		case "attempt_failed":
-			return withWarn({ ...state, open: false, failedAttempts: state.failedAttempts + 1, unhealthySince: state.unhealthySince ?? action.now }, action.now);
-		default:
-			return withWarn(state, action.now);
-	}
-}
-
 interface Replay {
 	warnMs: number;
-	oldTroubleMs: number;
 	warnAtEnd: boolean;
 	firstWarnAt: number | null;
 	/** How many failed attempts the host ever registered. */
@@ -108,20 +66,15 @@ interface Replay {
 }
 
 /**
- * Replays a socket script through one of the two hosts.
- *
- * `modern` runs the shipped host: it arms a connect deadline for a wedged
- * socket, and only settles a run once an open connection has carried a frame
- * or outlasted the dwell. The legacy host does neither.
+ * Replays a socket script through the shipped host: it arms a connect deadline
+ * for a wedged socket, and only settles a run once an open connection has
+ * carried a frame or outlasted the dwell.
  */
-function replay(scenario: Scenario, modern: boolean): Replay {
-	const reduce = modern
-		? (s: ConnectionHealthState, a: { type: string; now: number }) => reduceConnectionHealth(s, a as any)
-		: reduceLegacy;
+function replay(scenario: Scenario): Replay {
+	const reduce = (s: ConnectionHealthState, a: { type: string; now: number }) => reduceConnectionHealth(s, a as any);
 	let state: ConnectionHealthState = createConnectionHealthState();
 	let open = false;
 	let warnMs = 0;
-	let oldTroubleMs = 0;
 	let attempts = 0;
 	let firstWarnAt: number | null = null;
 	// Host-side timers, modelled exactly as App.tsx arms them.
@@ -141,13 +94,11 @@ function replay(scenario: Scenario, modern: boolean): Replay {
 					deadlineDueAt = null;
 					open = true;
 					state = reduce(state, { type: "opened", now });
-					// Only the shipped host waits for proof; the old one counted
-					// the open itself as recovery, which its reducer already did.
-					dwellDueAt = modern ? now + OPEN_DWELL_MS : null;
+					dwellDueAt = now + OPEN_DWELL_MS;
 					break;
 				case "frame":
 					dwellDueAt = null;
-					if (modern) state = reduce(state, { type: "settled", now });
+					state = reduce(state, { type: "settled", now });
 					break;
 				case "closed":
 					dwellDueAt = null;
@@ -162,10 +113,10 @@ function replay(scenario: Scenario, modern: boolean): Replay {
 					state = reduce(state, { type: "swapped", now });
 					break;
 				case "wedged":
-					// Stuck mid-handshake. Only the shipped host will ever hear
-					// from this socket again, and only because it set a deadline.
+					// Stuck mid-handshake: only the deadline will ever hear from
+					// this socket again.
 					open = false;
-					deadlineDueAt = modern ? now + CONNECT_DEADLINE_MS : null;
+					deadlineDueAt = now + CONNECT_DEADLINE_MS;
 					break;
 			}
 		}
@@ -182,9 +133,8 @@ function replay(scenario: Scenario, modern: boolean): Replay {
 			warnMs += TICK_MS;
 			if (firstWarnAt === null) firstWarnAt = now;
 		}
-		if (oldRuleTrouble(open)) oldTroubleMs += TICK_MS;
 	}
-	return { warnMs, oldTroubleMs, warnAtEnd: state.warn, firstWarnAt, attempts };
+	return { warnMs, warnAtEnd: state.warn, firstWarnAt, attempts };
 }
 
 /** A connection that comes up and proves itself, the ordinary healthy case. */
@@ -206,8 +156,6 @@ const scenarios: Scenario[] = [
 		untilMs: 20_000,
 		expectWarnAt: null,
 		expectQuietAtEnd: true,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 	{
 		name: "boot: a slow engine still gets the long first-connect grace",
@@ -216,8 +164,6 @@ const scenarios: Scenario[] = [
 		untilMs: 30_000,
 		expectWarnAt: null,
 		expectQuietAtEnd: true,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 	{
 		name: "entering a room: the home socket is swapped for the room socket",
@@ -226,8 +172,6 @@ const scenarios: Scenario[] = [
 		untilMs: 20_000,
 		expectWarnAt: null,
 		expectQuietAtEnd: true,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 	{
 		name: "leaving a room and going back in, twice in a row",
@@ -242,8 +186,6 @@ const scenarios: Scenario[] = [
 		untilMs: 30_000,
 		expectWarnAt: null,
 		expectQuietAtEnd: true,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 	{
 		name: "a single blip the next attempt heals",
@@ -252,8 +194,6 @@ const scenarios: Scenario[] = [
 		untilMs: 30_000,
 		expectWarnAt: null,
 		expectQuietAtEnd: true,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 	{
 		name: "a drop whose retries all fail inside the grace window, then succeed",
@@ -262,8 +202,6 @@ const scenarios: Scenario[] = [
 		untilMs: 40_000,
 		expectWarnAt: null,
 		expectQuietAtEnd: true,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 
 	// ── Trouble the reducer must actually report ────────────────────────────
@@ -274,8 +212,6 @@ const scenarios: Scenario[] = [
 		untilMs: 60_000,
 		expectWarnAt: 17_000,
 		expectQuietAtEnd: false,
-		oldWarnAt: 17_000,
-		expectOldTrouble: true,
 	},
 	{
 		name: "a sustained failure that later heals clears the banner",
@@ -284,8 +220,6 @@ const scenarios: Scenario[] = [
 		untilMs: 60_000,
 		expectWarnAt: 17_000,
 		expectQuietAtEnd: true,
-		oldWarnAt: 17_000,
-		expectOldTrouble: true,
 	},
 	{
 		name: "the app never connects at all",
@@ -294,8 +228,6 @@ const scenarios: Scenario[] = [
 		untilMs: 70_000,
 		expectWarnAt: 30_000,
 		expectQuietAtEnd: false,
-		oldWarnAt: 30_000,
-		expectOldTrouble: true,
 	},
 
 	// ── The three the old host got wrong by staying silent ──────────────────
@@ -312,8 +244,6 @@ const scenarios: Scenario[] = [
 		untilMs: 60_000,
 		expectWarnAt: 40_000,
 		expectQuietAtEnd: false,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 	{
 		name: "a server that accepts and drops in the same breath, forty times over",
@@ -327,8 +257,6 @@ const scenarios: Scenario[] = [
 		untilMs: 60_000,
 		expectWarnAt: 12_250,
 		expectQuietAtEnd: false,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 	{
 		name: "clicking between rooms every four seconds while the engine is dead",
@@ -347,8 +275,6 @@ const scenarios: Scenario[] = [
 		untilMs: 60_000,
 		expectWarnAt: 17_000,
 		expectQuietAtEnd: false,
-		oldWarnAt: null,
-		expectOldTrouble: true,
 	},
 ];
 
@@ -358,26 +284,12 @@ function fail(message: string): void {
 	console.error(`FAIL  ${message}`);
 }
 
-for (const [name, want] of Object.entries(EXPECTED_CONSTANTS)) {
-	const got = { RECONNECT_GRACE_MS, FIRST_CONNECT_GRACE_MS, OPEN_DWELL_MS, CONNECT_DEADLINE_MS }[name as keyof typeof EXPECTED_CONSTANTS];
-	if (got !== want) fail(`${name} is ${got}, but every pinned expectation below was derived from ${want}. Re-derive them deliberately.`);
-}
-
-console.log("connection health: the old host vs the one that ships\n");
+console.log("connection health\n");
 for (const scenario of scenarios) {
-	const before = replay(scenario, false);
-	const after = replay(scenario, true);
+	const after = replay(scenario);
 	const label = (r: Replay) => (r.firstWarnAt === null ? "never warns" : `warns at ${(r.firstWarnAt / 1000).toFixed(2)}s`);
-	console.log(`  ${scenario.name}`);
-	console.log(`      before: ${(before.oldTroubleMs / 1000).toFixed(1)}s "offline", ${before.attempts} failed attempts, ${label(before)}`);
-	console.log(`      after:  ${label(after)}`);
+	console.log(`  ${scenario.name}: ${label(after)}`);
 
-	if (scenario.expectOldTrouble && before.oldTroubleMs === 0) {
-		fail(`${scenario.name}: the old corner rule declared no trouble here, so the scenario reproduces nothing`);
-	}
-	if (before.firstWarnAt !== scenario.oldWarnAt) {
-		fail(`${scenario.name}: the OLD host warned at ${before.firstWarnAt}, expected ${scenario.oldWarnAt}. ${scenario.story}`);
-	}
 	if (after.firstWarnAt !== scenario.expectWarnAt) {
 		fail(`${scenario.name}: warned at ${after.firstWarnAt}, expected ${scenario.expectWarnAt}. ${scenario.story}`);
 	}
@@ -389,13 +301,11 @@ for (const scenario of scenarios) {
 	}
 }
 
-// The wedged scenario is the one where the difference is not "warned later"
-// but "heard nothing at all": pin that the old host registered zero attempts.
+// A wedged socket produces no event itself: only the connect deadline turns
+// it into failed attempts.
 {
 	const wedged = scenarios.find((s) => s.name.includes("wedged"))!;
-	const before = replay(wedged, false);
-	const after = replay(wedged, true);
-	if (before.attempts !== 0) fail(`the old host registered ${before.attempts} attempts on a wedged socket; the point is that it registered none`);
+	const after = replay(wedged);
 	if (after.attempts < 2) fail(`the connect deadline produced ${after.attempts} failed attempts, want at least 2`);
 }
 

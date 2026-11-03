@@ -24,8 +24,8 @@ function runFilesLine(executeState: PersistentRoomEnabledSkillStatus["executeSta
 	if (executeState === "approved" && sharedServer) return one ? "Allowed. On a shared server, its file never runs." : `Allowed. On a shared server, its ${count} files never run.`;
 	if (executeState === "approved" && terminalOn === false) {
 		return one
-			? "Allowed. Its file runs only while this room's Bash is on; turn it on under Workspace."
-			: `Allowed. Its ${count} files run only while this room's Bash is on; turn it on under Workspace.`;
+			? "Allowed. Its file runs only while this room's Bash is on; turn it on under Folder."
+			: `Allowed. Its ${count} files run only while this room's Bash is on; turn it on under Folder.`;
 	}
 	// While the room's Bash is not known, say only what is true either way.
 	if (executeState === "approved" && terminalOn === null) return one ? "Allowed. Its file runs only while this room's Bash is on." : `Allowed. Its ${count} files run only while this room's Bash is on.`;

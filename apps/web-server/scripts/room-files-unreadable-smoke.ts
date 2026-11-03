@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -39,10 +40,10 @@ fs.writeFileSync(path.join(appDir, "openai-compatible-ai-profile.json"), JSON.st
 fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible" }, null, 2), { mode: 0o600 });
 
 const MESSAGE_LINE = "The room could not read its own files, so your message was not sent. Nothing was lost. Try again; if it repeats, restart exxperts.";
-const MESSAGE_BACK_LINE = "The room could not read its own files, so your message was not sent. Your message is back in the box. Try again; if it repeats, restart exxperts.";
+const MESSAGE_BACK_LINE = "The room could not read its own files, so your message was not sent. Try again; if it repeats, restart exxperts.";
 const REMEMBER_LINE = "The room could not read its own files, so Remember did not start. Nothing was saved. Generate again; if it repeats, restart exxperts.";
 const SETTINGS_LINE = "The room could not apply its new settings, so your message was not sent. Nothing was lost. Try again; if it repeats, restart exxperts.";
-const SETTINGS_BACK_LINE = "The room could not apply its new settings, so your message was not sent. Your message is back in the box. Try again; if it repeats, restart exxperts.";
+const SETTINGS_BACK_LINE = "The room could not apply its new settings, so your message was not sent. Try again; if it repeats, restart exxperts.";
 
 async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, { ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
@@ -50,14 +51,7 @@ async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ stat
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 15_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(100, 15_000);
 
 async function createRoom(displayName: string): Promise<string> {
 	const created = await api("/api/persistent-agents", { method: "POST", body: JSON.stringify({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
@@ -176,7 +170,7 @@ try {
 			await page.waitForLoadState("networkidle");
 			const dismiss = page.locator(".whats-new-close");
 			if (await dismiss.count()) await dismiss.click();
-			await page.locator(".persistent-agent-card").filter({ hasText: "Page Desk" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await page.locator(".persistent-agent-card").filter({ hasText: "Page Desk" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await page.locator('button[title="Send"], .stop-btn').first().waitFor({ timeout: 15_000 });
 			await page.waitForLoadState("networkidle");
 			await page.waitForTimeout(800);
@@ -215,7 +209,7 @@ try {
 					await waitUntil(async () => (await errorLines()).length > before, "the refusal is shown");
 				});
 				await page.waitForTimeout(300);
-				assert((await errorLines()).at(-1) === MESSAGE_BACK_LINE, `the line says the message is back in the box, got ${JSON.stringify((await errorLines()).at(-1))}`);
+				assert((await errorLines()).at(-1) === MESSAGE_BACK_LINE, `the line says the message was not sent, got ${JSON.stringify((await errorLines()).at(-1))}`);
 				assert((await composer.inputValue()) === "Plan the week.", `the message is back in the box, got ${JSON.stringify(await composer.inputValue())}`);
 				assert((await bubbles("Plan the week.")) === 0, "its bubble is gone, so sending it again makes one");
 				await composer.fill("");
@@ -249,7 +243,7 @@ try {
 				await send("Sum up the notes.");
 				await waitUntil(async () => (await errorLines()).length > before, "the refusal is shown");
 				await page.waitForTimeout(300);
-				assert((await errorLines()).at(-1) === SETTINGS_BACK_LINE, `the settings line says the message is back in the box, got ${JSON.stringify((await errorLines()).at(-1))}`);
+				assert((await errorLines()).at(-1) === SETTINGS_BACK_LINE, `the settings line says the message was not sent, got ${JSON.stringify((await errorLines()).at(-1))}`);
 				assert((await composer.inputValue()) === "Sum up the notes.", `the message is back in the box, got ${JSON.stringify(await composer.inputValue())}`);
 				assert((await bubbles("Sum up the notes.")) === 0, "its bubble is gone");
 				assert(!(await page.locator("body").innerText()).includes("EACCES"), "the raw error is never shown");

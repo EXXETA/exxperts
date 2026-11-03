@@ -84,25 +84,19 @@ try {
 	statuses = computeSkillStatuses(readPersistentRoomSkillSettings(agentId).enabledSkills, resolveBody);
 	assert(statuses[0].executeState === undefined, "without a digest resolver the status view stays as before");
 
-	// --- read_skill exposure: only through the resolver, path-free otherwise --
-	// Same cast the sibling skill-tool smoke uses: the tool's full execute
-	// signature carries harness-only parameters this smoke never exercises.
-	const readTool = (resolver?: (name: string) => { skillDir: string; files: string[] } | null) =>
-		createReadSkillTool({
-			agentId,
-			lookupSkill: (name) => (library.has(name) ? { manifest, body: "Run the bundled script.", description: "Convert documents" } : null),
-			...(resolver ? { resolveExecutionExposure: resolver } : {}),
-		}) as unknown as {
-			execute(toolCallId: string, params: { name: string }): Promise<{ content: Array<{ text: string }>; details?: { outcome?: string; executionExposed?: boolean } }>;
-		};
-	const bare = await readTool().execute("t1", { name: "convert-docs" });
-	assert(!bare.content[0].text.includes(skillDir), "without a resolver the body must never carry a path");
-	const closed = await readTool(() => null).execute("t2", { name: "convert-docs" });
-	assert(!closed.content[0].text.includes(skillDir), "a closed gate chain must serve the body path-free");
-	assert(closed.details?.executionExposed === undefined, "a closed gate chain must not flag exposure");
-	const open = await readTool((name) => (name === "convert-docs" ? { skillDir, files: ["scripts/convert.py"] } : null)).execute("t3", { name: "convert-docs" });
-	assert(open.content[0].text.includes(skillDir), "an open gate chain must name the skill dir");
-	assert(open.content[0].text.includes("scripts/convert.py"), "an open gate chain must list the bundled files");
+	// --- read_skill exposure flag ---------------------------------------------
+	// Whether the path reaches a real turn only with an approval, and leaves
+	// with it, is skills-execution-exposure-smoke's. Same cast the sibling
+	// skill-tool smoke uses: the tool's full execute signature carries
+	// harness-only parameters this smoke never exercises.
+	const readTool = createReadSkillTool({
+		agentId,
+		lookupSkill: (name) => (library.has(name) ? { manifest, body: "Run the bundled script.", description: "Convert documents" } : null),
+		resolveExecutionExposure: (name) => (name === "convert-docs" ? { skillDir, files: ["scripts/convert.py"] } : null),
+	}) as unknown as {
+		execute(toolCallId: string, params: { name: string }): Promise<{ details?: { executionExposed?: boolean } }>;
+	};
+	const open = await readTool.execute("t3", { name: "convert-docs" });
 	assert(open.details?.executionExposed === true, "exposure must be flagged in the details");
 
 	// --- Revoke: idempotent, skill stays enabled ------------------------------

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -62,23 +62,6 @@ function assertNoUnexpectedRuntimeSideEffects(tempHome: string, tempAgentsRoot: 
 	assert(!fs.existsSync(path.join(tempHome, ".exxeta")), `${label}: preflight loop must not create legacy ~/.exxeta state`);
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams, baseUrl: string): Promise<void> {
-	const deadline = Date.now() + 15_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(baseUrl: string, pathname: string): Promise<{ status: number; body: any; text: string }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`);
 	const text = await response.text();
@@ -129,6 +112,7 @@ const serverOutput: string[] = [];
 try {
 	const { listBackgroundRuns, readBackgroundRun } = await import("../src/background-runs.js");
 	const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
+	const { archivePersistentAgent } = await import("../src/persistent-agent-archive.js");
 	const {
 		resolvePersistentRoomSchedulePreflightLoopOptionsFromEnv,
 		runPersistentRoomSchedulePreflightScanOnce,
@@ -233,10 +217,16 @@ try {
 	const runningTurn = beginPersistentAgentTurn(activeTurnRoom, "preflight_loop_active_turn_0001", { turnId: "synthetic-preflight-loop-turn", connectionId: "synthetic-ws" });
 	rememberRoomState(activeTurnRoom);
 
+	// An archived room keeps its schedule store but is never scanned: no run, no row.
+	const archivedRoom = String(createPersistentAgentFromScaffoldInput({ displayName: "Preflight Loop Archived Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId);
+	addSchedule(archivedRoom, "archived due");
+	archivePersistentAgent(archivedRoom, { confirmation: `DELETE ${archivedRoom}` });
+
 	const beforeRunCount = countBackgroundRunFiles(tempHome);
 	const firstResult = await runPersistentRoomSchedulePreflightScanOnce({ now: () => scanNow, limitPerRoom: 25 });
 	assertNoPromptLeak(firstResult, promptText, "first aggregate scan result");
 	assert(firstResult.roomCount >= 6 && firstResult.scannedRoomCount >= 6, "run-once should scan created non-archived rooms");
+	assert(!firstResult.rooms.some((room) => room.roomId === archivedRoom), "run-once should leave the archived room out");
 	assert(firstResult.totals.created === 4, `run-once should create due queued/deferred/blocked records, got ${JSON.stringify(firstResult.totals)}`);
 	assert(firstResult.totals.queued === 1, "run-once should create one queued fresh-thread record");
 	assert(firstResult.totals.deferred === 2, "run-once should create locked and active-turn deferred records");
@@ -352,7 +342,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server, baseUrl);
+	await waitForServer(server, baseUrl, 15_000);
 	const startupRun = await waitForHistoryRun(baseUrl, startupRoom);
 	assert(startupRun?.source?.scheduleId === startupJob.id, "startup loop-created run should be observable through existing history API");
 	assert(startupRun?.source?.dueAt === startupJob.nextRunAt, "startup loop-created run should preserve dueAt in history API");

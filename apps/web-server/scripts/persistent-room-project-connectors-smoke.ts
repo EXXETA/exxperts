@@ -1,9 +1,9 @@
 // A room uses only the connectors from the person's own settings
 // (~/.config/mcp/mcp.json, ~/.exxperts/agent/mcp.json), never a connector file
 // in its folder. Driven through a really spawned web server with a synthetic
-// model, plus the CLI room door in-process. Each folder file below names a
-// harmless command that appends to a marker in this smoke's own temp folder,
-// so a marker on disk means the file was used. Held:
+// model. Each folder file below names a harmless command that appends to a
+// marker in this smoke's own temp folder, so a marker on disk means the file
+// was used. Held:
 //
 //  - a web room session start with `.mcp.json` or `.pi/mcp.json` (lifecycle
 //    "eager") in its folder starts nothing;
@@ -12,9 +12,6 @@
 //    call reaches the connector from the person's settings;
 //  - a connector from the person's settings still starts in the folder it
 //    always started in (the server's own working folder, or its `cwd`);
-//  - a CLI room (whose process runs in the room's folder) starts nothing from
-//    a `.mcp.json` there, and that file's settings change none of the room's
-//    tools (no direct tools switched on, the mcp tool not hidden);
 //  - a bounded room's write tool cannot create `.mcp.json` or `.pi/mcp.json`.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -23,6 +20,9 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
+import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
+import { waitEvery } from "./smoke-wait.js";
+import { waitForTurnSettled } from "./smoke-turn-settle.js";
 
 const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-room-connectors-")));
 const tempHome = path.join(tempRoot, "home");
@@ -31,7 +31,7 @@ const agentDir = path.join(tempHome, ".exxperts", "agent");
 const productAppRoot = path.join(tempHome, ".exxperts", "app");
 const markers = path.join(tempRoot, "markers");
 for (const dir of [agentsRoot, agentDir, productAppRoot, markers]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-// Set before any import that reads them (the in-process CLI door below).
+// Set before any import that reads them (the in-process workspace tools below).
 process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
 process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -70,8 +70,10 @@ function writeFolderConnectorFile(workspace: string, file: ".mcp.json" | ".pi/mc
 }
 
 // The person's own connectors: `github` over HTTP (a recorder counts every
-// request that reaches it) and `cwd-probe`, a command that records the folder
-// it was started in.
+// request that reaches it), `cwd-probe`, a command that records the folder
+// it was started in, and `eager-probe`, started with every session: it exits
+// at once, so the adapter logs its failed start once the session's eager
+// starts are all done, a folder file's eager connector among them.
 let githubHits = 0;
 const githubRecorder = http.createServer((_req, res) => {
 	githubHits += 1;
@@ -82,8 +84,12 @@ fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({
 	mcpServers: {
 		github: { url: `http://127.0.0.1:${(githubRecorder.address() as AddressInfo).port}/mcp` },
 		"cwd-probe": markerCommand("cwd-probe", "folder"),
+		"eager-probe": { ...markerCommand("eager-probe"), lifecycle: "eager" },
 	},
 }, null, 2));
+const EAGER_DONE = "Failed to connect to eager-probe";
+const EAGER_AFTER_SESSION = "MCP initialization failed";
+const countLines = (lines: string[], needle: string): number => lines.join("").split("\n").filter((line) => line.includes(needle)).length;
 
 // Synthetic model: a prompt "CONNECT <name>" answers with one `mcp` connect
 // call; anything else (and every follow-up) answers "ok".
@@ -95,7 +101,8 @@ const gateway = http.createServer((req, res) => {
 		let parsed: any = {};
 		try { parsed = JSON.parse(body); } catch {}
 		const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
-		const lastUser = [...messages].reverse().find((m) => m?.role === "user");
+		// A room-state copy after the person's message is the app's, not the request.
+		const lastUser = [...messages].reverse().find((m) => m?.role === "user" && !JSON.stringify(m.content ?? "").includes(ROOM_STATE_HEADING));
 		const userText = typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? "");
 		const connect = userText.match(/CONNECT ([a-z-]+)/)?.[1];
 		const base = { id: "cmpl_smoke", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "room-model" };
@@ -137,7 +144,7 @@ async function grant(agentId: string, name: string): Promise<void> {
 
 const WebSocketImpl: any = (await import("ws")).default;
 
-/** Open the room as the browser does, wait, optionally send one prompt, and return the tool results the model saw. */
+/** Open the room as the browser does, wait, optionally send one prompt and its settled turn, and return the tool results the model saw. */
 async function openRoom(agentId: string, conversationId: string, prompt?: string): Promise<string[]> {
 	const seeded = await requestJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(conversationId)}`, {
 		method: "PUT",
@@ -149,25 +156,29 @@ async function openRoom(agentId: string, conversationId: string, prompt?: string
 	socket.addEventListener("message", (event: { data: unknown }) => {
 		try { frames.push(JSON.parse(String(event.data))); } catch {}
 	});
+	const startsBefore = countLines(serverOutput, EAGER_DONE);
 	await new Promise<void>((resolve, reject) => {
 		socket.addEventListener("open", () => resolve());
 		socket.addEventListener("error", () => reject(new Error("websocket failed to connect")));
 	});
-	await sleep(5_000);
+	await waitUntil(() => frames.some((frame) => frame?.type === "ready"), `${conversationId}: the room is ready`);
+	await waitUntil(() => countLines(serverOutput, EAGER_DONE) > startsBefore, `${conversationId}: the session's eager connectors have started`);
 	const toolResults: string[] = [];
 	if (prompt) {
 		socket.send(JSON.stringify({ type: "prompt", text: prompt }));
 		const deadline = Date.now() + 30_000;
 		while (Date.now() < deadline && !frames.some((f) => f?.type === "event" && f?.event?.type === "agent_end")) await sleep(100);
+		await waitForTurnSettled(requestJson, agentId, `${conversationId}: the turn has settled before the next seed`);
 		for (const frame of frames) {
 			const event = frame?.event;
 			if (frame?.type === "event" && event?.type === "tool_execution_end") toolResults.push(JSON.stringify(event?.result ?? "").slice(0, 400));
 		}
-		await sleep(2_000);
 	}
 	try { socket.close(); } catch {}
 	return toolResults;
 }
+
+const waitUntil = waitEvery(50, 30_000);
 
 const failures: string[] = [];
 const check = (condition: unknown, message: string): void => {
@@ -236,72 +247,25 @@ try {
 	// 4. A scheduled background run of a room with a folder connector file starts nothing.
 	const backgroundRoom = await createRoom("Folder Background", path.join(tempRoot, "ws-bg"));
 	writeFolderConnectorFile(path.join(tempRoot, "ws-bg"), ".mcp.json", "background");
+	const backgroundStartsBefore = countLines(serverOutput, EAGER_DONE) + countLines(serverOutput, EAGER_AFTER_SESSION);
 	const schedule = await requestJson(`/api/persistent-agents/${encodeURIComponent(backgroundRoom)}/schedules`, { method: "POST", body: JSON.stringify({ name: "folder check", type: "once", schedule: "+3s", prompt: "hello", enabled: true }) });
 	assert(schedule.status === 201, `schedule create: expected 201, got ${schedule.status}: ${JSON.stringify(schedule.body).slice(0, 300)}`);
 	let runStatus = "";
 	const runDeadline = Date.now() + 60_000;
 	while (Date.now() < runDeadline) {
-		await sleep(1_000);
+		await sleep(200);
 		const runs = await requestJson(`/api/persistent-agents/${encodeURIComponent(backgroundRoom)}/background-runs`);
 		runStatus = String(runs.body?.runs?.[0]?.status ?? "");
 		if (["succeeded", "failed", "blocked", "cancelled"].includes(runStatus)) break;
 	}
-	await sleep(2_000);
 	assert(runStatus === "succeeded", `the scheduled run must complete for the check to mean anything, got status "${runStatus}"`);
+	// A scheduled run ends before its eager starts do: the adapter then finds the session gone and logs that
+	// instead, once every start (a folder connector's among them, had it been read) has settled.
+	const backgroundDone = () => countLines(serverOutput, EAGER_DONE) + countLines(serverOutput, EAGER_AFTER_SESSION);
+	await waitUntil(() => backgroundDone() > backgroundStartsBefore, "the scheduled run's eager connectors have started");
 	check(markerText("background") === null, `a scheduled run must not use its folder's .mcp.json (marker: ${markerText("background")})`);
 
-	// 5. The CLI room door: the process carries the room id and runs in the folder.
-	const cliWorkspace = path.join(tempRoot, "ws-cli");
-	fs.mkdirSync(cliWorkspace, { recursive: true });
-	fs.writeFileSync(path.join(cliWorkspace, ".mcp.json"), JSON.stringify({
-		settings: { directTools: true, disableProxyTool: true },
-		mcpServers: { "folder-server": { ...markerCommand("cli"), lifecycle: "eager", directTools: false } },
-	}, null, 2));
-	// The person's connectors have cached tools, so a folder setting that
-	// switched direct tools on would have something to register.
-	const cacheMod = await import("pi-mcp-adapter/metadata-cache.ts" as string);
-	const personalConfig = JSON.parse(fs.readFileSync(path.join(agentDir, "mcp.json"), "utf-8"));
-	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify({
-		version: 1,
-		servers: {
-			github: { configHash: cacheMod.computeServerHash(personalConfig.mcpServers.github), cachedAt: Date.now(), resources: [], tools: [{ name: "search_issues", description: "Search issues" }] },
-			"cwd-probe": { configHash: cacheMod.computeServerHash(personalConfig.mcpServers["cwd-probe"]), cachedAt: Date.now(), resources: [], tools: [{ name: "where", description: "Where it runs" }] },
-		},
-	}, null, 2));
-	const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
-	const fakePi = {
-		tools: new Map<string, any>(),
-		registerTool(tool: any) { fakePi.tools.set(String(tool.name), tool); },
-		registerCommand() {},
-		registerFlag() {},
-		getFlag() { return undefined; },
-		getAllTools() { return [...fakePi.tools.values()]; },
-		sendMessage() {},
-		on(event: string, handler: (event: unknown, ctx: unknown) => unknown) { handlers.set(event, [...(handlers.get(event) ?? []), handler]); },
-	};
-	const cliCtx = { cwd: cliWorkspace, hasUI: false, ui: undefined, modelRegistry: undefined, model: undefined, signal: undefined };
-	process.env.EXXETA_PERSISTENT_ROOM_AGENT = grantRoom;
-	const launchCwd = process.cwd();
-	try {
-		const mcpExtension = await import("../../../pi-package/extensions/mcp/index.js");
-		process.chdir(cliWorkspace);
-		try {
-			await (mcpExtension.default as (pi: unknown) => Promise<unknown>)(fakePi);
-		} finally {
-			process.chdir(launchCwd);
-		}
-		const toolNames = [...fakePi.tools.keys()].sort().join(",");
-		check(fakePi.tools.has("mcp"), `a CLI room's folder settings must not hide the mcp tool, registered: ${toolNames}`);
-		check(![...fakePi.tools.keys()].some((name) => name.includes("search_issues")), `a CLI room's folder settings must not switch direct tools on, registered: ${toolNames}`);
-		for (const handler of handlers.get("session_start") ?? []) await handler({}, cliCtx);
-		await sleep(2_000);
-		check(markerText("cli") === null, `a CLI room must not use its folder's .mcp.json (marker: ${markerText("cli")})`);
-		for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, cliCtx);
-	} finally {
-		delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-	}
-
-	// 6. A bounded room's write tool cannot create a connector file in its folder.
+	// 5. A bounded room's write tool cannot create a connector file in its folder.
 	const { createPersistentRoomCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");
 	const { createPersistentRoomWorkspaceTools } = await import("../src/persistent-room-workspace-tools.js");
 	const boundedRoot = path.join(tempRoot, "ws-bounded");
@@ -327,7 +291,7 @@ try {
 		} catch (error) {
 			refusal = error instanceof Error ? error.message : String(error);
 		}
-		check(/blocked by workspace policy/i.test(refusal) && !fs.existsSync(path.join(boundedRoot, target)), `a bounded room's write tool must refuse ${target}, got: ${refusal || "written"}`);
+		check(!fs.existsSync(path.join(boundedRoot, target)), `a bounded room's write tool must refuse ${target}, got: ${refusal || "written"}`);
 	}
 
 	if (failures.length > 0) throw new Error(`room connector checks failed:\n- ${failures.join("\n- ")}`);

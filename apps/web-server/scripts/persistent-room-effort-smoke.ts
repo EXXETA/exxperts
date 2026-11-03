@@ -5,9 +5,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 
-// Per-room reasoning effort, end to end against a real spawned server and a
+// Reasoning effort per conversation, with the room's default for new ones
+// (Room settings), end to end against a real spawned server and a
 // synthetic OpenAI-compatible gateway that records the reasoning_effort each
 // turn actually asked the provider for. Proves:
 //   1. capability exposure: the ready frame reports the level in force plus
@@ -16,7 +17,7 @@ import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_
 //   2. a room that never chose keeps the machine-wide default thinking level
 //      and has NO settings record written on its behalf, at bind or on a turn;
 //   3. a prompt frame carrying `effort` applies that level to the turn and
-//      makes it the room's sticky choice;
+//      makes it the conversation's sticky choice;
 //   4. a prompt frame WITHOUT `effort` inherits the sticky level;
 //   5. the sticky level survives leaving and re-entering the room;
 //   6. an unknown value is ignored and a known-but-unreachable value clamps
@@ -35,7 +36,11 @@ import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_
 //      reported on the rung that replaced it, never on the bottom of the dial;
 //  12. a rung whose label differs from its token is selected and stored by
 //      TOKEN, never by the label the user read;
-//  13. through all of it, the CLI-wide defaultThinkingLevel in the runtime
+//  13. a pick changes only its conversation, an explicit pick is always
+//      stored, Room settings' default reaches only new conversations, an
+//      older conversation keeps the default at its next bind, and scheduled
+//      answers follow the same rule;
+//  14. through all of it, the CLI-wide defaultThinkingLevel in the runtime
 //      settings file is never touched.
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-room-effort-home-"));
@@ -98,23 +103,6 @@ const gateway = http.createServer((req, res) => {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, init);
 	const text = await response.text();
@@ -150,10 +138,38 @@ async function putThread(agentId: string, threadId: string, modelId: string, ite
 	assert(response.status === 200, `thread PUT should return 200, got ${response.status}: ${JSON.stringify(response.body)}`);
 }
 
-function readStickyLevel(agentId: string): string | null {
-	const file = path.join(tempHome, ".exxperts", "app", "personalized-agents", agentId, "runtime", "effort-settings.json");
+// The level a conversation keeps as its own.
+function readStickyLevel(agentId: string, conversationId: string): string | null {
+	return readLevelFile(path.join(tempHome, ".exxperts", "app", "personalized-agents", agentId, "runtime", "effort", `${conversationId}.json`));
+}
+
+// The room's default for new conversations: the effort last picked in the room, or the models route's `effort`.
+function readRoomDefaultLevel(agentId: string): string | null {
+	return readLevelFile(path.join(tempHome, ".exxperts", "app", "personalized-agents", agentId, "runtime", "effort-settings.json"));
+}
+
+function readLevelFile(file: string): string | null {
 	if (!fs.existsSync(file)) return null;
 	return String(JSON.parse(fs.readFileSync(file, "utf-8")).level ?? "");
+}
+
+async function setRoomDefaultEffort(agentId: string, level: string): Promise<{ status: number; body: any }> {
+	return requestJson(`/api/persistent-agents/${agentId}/models`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ effort: level }) });
+}
+
+// A closed socket leaves the room free for the next connection.
+async function closeAndWait(harness: WsHarness, agentId: string): Promise<void> {
+	harness.close();
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
+		// The room list's row carries the lock; the status route does not.
+		const listed = (await requestJson("/api/persistent-agents")).body;
+		const row = (Array.isArray(listed) ? listed : listed?.agents ?? []).find((room: any) => room.id === agentId);
+		assert(row, `the room list holds ${agentId}`);
+		if (!row.activeLock) return;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	throw new Error("the room lock was never released");
 }
 
 function readCliDefaultThinkingLevel(): unknown {
@@ -363,7 +379,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20_000);
 
 	const roomId = await createRoom("Effort Room");
 	const conversationId = `effortconv_${Date.now().toString(36)}`;
@@ -381,37 +397,37 @@ try {
 	// The machine-wide default is what an unchosen room reports, because it is
 	// what the session resolved for itself and nothing overrode it.
 	assert(readyEffort.level === CLI_DEFAULT_THINKING_LEVEL, `a room that never chose should report the session's own level, got ${JSON.stringify(readyEffort.level)}`);
-	assert(readStickyLevel(roomId) === null, "binding a room must not write a settings record on its behalf");
+	assert(readStickyLevel(roomId, conversationId) === null && readRoomDefaultLevel(roomId) === null, "binding a room must not write a settings record on its behalf");
 	pass("ready exposes the locked model's supported levels and the level actually in force");
 
 	// --- 2. A room that never chose keeps the machine-wide default -----------
 	const defaultTurn = await runTurn(ws, {});
 	assert(defaultTurn.reasoningEffort === CLI_DEFAULT_THINKING_LEVEL, `an unchosen room should keep the machine default, got ${JSON.stringify(defaultTurn.reasoningEffort)}`);
-	assert(readStickyLevel(roomId) === null, "a turn in an unchosen room must not invent a settings record");
-	pass("a room that never chose keeps the machine default and writes no record");
+	assert(readStickyLevel(roomId, conversationId) === CLI_DEFAULT_THINKING_LEVEL && readRoomDefaultLevel(roomId) === null, `the conversation keeps the level it ran at and the room's default stays unwritten, got ${JSON.stringify(readStickyLevel(roomId, conversationId))} ${JSON.stringify(readRoomDefaultLevel(roomId))}`);
+	pass("a room that never chose keeps the machine default; the conversation keeps it as its own, and no room record is written");
 
 	// --- 3. A prompt carrying `effort` applies AND sticks --------------------
 	const lowTurn = await runTurn(ws, { effort: "low" });
 	assert(lowTurn.reasoningEffort === "low", `the chosen level should reach the provider, got ${JSON.stringify(lowTurn.reasoningEffort)}`);
-	assert(readStickyLevel(roomId) === "low", `the choice should persist per room, got ${JSON.stringify(readStickyLevel(roomId))}`);
-	pass("a prompt frame with effort applies the level and persists it per room");
+	assert(readStickyLevel(roomId, conversationId) === "low", `the choice should persist per room, got ${JSON.stringify(readStickyLevel(roomId, conversationId))}`);
+	pass("a prompt frame with effort applies the level and persists it for the conversation");
 
 	// --- 4. A prompt WITHOUT `effort` inherits the sticky level --------------
 	const inheritedTurn = await runTurn(ws, {});
 	assert(inheritedTurn.reasoningEffort === "low", `a frame without effort should inherit the sticky level, got ${JSON.stringify(inheritedTurn.reasoningEffort)}`);
-	assert(readStickyLevel(roomId) === "low", `an inheriting turn must not rewrite the stored choice, got ${JSON.stringify(readStickyLevel(roomId))}`);
-	pass("a prompt frame without effort inherits the room's sticky level and rewrites nothing");
+	assert(readStickyLevel(roomId, conversationId) === "low", `an inheriting turn must not rewrite the stored choice, got ${JSON.stringify(readStickyLevel(roomId, conversationId))}`);
+	pass("a prompt frame without effort inherits the conversation's sticky level and rewrites nothing");
 
 	// --- 5. Unknown and unreachable values ----------------------------------
 	const nonsenseTurn = await runTurn(ws, { effort: "turbo" });
 	assert(nonsenseTurn.reasoningEffort === "low", `an unknown level should be ignored, got ${JSON.stringify(nonsenseTurn.reasoningEffort)}`);
-	assert(readStickyLevel(roomId) === "low", `an unknown level must not overwrite the sticky choice, got ${JSON.stringify(readStickyLevel(roomId))}`);
+	assert(readStickyLevel(roomId, conversationId) === "low", `an unknown level must not overwrite the sticky choice, got ${JSON.stringify(readStickyLevel(roomId, conversationId))}`);
 	// xhigh is real vocabulary this model cannot reach: it clamps to the
 	// highest level the model does have rather than failing the turn, and the
 	// RAW choice stays on disk so a model that can reach it later still will.
 	const clampedTurn = await runTurn(ws, { effort: "xhigh" });
 	assert(clampedTurn.reasoningEffort === "high", `an unreachable level should clamp to the model's ceiling, got ${JSON.stringify(clampedTurn.reasoningEffort)}`);
-	assert(readStickyLevel(roomId) === "xhigh", `the stored preference must stay raw, not the clamp, got ${JSON.stringify(readStickyLevel(roomId))}`);
+	assert(readStickyLevel(roomId, conversationId) === "xhigh", `the stored preference must stay raw, not the clamp, got ${JSON.stringify(readStickyLevel(roomId, conversationId))}`);
 	pass("an unknown value is ignored, an unreachable one clamps for the turn, and the raw choice survives");
 
 	// --- 5b. A client that echoes the clamped level cannot destroy the raw ---
@@ -421,7 +437,7 @@ try {
 	// permanently.
 	const echoedClampTurn = await runTurn(ws, { effort: "high" });
 	assert(echoedClampTurn.reasoningEffort === "high", `the echoed level should still drive the turn, got ${JSON.stringify(echoedClampTurn.reasoningEffort)}`);
-	assert(readStickyLevel(roomId) === "xhigh", `echoing the clamped level must not replace the raw preference, got ${JSON.stringify(readStickyLevel(roomId))}`);
+	assert(readStickyLevel(roomId, conversationId) === "xhigh", `echoing the clamped level must not replace the raw preference, got ${JSON.stringify(readStickyLevel(roomId, conversationId))}`);
 	pass("echoing back the clamped level leaves the raw stored preference intact");
 
 	// --- 6. The standalone effort frame, chosen between turns ----------------
@@ -429,10 +445,11 @@ try {
 	ws.send({ type: "effort", level: "minimal" });
 	const echoIndex = await ws.waitFor((frame) => frame.type === "effort", "effort echo", effortFrameIndex);
 	assert(ws.frames[echoIndex].level === "minimal", `the echo should report what took hold, got ${JSON.stringify(ws.frames[echoIndex].level)}`);
-	assert(readStickyLevel(roomId) === "minimal", `the effort frame should persist the choice, got ${JSON.stringify(readStickyLevel(roomId))}`);
+	assert(readStickyLevel(roomId, conversationId) === "minimal", `the effort frame should persist the choice, got ${JSON.stringify(readStickyLevel(roomId, conversationId))}`);
+	assert(readRoomDefaultLevel(roomId) === null, `a level without the explicit mark never writes the room's default, got ${JSON.stringify(readRoomDefaultLevel(roomId))}`);
 	const minimalTurn = await runTurn(ws, {});
 	assert(minimalTurn.reasoningEffort === "minimal", `the next turn should use the frame's level, got ${JSON.stringify(minimalTurn.reasoningEffort)}`);
-	pass("the standalone effort frame persists the choice and the next turn uses it");
+	pass("the standalone effort frame persists the choice for this conversation and the next turn uses it");
 
 	// --- 7. The choice survives leaving and re-entering the room -------------
 	ws.close();
@@ -458,13 +475,13 @@ try {
 	assert(plainEffort?.level === "off", `a non-reasoning model should report off as the level, got ${JSON.stringify(plainEffort?.level)}`);
 	const plainTurn = await runTurn(wsPlain, { effort: "high" });
 	assert(plainTurn.reasoningEffort === null, `a non-reasoning model must never be asked to reason, got ${JSON.stringify(plainTurn.reasoningEffort)}`);
-	assert(readStickyLevel(plainRoomId) === "high", `the raw choice should survive on a model that cannot reach it, got ${JSON.stringify(readStickyLevel(plainRoomId))}`);
+	assert(readStickyLevel(plainRoomId, plainConversationId) === "high", `the raw choice should survive on a model that cannot reach it, got ${JSON.stringify(readStickyLevel(plainRoomId, plainConversationId))}`);
 	// The sharpest version of the raw-preference rule: this room reports "off"
 	// on every frame because that is all its model can do, and a following turn
 	// must not turn that display value into the stored preference.
 	const plainFollowUp = await runTurn(wsPlain, {});
 	assert(plainFollowUp.reasoningEffort === null, `the follow-up must still ask for no reasoning, got ${JSON.stringify(plainFollowUp.reasoningEffort)}`);
-	assert(readStickyLevel(plainRoomId) === "high", `a follow-up turn must not flatten the stored choice to the model's clamp, got ${JSON.stringify(readStickyLevel(plainRoomId))}`);
+	assert(readStickyLevel(plainRoomId, plainConversationId) === "high", `a follow-up turn must not flatten the stored choice to the model's clamp, got ${JSON.stringify(readStickyLevel(plainRoomId, plainConversationId))}`);
 	wsPlain.close();
 	wsPlain = null;
 	pass("a non-reasoning model reports off alone, is never asked to reason, and keeps the room's raw choice");
@@ -498,7 +515,7 @@ try {
 	wsFolding.send({ type: "effort", level: "max" });
 	const foldingEchoIndex = await wsFolding.waitFor((frame) => frame.type === "effort", "effort echo in the folding room", foldingEffortIndex);
 	assert(wsFolding.frames[foldingEchoIndex].level === "max", `the echo should speak the internal token, got ${JSON.stringify(wsFolding.frames[foldingEchoIndex].level)}`);
-	assert(readStickyLevel(foldingRoomId) === "max", `the raw token should be what is stored, got ${JSON.stringify(readStickyLevel(foldingRoomId))}`);
+	assert(readStickyLevel(foldingRoomId, foldingConversationId) === "max", `the raw token should be what is stored, got ${JSON.stringify(readStickyLevel(foldingRoomId, foldingConversationId))}`);
 	const maxTurn = await runTurn(wsFolding, {});
 	assert(maxTurn.reasoningEffort === "max", `a turn at the top tier should reach the provider as max, got ${JSON.stringify(maxTurn.reasoningEffort)}`);
 	// A folded-away token still selects the rung that replaced it, and does not
@@ -553,7 +570,7 @@ try {
 		wsImplicit.frames[implicitReady].effort?.level === "low",
 		`a stored folded token should read back as the low rung, got ${JSON.stringify(wsImplicit.frames[implicitReady].effort)}`,
 	);
-	assert(readStickyLevel(implicitRoomId) === "minimal", `storage should still hold the raw token, got ${JSON.stringify(readStickyLevel(implicitRoomId))}`);
+	assert(readStickyLevel(implicitRoomId, implicitConversationId) === "minimal", `storage should still hold the raw token, got ${JSON.stringify(readStickyLevel(implicitRoomId, implicitConversationId))}`);
 	wsImplicit.close();
 	wsImplicit = null;
 	pass("an implicitly folded level shows the rung that replaced it, and storage stays raw");
@@ -572,14 +589,158 @@ try {
 	wsRenamed.send({ type: "effort", level: topRung.level });
 	const renamedEcho = await wsRenamed.waitFor((frame) => frame.type === "effort", "echo in the renamed-top room", renamedIndex);
 	assert(wsRenamed.frames[renamedEcho].level === "xhigh", `the echo should speak the token, got ${JSON.stringify(wsRenamed.frames[renamedEcho].level)}`);
-	assert(readStickyLevel(renamedRoomId) === "xhigh", `storage should hold the token, not the label, got ${JSON.stringify(readStickyLevel(renamedRoomId))}`);
+	assert(readStickyLevel(renamedRoomId, renamedConversationId) === "xhigh", `storage should hold the token, not the label, got ${JSON.stringify(readStickyLevel(renamedRoomId, renamedConversationId))}`);
 	const renamedTurn = await runTurn(wsRenamed, {});
 	assert(renamedTurn.reasoningEffort === "max", `the provider should receive the label's effort, got ${JSON.stringify(renamedTurn.reasoningEffort)}`);
 	wsRenamed.close();
 	wsRenamed = null;
 	pass("a rung whose label differs from its token is selected and stored by token");
 
-	// --- 14. The CLI-wide default was never touched --------------------------
+	// --- 14. Effort per conversation -----------------------------------------
+	const pcRoomId = await createRoom("Per Conversation Room");
+	const refusedDefault = await setRoomDefaultEffort(pcRoomId, "turbo");
+	assert(refusedDefault.status === 400 && readRoomDefaultLevel(pcRoomId) === null, `an unknown default level is refused, got ${refusedDefault.status} ${JSON.stringify(refusedDefault.body)}`);
+	const setHigh = await setRoomDefaultEffort(pcRoomId, "high");
+	assert(setHigh.status === 200 && setHigh.body?.effort === "high" && readRoomDefaultLevel(pcRoomId) === "high", `Room settings sets the default, got ${setHigh.status} ${JSON.stringify(setHigh.body?.effort)}`);
+	const readBack = await requestJson(`/api/persistent-agents/${pcRoomId}/models`);
+	assert(readBack.body?.effort === "high", `the models read answers the default effort, got ${JSON.stringify(readBack.body?.effort)}`);
+	const convA = `pcconva_${Date.now().toString(36)}`;
+	await putThread(pcRoomId, convA, "thinker-model", []);
+	let wsA = await WsHarness.connect(pcRoomId, convA, "thinker-model");
+	const readyA = await wsA.waitFor((frame) => frame.type === "ready", "ready frame in conversation A");
+	assert(wsA.frames[readyA].effort?.level === "high" && readStickyLevel(pcRoomId, convA) === null, `an empty conversation follows the room's default and keeps nothing yet, got ${JSON.stringify(wsA.frames[readyA].effort?.level)} ${JSON.stringify(readStickyLevel(pcRoomId, convA))}`);
+	const firstA = await runTurn(wsA, {});
+	assert(firstA.reasoningEffort === "high" && readStickyLevel(pcRoomId, convA) === "high", `the first message keeps the room's default as the conversation's own, got ${JSON.stringify(firstA.reasoningEffort)} ${JSON.stringify(readStickyLevel(pcRoomId, convA))}`);
+	pass("an empty conversation follows the room's default and keeps it as its own at the first message");
+
+	const effortEcho = async (harness: WsHarness, frame: Frame): Promise<Frame> => {
+		const from = harness.frames.length;
+		harness.send({ type: "effort", ...frame });
+		return harness.frames[await harness.waitFor((row) => row.type === "effort", `effort echo for ${JSON.stringify(frame)}`, from)];
+	};
+	await effortEcho(wsA, { level: "xhigh", explicit: true });
+	assert(readStickyLevel(pcRoomId, convA) === "xhigh" && readRoomDefaultLevel(pcRoomId) === "xhigh", `an explicit pick is stored raw, for this conversation and as the room's default, got ${JSON.stringify(readStickyLevel(pcRoomId, convA))} ${JSON.stringify(readRoomDefaultLevel(pcRoomId))}`);
+	await effortEcho(wsA, { level: "high" });
+	assert(readStickyLevel(pcRoomId, convA) === "xhigh" && readRoomDefaultLevel(pcRoomId) === "xhigh", `a frame without the flag equal to the current clamp is not stored, as today, got ${JSON.stringify(readStickyLevel(pcRoomId, convA))} ${JSON.stringify(readRoomDefaultLevel(pcRoomId))}`);
+	await effortEcho(wsA, { level: "medium" });
+	assert(readStickyLevel(pcRoomId, convA) === "medium", `a frame without the flag that differs is stored, as today, got ${JSON.stringify(readStickyLevel(pcRoomId, convA))}`);
+	assert(readRoomDefaultLevel(pcRoomId) === "xhigh", `a level without the explicit mark leaves the room's default, got ${JSON.stringify(readRoomDefaultLevel(pcRoomId))}`);
+	await effortEcho(wsA, { level: "xhigh", explicit: true });
+	const explicitClamp = await effortEcho(wsA, { level: "high", explicit: true });
+	assert(explicitClamp.level === "high" && readStickyLevel(pcRoomId, convA) === "high", `an explicit level equal to the current clamp is stored, got ${JSON.stringify(explicitClamp.level)} ${JSON.stringify(readStickyLevel(pcRoomId, convA))}`);
+	await effortEcho(wsA, { level: "low", explicit: true });
+	assert(readStickyLevel(pcRoomId, convA) === "low" && readRoomDefaultLevel(pcRoomId) === "low", `an explicit pick changes this conversation and the room's default, got ${JSON.stringify(readStickyLevel(pcRoomId, convA))} ${JSON.stringify(readRoomDefaultLevel(pcRoomId))}`);
+	await closeAndWait(wsA, pcRoomId);
+	pass("an explicit pick is always stored and sets the room's default; a frame without the flag keeps today's echo guard and leaves the default");
+
+	const convB = `pcconvb_${Date.now().toString(36)}`;
+	await putThread(pcRoomId, convB, "thinker-model", []);
+	let wsB = await WsHarness.connect(pcRoomId, convB, "thinker-model");
+	const readyNewB = await wsB.waitFor((frame) => frame.type === "ready", "ready frame in the new conversation B");
+	assert(wsB.frames[readyNewB].effort?.level === "low", `a new conversation starts at the effort last picked in this room, got ${JSON.stringify(wsB.frames[readyNewB].effort?.level)}`);
+	await closeAndWait(wsB, pcRoomId);
+	pass("a new conversation starts at the effort last picked in the room");
+	await setRoomDefaultEffort(pcRoomId, "medium");
+	wsB = await WsHarness.connect(pcRoomId, convB, "thinker-model");
+	const readyB = await wsB.waitFor((frame) => frame.type === "ready", "ready frame in conversation B");
+	assert(wsB.frames[readyB].effort?.level === "medium", `a new conversation starts on the room's current default, got ${JSON.stringify(wsB.frames[readyB].effort?.level)}`);
+	await closeAndWait(wsB, pcRoomId);
+	await setRoomDefaultEffort(pcRoomId, "minimal");
+	wsB = await WsHarness.connect(pcRoomId, convB, "thinker-model");
+	await wsB.waitFor((frame) => frame.type === "ready", "ready frame in conversation B again");
+	const firstB = await runTurn(wsB, {});
+	assert(firstB.reasoningEffort === "minimal" && readStickyLevel(pcRoomId, convB) === "minimal", `an empty conversation follows a default changed before its first message, got ${JSON.stringify(firstB.reasoningEffort)} ${JSON.stringify(readStickyLevel(pcRoomId, convB))}`);
+	await closeAndWait(wsB, pcRoomId);
+	await setRoomDefaultEffort(pcRoomId, "high");
+	// The PUT made B the open conversation; A is opened again the same way.
+	await putThread(pcRoomId, convA, "thinker-model", (await requestJson(`/api/persistent-agents/${pcRoomId}/threads/${convA}`)).body?.thread?.items ?? []);
+	wsA = await WsHarness.connect(pcRoomId, convA, "thinker-model");
+	const readyA2 = await wsA.waitFor((frame) => frame.type === "ready", "ready frame in conversation A again");
+	const againA = await runTurn(wsA, {});
+	assert(wsA.frames[readyA2].effort?.level === "low" && againA.reasoningEffort === "low", `a conversation with its own level keeps it when the default changes, got ${JSON.stringify(wsA.frames[readyA2].effort?.level)} ${JSON.stringify(againA.reasoningEffort)}`);
+	pass("Room settings' default reaches only new conversations; one with its own level keeps it");
+	await effortEcho(wsA, { level: "medium", explicit: true });
+	assert(readRoomDefaultLevel(pcRoomId) === "medium" && readStickyLevel(pcRoomId, convB) === "minimal", `a pick in A sets the default and leaves B's own, got ${JSON.stringify(readRoomDefaultLevel(pcRoomId))} ${JSON.stringify(readStickyLevel(pcRoomId, convB))}`);
+	await closeAndWait(wsA, pcRoomId);
+	await putThread(pcRoomId, convB, "thinker-model", (await requestJson(`/api/persistent-agents/${pcRoomId}/threads/${convB}`)).body?.thread?.items ?? []);
+	wsB = await WsHarness.connect(pcRoomId, convB, "thinker-model");
+	const readyB2 = await wsB.waitFor((frame) => frame.type === "ready", "ready frame in conversation B after a pick in A");
+	const againB = await runTurn(wsB, {});
+	assert(wsB.frames[readyB2].effort?.level === "minimal" && againB.reasoningEffort === "minimal", `another existing conversation keeps its own level after a pick in A, got ${JSON.stringify(wsB.frames[readyB2].effort?.level)} ${JSON.stringify(againB.reasoningEffort)}`);
+	await closeAndWait(wsB, pcRoomId);
+	// The PUT made B the open conversation again; A is opened the same way.
+	await putThread(pcRoomId, convA, "thinker-model", (await requestJson(`/api/persistent-agents/${pcRoomId}/threads/${convA}`)).body?.thread?.items ?? []);
+	pass("an explicit pick in one conversation leaves another existing conversation's own level");
+
+	// A conversation from before levels were kept per conversation: messages, no file.
+	fs.rmSync(path.join(tempHome, ".exxperts", "app", "personalized-agents", pcRoomId, "runtime", "effort", `${convA}.json`));
+	await setRoomDefaultEffort(pcRoomId, "minimal");
+	wsA = await WsHarness.connect(pcRoomId, convA, "thinker-model");
+	await wsA.waitFor((frame) => frame.type === "ready", "ready frame in the older conversation");
+	assert(readStickyLevel(pcRoomId, convA) === "minimal", `an older conversation keeps the room's current default at its next bind, got ${JSON.stringify(readStickyLevel(pcRoomId, convA))}`);
+	await closeAndWait(wsA, pcRoomId);
+	await setRoomDefaultEffort(pcRoomId, "high");
+	wsA = await WsHarness.connect(pcRoomId, convA, "thinker-model");
+	const readyOld = await wsA.waitFor((frame) => frame.type === "ready", "ready frame in the older conversation again");
+	assert(wsA.frames[readyOld].effort?.level === "minimal", `after that bind the default no longer reaches it, got ${JSON.stringify(wsA.frames[readyOld].effort?.level)}`);
+	await closeAndWait(wsA, pcRoomId);
+	pass("a conversation from before gets the room's current choice at its next bind, and keeps it");
+
+	// A conversation started while the room had no default keeps the level it ran at once a default is set.
+	const noDefaultRoomId = await createRoom("No Default Room");
+	const convC = `pcconvc_${Date.now().toString(36)}`;
+	await putThread(noDefaultRoomId, convC, "thinker-model", []);
+	let wsC = await WsHarness.connect(noDefaultRoomId, convC, "thinker-model");
+	await wsC.waitFor((frame) => frame.type === "ready", "ready frame in conversation C");
+	const firstC = await runTurn(wsC, {});
+	assert(firstC.reasoningEffort === CLI_DEFAULT_THINKING_LEVEL, `with no default anywhere the first message runs at the machine's level, got ${JSON.stringify(firstC.reasoningEffort)}`);
+	await closeAndWait(wsC, noDefaultRoomId);
+	await setRoomDefaultEffort(noDefaultRoomId, "low");
+	wsC = await WsHarness.connect(noDefaultRoomId, convC, "thinker-model");
+	const readyC = await wsC.waitFor((frame) => frame.type === "ready", "ready frame in conversation C again");
+	const againC = await runTurn(wsC, {});
+	assert(wsC.frames[readyC].effort?.level === CLI_DEFAULT_THINKING_LEVEL && againC.reasoningEffort === CLI_DEFAULT_THINKING_LEVEL && readStickyLevel(noDefaultRoomId, convC) === CLI_DEFAULT_THINKING_LEVEL, `a default set later does not reach it, got ${JSON.stringify(wsC.frames[readyC].effort?.level)} ${JSON.stringify(againC.reasoningEffort)} ${JSON.stringify(readStickyLevel(noDefaultRoomId, convC))}`);
+	await closeAndWait(wsC, noDefaultRoomId);
+	pass("a conversation started with no default anywhere keeps the level it ran at when a default is set later");
+
+	// A first message carrying the default's own level without the flag (the echo guard skips it) still keeps it.
+	await setRoomDefaultEffort(pcRoomId, "high");
+	const convD = `pcconvd_${Date.now().toString(36)}`;
+	await putThread(pcRoomId, convD, "thinker-model", []);
+	let wsD = await WsHarness.connect(pcRoomId, convD, "thinker-model");
+	await wsD.waitFor((frame) => frame.type === "ready", "ready frame in conversation D");
+	const firstD = await runTurn(wsD, { effort: "high" });
+	assert(firstD.reasoningEffort === "high" && readStickyLevel(pcRoomId, convD) === "high", `the first message keeps the level it ran at, got ${JSON.stringify(firstD.reasoningEffort)} ${JSON.stringify(readStickyLevel(pcRoomId, convD))}`);
+	await closeAndWait(wsD, pcRoomId);
+	await setRoomDefaultEffort(pcRoomId, "low");
+	wsD = await WsHarness.connect(pcRoomId, convD, "thinker-model");
+	await wsD.waitFor((frame) => frame.type === "ready", "ready frame in conversation D again");
+	const againD = await runTurn(wsD, {});
+	assert(againD.reasoningEffort === "high", `a later default does not reach it, got ${JSON.stringify(againD.reasoningEffort)}`);
+	await closeAndWait(wsD, pcRoomId);
+	pass("a first message whose level the echo guard skips still keeps it for the conversation");
+	// A is the open conversation again for the scheduled answers below.
+	await putThread(pcRoomId, convA, "thinker-model", (await requestJson(`/api/persistent-agents/${pcRoomId}/threads/${convA}`)).body?.thread?.items ?? []);
+
+	// --- 15. Scheduled answers follow the same rule -----------------------------
+	// The server and this process share the temp home; the scheduled run is
+	// driven in this process, as the scheduler does.
+	process.env.HOME = tempHome;
+	process.env.USERPROFILE = tempHome;
+	process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
+	const background = await import("../src/persistent-room-background-execution.js");
+	await setRoomDefaultEffort(pcRoomId, "medium");
+	const resumedBefore = gatewayRequests.length;
+	await background.executePersistentRoomBackgroundPrompt({ roomId: pcRoomId, target: { kind: "resume-thread", threadId: convA, model: { provider: "openai-compatible", model: "thinker-model" } }, prompt: "The scheduled check.", executionId: "effort-scheduled-resume", agentDir } as any);
+	assert(gatewayRequests.length > resumedBefore && gatewayRequests[resumedBefore].reasoningEffort === "minimal", `a scheduled answer in a conversation runs at that conversation's level, got ${JSON.stringify(gatewayRequests.slice(resumedBefore))}`);
+	const freshBefore = gatewayRequests.length;
+	await background.executePersistentRoomBackgroundPrompt({ roomId: pcRoomId, target: { kind: "fresh-thread", model: { provider: "openai-compatible", model: "thinker-model" } }, prompt: "The scheduled check.", executionId: "effort-scheduled-fresh", agentDir } as any);
+	assert(gatewayRequests.length > freshBefore && gatewayRequests[freshBefore].reasoningEffort === "medium", `a scheduled answer in a new conversation runs at the room's default, got ${JSON.stringify(gatewayRequests.slice(freshBefore))}`);
+	const freshThreadId = background.scheduledPromptBackgroundThreadId("effort-scheduled-fresh");
+	assert(readStickyLevel(pcRoomId, freshThreadId) === "medium", `the new conversation keeps the default as its own, got ${JSON.stringify(readStickyLevel(pcRoomId, freshThreadId))}`);
+	pass("a scheduled answer runs at its conversation's level, a new one at the room's default");
+
+	// --- 16. The CLI-wide default was never touched --------------------------
 	assert(
 		readCliDefaultThinkingLevel() === CLI_DEFAULT_THINKING_LEVEL,
 		`the CLI-wide defaultThinkingLevel must survive untouched, got ${JSON.stringify(readCliDefaultThinkingLevel())}`,

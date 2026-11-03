@@ -1,15 +1,15 @@
 // Room-files routes smoke (files UI + files-management slices): upload with
 // type gates and the collision rule, list with origins, inline-preview vs
-// download serving, the unified delete (stage → undo → commit; the retired
-// direct DELETE), inline rename with the collision rule, and the 💾 Save…
-// export with its local-action guard, saveAs filename, and collision flow.
+// download serving, the unified delete (stage → undo → commit), inline rename
+// with the collision rule, and the 💾 Save… export with its local-action
+// guard, saveAs filename, and collision flow.
 // Boots the real server against an isolated HOME.
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -54,23 +54,6 @@ for (const name of ["writeSync", "writeFileSync"]) {
 const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 function upload(filename: string, content: Buffer): Promise<Response> {
 	return authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files`, {
 		method: "POST",
@@ -99,7 +82,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	// 1. Upload a text file; a same-named second upload takes the collision name.
 	const first = await upload("notes.md", Buffer.from("# alpha\nbeta\n"));
@@ -111,21 +94,19 @@ try {
 	const secondBody = (await second.json()) as { name: string };
 	assert(secondBody.name === "notes (2).md", `collision rule: expected notes (2).md, got ${secondBody.name}`);
 
-	// 2. Tier-3 refusals name the safe path and never land.
+	// 2. Tier-3 refusals never land.
 	const ole = await upload("legacy.doc", Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0, 0, 0, 0]));
 	assert(ole.status === 415, `OLE upload: expected 415, got ${ole.status}`);
-	const oleBody = (await ole.json()) as { error: string };
-	assert(oleBody.error.includes(".docx"), `OLE refusal must name the safe path, got: ${oleBody.error}`);
 	const binary = await upload("blob.bin", Buffer.from([0, 1, 2, 3, 0, 5]));
 	assert(binary.status === 415, `binary upload: expected 415, got ${binary.status}`);
 	const empty = await upload("empty.txt", Buffer.alloc(0));
 	assert(empty.status === 400, `empty upload: expected 400, got ${empty.status}`);
 
-	// 3. Images are accepted-stored with the honest vision note.
+	// 3. Images are accepted and stored.
 	const png = await upload("shot.png", Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("fakepngdata")]));
 	assert(png.status === 200, `png upload: expected 200, got ${png.status}`);
-	const pngBody = (await png.json()) as { kind: string; parseNote?: string };
-	assert(pngBody.kind === "image" && String(pngBody.parseNote).includes("reads it visually"), `png parse note must state the visual read, got ${JSON.stringify(pngBody)}`);
+	const pngBody = (await png.json()) as { kind: string };
+	assert(pngBody.kind === "image", `png upload is an image, got ${JSON.stringify(pngBody)}`);
 
 	// 4. List: user origin, sizes, extensions.
 	const list = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files`);
@@ -174,6 +155,54 @@ try {
 	assert(jsonUpload.status === 200, "json upload must succeed");
 	const jsonInline = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("data.json")}`);
 	assert(jsonInline.status === 200 && (jsonInline.headers.get("content-type") ?? "").startsWith("text/plain"), `json inline: expected text/plain (inert source, never application/json for a document view), got ${jsonInline.status} ${jsonInline.headers.get("content-type")}`);
+	// Code and other text files preview as text too: served as
+	// text/plain; charset=utf-8 with nosniff under the sandboxed CSP, never as
+	// a page, a script or a picture.
+	for (const [name, content] of [["report.py", "print('hello')\n"], ["app.ts", "export const a: number = 1;\n"], ["config.yaml", "name: room\n"]] as const) {
+		assert((await upload(name, Buffer.from(content))).status === 200, `${name} upload must succeed`);
+		const served = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent(name)}`);
+		assert(served.status === 200 && served.headers.get("content-type") === "text/plain; charset=utf-8", `${name} inline: expected text/plain; charset=utf-8, got ${served.status} ${served.headers.get("content-type")}`);
+		assert(served.headers.get("x-content-type-options") === "nosniff", `${name} serving keeps nosniff`);
+		assert((served.headers.get("content-security-policy") ?? "").includes("sandbox"), `${name} serving carries the sandboxed CSP`);
+		assert((await served.text()) === content, `${name} serves its own bytes`);
+	}
+	// The neighbours keep their own handling: HTML renders sandboxed, SVG is a
+	// picture, and a binary has no inline preview.
+	assert((await upload("page.html", Buffer.from("<p>hi</p>\n"))).status === 200, "html upload must succeed");
+	const htmlInline = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("page.html")}`);
+	assert(htmlInline.status === 200 && (htmlInline.headers.get("content-type") ?? "").startsWith("text/html") && (htmlInline.headers.get("content-security-policy") ?? "").includes("sandbox"), `html inline: expected sandboxed text/html, got ${htmlInline.status} ${htmlInline.headers.get("content-type")}`);
+	assert((await upload("pic.svg", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>\n'))).status === 200, "svg upload must succeed");
+	const svgInline = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("pic.svg")}`);
+	assert(svgInline.status === 200 && (svgInline.headers.get("content-type") ?? "").startsWith("image/svg+xml"), `svg inline: expected image/svg+xml, got ${svgInline.status} ${svgInline.headers.get("content-type")}`);
+	assert((await upload("sheet.xlsx", Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from("xl/workbook.xml")]))).status === 200, "xlsx upload must succeed");
+	const xlsxInline = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("sheet.xlsx")}`);
+	assert(xlsxInline.status === 415, `a binary has no inline preview: expected 415, got ${xlsxInline.status}`);
+	{
+		const { PLAIN_TEXT_PREVIEW_EXTENSIONS } = await import("../src/plain-text-preview.js");
+		for (const never of [".html", ".htm", ".xhtml", ".svg", ".md"]) assert(!PLAIN_TEXT_PREVIEW_EXTENSIONS.has(never), `${never} keeps its own handling, never the plain-text list`);
+	}
+	// The viewer shows the same files in its sandboxed text frame, with the full
+	// name in its title; a binary keeps "cannot be previewed".
+	{
+		const pageRequire = (await import("node:module")).createRequire(new URL("../../web-ui/package.json", import.meta.url));
+		const { createElement } = pageRequire("react");
+		const { renderToStaticMarkup } = pageRequire("react-dom/server");
+		// The page's components build their elements through the global React, as the smoke compiles them.
+		(globalThis as any).React = pageRequire("react");
+		const { ArtifactViewer } = (await import(pathToFileURL(path.resolve(scriptDir, "../../web-ui/src/components/ArtifactViewer.tsx")).href)) as any;
+		const view = (name: string): string => renderToStaticMarkup(createElement(ArtifactViewer, {
+			taskId: `file:${name}`, templateLabel: "file", artifact: { relativePath: `files/${name}`, extension: path.extname(name) },
+			onClose: () => {}, maximized: false, onToggleMaximize: () => {}, roomId: ROOM_ID, assetTitle: path.basename(name, path.extname(name)),
+		}));
+		for (const name of ["report.py", "app.ts", "config.yaml"]) {
+			const html = view(name);
+			assert(html.includes('class="artifact-viewer-frame artifact-viewer-frame-text"') && html.includes('sandbox=""') && !html.includes("cannot be previewed"), `the viewer shows ${name} as text in its sandboxed frame: ${html.slice(0, 600)}`);
+			assert(html.includes(`<div class="artifact-viewer-template" title="${name}">${name}</div>`), `the viewer's title names ${name} with its extension`);
+		}
+		const binary = view("sheet.xlsx");
+		assert(binary.includes("This file type cannot be previewed.") && !binary.includes("<iframe"), "a binary keeps \"cannot be previewed\" in the viewer");
+		assert(binary.includes('title="sheet.xlsx">sheet.xlsx</div>'), "the viewer's title names the binary with its extension");
+	}
 	const csvDownload = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("data.csv")}?download=1`);
 	assert(csvDownload.status === 200 && (csvDownload.headers.get("content-disposition") ?? "").includes('filename="data.csv"'), `csv download: ${csvDownload.status}`);
 	const missing = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("nope.md")}`);
@@ -240,7 +269,6 @@ try {
 		const replaced = await save("notes.md", { targetDir: linkFolder, overwrite: true });
 		const replacedBody = (await replaced.json()) as { error?: string };
 		assert(replaced.status === 400, `${label} link, Replace: expected 400, got ${replaced.status}: ${JSON.stringify(replacedBody)}`);
-		assert(replacedBody.error === "The file with this name in the chosen folder is a shortcut to somewhere else, so it was not replaced. Use Keep both, or pick another name.", `${label} link, Replace: the refusal must be the plain sentence, got ${JSON.stringify(replacedBody)}`);
 		const keptBoth = await save("notes.md", { targetDir: linkFolder, rename: true });
 		const keptBothBody = (await keptBoth.json()) as { savedTo: string };
 		assert(keptBoth.status === 200 && keptBothBody.savedTo === path.join(linkFolderReal, "notes-2.md"), `${label} link, Keep both: expected notes-2.md, got ${keptBoth.status}: ${JSON.stringify(keptBothBody)}`);
@@ -505,10 +533,6 @@ try {
 	assert(missingStage.status === 404, `stage on a missing file: expected 404, got ${missingStage.status}`);
 	const listAfter = (await (await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files`)).json()) as { files: Array<{ name: string }> };
 	assert(!listAfter.files.some((file) => file.name === "notes (2).md"), "deleted file must leave the list");
-	// The old direct DELETE route retired with the unified flow.
-	const oldDelete = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("notes.md")}`, { method: "DELETE" });
-	assert(oldDelete.status === 404 || oldDelete.status === 405, `the direct DELETE route is retired, got ${oldDelete.status}`);
-	assert((await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files/${encodeURIComponent("notes.md")}`)).status === 200, "the retired route deleted nothing");
 
 	// 8. Inline rename: fs rename under the collision rule; the manifest/list
 	// shows the new name; renaming to a taken name allocates "(2)".

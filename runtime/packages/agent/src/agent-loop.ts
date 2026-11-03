@@ -316,6 +316,8 @@ async function streamAssistantResponse(
 			case "toolcall_start":
 			case "toolcall_delta":
 			case "toolcall_end":
+			case "server_tool_start":
+			case "server_tool_end":
 				if (partialMessage) {
 					partialMessage = event.partial;
 					context.messages[context.messages.length - 1] = partialMessage;
@@ -434,9 +436,13 @@ async function executeToolCallsSequential(
 			args: toolCall.arguments,
 		});
 
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+		const preparation = signal?.aborted
+			? undefined
+			: await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		let finalized: FinalizedToolCallOutcome;
-		if (preparation.kind === "immediate") {
+		if (!preparation || (preparation.kind === "prepared" && signal?.aborted)) {
+			finalized = createStoppedToolCallOutcome(toolCall);
+		} else if (preparation.kind === "immediate") {
 			finalized = {
 				toolCall,
 				result: preparation.result,
@@ -485,6 +491,13 @@ async function executeToolCallsParallel(
 			args: toolCall.arguments,
 		});
 
+		if (signal?.aborted) {
+			const finalized = createStoppedToolCallOutcome(toolCall);
+			await emitToolExecutionEnd(finalized, emit);
+			finalizedCalls.push(finalized);
+			continue;
+		}
+
 		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
 			const finalized = {
@@ -498,6 +511,11 @@ async function executeToolCallsParallel(
 		}
 
 		finalizedCalls.push(async () => {
+			if (signal?.aborted) {
+				const finalized = createStoppedToolCallOutcome(toolCall);
+				await emitToolExecutionEnd(finalized, emit);
+				return finalized;
+			}
 			const executed = await executePreparedToolCall(preparation, signal, emit);
 			const finalized = await finalizeExecutedToolCall(
 				currentContext,
@@ -710,6 +728,19 @@ async function finalizeExecutedToolCall(
 		toolCall: prepared.toolCall,
 		result,
 		isError,
+	};
+}
+
+/**
+ * The answer for a call that has not started when the signal is aborted: its tool never runs,
+ * nor its before-hook when the batch had not reached it yet, and it still gets the one result
+ * every provider needs for the next request.
+ */
+function createStoppedToolCallOutcome(toolCall: AgentToolCall): FinalizedToolCallOutcome {
+	return {
+		toolCall,
+		result: createErrorToolResult(`Tool call "${toolCall.name}" was not executed: the turn was stopped before it ran.`),
+		isError: true,
 	};
 }
 

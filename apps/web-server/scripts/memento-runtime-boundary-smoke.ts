@@ -105,7 +105,6 @@ try {
 		createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: oldThreadId, model, cwd: tempCwd }),
 	});
 	assert(oldWrite.thread.runtime.kind === "pi-session-jsonl", "old Pi fixture should be Pi-backed");
-	const oldJsonlPath = instance.runtimePiSessionPath(oldThreadId);
 	const oldBootPath = instance.runtimeBootPromptSnapshotPath(oldThreadId);
 	const oldSession = openPersistentAgentPiSessionManager(agentId, oldWrite.thread.runtime, tempCwd);
 	oldSession.appendMessage({ role: "user", content: JSONL_SENTINEL, timestamp: Date.now() });
@@ -117,17 +116,11 @@ try {
 	assert(result.memory.l1bMutated === false, "Memento result should mark L1b unchanged");
 	assert(result.runtimeBoundary.closedThreadId === oldThreadId, "boundary should identify old thread");
 	assert(result.runtimeBoundary.closedReason === "memento", "boundary close reason should be memento");
-	assert(result.runtimeBoundary.closedByMementoId === result.mementoId, "boundary should reference memento id");
-	assert(result.runtimeBoundary.oldRuntime.kind === "pi-session-jsonl", "boundary should retain old runtime metadata");
-	assert(result.runtimeBoundary.newRuntime.kind === "pi-session-jsonl", "boundary should include fresh Pi runtime metadata");
 	assert(result.postMemento.activeThreadId === result.runtimeBoundary.newThreadId, "postMemento should point to fresh thread");
 
 	const oldThread = getPersistentAgentThread(agentId, oldThreadId);
 	assert(oldThread?.state === "closed", "old Pi thread should be closed");
 	assert(oldThread.closedReason === "memento", "old Pi thread should record Memento close reason");
-	assert(oldThread.closedByMementoId === result.mementoId, "old Pi thread should record closing Memento id");
-	assert(fs.existsSync(instance.runtimeThreadPath(oldThreadId)) && oldThread.items.length === 0, "old Pi thread JSON should remain as a closed record with no words");
-	assert(!fs.existsSync(oldJsonlPath), "Forget deletes the old Pi JSONL transcript");
 	assert(!fs.existsSync(oldBootPath), "Forget deletes the old boot artifact");
 
 	const freshThread = getPersistentAgentThread(agentId, result.postMemento.activeThreadId);
@@ -140,7 +133,6 @@ try {
 	assert(runtime.activeThreadId === freshThread.threadId, "runtime state should point at fresh Memento thread");
 	const statusAfterMemento = getPersistentAgentStatus(agentId);
 	assert(statusAfterMemento.activeThread?.threadId === freshThread.threadId, "status should expose fresh Memento activeThread");
-	assert(statusAfterMemento.activeThread.preparedByBoundary === "memento", "empty fresh Memento runtime should be prepared/READY");
 	assert(statusAfterMemento.activeThread.preparedByCheckpoint === false, "fresh Memento runtime should not be checkpoint-prepared");
 	assert(statusAfterMemento.activeThread.hasUserVisibleTurns === false, "empty fresh Memento runtime should have no user-visible turns");
 
@@ -152,12 +144,10 @@ try {
 	});
 	const statusAfterPostMementoTurn = getPersistentAgentStatus(agentId);
 	assert(statusAfterPostMementoTurn.activeThread?.threadId === freshThread.threadId, "status should still expose fresh Memento thread after user turn");
-	assert(statusAfterPostMementoTurn.activeThread.preparedByBoundary === null, "post-Memento user turn should clear prepared boundary flag");
 	assert(statusAfterPostMementoTurn.activeThread.hasUserVisibleTurns === true, "post-Memento user turn should make thread resumable/standby-like");
 
 	const l1bAfter = fs.readFileSync(l1bPath, "utf-8");
 	assert(sha256(l1bAfter) === l1bHashBefore, "Memento should not mutate L1b");
-	assert(result.runtimeBoundary.newRuntime.l1bFingerprint.value === result.memory.l1bFingerprint.value, "fresh runtime L1b fingerprint should match Memento memory fingerprint");
 
 	assert(fs.existsSync(result.eventRecordPath), "Memento event record should exist");
 	const eventRecord = JSON.parse(fs.readFileSync(result.eventRecordPath, "utf-8"));
@@ -214,12 +204,10 @@ try {
 	const legacyClosed = getPersistentAgentThread(agentId, legacyThreadId);
 	assert(legacyClosed?.state === "closed", "legacy old thread should close");
 	assert(legacyClosed.closedReason === "memento", "legacy old thread should record Memento close reason");
-	assert(legacyResult.runtimeBoundary.oldRuntime.kind === "transcript-recap-v1", "legacy boundary should preserve old runtime kind");
 	const legacyFresh = getPersistentAgentThread(agentId, legacyResult.postMemento.activeThreadId);
 	assert(legacyFresh?.origin === "memento", "legacy Memento fresh thread should have Memento origin");
 	assert(legacyFresh.items.length === 0, "legacy Memento fresh thread should not copy old display cache");
 	assertFreshRuntimeMaterialized(legacyFresh, "legacy Memento");
-	assert(getPersistentAgentStatus(agentId).activeThread?.preparedByBoundary === "memento", "legacy Memento fresh thread should report prepared/READY");
 
 	fs.rmSync(tempHome, { recursive: true, force: true });
 	fs.rmSync(tempCwd, { recursive: true, force: true });

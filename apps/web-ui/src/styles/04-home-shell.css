@@ -1,0 +1,452 @@
+.landing-shell {
+	height: 100%;
+	overflow: hidden;
+	background: var(--bg);
+	color: var(--fg);
+}
+.landing-shell.with-product-sidebar {
+	display: grid;
+	grid-template-columns: 260px minmax(0, 1fr);
+}
+.product-sidebar {
+	background: var(--exx-surface-inset);
+	border-right: 1px solid var(--exx-divider);
+	color: var(--fg);
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+:root[data-theme="light"] .product-sidebar {
+	background: var(--exx-surface);
+	color: var(--fg);
+	border-right-color: var(--exx-divider);
+}
+.product-nav {
+	padding: 14px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.product-nav-section {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+.product-nav-label {
+	color: var(--muted);
+	font-size: var(--exx-font-size-xs);
+	font-weight: 700;
+	line-height: 1;
+	padding: 6px 11px 3px;
+}
+.product-nav .list-btn {
+	position: relative;
+	width: 100%;
+	background: transparent;
+	border-color: transparent;
+	border-radius: var(--exx-radius-control);
+	color: var(--fg-soft);
+	font-weight: 400;
+	line-height: 1.2;
+	/* The text on the logo's left edge, as in the in-room list (02-sidebar.css). */
+	padding: 6px 12px 6px calc(var(--sidebar-text-left) - 13px);
+	transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+/* The phone's top bar puts the logo and the labels in one row: its items keep their 14px. */
+@media (max-width: 760px) {
+	.product-sidebar {
+		--sidebar-text-left: 27px;
+	}
+}
+.product-nav .list-btn:hover,
+.product-nav .list-btn:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border-soft);
+	color: var(--fg);
+}
+.product-nav .list-btn:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.product-nav .list-btn.active,
+.product-nav .list-btn.active:hover,
+.product-nav .list-btn.active:focus-visible {
+	background: var(--exx-active-muted-bg);
+	border-color: var(--exx-divider);
+	box-shadow: var(--exx-shadow-hover);
+	color: var(--fg);
+}
+.product-nav .list-btn[disabled] {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+.product-sidebar-footer {
+	margin-top: auto;
+	/* One row, like the old connection-label days: the remote pill takes the
+	   label's left slot, the gear pair keeps its right corner. */
+	display: flex;
+	align-items: center;
+	color: var(--muted);
+	font-size: var(--exx-font-size-xs);
+	padding: 10px 12px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+/* Between the phone's bar and the side rail the sidebar stacks above the page
+   (the 900px block in 21-approval-preview.css): the gear stays on the nav's
+   row, at its end, rather than taking a row of its own under it. */
+@media (min-width: 761px) and (max-width: 900px) {
+	.product-sidebar {
+		display: grid;
+		/* The nav keeps its whole width; the footer gets what is left, so a
+		   long signed-in name cuts to an ellipsis instead of squeezing Rooms. */
+		grid-template-columns: minmax(max-content, 1fr) minmax(0, auto);
+		align-items: center;
+	}
+	.product-sidebar-header { grid-column: 1 / -1; }
+	.product-sidebar-footer { margin-top: 0; min-width: 0; }
+}
+.sidebar-config {
+	position: relative;
+	display: flex;
+}
+.sidebar-config-gear {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--fg);
+	border-radius: 6px;
+	padding: 2px 7px;
+	font-size: 13px;
+	line-height: 1.2;
+	cursor: pointer;
+}
+.sidebar-config-gear:hover,
+.sidebar-config-gear:focus-visible {
+	background: var(--fg);
+	color: var(--bg);
+	border-color: var(--fg);
+	outline: none;
+}
+.sidebar-config-menu {
+	position: absolute;
+	bottom: 100%;
+	right: 0;
+	margin-bottom: 8px;
+	min-width: 260px;
+	max-width: calc(100vw - 24px);
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 6px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-card);
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 50;
+}
+/* At 900px and under the sidebar is a bar at the top of the page, so the gear
+   menu opens downward (the in-room drawer keeps its upward menu). */
+@media (max-width: 900px) {
+	.product-sidebar .sidebar-config-menu {
+		bottom: auto;
+		top: 100%;
+		margin-bottom: 0;
+		margin-top: 8px;
+		right: 0;
+	}
+}
+/* The menu stays inside the sidebar: its right edge on the gear's, and on
+   the desktop its width the footer's 235px (the 260px sidebar less its 1px
+   border and the footer's 12px padding on each side). */
+@media (min-width: 761px) {
+	.sidebar-config-menu {
+		min-width: 0;
+		width: 235px;
+	}
+}
+/* A row wraps rather than clip its controls when larger text makes it wider than the menu. */
+.sidebar-config-menu .menu-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 4px 8px;
+}
+.sidebar-config-menu .menu-row-label {
+	color: var(--fg);
+	font-size: var(--exx-font-size-xs);
+}
+.sidebar-config-menu .menu-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	width: 100%;
+	text-align: left;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--fg);
+	font-size: var(--exx-font-size-xs);
+	padding: 6px 8px;
+	cursor: pointer;
+}
+/* Rows with a shortcut carry the accelerator at the right edge, quiet
+   mono like a macOS menu. */
+.sidebar-config-menu .menu-item-kbd {
+	color: var(--muted);
+	font-family: var(--exx-font-mono);
+}
+.sidebar-config-menu .menu-item:hover,
+.sidebar-config-menu .menu-item:focus-visible {
+	background: var(--panel-2);
+	outline: none;
+}
+.sidebar-config-menu .menu-item.active {
+	border-color: var(--border);
+	background: var(--panel-2);
+}
+.sidebar-config-menu .menu-appearance-seg {
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+.sidebar-config-menu .menu-appearance-seg button {
+	background: transparent;
+	border: 0;
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 4px 10px;
+	cursor: pointer;
+}
+.sidebar-config-menu .menu-appearance-seg button:hover,
+.sidebar-config-menu .menu-appearance-seg button:focus-visible {
+	color: var(--fg);
+	outline: none;
+}
+.sidebar-config-menu .menu-appearance-seg button.on {
+	background: var(--fg);
+	color: var(--bg);
+}
+.landing {
+	background: var(--bg);
+	overflow-y: auto;
+	min-height: 0;
+	padding: 34px 36px 40px;
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+}
+.landing > * {
+	width: min(980px, 100%);
+	margin: 0 auto;
+}
+.home-page > *,
+.dashboard-page > * {
+	width: min(1120px, 100%);
+}
+.landing-hero {
+	max-width: none;
+	padding-bottom: 18px;
+	border-bottom: 1px solid var(--exx-divider);
+}
+.home-page .landing-hero,
+.dashboard-page .landing-hero {
+	border-bottom: none;
+}
+.home-page .landing-hero p {
+	max-width: none;
+}
+.eyebrow,
+.card-kicker,
+.command-label {
+	color: var(--muted);
+	font-family: var(--exx-font-display);
+	font-size: var(--exx-font-size-xs);
+	font-weight: 700;
+	margin: 0 0 9px;
+}
+.landing h1 {
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 760;
+	font-size: 28px;
+	line-height: 1.15;
+	letter-spacing: -0.01em;
+	margin: 0 0 6px;
+}
+.landing h2 {
+	font-family: var(--exx-font-display);
+	font-size: 22px;
+	line-height: 1.05;
+	margin: 0 0 10px;
+}
+.landing p { color: var(--fg-soft); margin: 0; max-width: 700px; }
+/* Home with nothing to answer yet: connecting comes before the first room. */
+.home-connect-card {
+	margin-top: 18px;
+	max-width: 560px;
+	padding: 18px 20px;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-card);
+	background: var(--panel);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.landing .home-connect-card h2 {
+	font-size: 17px;
+	line-height: 1.25;
+	margin: 0;
+}
+.home-page .home-connect-card p {
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 1.45;
+}
+.home-connect-card .landing-action {
+	margin-top: 6px;
+}
+.home-ai-profile-status {
+	background: transparent;
+	border: 1px solid color-mix(in srgb, var(--fg-soft) 16%, var(--border-soft));
+	border-radius: 999px;
+	color: var(--fg-soft);
+	cursor: pointer;
+	display: inline-flex;
+	font-family: var(--exx-font-display);
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	line-height: 1;
+	margin-top: 16px;
+	padding: 7px 10px;
+	width: fit-content;
+}
+.home-ai-profile-status:hover,
+.home-ai-profile-status:focus-visible {
+	border-color: var(--fg-soft);
+	color: var(--fg);
+	outline: none;
+}
+.home-ai-profile-status.setup-needed {
+	border-color: color-mix(in srgb, var(--warning) 34%, var(--border-soft));
+	color: var(--warning);
+}
+.home-resume-error {
+	background: color-mix(in srgb, var(--error) 9%, transparent);
+	border: 1px solid color-mix(in srgb, var(--error) 34%, var(--border-soft));
+	border-radius: 12px;
+	color: var(--error);
+	font-size: 13px;
+	line-height: 1.45;
+	margin-top: 14px;
+	padding: 10px 12px;
+}
+.home-resume-status {
+	border: 1px solid color-mix(in srgb, var(--fg-soft) 16%, var(--border-soft));
+	border-radius: 12px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 1.45;
+	margin-top: 14px;
+	padding: 10px 12px;
+}
+.landing .cli-note {
+	font-size: 12px;
+	line-height: 1.5;
+}
+.landing .cli-note code,
+.cli-command code {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+}
+.cli-copy-action {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+}
+.cli-command {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px 12px;
+	width: 100%;
+	overflow-x: auto;
+	font-size: 12px;
+}
+.landing-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+	gap: 14px;
+	align-items: stretch;
+}
+.home-page .landing-grid {
+	gap: 20px;
+}
+.landing-card {
+	background: color-mix(in srgb, var(--panel) 72%, transparent);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-card);
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	gap: 10px;
+	min-height: 0;
+}
+/* "+ New room" tile — a dashed add-card that sits in the room grid and stretches
+   to match the room cards in its row. */
+.add-room-card {
+	background: transparent;
+	border: 1px dashed color-mix(in srgb, var(--fg-soft) 45%, var(--border-soft));
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 112px;
+	color: var(--fg-soft);
+	cursor: pointer;
+	text-align: center;
+	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.add-room-card:hover,
+.add-room-card:focus-visible {
+	background: color-mix(in srgb, var(--fg) 6%, transparent);
+	border-color: var(--fg-soft);
+	color: var(--fg);
+}
+.add-room-card:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: 2px; }
+.add-room-plus { font-size: 30px; line-height: 1; font-weight: 300; }
+.add-room-label { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
+/* Under "New room" while nothing can answer yet: the room would wait. */
+.add-room-hint { color: var(--muted); font-size: var(--exx-font-size-xs); }
+/* The first room, once an AI is connected: New room is the one thing to do.
+   The light theme's own card colours (below, and 11-light-sidebar-home.css)
+   are more specific than a class pair, so the light selectors are named too. */
+.add-room-card.is-primary,
+:root[data-theme="light"] .add-room-card.is-primary {
+	background: var(--exx-action-primary-bg);
+	border: 1px solid var(--exx-action-primary-bg);
+	color: var(--exx-action-primary-fg);
+}
+.add-room-card.is-primary:hover,
+.add-room-card.is-primary:focus-visible,
+:root[data-theme="light"] .add-room-card.is-primary:hover,
+:root[data-theme="light"] .add-room-card.is-primary:focus-visible {
+	background: var(--exx-action-primary-hover-bg);
+	border-color: var(--exx-action-primary-hover-bg);
+	color: var(--exx-action-primary-fg);
+}
+.landing-card-primary {
+	min-height: clamp(148px, 19vh, 184px);
+}
+:root[data-theme="light"] .landing-card {
+	background: color-mix(in srgb, var(--panel) 88%, var(--bg) 12%);
+	border-color: var(--border-soft);
+	box-shadow: 0 1px 0 color-mix(in srgb, var(--fg) 5%, transparent);
+	color: var(--fg);
+}
+.landing-card.cli-card { gap: 14px; }

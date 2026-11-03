@@ -1,3 +1,7 @@
 # Documented exceptions for the OSV dependency scan (release gate + weekly).
 # Every entry must say why the finding does not apply; delete entries the
 # moment they stop being true.
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+reason = "minimatch can blow up a crafted pattern into heavy CPU work; fixed only in 11.0.1. In this lockfile every minimatch copy belongs to electron-builder, which matches the file patterns of our own builder config while packaging; nothing that ships in the app (the bundled shell and electron-updater) depends on it. The 3.x and 5.x copies do not contain the affected code, no fixed 3.x, 5.x or 9.x release exists, and electron-builder 26.18.1 still asks for minimatch ^10.2.5."

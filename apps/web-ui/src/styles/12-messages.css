@@ -1,0 +1,340 @@
+.bubble-row {
+	display: flex;
+	width: min(var(--chat-rail-width), 100%);
+}
+.bubble-row.user { justify-content: flex-end; }
+.bubble {
+	min-width: 0;
+	max-width: 780px;
+	border-radius: 0;
+	padding: 2px 0;
+	border: none;
+	background: transparent;
+}
+.bubble.user {
+	max-width: min(85%, 760px);
+	background: var(--user-bubble);
+	color: var(--user-fg);
+	border-color: transparent;
+	border-radius: 10px;
+	padding: 12px 16px;
+	font-weight: 500;
+}
+/* Links in the text only: a picture's download control is a link too and
+   keeps its own colours on its own ground (.image-action). */
+.bubble.user a:not(.image-action) { color: var(--user-fg); text-decoration: underline; }
+
+/* Column wrapper so the copy control sits UNDER its bubble, not inside it.
+ * Inherits the row's alignment: assistant fills the width (copy left), user
+ * hugs the right (copy right, under the bubble). */
+.bubble-col {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	max-width: 100%;
+}
+.bubble-col.user { align-items: flex-end; max-width: min(85%, 760px); }
+/* The column now carries the width cap; keep the inner bubble uncapped so the
+ * two do not nest and shrink long user messages. */
+.bubble-col.user > .bubble.user { max-width: 100%; }
+
+/* Action row under a bubble: the copy control and the message time. The
+ * reply's row sits under its last segment, button first; the user's hugs the
+ * right edge under the bubble, time first. */
+.message-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	min-height: 22px;
+}
+.message-actions.user { align-self: flex-end; }
+.message-actions .message-copy { margin-top: 0; }
+/* When the message was written: quiet, revealed with the row on hover, the
+ * full date and time in its tooltip. */
+.message-time {
+	font-size: 11px;
+	line-height: 1;
+	color: var(--muted);
+	opacity: 0;
+	cursor: default;
+	user-select: none;
+	white-space: nowrap;
+	transition: opacity 120ms ease;
+}
+.bubble-row:hover .message-time { opacity: 1; }
+
+/* Message copy control. Quiet ghost affordance in the app's control language:
+ * transparent at rest, faint until hovered/focused. Assistant replies show it
+ * always (aligned under the text); user messages reveal it on row hover. */
+.message-copy {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin-top: 6px;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	transition: color 120ms ease, opacity 120ms ease;
+}
+.message-copy svg { display: block; }
+.message-copy:hover,
+.message-copy:focus-visible {
+	color: var(--fg);
+	outline: none;
+}
+.message-copy:focus-visible svg { outline: 2px solid var(--exx-focus); outline-offset: 3px; border-radius: 3px; }
+.message-copy.is-copied { color: var(--fg); }
+
+/* Assistant: always present but understated, so a read stays clean. */
+.message-copy-assistant { opacity: 0.55; }
+.message-copy-assistant:hover,
+.message-copy-assistant:focus-visible { opacity: 1; }
+
+/* User: hidden at rest, revealed when the row is hovered or the button is
+ * keyboard-focused; its action row sits at the right edge under the
+ * right-aligned bubble. */
+.message-copy-user {
+	opacity: 0;
+	pointer-events: none;
+}
+.bubble-row.user:hover .message-copy-user,
+.message-copy-user:focus-visible,
+.message-copy-user.is-copied {
+	/* The confirmation tick stays visible after the cursor leaves, until the
+	 * copied state auto-reverts a moment later. */
+	opacity: 1;
+	pointer-events: auto;
+}
+@media (hover: none) {
+	/* Touch devices have no hover: keep the user-message control reachable
+	 * and the message time readable at rest. */
+	.message-copy-user { opacity: 0.55; pointer-events: auto; }
+	.message-time { opacity: 0.55; }
+}
+.user-message-content {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	line-height: 1.56;
+}
+.user-message-content.is-folded {
+	max-height: 144px;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 72%, transparent 100%);
+	mask-image: linear-gradient(to bottom, #000 0%, #000 72%, transparent 100%);
+}
+.user-message-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin-top: 8px;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--user-fg);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.2;
+	text-decoration: underline;
+	text-underline-offset: 3px;
+	cursor: pointer;
+	opacity: 0.78;
+}
+.user-message-toggle:hover { opacity: 1; }
+.user-message-toggle:focus-visible {
+	outline: 2px solid currentColor;
+	outline-offset: 3px;
+	border-radius: 4px;
+}
+
+.bubble pre {
+	background: var(--code-bg);
+	color: var(--code-fg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 10px;
+	overflow-x: auto;
+	font-size: 12.5px;
+}
+.bubble code {
+	font-family: var(--exx-font-mono);
+	font-size: 0.92em;
+}
+.bubble :not(pre) > code {
+	background: var(--code-bg);
+	color: var(--code-fg);
+	padding: 1px 5px;
+	border-radius: 4px;
+}
+.bubble.user :not(pre) > code { background: color-mix(in srgb, var(--user-fg) 10%, transparent); color: inherit; }
+.bubble p:first-child { margin-top: 0; }
+.bubble p:last-child { margin-bottom: 0; }
+/* While an answer is written, each new paragraph, list, table or code block
+   fades in as a whole. A CSS animation runs once, when its element is
+   inserted, so only what is new fades. A finished answer, the blocks a
+   reconnect drew at once (Message.tsx marks them data-drawn-at-once) and
+   reduced motion: no fade; the pace is the same. */
+@keyframes answer-block-in { from { opacity: 0; } to { opacity: 1; } }
+.assistant-markdown[data-streaming] > :not([data-drawn-at-once]) { animation: answer-block-in 200ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+	.assistant-markdown[data-streaming] > :not([data-drawn-at-once]) { animation: none; }
+}
+.bubble ul, .bubble ol { padding-left: 22px; }
+.bubble h1, .bubble h2, .bubble h3 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-weight: 700;
+	letter-spacing: -0.005em;
+}
+
+.tool-card {
+	max-width: 760px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--fg);
+	border-radius: 8px;
+	padding: 9px 13px;
+	font-size: 13px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.tool-card .head {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.tool-card .head .name { color: var(--fg); font-weight: 700; }
+.tool-card .args {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	color: var(--fg);
+	white-space: pre-wrap;
+	word-break: break-word;
+	background: var(--code-bg);
+	padding: 6px 8px;
+	border-radius: 4px;
+}
+.tool-card .status { color: var(--dim); font-size: 11px; }
+.tool-card.error { border-left-color: var(--error); }
+.tool-card.error .head .name { color: var(--error); }
+.tool-card details summary { cursor: pointer; color: var(--fg-soft); font-size: 11px; font-weight: 700; }
+.tool-card details[open] summary { color: var(--muted); }
+
+
+/* A message the room has not taken yet: a filled bubble like a sent one,
+   under the answer, with "Queued" and Send now under it. When the room takes it, the
+   conversation's own bubble stands in the same place. Messages queued one
+   after another stack 12 px apart, so each caption reads as its bubble's. */
+/* As wide as a message row, so each bubble sits right as the person's own do. */
+.queued-messages { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; width: min(var(--chat-rail-width), 100%); }
+.queued-messages > .bubble-row { width: 100%; }
+/* With a mouse the tools sit left of the bubble, the caption under it; on a
+   touch screen the bubble takes the whole row and the tools join the caption. */
+.queued-col { display: grid; grid-template-columns: auto minmax(0, auto); grid-template-areas: "tools bubble" ". caption"; justify-content: end; justify-items: end; column-gap: 4px; min-width: 0; max-width: min(85%, 760px); }
+.queued-col > .bubble.user.queued { grid-area: bubble; max-width: 100%; animation: wk-fade 200ms both; }
+.queued-tools { grid-area: tools; align-self: start; display: flex; align-items: center; margin-top: 8px; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+.bubble-row.queued:hover .queued-tools,
+.queued-tools:focus-within,
+.queued-tools:has(.is-copied) { opacity: 1; pointer-events: auto; }
+.queued-tool { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; margin: 0; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+.queued-tool:hover, .queued-tool:focus-visible { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); outline: none; }
+.queued-tool:focus-visible { box-shadow: 0 0 0 2px var(--exx-focus); }
+/* One line: on a phone the caption shares its row with the tools, and a wrap put "Queued" above Send now. */
+.bubble-queued-caption { grid-area: caption; display: flex; flex-wrap: nowrap; white-space: nowrap; justify-content: flex-end; align-items: center; gap: 4px 10px; padding-top: 6px; color: var(--muted); font-size: 12.5px; animation: wk-fade 200ms both; }
+/* "Queued": the muted grey, quieter than Send now beside it and still readable. */
+.bubble-queued-word { color: var(--muted); }
+.bubble-queued-action { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: var(--fg-soft); font: inherit; cursor: pointer; }
+.bubble-queued-action:hover { color: var(--fg); }
+.bubble-queued-action:focus-visible { color: var(--fg); outline: 2px solid var(--exx-focus); outline-offset: 2px; border-radius: 4px; }
+.queued-keys { display: inline-flex; gap: 3px; }
+/* The keys as caps, as the shortcuts list draws them, a size smaller. */
+.queued-keys kbd { min-width: 20px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-2); color: var(--muted); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11.5px; line-height: 16px; text-align: center; }
+@media (hover: none) {
+	/* No hover and no keyboard: the tools stay in view beside Send now, and the chord's keys go.
+	   The tools' column takes any width the bubble adds, so they always sit right beside the caption. */
+	.queued-col { grid-template-columns: 1fr auto; grid-template-areas: "bubble bubble" "tools caption"; }
+	.queued-tools { align-self: center; margin-top: 0; opacity: 1; pointer-events: auto; }
+	.queued-keys { display: none; }
+}
+/* A finger needs a target about 44 px. Send now's wider target reaches past
+   the bubble's edge, so its words still end where the bubble does. */
+@media (pointer: coarse) {
+	.queued-tool { width: 44px; height: 44px; }
+	.bubble-queued-action { min-height: 44px; padding: 0 6px; margin-inline-end: -6px; }
+}
+@media (prefers-reduced-motion: reduce) { .queued-col > .bubble.user.queued, .bubble-queued-caption { animation-duration: 120ms; } }
+
+/* The pencil on the newest message: Copy's ghost look, beside it and revealed
+ * with it on hover; on touch it stays under the message at its full tap size. */
+.message-edit-user {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	opacity: 0;
+	pointer-events: none;
+	transition: color 120ms ease, opacity 120ms ease;
+}
+.message-edit-user svg { display: block; }
+.bubble-row.user:hover .message-edit-user,
+.message-edit-user:focus-visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+.message-edit-user:hover,
+.message-edit-user:focus-visible { color: var(--fg); outline: none; }
+.message-edit-user:focus-visible svg { outline: 2px solid var(--exx-focus); outline-offset: 3px; border-radius: 3px; }
+@media (hover: none) {
+	.message-edit-user { opacity: 0.55; pointer-events: auto; }
+}
+/* A finger needs a target about 44 px across. */
+@media (pointer: coarse) {
+	.message-edit-user { width: 44px; height: 44px; }
+	.bubble-edit-actions .rs-btn { min-height: 44px; min-width: 64px; }
+}
+
+/* The bubble being edited: the same ground and width as the bubble, with
+ * Cancel and Send under it. Focus is a slightly firmer edge, as in the
+ * message box, never an outline. */
+.bubble-edit-col { width: min(85%, 760px); }
+.bubble-edit-box {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 48px;
+	resize: none;
+	background: var(--user-bubble);
+	color: var(--user-fg);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 12px 16px;
+	font: inherit;
+	font-weight: 500;
+	line-height: 1.56;
+}
+.bubble-edit-box:focus { outline: none; border-color: color-mix(in srgb, var(--fg) 28%, var(--border)); }
+.bubble-edit-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+/* From Edit until the server takes the edit, what it replaces is dimmed. */
+.transcript-turn.edit-dim-answer > :not(:first-child),
+.transcript-turn.edit-dim-all > * {
+	opacity: 0.4;
+	transition: opacity 160ms ease;
+}

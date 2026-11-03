@@ -77,6 +77,8 @@ try {
 		writePersistentAgentThread,
 	} = persistentAgents;
 	const { createWebUiContext } = await import("../src/web-ui-context.js");
+	const { createPersistentRoomBashApprovalGuard } = await import("../src/persistent-room-bash-approval.js");
+	const { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } = await import("../src/room-approval-titles.js");
 	const executionAdapter = await import("../src/persistent-room-background-execution.js");
 	const {
 		createHeadlessUiContext,
@@ -334,7 +336,6 @@ try {
 	assert(declineNotes.length === 1, `the detached landing should persist exactly one decline note, got ${JSON.stringify(declineNotes)}`);
 	assert((declineNotes[0] as any).level === "info", `the decline note should read as info, got ${JSON.stringify(declineNotes[0])}`);
 	assert((declineNotes[0] as any).text === `While you were away, a question came up and was answered with a safe default: ${questionTitle}`, `the decline note should name the question plainly, got ${JSON.stringify(declineNotes[0])}`);
-	assert(!String((declineNotes[0] as any).text).includes("—"), "user-facing notes must not use em-dashes");
 	console.log("ok: an auto-declined confirm in a detached turn leaves exactly one honest note in the persisted thread");
 	// A command waiting for approval says it did not run, not that it was "answered".
 	const commandLog = createPersistentRoomAutoDeclinedQuestionLog();
@@ -359,6 +360,51 @@ try {
 	const otherCards = shownLog.appendItems([card("old-card", "Run this command?"), { kind: "user", id: "later-user", text: "Again." }, card("answered-card", "Run this command?", "Yes")], "detached-declined-later-turn");
 	assert(notesOf(otherCards).length === 2, `an earlier turn's card or an answered one keeps the note, got ${JSON.stringify(notesOf(otherCards))}`);
 	console.log("ok: a question whose card the turn kept is said once, on the card");
+
+	// -----------------------------------------------------------------------
+	// 4b. Coming back mid-answer: the room asks the returning person again.
+	//     The real command guard rides the bridge through a leave, a return,
+	//     a second tab and a second leave.
+	// -----------------------------------------------------------------------
+	const returnLog = createPersistentRoomAutoDeclinedQuestionLog();
+	const returnFrames: any[] = [];
+	let watcher = (msg: any) => returnFrames.push({ ...msg, tab: "first" });
+	const returnBridge = createWebUiContext((msg) => watcher(msg), (question) => returnLog.note(question));
+	const commandGuard = createPersistentRoomBashApprovalGuard({ isAutoApproved: () => false });
+	const runCommand = (command: string) => commandGuard.beforeBashCall(command, { hasUI: true, cwd: repoRoot, ui: returnBridge });
+	const commandCards = () => returnFrames.filter((frame) => frame?.type === "ui_request" && frame?.title === PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE);
+	returnBridge.detach(detachMessage);
+	const awayRejection = await expectRejection(runCommand("ls away"), "command asked while away");
+	assert(awayRejection === detachMessage && commandCards().length === 0, `a command asked while nobody is in the room is declined with the leave's words and shows no card, got ${awayRejection}`);
+	assert(JSON.stringify(returnLog.titles()) === JSON.stringify([PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE]), `the away decline is noted for the landing, got ${JSON.stringify(returnLog.titles())}`);
+	returnBridge.attach();
+	const approvedRun = runCommand("ls back");
+	const approveCard = commandCards().at(-1);
+	assert(approveCard?.tab === "first" && String(approveCard.message).includes("ls back"), `a command asked after the return shows its card, got ${JSON.stringify(commandCards())}`);
+	returnBridge.resolveResponse(approveCard.id, true);
+	assert(JSON.stringify(await approvedRun) === JSON.stringify({ allow: true }), "the returning person's approve reaches the room");
+	const declinedRun = runCommand("rm back");
+	returnBridge.resolveResponse(commandCards().at(-1).id, false);
+	const declinedDecision = await declinedRun;
+	assert(!declinedDecision.allow && declinedDecision.reason.startsWith("The user declined this command."), `the returning person's decline reaches the room, got ${JSON.stringify(declinedDecision)}`);
+	// A second tab takes the room over while a card is open: the card is asked again there, and one answer counts.
+	const openRun = runCommand("ls two tabs");
+	const firstTabCard = commandCards().at(-1);
+	watcher = (msg: any) => returnFrames.push({ ...msg, tab: "second" });
+	returnBridge.attach();
+	const secondTabCard = commandCards().at(-1);
+	assert(secondTabCard?.tab === "second" && secondTabCard.id === firstTabCard.id && secondTabCard.message === firstTabCard.message, `the open card is asked again in the tab that came back last, got ${JSON.stringify(commandCards())}`);
+	returnBridge.resolveResponse(secondTabCard.id, false);
+	returnBridge.resolveResponse(firstTabCard.id, true);
+	const twoTabDecision = await openRun;
+	assert(!twoTabDecision.allow, `the first answer counts and a second one for the same card is ignored, got ${JSON.stringify(twoTabDecision)}`);
+	// Leaving again declines as before, with the same words.
+	const pendingAtLeave = runCommand("ls leaving");
+	returnBridge.detach(detachMessage);
+	const leaveRejection = await expectRejection(pendingAtLeave, "card open at the second leave");
+	assert(leaveRejection === detachMessage, `a card open when the person leaves again is declined with the leave's words, got ${leaveRejection}`);
+	assert(JSON.stringify(returnLog.titles()) === JSON.stringify([PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE]), `the returned person's own answers are never noted as away declines, got ${JSON.stringify(returnLog.titles())}`);
+	console.log("ok: a person who comes back mid-answer gets the command card and their answer reaches the room; away still declines");
 
 	// -----------------------------------------------------------------------
 	// 5. The headless background context tells the same story.

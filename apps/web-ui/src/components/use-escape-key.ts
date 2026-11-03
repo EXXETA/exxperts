@@ -19,6 +19,11 @@ function onDocumentKeyDown(event: KeyboardEvent) {
 	if (top) top.fire();
 }
 
+/** A surface that closes on Escape is open: that Escape is its own. */
+export function escapeLayerOpen(): boolean {
+	return escapeStack.length > 0;
+}
+
 export function useEscapeKey(onEscape: () => void, enabled = true): void {
 	const handlerRef = useRef(onEscape);
 	handlerRef.current = onEscape;

@@ -26,7 +26,7 @@
 // viewport shrinks with the keyboard there: the overlap measures zero and
 // the whole module is a natural no-op.
 
-const PHONE_MEDIA = "(max-width: 760px)";
+export const PHONE_MEDIA = "(max-width: 760px)";
 const LIFT_VAR = "--phone-keyboard-lift";
 // Longer than the gap between iOS keyboard-animation resize events, shorter
 // than feeling laggy after the keyboard settles.

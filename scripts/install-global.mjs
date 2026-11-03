@@ -173,4 +173,4 @@ if (globalPrefix && fs.existsSync(installedRoot)) {
 }
 
 console.log(`[exxperts] installed version ${pkg.version} (check anytime with: exxperts --version)`);
-console.log("[exxperts] done — run: exxperts web  (web app)  or: exxperts cli  (CLI/TUI)");
+console.log("[exxperts] done. Run: exxperts  (opens the app in your browser)");

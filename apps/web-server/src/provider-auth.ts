@@ -94,7 +94,7 @@ export async function startProviderLogin(providerId: string, onSignedIn?: () => 
 			// a required prompt ends the flow with the reason instead of hanging.
 			onPrompt: async (prompt) => {
 				if (prompt.allowEmpty) return "";
-				throw new Error(`Sign-in needs input that is not available here (${prompt.message}). Use "exxperts cli" and /login instead.`);
+				throw new Error(`Sign-in needs input that is not available here (${prompt.message}).`);
 			},
 			// The flows race the callback server against this promise and tear
 			// the server down when it rejects — the only cancellation hook they

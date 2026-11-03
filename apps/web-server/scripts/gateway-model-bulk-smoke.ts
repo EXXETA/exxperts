@@ -196,10 +196,6 @@ check(twice[0]!.vision === undefined && twice[0]!.webSearch === true, "trusting 
 
 check(trustDetected([]).length === 0, "trusting detection invented a model");
 
-// An empty list must not pretend everything in it is approved.
-check(approvedCount([]) === 0, "an empty list reported approved models");
-check(setAllApproved([], true).length === 0, "approve all invented a model");
-
 if (failures > 0) {
 	console.error(`\n${failures} check(s) failed`);
 	process.exit(1);

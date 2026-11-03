@@ -1,0 +1,349 @@
+/* Charts ----------------------------------------------------------- */
+.chart-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+	gap: 16px;
+}
+.chart-block {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 16px 18px;
+	background: var(--panel);
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	min-width: 0; /* allow shrinking inside the auto-fit grid */
+}
+.chart-block h2 { font-size: 18px; margin: 0; }
+.chart-head { display: flex; flex-direction: column; gap: 2px; }
+.chart-head .sub { margin-top: 0; }
+.chart-head.with-toggle { flex-direction: row; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.chart-wrap {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.chart-svg {
+	width: 100%;
+	height: 156px; /* fixed height — SVG fills width via preserveAspectRatio=none */
+	color: var(--fg);
+	display: block;
+}
+.chart-axis {
+	display: flex;
+	justify-content: space-between;
+	color: var(--dim);
+	font-size: 10px;
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	margin-top: -2px;
+}
+.chart-legend {
+	display: flex;
+	gap: 18px;
+	color: var(--muted);
+	font-size: 12px;
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+}
+.chart-legend strong { color: var(--fg); font-weight: 700; }
+.chart-empty {
+	color: var(--muted);
+	font-size: 13px;
+	padding: 22px 0;
+	text-align: center;
+	border: 1px dashed var(--border-soft);
+	border-radius: 8px;
+	margin-top: 6px;
+}
+
+/* Agent share — horizontal stacked bar + legend rows */
+/* Collapsible recent-turns block ---------------------------------- */
+/* Plain <section> + a controlled <button> toggle. The previous
+   <details>/<summary> markup interacted badly with .dashboard's
+   flex column — rows rendered but were clipped behind the panel. */
+.recent-block {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--panel);
+	/* No overflow:hidden — the body uses its own overflow-x:auto. */
+}
+.recent-summary {
+	appearance: none;
+	width: 100%;
+	background: transparent;
+	border: none;
+	color: var(--fg);
+	cursor: pointer;
+	padding: 14px 18px;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	text-align: left;
+	font: inherit;
+}
+.recent-summary:focus-visible { outline: 1px solid var(--fg); outline-offset: -3px; }
+.recent-summary .recent-toggle {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 22px;
+	font-weight: 700;
+	color: var(--fg);
+	line-height: 1;
+	margin-left: auto;
+}
+.recent-block[data-open="true"] .recent-summary { border-bottom: 1px solid var(--border-soft); }
+.recent-block .recent-title {
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-size: 18px;
+	font-weight: 700;
+	letter-spacing: -0.005em;
+	color: var(--fg);
+}
+.recent-block .recent-meta {
+	color: var(--muted);
+	font-size: 11px;
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-weight: 700;
+}
+.recent-block .recent-filter {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--fg);
+	cursor: pointer;
+}
+.recent-block .recent-filter:hover { background: var(--panel-2); }
+.recent-block .recent-filter .ui-icon { color: var(--muted); }
+/* Recent-turns table: the page's table style (.dashboard table), with no
+   sticky header and no separate border collapse, which left rows looking
+   blank in some browsers. */
+.recent-body {
+	padding: 0 0 6px 0;
+	overflow-x: auto;
+}
+.recent-body table th,
+.recent-body table td {
+	padding: 9px 12px;
+	white-space: nowrap;
+}
+.recent-body table tbody tr:last-child td { border-bottom: none; }
+.recent-cache-note {
+	display: block;
+	font-size: 11px;
+	opacity: 0.7;
+}
+.recent-body table th:first-child,
+.recent-body table td:first-child { padding-left: 18px; }
+.recent-body table th:last-child,
+.recent-body table td:last-child { padding-right: 18px; }
+
+/* Wallet: source split, stacked chart, heatmap, export ------------ */
+/* Source colors: billed spend is ink (real money), plan-covered usage is
+   brand lila, unattributed history is border-gray. Shared by the split bar,
+   the legend swatches, and the stacked chart segments. */
+.seg-billed { background: var(--fg); fill: var(--fg); }
+.seg-plan { background: var(--exx-plan); fill: var(--exx-plan); }
+.seg-unattributed { background: var(--border); fill: var(--border); }
+
+.export-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	padding: 4px 11px;
+	color: var(--fg-soft);
+	font-family: var(--exx-font-display);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-decoration: none;
+	cursor: pointer;
+}
+.export-btn:hover { border-color: var(--fg); color: var(--fg); }
+.export-btn svg { display: block; }
+.export-btn:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: 2px; }
+
+.source-splitbar {
+	display: flex;
+	height: 14px;
+	border-radius: 4px;
+	overflow: hidden;
+	margin: 2px 0 12px;
+	background: var(--panel-2);
+}
+.src-row {
+	display: grid;
+	grid-template-columns: 12px minmax(200px, auto) minmax(90px, max-content) 1fr;
+	gap: 12px;
+	align-items: baseline;
+	padding: 8px 0;
+	border-top: 1px solid var(--divider);
+	font-size: 13.5px;
+}
+.src-row:first-of-type { border-top: none; }
+.src-dot { width: 10px; height: 10px; border-radius: 2px; align-self: center; }
+.src-name { font-weight: 700; font-size: 13px; }
+.src-chip {
+	font-family: var(--exx-font-display);
+	font-size: 9px;
+	font-weight: 700;
+	border: 1px solid var(--border);
+	border-radius: 3px;
+	padding: 1px 6px;
+	color: var(--muted);
+	margin-left: 8px;
+	vertical-align: 2px;
+}
+.src-chip.plan { color: var(--exx-plan); border-color: var(--exx-plan); }
+.src-chip.billed { color: var(--fg); border-color: var(--fg); }
+.src-money { font-family: var(--exx-font-sans); font-variant-numeric: tabular-nums; font-size: 12.5px; font-weight: 700; text-align: right; white-space: nowrap; }
+.src-meta { color: var(--muted); font-size: 12px; }
+/* Removed gateways fold behind one quiet row; the caret is the whole affordance
+   and the header stays exactly as loud as its neighbours. */
+.src-row-fold {
+	width: 100%;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	border: none;
+	border-radius: 6px;
+}
+.src-row.src-row-fold { border-top: 1px solid var(--divider); }
+.src-row-fold:hover { background: var(--panel-2); }
+.src-row-fold:focus-visible { outline: 1px solid var(--fg); outline-offset: -2px; }
+.src-row-inner { padding-left: 14px; }
+.fold-caret { color: var(--muted); font-size: 10px; align-self: center; }
+.src-note {
+	font-size: 12.5px;
+	color: var(--muted);
+	border-top: 1px solid var(--divider);
+	margin-top: 12px;
+	padding-top: 10px;
+}
+
+.chart-legend { flex-wrap: wrap; }
+.chart-legend > span { white-space: nowrap; }
+.chart-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend .lg i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+.heat-label { font: 10px var(--exx-font-mono); fill: var(--muted); }
+.heat-cell-empty { fill: var(--panel-2); }
+.heat-ramp i { background: var(--fg); }
+.heat-ramp i.empty { background: var(--panel-2); border: 1px solid var(--border-soft); }
+.heat-axis { padding-left: 30px; }
+
+.bar-list-sub { margin: 0 0 6px; }
+/* A Wallet row's name and its tag are separate boxes: when both do not fit
+   the name column, the tag moves whole onto its own line and the name stays
+   whole. Memory's read-only rows (.bar-row-static) keep their own layout. */
+.bar-row:not(.bar-row-static) .name { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; }
+.bar-row:not(.bar-row-static) .name .bar-tag { margin-left: 0; }
+.bar-tag {
+	color: var(--dim);
+	font-weight: 400;
+	font-size: 11px;
+	white-space: nowrap;
+	border: 1px solid var(--border-soft);
+	border-radius: 3px;
+	padding: 0 5px;
+	margin-left: 6px;
+}
+.bar-subdetail {
+	color: var(--dim);
+	font-size: 11.5px;
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	padding: 0 6px 8px 12px;
+	border-bottom: 1px solid var(--border-soft);
+}
+/* Retired rooms fold: the header toggles, it does not filter, and it is no
+   louder than the rows above it. */
+.bar-row .fold-caret { margin-right: 6px; }
+.bar-fold-row { padding-left: 14px; }
+.kind-chip {
+	font-family: var(--exx-font-display);
+	font-size: 9px;
+	font-weight: 700;
+	color: var(--muted);
+	border: 1px solid var(--border-soft);
+	border-radius: 3px;
+	padding: 1px 5px;
+}
+.dash-footer {
+	color: var(--dim);
+	font-size: 12px;
+	text-align: center;
+}
+
+
+/* Wallet on a phone: every list is a stack of short cards, so nothing is
+   wider than the screen and every amount and count shows whole. */
+@media (max-width: 760px) {
+	.chart-grid { grid-template-columns: minmax(0, 1fr); }
+	/* Source row: the name and amount on one line, the turns under them. */
+	.src-row { grid-template-columns: 12px minmax(0, 1fr) auto; row-gap: 2px; }
+	.src-row .src-meta { grid-column: 2 / -1; }
+	.src-name { overflow-wrap: anywhere; }
+	/* Rooms and Models: name, share bar and percent, then the amount and turns.
+	   Memory's read-only topic rows share .bar-row and keep their own grid. */
+	.bar-row:not(.bar-row-static) { grid-template-columns: minmax(0, 1fr) 56px auto; row-gap: 4px; }
+	.bar-row:not(.bar-row-static) .name { overflow-wrap: anywhere; }
+	.bar-row:not(.bar-row-static) .num { grid-column: 1 / -1; text-align: left; white-space: normal; }
+	.bar-subdetail { padding-left: 6px; }
+	/* Recent turns: each turn a card, the room and its value first, the rest
+	   on the line under them. The headers are hidden from sight only, so a
+	   screen reader still reads them (the table's roles in Dashboard.tsx keep
+	   its semantics once the display changes); arrows mark the counts. */
+	/* The +/– stays on the title's line while the room chip and the count wrap. */
+	.recent-summary { flex-wrap: wrap; row-gap: 4px; position: relative; padding-right: 44px; }
+	.recent-summary .recent-toggle { position: absolute; right: 18px; top: 14px; }
+	.recent-body table,
+	.recent-body thead,
+	.recent-body tbody,
+	.recent-body tr { display: block; }
+	.recent-body thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	.recent-body tbody tr {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		column-gap: 8px;
+		row-gap: 2px;
+		padding: 10px 18px;
+		border-bottom: 1px solid var(--border-soft);
+	}
+	.recent-body tbody tr:last-child { border-bottom: none; }
+	/* :nth-child(n) outweighs the page's right-aligned number columns. */
+	.recent-body table td:nth-child(n) {
+		padding: 0;
+		border: none;
+		text-align: left;
+		white-space: normal;
+	}
+	/* Two line breaks: after the room and value, and before tokens in and out, which keep one line together. */
+	.recent-body tbody tr::after { content: ""; order: 2; flex-basis: 100%; }
+	.recent-body tbody tr::before { content: ""; order: 4; flex-basis: 100%; }
+	.recent-body table td:nth-child(2) { order: 0; flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+	.recent-body table td:nth-child(8) { order: 1; font-weight: 700; color: var(--fg); }
+	.recent-body table td:nth-child(n+3):nth-child(-n+7),
+	.recent-body table td:nth-child(1) { order: 3; font-size: 11.5px; color: var(--muted); }
+	.recent-body table td:nth-child(n+6):nth-child(-n+7) { order: 5; }
+	.recent-body table td:nth-child(6)::before { content: "↑ "; }
+	.recent-body table td:nth-child(7)::before { content: "↓ "; }
+	.recent-body .recent-cache-note { display: inline; margin-left: 4px; }
+	.recent-body table td[colspan] { order: 0; flex-basis: 100%; }
+}

@@ -565,7 +565,7 @@ try_archive_install() {
 			;;
 	esac
 	say ""
-	say "  exxperts web"
+	say "  exxperts"
 	say ""
 	say "Installed version: ${version:-unknown} (check anytime with: exxperts --version)"
 	say "To update later, just run this same install command again."
@@ -637,7 +637,7 @@ source_install() {
 	say ""
 	say "all set. Start exxperts with:"
 	say ""
-	say "  exxperts web"
+	say "  exxperts"
 	say ""
 	say "Installed version: ${version:-unknown} (check anytime with: exxperts --version)"
 	say "To update later, just run this same install command again."

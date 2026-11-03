@@ -252,9 +252,10 @@ export function persistentRoomMcpGrantsMigrationPending(options: PersistentRoomM
  * One-time update-day migration: every existing room without an
  * mcp-settings.json is granted the FULL current global connector list, so
  * nothing a room could do before the update stops working on update day.
- * Guarded by a marker file created atomically (wx), so concurrent surfaces
- * (web server and a CLI room) racing here converge on one migration; after
- * the marker exists, a room without a settings file simply has no grants.
+ * Guarded by a marker file created atomically (wx), so concurrent callers
+ * (the server's boot and a room session's registration) racing here
+ * converge on one migration; after the marker exists, a room without a
+ * settings file simply has no grants.
  * Returns the ids of the rooms that received the migrated full list.
  */
 export function ensurePersistentRoomMcpGrantsMigration(configuredNames: readonly string[], options: PersistentRoomMcpSettingsStorageOptions = {}, now = new Date()): string[] {

@@ -19,7 +19,8 @@ export interface McpConnectorStatus {
 	name: string;
 	transport: "http" | "stdio";
 	target: string;
-	source: { path: string; kind: string; importKind?: string } | null;
+	/** importFile: the other tool's own file an imported connector is read from; Remove cannot remove it here. */
+	source: { path: string; kind: string; importKind?: string; importFile?: string } | null;
 	auth: McpConnectorAuthStatus;
 	tools: McpConnectorToolsStatus | null;
 }
@@ -102,6 +103,8 @@ export interface McpServerTestResult {
 	toolNames?: string[];
 	needsAuth?: boolean;
 	error?: string;
+	/** The status the address answered with, when the test learned it. */
+	httpStatus?: number;
 }
 
 export function testMcpServer(name: string): Promise<McpServerTestResult> {

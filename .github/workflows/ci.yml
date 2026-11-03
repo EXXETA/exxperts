@@ -21,9 +21,9 @@ jobs:
       # Smokes and typecheck don't need the headless browser; skip the ~150 MB download.
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
@@ -80,9 +80,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: latest
 
@@ -116,7 +116,8 @@ jobs:
           grep -q "patch-mcp-adapter:" ig.log || { echo "the installed copy's postinstall did not run" >&2; exit 1; }
 
       - name: Global exxperts command launches
-        run: exxperts --help
+        run: |
+          test "$(exxperts --help)" = "$(printf 'Usage: exxperts\nOpens exxperts in your browser. Everything else is in the app.')"
 
   # The one-line installers (install.sh / install.ps1), run against the local
   # checkout (EXXPERTS_DIR points at it, so the GitHub clone step is skipped;
@@ -129,9 +130,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -140,7 +141,8 @@ jobs:
         run: EXXPERTS_DIR="$GITHUB_WORKSPACE" bash install.sh
 
       - name: Verify the installed command
-        run: exxperts --help
+        run: |
+          test "$(exxperts --help)" = "$(printf 'Usage: exxperts\nOpens exxperts in your browser. Everything else is in the app.')"
 
       - name: Verify the product version is reported
         run: test "$(exxperts --version)" = "exxperts $(node -p 'require("./package.json").version')"
@@ -153,9 +155,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -173,7 +175,10 @@ jobs:
 
       - name: Verify the installed command (policy-proof shim)
         shell: pwsh
-        run: exxperts.cmd --help
+        run: |
+          $help = exxperts.cmd --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($help[0] -ne "Usage: exxperts") { Write-Error "unexpected help: $help"; exit 1 }
 
       - name: Verify the product version is reported
         shell: pwsh
@@ -197,9 +202,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -328,7 +333,8 @@ jobs:
           grep -q "falling back to the source install" fallback.log
 
       - name: The fallback install produced a working global command
-        run: exxperts --help
+        run: |
+          test "$(exxperts --help)" = "$(printf 'Usage: exxperts\nOpens exxperts in your browser. Everything else is in the app.')"
 
   # Same acceptance test as install-script-archive-linux, on the win-x64
   # archive and install.ps1. The installer is driven exactly like the
@@ -345,9 +351,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -500,9 +506,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm

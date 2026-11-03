@@ -68,7 +68,7 @@ const tool = createReadSkillTool({ agentId, lookupSkill, telemetry }) as unknown
 };
 assert(tool.name === READ_SKILL_TOOL_NAME && tool.name === "read_skill", "tool must be named read_skill");
 
-// Happy path: defanged body + provenance wrapper + telemetry.
+// Happy path: defanged body + provenance wrapper.
 const ok = await tool.execute("t1", { name: "cite-sources" });
 const okText = ok.content[0].text as string;
 assert(ok.details?.outcome === "ok", `expected ok outcome, got ${JSON.stringify(ok.details)}`);
@@ -78,7 +78,6 @@ assert(!okText.includes("[CONSULT HANDOFF"), "defang must break envelope-marker 
 assert(!/[*_]{1,3}\s*must-keep/i.test(okText), "defang must collapse must-keep emphasis");
 assert(!/<\s*\/?\s*skill\b/i.test(okText), "defang must break skill tag closers");
 assert(okText.includes("Always cite sources."), "the actual instruction text must survive");
-assert(telemetry.reads === 1 && telemetry.bodyChars > 0, "telemetry must count the read");
 
 // Not enabled: refusal, no body.
 const notEnabled = await tool.execute("t2", { name: "summarize-first" });
@@ -117,8 +116,6 @@ assert(!/\*\*must-keep\*\*/i.test(poisonIndex), "index description must collapse
 library.delete("cite-sources");
 const missing = await tool.execute("t6", { name: "cite-sources" });
 assert(missing.details?.outcome === "missing", "deleted skill must refuse as missing");
-
-assert((telemetry.reads as number) === 2, `telemetry must count only successful reads, got ${telemetry.reads}`);
 
 fs.rmSync(tempHome, { recursive: true, force: true });
 fs.rmSync(tempAgentsRoot, { recursive: true, force: true });

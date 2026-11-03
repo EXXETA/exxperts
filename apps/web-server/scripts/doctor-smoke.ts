@@ -1,15 +1,13 @@
-// Doctor CLI contract: `exxperts doctor` is the one health check across all
-// three install types. This smoke proves (1) the clone profile passes on a
-// built repo and prints its install-type line and section headers, (2) the
-// archive profile skips the clone-only checks and still exits 0 (the exit-code
-// contract: optional layers and network probes are warnings, never failures,
-// so a healthy CI machine always gets exit 0), (3) the launcher routes
-// `exxperts doctor` through to the script and `doctor --help` prints usage
-// without running checks, (4) the launcher's setup interception is limited to
-// the literal "chromium"/"search" subcommands: any other `exxperts setup <x>`
-// must still reach the runtime CLI, and (5) the setup guardrails: bare `setup`
-// prints a launcher-side usage listing all targets, `setup chromium --help`
-// prints usage without downloading, and stray arguments are rejected.
+// The health check's contract: scripts/doctor.mjs is the one health check
+// across all three install types (the desktop app's Health Check runs it).
+// This smoke proves (1) the clone profile passes on a built repo and prints
+// its install-type line and section headers, (2) the archive profile skips
+// the clone-only checks and still exits 0 (the exit-code contract: optional
+// layers and network probes are warnings, never failures, so a healthy CI
+// machine always gets exit 0), (3) `--help` prints usage without running
+// checks, and (4) the launcher's start checks (`--start-checks`) print
+// nothing and exit 0 on a healthy clone. one-command-smoke.ts holds the
+// failing side, through a failed `exxperts` start.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -88,58 +86,20 @@ try {
 		assertNotIncludes(output, "npm dependencies", "doctor --profile archive (no clone-only checks)");
 	}
 
-	// 3. The launcher routes `exxperts doctor` through to the script.
+	// 3. `--help` prints usage fast (no checks run) and exits 0.
 	{
-		const { status, output } = run("bin/exxperts.cjs", ["doctor", "--profile", "clone"]);
-		assert(status === 0, `exxperts doctor --profile clone: expected exit 0, got ${status}:\n${output}`);
-		assertIncludes(output, "install type: clone", "exxperts doctor (routed to doctor.mjs)");
+		const { status, output } = run("scripts/doctor.mjs", ["--help"]);
+		assert(status === 0, `doctor --help: expected exit 0, got ${status}:\n${output}`);
+		assertIncludes(output, "Usage: node scripts/doctor.mjs", "doctor --help (usage line)");
+		assertNotIncludes(output, "install type:", "doctor --help (must not run the checks)");
 	}
 
-	// 4. `doctor --help` prints usage fast (no checks run) and exits 0.
+	// 4. The start checks on a healthy clone: nothing to say, exit 0. Only a
+	//    failing check prints, so a failed start shows only what is wrong.
 	{
-		const { status, output } = run("bin/exxperts.cjs", ["doctor", "--help"]);
-		assert(status === 0, `exxperts doctor --help: expected exit 0, got ${status}:\n${output}`);
-		assertIncludes(output, "Usage: exxperts doctor", "exxperts doctor --help (usage line)");
-		assertNotIncludes(output, "install type:", "exxperts doctor --help (must not run the checks)");
-	}
-
-	// 5. Only the literal "chromium"/"search" setup subcommands are intercepted:
-	//    any other target must reach the runtime CLI's setup handler unchanged.
-	//    The expected wording is coupled to the runtime's setup handler in
-	//    runtime/packages/coding-agent/src/cli/setup-openai-compatible.ts; if
-	//    this assertion starts failing on the needle, check that file first.
-	{
-		const { output } = run("bin/exxperts.cjs", ["setup", "nonsense"]);
-		assertIncludes(output, "Unknown setup target: nonsense", "exxperts setup nonsense (must reach the runtime CLI)");
-		assertNotIncludes(output, "Downloading headless Chromium", "exxperts setup nonsense (must not run the chromium installer)");
-		assertNotIncludes(output, "SearXNG", "exxperts setup nonsense (must not run the search helper)");
-	}
-
-	// 6. Bare `exxperts setup` prints the three-target usage in the launcher and
-	//    never reaches the runtime (whose usage only knows openai-compatible).
-	{
-		const { status, output } = run("bin/exxperts.cjs", ["setup"]);
-		assert(status === 0, `exxperts setup: expected exit 0, got ${status}:\n${output}`);
-		assertIncludes(output, "chromium", "exxperts setup (usage lists chromium)");
-		assertIncludes(output, "search", "exxperts setup (usage lists search)");
-		assertIncludes(output, "openai-compatible", "exxperts setup (usage lists openai-compatible)");
-		assertNotIncludes(output, "Unknown setup target", "exxperts setup (must not reach the runtime CLI)");
-		assertNotIncludes(output, "Downloading headless Chromium", "exxperts setup (must not start a download)");
-	}
-
-	// 7. `setup chromium --help` prints usage without downloading; extra args are
-	//    rejected instead of silently starting a 150 MB download.
-	{
-		const { status, output } = run("bin/exxperts.cjs", ["setup", "chromium", "--help"]);
-		assert(status === 0, `exxperts setup chromium --help: expected exit 0, got ${status}:\n${output}`);
-		assertIncludes(output, "Usage: exxperts setup chromium", "setup chromium --help (usage line)");
-		assertNotIncludes(output, "Downloading headless Chromium", "setup chromium --help (must not download)");
-	}
-	{
-		const { status, output } = run("bin/exxperts.cjs", ["setup", "chromium", "bogus"]);
-		assert(status === 1, `exxperts setup chromium bogus: expected exit 1, got ${status}:\n${output}`);
-		assertIncludes(output, "unexpected argument", "setup chromium bogus (rejection message)");
-		assertNotIncludes(output, "Downloading headless Chromium", "setup chromium bogus (must not download)");
+		const { status, output } = run("scripts/doctor.mjs", ["--start-checks"]);
+		assert(status === 0, `doctor --start-checks: expected exit 0, got ${status}:\n${output}`);
+		assert(output.trim() === "", `doctor --start-checks on a healthy clone must print nothing, got:\n${output}`);
 	}
 
 	console.log("doctor-smoke: OK");

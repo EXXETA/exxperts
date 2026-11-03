@@ -6,11 +6,10 @@ Use this document for detailed tarball checks. For day-to-day feature work, use 
 
 ## Installed product loop vs repo development loop
 
-- **Installed product loop:** `npm run build` → `npm pack` → `npm exec --package <tarball> -- exxperts web` or `npm install -g <tarball>` → `exxperts web` for the web app, `exxperts cli` for the coding CLI/TUI. Plain `exxperts` opens an interactive picker between the two surfaces.
-- **Installed gateway provider setup:** `exxperts setup openai-compatible`.
-- **Repo development loop:** clone → `npm install` → `npm run build` → `./scripts/exxperts-web` / `./scripts/exxperts-cli`.
-- **Repo gateway provider setup:** `./scripts/exxperts-cli setup openai-compatible`.
-- Package commands validate user launch, bin resolution, packaged assets, package-root paths, setup-command routing, and current-repo cwd handling for `exxperts cli`.
+- **Installed product loop:** `npm run build` → `npm pack` → `npm exec --package <tarball> -- exxperts` or `npm install -g <tarball>` → `exxperts`, which starts the app and opens it in the browser.
+- **Repo development loop:** clone → `npm install` → `npm run build` → `./scripts/exxperts-web`.
+- Provider and gateway setup happens in the app, under **Settings, AI setup**, on both loops.
+- Package commands validate user launch, bin resolution, packaged assets, and package-root paths.
 - Older `./scripts/exxeta-web` and `./scripts/exxeta` repo scripts remain compatibility aliases, but current docs should prefer the explicit Exxperts commands.
 
 ## Build and pack
@@ -32,29 +31,21 @@ exxeta-exxperts-app-0.6.0-f6.0.tgz
 Use `npm exec` when you want to test the tarball once without installing commands globally or changing your `PATH`:
 
 ```bash
-# Web workspace
-npm exec --package ./exxeta-exxperts-app-0.6.0-f6.0.tgz -- exxperts web
+# The app
+npm exec --package ./exxeta-exxperts-app-0.6.0-f6.0.tgz -- exxperts
 
-# Help and setup checks
+# Help check
 npm exec --package ./exxeta-exxperts-app-0.6.0-f6.0.tgz -- exxperts --help
-npm exec --package ./exxeta-exxperts-app-0.6.0-f6.0.tgz -- exxperts setup --help
-npm exec --package ./exxeta-exxperts-app-0.6.0-f6.0.tgz -- exxperts cli --help
-
-# Coding CLI/TUI from any repo
-cd /path/to/any/repo
-npm exec --package /absolute/path/to/exxeta-exxperts-app-0.6.0-f6.0.tgz -- exxperts cli
 ```
 
 ## Optional global install
 
-Use global install when you want to validate the real installed user commands from any shell:
+Use global install when you want to validate the real installed user command from any shell:
 
 ```bash
 npm install -g ./exxeta-exxperts-app-0.6.0-f6.0.tgz
 which exxperts
-exxperts web   # packaged web app
-exxperts cli   # packaged CLI/TUI from the current directory
-exxperts       # interactive picker between the two surfaces
+exxperts       # starts the app and opens it in the browser
 ```
 
 If macOS returns `EACCES`, do not use `sudo` for this local product install. Configure a user-level npm prefix:
@@ -88,10 +79,8 @@ npm uninstall -g @exxeta/exxperts-app
 ## What the package does
 
 - exposes a single npm bin: `exxperts`
-- `exxperts web` starts the local Fastify server, serves `apps/web-ui/dist`, and opens the browser unless `--no-open` is set
-- `exxperts cli` starts the packaged CLI/TUI directly from Node and preserves the caller's cwd for repo work
-- plain `exxperts` opens an interactive picker between the two surfaces (web app recommended)
-- `exxperts setup openai-compatible` routes directly to the runtime setup command without starting the web server
+- `exxperts` starts the local Fastify server, serves `apps/web-ui/dist`, and opens the browser unless `--no-open` is set
+- the removed terminal commands print that they were removed and exit 1
 - sets `EXXETA_HOME` to the installed package root for bundled agents, skills, extensions, themes, runtime assets, and static web UI files
 - creates first-run user dirs as needed under `~/.exxperts/app`, including `~/.exxperts/app/agents` and `~/.exxperts/app/skills`
 - keeps user-created agents, skills, memory, usage, conversations, MCP config, policy config, and artifacts under `~/.exxperts/app`
@@ -113,12 +102,10 @@ npm run build
 npm pack --dry-run --json
 npm pack
 npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts --help
-npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts setup --help
-npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts cli --help
-npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts web --no-open --port 8790
+npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts --no-open --port 8790
 ```
 
-`--port` and `--no-open` are test/debug flags for scripted web checks, port conflicts, and asset validation. For normal web launches, use `exxperts web`.
+`--port` and `--no-open` are test/debug flags for scripted web checks, port conflicts, and asset validation. For normal launches, use `exxperts`.
 
 While the web server is running, check assets. Asset routes require the client auth token (see `SECURITY.md`), so send it as a header; without it every check returns HTTP 401 by design:
 
@@ -139,7 +126,7 @@ Implemented for local npm tarball smoke testing only:
 - cross-platform Node launchers for macOS/Windows/Linux browser opening
 - package-root path resolution via `EXXETA_HOME`
 - packaged static web UI serving, including logo and fonts
-- product command split: `exxperts web` for the web app, `exxperts cli` for the packaged CLI/TUI, and bare `exxperts` opening the interactive surface picker (the single installed command)
+- the single installed command, `exxperts`, which starts the app and opens it in the browser
 
 Not included in this local tarball flow: Electron, Docker, native installers, DMG/MSI, notarisation, icons, auto-update, or publishing automation. Those exist elsewhere: the signed desktop app with its installers and update check lives in `apps/desktop`, and publishing in the [release pipeline](release-pipeline.md).
 
@@ -154,7 +141,7 @@ exxperts/
   vendor/node/      pinned Node runtime (bin/node plus LICENSE; node.exe on Windows)
 ```
 
-The shim runs `vendor/node/bin/node app/bin/exxperts.cjs`, and because the launcher chain spawns all children via its own `process.execPath`, everything downstream (tsx, the web server, the CLI runtime) uses the vendored Node. The Node version is pinned in `scripts/release-node-version.json` together with the per-target sha256 of the nodejs.org archive (checked weekly by `scripts/check-node-currency.mjs`), and the download is verified against that pinned hash.
+The shim runs `vendor/node/bin/node app/bin/exxperts.cjs`, and because the launcher chain spawns all children via its own `process.execPath`, everything downstream, the web server included, uses the vendored Node. The Node version is pinned in `scripts/release-node-version.json` together with the per-target sha256 of the nodejs.org archive (checked weekly by `scripts/check-node-currency.mjs`), and the download is verified against that pinned hash.
 
 Deliberately not bundled: Chromium (a per-user cache download, fetched later with `npx playwright install chromium`; artifact preview degrades gracefully without it) and git (a soft dependency: a public GitHub repository's skills arrive as GitHub's zip, so git is needed only to import from a private repository, another host or an SSH address). The `.env` file is read from `app/.env` inside the unpacked archive, so provider configuration travels with the install location, not the archive.
 

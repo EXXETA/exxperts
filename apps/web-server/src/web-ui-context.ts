@@ -7,6 +7,9 @@
  *   { type: "ui_request", id, kind: "confirm"|"select"|"input"|"notify"|"status",
  *     title?, message?, options?, placeholder?, detail?, level? }
  *
+ *   { type: "ui_request_closed", id, reason: "stopped" }
+ *     (Stop answered the question for the person: the card stops asking)
+ *
  * Wire protocol additions (client → server):
  *   { type: "ui_response", id, value }
  *
@@ -39,6 +42,29 @@ export interface WebUiContext extends ExtensionUIContext {
 	 * the turn forever.
 	 */
 	detach(message: string): void;
+	/**
+	 * Somebody is on the other end again (a person came back while the turn
+	 * keeps running): future dialogs reach the client as normal, and every
+	 * dialog still waiting is asked again, so the newest watcher sees its card.
+	 */
+	attach(): void;
+	/**
+	 * The person pressed Stop: every open question is answered with
+	 * `sentence` for the model, its card is told it closed, and a question
+	 * asked while the stop is under way gets the same answer at once. Not an
+	 * away decline, so nothing is noted for the landing. `reopen` ends it
+	 * when the next turn starts.
+	 */
+	declineOpenQuestions(sentence: string): void;
+	/**
+	 * The person sent a message instead of answering: every question open now
+	 * is answered with `sentence` and its card is told it was declined. Unlike
+	 * Stop, a question asked after this is asked as usual.
+	 */
+	declineOpenQuestionsOnce(sentence: string): void;
+	/** Whether a question waits for the person's answer now. */
+	hasOpenQuestions(): boolean;
+	reopen(): void;
 }
 
 // Extensions style status/notification text via `ctx.ui.theme` (a required
@@ -57,8 +83,9 @@ const passthroughTheme = {
 };
 
 export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebUiAutoDeclinedQuestion) => void): WebUiContext {
-	const pending = new Map<string, { kind: WebUiAutoDeclinedQuestion["kind"]; title: string; resolve: (v: any) => void; reject: (e: Error) => void }>();
+	const pending = new Map<string, { kind: WebUiAutoDeclinedQuestion["kind"]; title: string; payload: Record<string, unknown>; resolve: (v: any) => void; reject: (e: Error) => void }>();
 	let detachedMessage: string | null = null;
+	let stoppedMessage: string | null = null;
 	let nextId = 1;
 	const newId = () => `ui_${Date.now()}_${nextId++}`;
 	// Every dialog the detached bridge answers for the user is reported once so
@@ -78,8 +105,12 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 				reject(new Error(detachedMessage));
 				return;
 			}
+			if (stoppedMessage !== null) {
+				reject(new Error(stoppedMessage));
+				return;
+			}
 			const id = newId();
-			pending.set(id, { kind, title, resolve: resolve as any, reject });
+			pending.set(id, { kind, title, payload, resolve: resolve as any, reject });
 			send({ type: "ui_request", id, ...payload });
 		});
 
@@ -132,6 +163,28 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 			r.resolve(value);
 		},
 
+		declineOpenQuestions(sentence: string) {
+			stoppedMessage = sentence;
+			for (const [id, r] of pending) {
+				pending.delete(id);
+				send({ type: "ui_request_closed", id, reason: "stopped" });
+				r.reject(new Error(sentence));
+			}
+		},
+		declineOpenQuestionsOnce(sentence: string) {
+			for (const [id, r] of pending) {
+				pending.delete(id);
+				send({ type: "ui_request_closed", id, reason: "declined" });
+				r.reject(new Error(sentence));
+			}
+		},
+		hasOpenQuestions() {
+			return pending.size > 0;
+		},
+		reopen() {
+			stoppedMessage = null;
+		},
+
 		// Internal — called by the WS close handler when a turn detaches.
 		detach(message: string) {
 			detachedMessage = message;
@@ -140,6 +193,12 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 				noteAutoDecline(r.kind, r.title);
 				r.reject(new Error(message));
 			}
+		},
+
+		// Internal: called when a returning connection takes the turn over.
+		attach() {
+			detachedMessage = null;
+			for (const [id, r] of pending) send({ type: "ui_request", id, ...r.payload });
 		},
 	};
 

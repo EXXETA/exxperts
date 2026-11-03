@@ -7,9 +7,9 @@
 
 import { useState } from "react";
 import { ApiRequestError } from "../api";
-import type { CredentialKey } from "../../../web-server/src/model-not-offered";
+import { credentialGoneOf, type CredentialKey } from "../../../web-server/src/model-not-offered";
 import { clockTime, failureButtons, isGatewayFind, quotaCause, quotaOffersTryAgain, quotaWayOn, type GatewayFind, type QuotaWay } from "../turn-failure-line";
-import { useRemoteClientContext } from "../remote-client-context";
+import { sharedServerRole, useRemoteClientContext } from "../remote-client-context";
 import { canonicalModelName } from "../model-names";
 import { ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, memoryModelSignInLabel } from "../memory-v2-copy";
 
@@ -72,6 +72,16 @@ export function retryCanHelp(cause: string, quotaWay?: QuotaWay, gatewayFind?: G
 }
 
 /**
+ * Whether a gone credential offers its button (Sign in, Add key, Replace
+ * key), which opens AI setup: on a shared server only to the admin, who can
+ * change it there, and never Sign in, which nobody can do there. `role` is
+ * sharedServerRole's.
+ */
+export function offersCredentialButton(role: "member" | "admin" | null, signsIn: boolean): boolean {
+	return role === null || (role === "admin" && !signsIn);
+}
+
+/**
  * The ways on a memory screen offers for its Memory model's stop, decided here
  * once so the screens never drift. The key's button where a sign-in or key is
  * gone, or for a gateway's bare 403, which may be its key, and AI setup's for
@@ -81,13 +91,13 @@ export function retryCanHelp(cause: string, quotaWay?: QuotaWay, gatewayFind?: G
  * that worked leads on. Choose another model leads where neither of the others
  * is offered, or where `chooseFirst` says so, as after the same failure twice.
  */
-export function useMemoryWaysOn<P>(cause: string | undefined, quotaWay: QuotaWay | undefined, ways: { onTryAgain?: () => void; onChooseModel?: () => void; onSignIn?: (provider: P) => void; provider: P; chooseFirst?: boolean; gatewayFind?: GatewayFind }) {
+export function useMemoryWaysOn<P>(cause: string | undefined, quotaWay: QuotaWay | undefined, ways: { onTryAgain?: () => void; onChooseModel?: () => void; onSignIn?: (provider: P) => void; provider: P; key?: CredentialKey; chooseFirst?: boolean; gatewayFind?: GatewayFind }) {
 	const [wayTaken, setWayTaken] = useState(false);
-	const { sharedServer } = useRemoteClientContext();
+	const context = useRemoteClientContext();
 	const took = (action?: () => void) => action && (() => { setWayTaken(true); action(); });
 	const { onSignIn, provider } = ways;
-	const gatewayButtons = failureButtons(cause === "gateway-refused" || cause === "gateway-not-found" ? cause : undefined, undefined, sharedServer, ways.gatewayFind);
-	const keyButton = cause === "signed-out" || gatewayButtons.replaceKey || gatewayButtons.aiSetup;
+	const gatewayButtons = failureButtons(cause === "gateway-refused" || cause === "gateway-not-found" ? cause : undefined, undefined, context.sharedServer, ways.gatewayFind);
+	const keyButton = (cause === "signed-out" && offersCredentialButton(sharedServerRole(context), credentialGoneOf(ways.key) === "signed-out")) || gatewayButtons.replaceKey || gatewayButtons.aiSetup;
 	const signIn = keyButton && onSignIn ? took(() => onSignIn(provider)) : undefined;
 	const chooseModel = took(ways.onChooseModel);
 	const tryAgain = !cause || retryCanHelp(cause, quotaWay, ways.gatewayFind) || wayTaken ? ways.onTryAgain : undefined;
@@ -152,7 +162,7 @@ export function ModelNoticePanel({ notice, kept, onTryAgain, onChooseModel, onSi
 	onClose?: () => void;
 	busy?: boolean;
 }) {
-	const ways = useMemoryWaysOn(notice.detail, notice.quotaWay, { onTryAgain, onChooseModel, onSignIn, provider: notice.provider, gatewayFind: notice.gatewayFind });
+	const ways = useMemoryWaysOn(notice.detail, notice.quotaWay, { onTryAgain, onChooseModel, onSignIn, provider: notice.provider, key: notice.key, gatewayFind: notice.gatewayFind });
 	return (
 		<div className="memory-action-note model-notice" role="status">
 			<p>{modelNoticeSentence(notice)}{kept ? ` ${kept}` : ""}</p>

@@ -13,7 +13,7 @@
 //
 // The routes live under /api/persistent-agents/:id/ beside the room's other
 // per-room routes, share their auth, their `{ error, code? }` envelope and
-// their remote-route classification, and are registered from index.ts with one
+// their remote-route classification, and are registered from room-settings-routes.ts with one
 // line next to the maintenance-settings pair.
 
 import type { FastifyInstance } from "fastify";

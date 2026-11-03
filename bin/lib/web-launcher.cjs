@@ -3,16 +3,19 @@ const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
-const { ensureProductAppUserDirs, productAppStatePath } = require("./product-state-paths.cjs");
+const { ensureProductAppUserDirs } = require("./product-state-paths.cjs");
 const stateProfiles = require("./state-profiles.cjs");
 const { serverLaunchArgs } = require("./server-entry.cjs");
 
-function usage(command) {
-  return `Usage: ${command} [--port <port>] [--no-open] [--help]\n\nStarts the local exxperts business/user web app, serves the built UI,\nand opens the browser unless --no-open is set.\n\nOptions:\n  --port <port>   Port for the local server (default: 8787 or PORT)\n  --no-open       Do not open a browser\n  --help          Show this help\n`;
-}
+// --port and --no-open work but stay out of the help: tests, CI and a home
+// computer serving a phone use them; a person never needs them.
+const HELP = "Usage: exxperts\nOpens exxperts in your browser. Everything else is in the app.";
+const REMOVED = "The terminal app and its commands were removed in exxperts 0.15. Run `exxperts` to open the app; everything else is in the app.";
 
+// Any word this command does not know gets REMOVED: it is either one of the
+// terminal app's commands or a typo, and both are answered by the app.
 function parseArgs(argv) {
-  const opts = { port: process.env.PORT || "8787", open: true, help: false };
+  const opts = { port: process.env.PORT || "8787", open: true, help: false, unknown: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") opts.help = true;
@@ -22,15 +25,51 @@ function parseArgs(argv) {
       if (!value || value.startsWith("-")) throw new Error("--port requires a value");
       opts.port = value;
     } else {
-      throw new Error(`Unknown option: ${arg}`);
+      return { ...opts, unknown: arg };
     }
   }
   if (!/^\d+$/.test(String(opts.port))) throw new Error(`Invalid port: ${opts.port}`);
   return opts;
 }
 
-function ensureDirs() {
-  ensureProductAppUserDirs();
+// A start that fails says why: the launcher's own reason, then the failing
+// lines of the health check's start checks (scripts/doctor.mjs
+// --start-checks), which name the fix for a broken install. Only the first
+// line of a system error is shown, so a person never gets a stack.
+function cannotStart(root, reason) {
+  console.error(reason);
+  const checks = spawnSync(process.execPath, [path.join(root, "scripts", "doctor.mjs"), "--start-checks"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 60_000,
+  });
+  const failing = String(checks.stdout || "").trimEnd();
+  if (failing) console.error(`\n${failing}`);
+  process.exit(1);
+}
+
+function firstLine(err) {
+  return String(err && err.message ? err.message : err).split("\n")[0];
+}
+
+// What a server that died while starting printed, without Node's crash dump:
+// its own sentences stay, and an uncaught error comes down to its message
+// (from the line that names the error to the first stack frame, so a
+// compiler's file, position and explanation stay), with the source excerpt
+// Node prints above it, a "Require stack" list, the frames, the error's
+// fields and the "Node.js v.." footer gone.
+function withoutCrashDump(text) {
+  const lines = text.split(/\r?\n/);
+  const firstFrame = lines.findIndex((line) => /^\s+at /.test(line));
+  if (firstFrame === -1) return text;
+  let message = firstFrame - 1;
+  while (message > 0 && !/^\S*(Error|Exception)\b/.test(lines[message])) message--;
+  let start = message;
+  // Node's excerpt: "<file>:<line>", the source line, the caret, a blank line.
+  if (message >= 4 && lines[message - 1] === "" && /^\s*\^+\s*$/.test(lines[message - 2])) start = message - 4;
+  const requireStack = lines.indexOf("Require stack:", message);
+  const end = requireStack !== -1 && requireStack < firstFrame ? requireStack : firstFrame;
+  return [...lines.slice(0, start), ...lines.slice(message, end)].join("\n").trim();
 }
 
 function loadDotenv(root) {
@@ -113,10 +152,15 @@ function readAuthToken(home) {
 function openBrowser(url) {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  // A missing opener (a Linux without xdg-open) fails after the spawn, as an
+  // error event; unheard, it would end the launcher and leave the server.
+  const failed = () => console.error(`Could not open the browser. Open this link once to sign the browser in:\n${url}\n`);
   try {
-    spawn(command, args, { detached: true, stdio: "ignore" }).unref();
-  } catch (err) {
-    console.error(`Could not open browser automatically. Open ${url} manually.`);
+    const opener = spawn(command, args, { detached: true, stdio: "ignore" });
+    opener.on("error", failed);
+    opener.unref();
+  } catch {
+    failed();
   }
 }
 
@@ -132,9 +176,25 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
   // previous leg's adopted process.env would run against the folder the data
   // just left.
   const baseEnv = { ...process.env };
+  let opts;
+  try {
+    opts = parseArgs(argv);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
+  if (opts.unknown !== null) {
+    console.error(REMOVED);
+    process.exit(1);
+  }
+  if (opts.help) {
+    console.log(HELP);
+    return;
+  }
+
   // Complete a move a dying run left behind, then point this process at the
-  // exxperts home before ANYTHING (setup branch, ensureDirs, profile pointer
-  // reads) resolves a state path.
+  // exxperts home before ANYTHING (the data folders, profile pointer reads)
+  // resolves a state path.
   // A move that cannot run is not a reason not to start: it left the old home
   // intact and the pointer still names it, so the run continues there and
   // says why. Only an unusable home is fatal.
@@ -146,45 +206,19 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
   try {
     stateProfiles.adoptStateHome(loginHome);
   } catch (err) {
-    console.error(err.message);
-    process.exit(1);
+    cannotStart(root, err.message);
   }
-
-  // Product setup commands should not start the web server or require an
-  // already-configured AI provider. Route them directly to the runtime setup
-  // handler, matching the exxcode launcher behavior.
-  if (argv[0] === "setup") {
-    loadDotenv(root);
-    const env = { ...process.env, EXXETA_HOME: root };
-    const result = spawnSync(process.execPath, [path.join(root, "runtime", "packages", "coding-agent", "dist", "cli.js"), ...argv], {
-      stdio: "inherit",
-      env,
-      cwd: process.cwd(),
-    });
-    process.exit(result.status ?? (result.signal ? 1 : 0));
-  }
-
-  let opts;
   try {
-    opts = parseArgs(argv);
+    ensureProductAppUserDirs();
   } catch (err) {
-    console.error(err.message);
-    console.error(`\n${usage(command)}`);
-    process.exit(2);
+    cannotStart(root, `Could not create the exxperts data folders: ${firstLine(err)}`);
   }
-  if (opts.help) {
-    console.log(usage(command));
-    return;
-  }
-
-  ensureDirs();
   loadDotenv(root);
 
   (async () => {
     const portState = await probePort(opts.port);
     if (portState === "responding" || portState === "unresponsive") {
-      console.error(portHeldMessage(command, opts.port, portState));
-      process.exit(1);
+      cannotStart(root, portHeldMessage(command, opts.port, portState));
     }
     const serverArgs = serverLaunchArgs(root);
     // Spread per leg on top of a fresh copy of baseEnv: the exxperts home can
@@ -234,37 +268,57 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
       // env copy, so no leg can inherit the one before it.
       const { home } = stateProfiles.adoptStateHome(loginHome, legEnv);
       const activeProfile = stateProfiles.readActiveProfile(home);
+      // The server's stderr is held while it starts: a server that dies
+      // before it answers would print Node's raw stack there. Once it
+      // answers, it passes straight through.
       server = spawn(process.execPath, serverArgs, {
         cwd: root,
-        stdio: "inherit",
+        stdio: ["inherit", "inherit", "pipe"],
         env: { ...legEnv, EXXPERTS_REAL_HOME: home, ...stateProfiles.serverEnvForProfile(home, activeProfile) },
       });
+      server.stderr.setEncoding("utf8");
+      let heldStderr = "";
+      let holdingStderr = true;
+      server.stderr.on("data", (chunk) => {
+        if (holdingStderr) heldStderr += chunk;
+        else process.stderr.write(chunk);
+      });
+      const passStderrThrough = () => {
+        if (!holdingStderr) return;
+        holdingStderr = false;
+        process.stderr.write(heldStderr);
+        heldStderr = "";
+      };
+      // A process the server started can hold its stderr open, so the wait
+      // for the rest of it is short.
+      const stderrClosed = new Promise((resolve) => server.stderr.on("close", resolve));
+      const stderrRead = () => Promise.race([stderrClosed, new Promise((r) => setTimeout(r, 2000))]);
       const exited = new Promise((resolve) => {
-        server.on("error", (err) => {
-          console.error(`Could not start the exxperts web server: ${err.message}`);
-          process.exit(1);
-        });
+        server.on("error", (err) => cannotStart(root, `Could not start the exxperts web server: ${firstLine(err)}`));
         server.on("exit", (code, signal) => resolve({ code, signal }));
       });
+      // A server ended by a signal keeps exitCode null and sets signalCode.
+      const running = () => server.exitCode === null && server.signalCode === null;
 
       let ready = false;
       // If the server child already died (e.g. port in use), it printed why —
       // don't claim the app is running just because something answers on the port.
-      for (let i = 0; i < 40 && !ready && server.exitCode === null; i++) {
+      for (let i = 0; i < 40 && !ready && running(); i++) {
         ready = await waitFor(`${url}/healthz`);
         if (!ready) await new Promise((r) => setTimeout(r, 250));
       }
-      if (!ready && server.exitCode === null) {
+      if (!ready && running()) {
         // Say so and keep waiting instead of claiming success: the first start
         // after an install or update pays a cold TypeScript startup that can
         // outlast the poll window, especially on Windows.
         console.error(`\nThe web server is not answering on ${url} yet. The first start after an install or update can be slow; still waiting. Press Ctrl+C to stop.`);
-        while (!ready && server.exitCode === null) {
+        while (!ready && running()) {
           ready = await waitFor(`${url}/healthz`);
           if (!ready) await new Promise((r) => setTimeout(r, 1000));
         }
       }
-      if (server.exitCode === null) {
+      if (running()) {
+        passStderrThrough();
         // The token is re-read per leg: it lives inside the profile, so a
         // switch rotates it. The browser only opens on the first leg: after
         // a switch the already-open page signs itself into the new profile,
@@ -272,10 +326,11 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
         // for anyone who closed that page.
         const token = readAuthToken(home);
         const signInUrl = token ? `${url}/auth/session?token=${encodeURIComponent(token)}` : url;
-        console.error(`\nexxperts web running at ${url}\nPress Ctrl+C to stop.\n`);
+        console.error(`\nexxperts running at ${url}\nPress Ctrl+C to stop.\n`);
         if (opts.open && firstLeg) openBrowser(signInUrl);
         else if (token) console.error(`Open this link once to sign the browser in:\n${signInUrl}\n`);
       }
+      const startedLeg = ready;
       firstLeg = false;
 
       const { code, signal } = await exited;
@@ -284,19 +339,33 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
         // a home-move intent); the next leg picks it up. No port pre-flight:
         // our own child just released the port.
         if (fs.existsSync(stateProfiles.homeMoveIntentPath(loginHome))) {
-          console.error("\nMoving where exxperts keeps its data; restarting exxperts web…\n");
+          console.error("\nMoving where exxperts keeps its data; restarting exxperts…\n");
         } else {
           const next = stateProfiles.readActiveProfile(home);
-          console.error(`\nSwitching to ${next === null ? "the standard profile (.exxperts)" : `profile "${next}"`}; restarting exxperts web…\n`);
+          console.error(`\nSwitching to ${next === null ? "the standard profile (.exxperts)" : `profile "${next}"`}; restarting exxperts…\n`);
         }
         continue;
       }
-      process.exit(code ?? (signal ? 1 : 0));
+      // A server that never answered stopped while starting: the server said
+      // what it knew, and the launcher adds the start checks. Its stderr may
+      // still be arriving when it exits, so it is read to the end first.
+      if (!stopping && !startedLeg) {
+        if (holdingStderr) {
+          await stderrRead();
+          holdingStderr = false;
+          const said = withoutCrashDump(heldStderr);
+          if (said) console.error(said);
+        }
+        cannotStart(root, `The exxperts server stopped while starting (exit code ${code ?? signal}).`);
+      }
+      // The server's last words and the launcher's own queued writes reach a
+      // slow pipe before the exit.
+      passStderrThrough();
+      await stderrRead();
+      process.stderr.write("", () => process.exit(code ?? (signal ? 1 : 0)));
+      return;
     }
-  })().catch((err) => {
-    console.error(`Could not start exxperts web: ${err && err.message ? err.message : err}`);
-    process.exit(1);
-  });
+  })().catch((err) => cannotStart(root, `Could not start exxperts: ${firstLine(err)}`));
 }
 
-module.exports = { main, usage };
+module.exports = { main };

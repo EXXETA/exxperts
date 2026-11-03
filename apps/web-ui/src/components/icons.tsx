@@ -102,13 +102,44 @@ export function SpinnerIcon({ size = 14 }: { size?: number } = {}) {
 }
 
 
-/** A command prompt: the Bash chip's face when there is no room for its words. */
-export function TerminalIcon({ size = 16 }: { size?: number } = {}) {
+/** Close: dialogs, panes and removable rows. */
+export function CloseIcon({ size = 16 }: { size?: number } = {}) {
 	return (
 		<Icon size={size}>
-			<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6" />
-			<path d="M4.6 6.2l2 1.8-2 1.8" />
-			<path d="M8.4 10.2h3" />
+			<path d="M4 4l8 8" />
+			<path d="M12 4l-8 8" />
+		</Icon>
+	);
+}
+
+/** Rename, and edit the newest message. */
+export function PencilIcon({ size = 14 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M10.6 2.6l2.8 2.8-7.9 7.9H2.7v-2.8z" />
+			<path d="M9.2 4l2.8 2.8" />
+		</Icon>
+	);
+}
+
+/** Download a copy. */
+export function DownloadIcon({ size = 14 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M8 2.4v8" />
+			<path d="M4.8 7.4L8 10.6l3.2-3.2" />
+			<path d="M2.8 13.4h10.4" />
+		</Icon>
+	);
+}
+
+/** Save a copy into a folder the person picks: the save disk, beside Download. */
+export function SaveIcon({ size = 14 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M2.8 2.8h8.2l2.2 2.2v8.2H2.8z" />
+			<path d="M5.4 2.8v3h4.6v-3" />
+			<path d="M5.2 13.2V9.6h5.6v3.6" />
 		</Icon>
 	);
 }

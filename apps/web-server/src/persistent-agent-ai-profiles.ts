@@ -65,10 +65,12 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 		providerLabel: "ChatGPT Plus/Pro",
 		description: "ChatGPT subscription profile for persistent-agent room and maintenance workflows.",
 		processes: {
-			// The default first, then OpenAI's order on its Codex models page:
-			// its recommended models, then the previous ones.
+			// The default first and its 6.1 sibling Terra beside it, then
+			// OpenAI's order on its Codex models page: its recommended models,
+			// then the previous ones.
 			persistentRoom: [
 				{ provider: "openai-codex", model: "gpt-6.1-sol" },
+				{ provider: "openai-codex", model: "gpt-6.1-terra" },
 				{ provider: "openai-codex", model: "gpt-6-astra" },
 				{ provider: "openai-codex", model: "gpt-6-luna" },
 				{ provider: "openai-codex", model: "gpt-6-sol" },

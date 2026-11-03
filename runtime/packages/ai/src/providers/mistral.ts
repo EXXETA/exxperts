@@ -153,6 +153,18 @@ function createOutput(model: Model<"mistral-conversations">): AssistantMessage {
 	};
 }
 
+/**
+ * The prompt tokens Mistral served from its cache, billed at the cache-read
+ * price. They are part of `prompt_tokens`. The stream's usage type names none
+ * of the fields, so they arrive as Mistral sent them; the SDK's newer usage
+ * type names these three shapes, read in that order.
+ */
+function cachedPromptTokens(usage: Record<string, unknown>): number {
+	const details = (usage.prompt_tokens_details ?? usage.prompt_token_details) as { cached_tokens?: unknown } | null | undefined;
+	const cached = details?.cached_tokens ?? usage.num_cached_tokens;
+	return typeof cached === "number" && cached > 0 ? cached : 0;
+}
+
 function createMistralToolCallIdNormalizer(): (id: string) => string {
 	const idMap = new Map<string, string>();
 	const reverseMap = new Map<string, string>();
@@ -308,11 +320,12 @@ async function consumeChatStream(
 		output.responseId ||= chunk.id;
 
 		if (chunk.usage) {
-			output.usage.input = chunk.usage.promptTokens || 0;
+			const cached = cachedPromptTokens(chunk.usage);
+			output.usage.input = Math.max(0, (chunk.usage.promptTokens || 0) - cached);
 			output.usage.output = chunk.usage.completionTokens || 0;
-			output.usage.cacheRead = 0;
+			output.usage.cacheRead = cached;
 			output.usage.cacheWrite = 0;
-			output.usage.totalTokens = chunk.usage.totalTokens || output.usage.input + output.usage.output;
+			output.usage.totalTokens = chunk.usage.totalTokens || output.usage.input + output.usage.output + output.usage.cacheRead;
 			calculateCost(model, output.usage);
 		}
 

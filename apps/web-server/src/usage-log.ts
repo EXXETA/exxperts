@@ -29,6 +29,8 @@ export interface UsageRow {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	/** How many of cacheWrite were one-hour writes, priced higher. Absent on older rows and when none were. */
+	cacheWrite1h?: number;
 	cost: number;
 	tools?: string[];
 	/** Background-run id for runs billed via appendUsageOnce. Absent on older rows. */

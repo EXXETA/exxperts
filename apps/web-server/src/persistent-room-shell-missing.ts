@@ -3,7 +3,7 @@ import { findShellConfig, getAgentDir, isNoShellFoundMessage, SettingsManager, s
 /**
  * Shell commands on a computer with no shell to run them in: only Windows
  * without Git for Windows (or another bash) gets here, since macOS and Linux
- * always have one. The person reads one plain line, in the Workspace pane and
+ * always have one. The person reads one plain line, in the Folder pane and
  * in the chat; the runtime's own text, which tells a developer to edit
  * settings.json, goes to the server log only.
  *

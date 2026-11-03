@@ -12,9 +12,11 @@
 // Steps (each prints pass/fail; exit 0 only if all pass):
 //   1. `exxperts --version` prints "exxperts <version>" (version read from
 //      the archive's app/package.json).
-//   2. `exxperts doctor` exits 0 and reports the archive install type: doctor's
-//      exit-code contract (optional layers and network probes warn, never fail)
-//      must hold on a bare machine, and the archive detection must fire.
+//   2. app/scripts/doctor.mjs, run by the vendored node as the desktop app's
+//      Health Check runs it, exits 0 and reports the archive install type:
+//      doctor's exit-code contract (optional layers and network probes warn,
+//      never fail) must hold on a bare machine, and the archive detection
+//      must fire.
 //   3. `exxperts web --no-open --port <free port>` boots the real web server
 //      (tsx compiling the TS sources with the vendored node) and serves HTTP
 //      on /healthz and /; then the whole process tree is torn down.
@@ -267,8 +269,8 @@ function runShim(args, opts = {}) {
 // ---------------------------------------------------------------------------
 
 {
-	const { cmd, cmdArgs, spawnOpts } = runShim(["doctor"]);
-	const res = spawnSync(cmd, cmdArgs, { ...spawnOpts, encoding: "utf8", timeout: 120_000 });
+	const vendorNode = path.join(top, "vendor", "node", ...(isWin ? ["node.exe"] : ["bin", "node"]));
+	const res = spawnSync(vendorNode, [path.join(top, "app", "scripts", "doctor.mjs")], { env: sanitizedEnv, cwd: top, encoding: "utf8", timeout: 120_000 });
 	const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
 	const reportsArchive = output.includes("install type: archive");
 	step(

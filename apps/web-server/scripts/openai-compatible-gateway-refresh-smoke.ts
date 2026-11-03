@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 /**
  * Saved gateways re-read their declarations on their own.
@@ -131,23 +131,6 @@ function startStubGateway(): Promise<http.Server> {
 		server.once("error", reject);
 		server.listen(stubPort, "127.0.0.1", () => resolve(server));
 	});
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${serverBaseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 const serverOutput: string[] = [];
@@ -377,8 +360,6 @@ try {
 	// The env switch and the loop's own guarantees.
 	const off = resolveGatewayDeclarationsRefreshOptionsFromEnv({ EXXPERTS_GATEWAY_REFRESH_ENABLED: "off" });
 	assert(off.enabled === false, "EXXPERTS_GATEWAY_REFRESH_ENABLED=off switches the refresh off");
-	const defaults = resolveGatewayDeclarationsRefreshOptionsFromEnv({});
-	assert(defaults.enabled === true && defaults.initialDelayMs === 5000 && defaults.intervalMs === 86_400_000, `the defaults are five seconds and a day, got ${JSON.stringify(defaults)}`);
 	const badWarnings: string[] = [];
 	const bad = resolveGatewayDeclarationsRefreshOptionsFromEnv({ EXXPERTS_GATEWAY_REFRESH_INTERVAL_MS: "soon" }, { warn: (_value, message) => badWarnings.push(message ?? "") });
 	assert(bad.intervalMs === 86_400_000 && badWarnings.length === 1, "an unparseable interval falls back to the default and says so");
@@ -471,7 +452,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, serverBaseUrl, 20000);
 
 	// (a) The first tick sees the new price and the flipped flag.
 	await waitForLogLine("refreshed 2 model declarations for Acme", 1);

@@ -365,26 +365,27 @@ export function StateProfileSection() {
 					<div className="settings-row">
 						<div className="settings-row-main">
 							<span className="settings-row-label">New profile</span>
-							<span className="settings-row-sub">Starts empty, like a fresh install.</span>
+							<span className="settings-row-sub">Adds an empty profile, like a fresh install, to the list above. The loaded profile stays loaded until you switch.</span>
+							{createError && <span className="settings-row-sub workspaces-error" role="alert">{createError}</span>}
 						</div>
 						<div className="settings-row-value">
 							<input
 								className="launcher-path-input"
 								type="text"
 								value={draft}
-								placeholder="demo"
+								placeholder="Profile name"
 								disabled={creating}
-								onChange={(e) => setDraft(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter" && draft.trim()) void create(); }}
+								onChange={(e) => { setDraft(e.target.value); setCreateError(null); }}
+								onKeyDown={(e) => { if (e.key === "Enter") void create(); }}
 								aria-label="New profile name"
 							/>
-							<button className="rs-btn" type="button" disabled={creating || !draft.trim()} onClick={() => void create()}>
-								{creating ? "Creating…" : "Create"}
+							{/* Never greyed for an empty name: pressing it shows the server's own reason. */}
+							<button className="rs-btn" type="button" disabled={creating} onClick={() => void create()}>
+								{creating ? "Creating…" : "Create profile"}
 							</button>
 						</div>
 					</div>
 				</div>
-				{createError && <div className="workspaces-error archived-rooms-note" role="alert">{createError}</div>}
 				{listError && <div className="workspaces-error archived-rooms-note" role="alert">{listError}</div>}
 			</section>
 			{payload.home && (

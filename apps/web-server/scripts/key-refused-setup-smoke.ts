@@ -6,7 +6,12 @@
 //
 // - after a turn the service refused for its key (a 401), AI setup's row for
 //   the key says "not accepted at the last try" and offers Replace key; the
-//   profile's message and issue give the full sentence;
+//   profile's message and issue give the full sentence; the room's Model pane
+//   shows the amber line under its row (no Replace key while the page gives
+//   the pane no way to AI setup), and both pickers, the pane's and AI setup's
+//   default models, mute the key's models with "Key refused"; the key saved
+//   again in AI setup clears the marks the next time the picker opens, with
+//   no reload;
 // - the next turn the service answers clears it;
 // - a Memory model call refused for its key says the same;
 // - saving the key again clears it before any call, and a refusal from a call
@@ -35,6 +40,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(100);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -160,15 +168,6 @@ async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ stat
 	return { status: response.status, body: text ? JSON.parse(text) : null, text };
 }
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 const WebSocketImpl: any = (await import("ws")).default;
 
 async function turnIn(agentId: string, conversationId: string, text: string): Promise<void> {
@@ -225,6 +224,53 @@ async function rowInPage(page: Page, providerId: string): Promise<{ line: string
 	return { line, signInOffered, replaceOpensForm: await row.locator('input[type="password"]').count() >= 1 };
 }
 
+const REFUSED_LINE = "Anthropic did not accept the saved key.";
+
+/** Opens a picker and reads each of the key provider's models: its name, and its mark ("" for none). */
+async function keyModelsInPicker(page: Page, trigger: ReturnType<Page["locator"]>): Promise<string[]> {
+	if (!(await page.locator(".room-model-menu").count())) await trigger.click();
+	const group = page.locator(".room-model-menu .room-model-menu-group[aria-label=\"Claude API key\"]");
+	await group.waitFor({ timeout: 10_000 });
+	const options = await group.locator(".room-model-option").evaluateAll((els) => els.map((el) => `${el.querySelector(".room-model-option-name")?.textContent ?? ""}|${el.classList.contains("marked") ? el.querySelector(".room-model-option-reason")?.textContent ?? "" : ""}`));
+	await page.keyboard.press("Escape");
+	return options;
+}
+
+/** Room settings, Model of a room on the key, and AI setup's default models, as the page draws them. */
+async function modelsInPage(page: Page, roomName: string): Promise<{ line: string | null; buttons: string[]; pane: string[]; defaults: string[] }> {
+	await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+	await page.waitForLoadState("networkidle");
+	const dismiss = page.locator(".whats-new-close");
+	if (await dismiss.count()) await dismiss.click();
+	await page.locator(".persistent-agent-card").filter({ hasText: roomName }).locator(".card-gear-btn").click();
+	await page.waitForSelector(".settings-dialog", { timeout: 10_000 });
+	await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Model$/ }).first().click();
+	const row = page.locator(".room-settings-section:not([hidden]) .room-model-row").first();
+	await row.locator(".room-model-pick:not([disabled])").waitFor({ timeout: 10_000 });
+	// The refusals are read beside the models; the line, when there is one, follows them.
+	await page.waitForLoadState("networkidle");
+	const refused = row.locator(".room-model-refused");
+	const line = (await refused.count()) ? (await refused.locator("span").first().innerText()).trim() : null;
+	const buttons = (await refused.locator("button").allInnerTexts()).map((text) => text.trim());
+	// "Choose another" opens the row's own picker.
+	if (buttons.includes("Choose another")) {
+		await refused.getByRole("button", { name: "Choose another" }).click();
+		await page.locator(".room-model-menu").waitFor({ timeout: 10_000 });
+	}
+	const pane = await keyModelsInPicker(page, row.locator(".room-model-pick"));
+	await page.keyboard.press("Escape");
+	await page.waitForSelector(".settings-dialog", { state: "detached", timeout: 10_000 });
+	await page.locator(".product-sidebar-footer button").first().click();
+	await page.locator(".sidebar-config-menu button, .sidebar-config-menu a").filter({ hasText: /Settings/ }).first().click();
+	await page.waitForSelector(".settings-overlay", { timeout: 10_000 });
+	await page.locator(".settings-dialog-nav button").filter({ hasText: "AI setup" }).first().click();
+	const defaultsTrigger = page.locator(".ai-defaults-group .room-model-pick:not([disabled])").first();
+	await defaultsTrigger.waitFor({ timeout: 15_000 });
+	await page.waitForLoadState("networkidle");
+	const defaults = await keyModelsInPicker(page, defaultsTrigger);
+	return { line, buttons, pane, defaults };
+}
+
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -272,6 +318,13 @@ try {
 	await turnIn(room, "c_key_0001", "A question the key answers.");
 	assert(clearRow(await keyRow()), `with the key answering, its row is ready and says nothing more, got ${said(await keyRow())}`);
 	pass("a key that answers: its row is ready");
+	const answering = page ? await modelsInPage(page, "Key Room") : null;
+	if (answering) {
+		assert(answering.line === null, `with the key answering, the Model pane's row has no refused line, got "${answering.line}"`);
+		const unmarked = (options: string[]) => options.length > 0 && options.every((option) => option.endsWith("|"));
+		assert(unmarked(answering.pane) && unmarked(answering.defaults), `with the key answering, no picker marks its models, got ${JSON.stringify(answering)}`);
+		pass("a key that answers: the Model pane and both pickers show its models plain");
+	}
 
 	refuse = "key";
 	await turnIn(room, "c_key_0002", "A question the service refuses.");
@@ -284,6 +337,29 @@ try {
 		assert(drawn.line === ROW_LINE, `the row's line is "${ROW_LINE}", got "${drawn.line}"`);
 		assert(drawn.replaceOpensForm, "the row offers Replace key, which opens the key form");
 		pass(`AI setup's row reads "${ROW_LINE}" beside Replace key, which opens the key form`);
+		const refusedModels = await modelsInPage(page, "Key Room");
+		assert(refusedModels.line === REFUSED_LINE, `the Model pane's row reads "${REFUSED_LINE}", got "${refusedModels.line}"`);
+		assert(JSON.stringify(refusedModels.buttons) === JSON.stringify(["Choose another"]), `without a way to AI setup the line offers Choose another alone, got ${JSON.stringify(refusedModels.buttons)}`);
+		const marked = (options: string[]) => options.length > 0 && options.every((option) => option.endsWith("|Key refused"));
+		assert(marked(refusedModels.pane), `the pane's picker mutes the key's models with "Key refused", got ${JSON.stringify(refusedModels.pane)}`);
+		assert(marked(refusedModels.defaults), `AI setup's default models mute the key's models with "Key refused", got ${JSON.stringify(refusedModels.defaults)}`);
+		pass(`the Model pane's row reads "${REFUSED_LINE}" with Choose another, and both pickers mark the key's models "Key refused"`);
+
+		// Still in AI setup, no reload: the key saved again, then the default models opened.
+		const keyGroup = page.locator(`.ai-profile-row-group[data-provider-id="${KEY_PROVIDER}"]`);
+		await keyGroup.getByRole("button", { name: "Replace key" }).click();
+		const form = page.locator(".ai-profile-key-form");
+		await form.locator("input").fill("synthetic-anthropic-key");
+		await form.getByRole("button", { name: "Save key" }).click();
+		await waitUntil(async () => clearRow(await keyRow()), "the key saved again clears the refusal");
+		await page.locator(".ai-defaults-group .room-model-pick:not([disabled])").first().click();
+		const keyOptions = page.locator(".room-model-menu .room-model-menu-group[aria-label=\"Claude API key\"] .room-model-option");
+		await keyOptions.first().waitFor({ timeout: 10_000 });
+		await waitUntil(async () => (await keyOptions.count()) > 0 && (await page.locator(".room-model-menu .room-model-option.marked").count()) === 0, "the default models opened after the key was saved again show no Key refused", 10_000).catch(async (error) => {
+			throw new Error(`${(error as Error).message}; marked: ${JSON.stringify(await page.locator(".room-model-menu .room-model-option.marked").allInnerTexts())}`);
+		});
+		await page.keyboard.press("Escape");
+		pass("the key saved again in AI setup: the default models opened next show no Key refused, without a reload");
 	}
 
 	await turnIn(room, "c_key_0003", "A question the key answers again.");

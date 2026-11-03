@@ -14,6 +14,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -87,15 +90,6 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -143,7 +137,7 @@ try {
 		};
 		const enterRoom = async (target: typeof page) => {
 			const card = target.locator(".persistent-agent-card").filter({ hasText: "Return Room" });
-			if (!(await target.evaluate(() => window.location.hash)).startsWith("#/room/")) await card.getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			if (!(await target.evaluate(() => window.location.hash)).startsWith("#/room/")) await card.getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await waitUntil(async () => (await target.locator("textarea").first().isVisible().catch(() => false)) && !(await card.count()), "the room is open");
 			await target.waitForTimeout(800);
 		};
@@ -155,6 +149,16 @@ try {
 			await target.waitForTimeout(800);
 		};
 		const dialogOf = (target: typeof page) => target.getByRole("dialog", { name: "Remember this conversation" });
+		// The conversation each Remember reads, as the page asks for it, so the
+		// smoke can wait on that job's state on the server.
+		let rememberedConversation = "";
+		ctx.on("request", (request) => {
+			if (request.method() === "POST" && request.url().endsWith("/checkpoint/propose")) rememberedConversation = String(request.postDataJSON()?.conversationId ?? "");
+		});
+		const rememberReadEnds = () => waitUntil(async () => {
+			const progress = await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/checkpoint/progress?conversationId=${encodeURIComponent(rememberedConversation)}`).then((r) => r.json()).catch(() => null) as { state?: string } | null;
+			return !!progress?.state && progress.state !== "reading";
+		}, "the Remember read has ended on the server");
 		// After a restart the open tab reconnects and takes the room on the new server. A tab closed before that
 		// leaves the stopped server's lock, which Home counts as open elsewhere for 90 s, so a step that closes the
 		// tab after a restart waits for the reconnect first, read through the list Home reads.
@@ -181,7 +185,7 @@ try {
 		holdRemember = false;
 		for (const release of held.splice(0)) release();
 		await page.waitForTimeout(0).catch(() => {});
-		await new Promise((resolve) => setTimeout(resolve, 2500));
+		await rememberReadEnds();
 		page = await ctx.newPage();
 		await open(page);
 		await enterRoom(page);
@@ -267,7 +271,7 @@ try {
 		await fresh.close();
 		holdRemember = false;
 		for (const release of held.splice(0)) release();
-		await new Promise((resolve) => setTimeout(resolve, 2500));
+		await rememberReadEnds();
 		const writer = await ctx.newPage();
 		await open(writer);
 		await enterRoom(writer);
@@ -305,9 +309,13 @@ try {
 		await reconnectedSince(restartedAgainAt);
 		await back.close();
 		const after = await ctx.newPage();
+		// Entering asks the server how this conversation's Remember stands, and
+		// a restart line still kept would open the dialog on that answer.
+		const asked = after.waitForResponse((response) => response.url().includes("/checkpoint/progress?"), { timeout: 15000 });
 		await open(after);
 		await enterRoom(after);
-		await after.waitForTimeout(2500);
+		await asked;
+		await after.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 		assert(await dialogOf(after).count() === 0, "after Discard the next entry opens no dialog");
 		assert(rememberCalls() === before6 + 1, `Discard costs no read, got ${rememberCalls() - before6} calls`);
 		console.log("  ok  the restart line's Discard lets it go");

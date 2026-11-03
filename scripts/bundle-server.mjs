@@ -93,8 +93,8 @@ const installRootReason = "finds the install root three folders up or in EXXETA_
 
 export const REVIEWED_OWN_LOCATION_READS = [
 	{ file: /^\(preamble\)$/, sites: 5, reason: "the bundle's banner defines require, __filename and __dirname for the inlined CommonJS code" },
-	{ file: /(^|\/)apps\/web-server\/src\/index\.ts$/, sites: 3, reason: `${installRootReason}; loads room-lock.cjs and state-profiles.cjs from there` },
-	{ file: /(^|\/)apps\/web-server\/src\/persistent-agents\.ts$/, sites: 2, reason: `${installRootReason}; loads room-lock.cjs from there` },
+	{ file: /(^|\/)apps\/web-server\/src\/server-install-root\.ts$/, sites: 3, reason: `${installRootReason}; loads room-lock.cjs and state-profiles.cjs from there` },
+	{ file: /(^|\/)apps\/web-server\/src\/persistent-agent-store\.ts$/, sites: 2, reason: `${installRootReason}; loads room-lock.cjs from there` },
 	{ file: /(^|\/)apps\/web-server\/src\/persistent-room-background-execution\.ts$/, sites: 1, reason: installRootReason },
 	{ file: /(^|\/)apps\/web-server\/src\/scheduled-prompt-background-execution\.ts$/, sites: 2, reason: `${installRootReason}; loads room-lock.cjs from there` },
 	{ file: /(^|\/)apps\/web-server\/src\/whats-new\.ts$/, sites: 1, reason: installRootReason },

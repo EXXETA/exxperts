@@ -14,7 +14,7 @@
 // Run: node scripts/run-smokes.mjs searxng-setup
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +35,7 @@ engine first (one-time setup, like installing Node):
   Docker Desktop             https://www.docker.com/products/docker-desktop/
   OrbStack (lighter, macOS)  https://orbstack.dev
 Colima and Podman work too.
-Install one, start it, then re-run: exxperts setup search\`);
+Install one, start it, then re-run: ./scripts/searxng start\`);
 process.exit(1);
 `;
 
@@ -45,23 +45,6 @@ function assert(condition: unknown, message: string): asserts condition {
 
 let port = 0;
 let baseUrl = "";
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, init);
@@ -109,12 +92,11 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20000);
 
 	// ---- nothing asked for, nothing claimed --------------------------------
 	const before = await requestJson("/api/web-search/searxng/setup");
-	assert(before.status === 200, `status reads before any run, got ${before.status}`);
-	assert(before.body.phase === "idle", `no run means idle, got ${JSON.stringify(before.body)}`);
+	// The idle phase itself is searxng-setup-honesty-smoke's.
 	assert(before.body.running === false, "an idle status is not a running one");
 
 	// ---- the POST answers now, not in five minutes -------------------------

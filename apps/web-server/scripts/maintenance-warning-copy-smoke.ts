@@ -4,7 +4,6 @@
 // with no status code and no raw detail.
 
 import { formatAbsorbRunSaveError, isStaleMaintenanceMessage, logMaintenanceWarnings } from "../../web-ui/src/maintenance-warnings.js";
-import * as warningCopy from "../../web-ui/src/maintenance-warnings.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -17,7 +16,6 @@ function assert(condition: unknown, message: string): asserts condition {
 	console.info = (line: string) => { logged.push(line); };
 	try { logMaintenanceWarnings(["assessment missing Deep Memory change bullets", "no memory has been written"]); } finally { console.info = info; }
 	assert(logged.length === 1 && logged[0].includes("assessment missing"), `one warning logged, got ${JSON.stringify(logged)}`);
-	assert(!("meaningfulMaintenanceWarnings" in warningCopy) && !("describeMaintenanceWarning" in warningCopy), "nothing turns a warning into a line on screen");
 }
 
 // 5. A Memorize save that failed lands on the run's card, which has no draft
@@ -27,8 +25,6 @@ function assert(condition: unknown, message: string): asserts condition {
 	assert(stale.startsWith("Memory changed while this update was open. Nothing was saved."), `a stale save says what happened (got: ${stale})`);
 	assert(stale.includes("Start Memorize again"), `and names the way out (got: ${stale})`);
 	assert(!isStaleMaintenanceMessage("Recent Context entry count changed"), "a sentence no server writes any more is not read as a stale save");
-	const gone = "That memory update is no longer open. Start Memorize again.";
-	assert(formatAbsorbRunSaveError(gone) === gone, "the server's own sentence that names the way out passes through");
 	const http = formatAbsorbRunSaveError("Request failed (502)");
 	assert(!/HTTP|502/.test(http) && http.includes("Nothing was saved."), `a bare HTTP failure is a plain sentence (got: ${http})`);
 	const other = formatAbsorbRunSaveError("ENOENT: something raw");

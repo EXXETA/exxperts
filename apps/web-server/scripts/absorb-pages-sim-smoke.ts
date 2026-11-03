@@ -623,9 +623,8 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 	const fs = await import("node:fs");
 	const os = await import("node:os");
 	const path = await import("node:path");
-	const { pageFailureKey, pageFailuresPath, readPageFailures, writePageFailures, MEMORIZE_PAGE_FAILURES_FILE } = await import("../src/absorb-page-failures.js");
+	const { pageFailureKey, pageFailuresPath, readPageFailures, writePageFailures } = await import("../src/absorb-page-failures.js");
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "page-failures-"));
-	assert(pageFailuresPath(dir).endsWith(MEMORIZE_PAGE_FAILURES_FILE) && MEMORIZE_PAGE_FAILURES_FILE === "memorize-page-failures.json", "the sidecar is memorize-page-failures.json in the room's runtime state");
 	assert(readPageFailures(dir).records.size === 0, "no file reads as no records");
 	const record = { at: "2026-09-28T10:00:00.000Z", provider: "sim", model: "sim-model", code: "timed-out" as const };
 	writePageFailures(dir, { records: new Map([["cp-1", record]]), throttled: new Map([["cp-2", { at: "2026-09-28T10:00:00.000Z" }]]) });

@@ -105,6 +105,7 @@ export function importHistoricalSessionUsage(agentsRoot: string, warn: (message:
 					output,
 					cacheRead,
 					cacheWrite: usage.cacheWrite ?? 0,
+					...(usage.cacheWrite1h ? { cacheWrite1h: usage.cacheWrite1h } : {}),
 					cost: usage.cost?.total ?? 0,
 				});
 			}

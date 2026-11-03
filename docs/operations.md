@@ -25,7 +25,7 @@ cp .env.example .env
 
 ## Running
 
-The `./scripts/...` launchers below are bash scripts (macOS/Linux/Git Bash). On Windows PowerShell/cmd, use the shell-independent equivalents: `node scripts\exxeta-web.mjs` (dev web), `node bin\exxperts-web.cjs` (web app), `node bin\exxperts-cli.cjs` (CLI/TUI).
+The `./scripts/...` launchers below are bash scripts (macOS/Linux/Git Bash). On Windows PowerShell/cmd, use the shell-independent equivalents: `node scripts\exxeta-web.mjs` (dev web), `node bin\exxperts-web.cjs` (web app).
 
 ### Web (server + UI together)
 
@@ -47,27 +47,16 @@ Behind the scenes:
 The web server binds to `127.0.0.1` only, validates Host/Origin
 headers, and requires a client auth token on API and WebSocket
 requests (see `SECURITY.md`); it is not reachable from the LAN by design.
-The one exception is the off-by-default remote mode (`exxperts remote`),
+The one exception is the off-by-default remote mode (Settings, Remote access),
 which additionally serves the user's own enrolled devices over their
 private tunnel; `SECURITY.md` has its threat model.
 
-### CLI
-
-```bash
-./scripts/exxperts-cli
-```
-
-Compatibility: `./scripts/exxeta` still works today as the older repo/dev CLI alias. Keep the `EXXETA_*` environment variable names; they remain the current compatibility/internal names for these controls.
-
-The launcher is a thin shim: it sets `EXXETA_HOME`, auto-loads `.env`,
-and starts the runtime CLI/TUI with the exxperts extension set. It
-preserves the caller cwd so coding sessions can inspect/edit the target
-repo.
+Keep the `EXXETA_*` environment variable names; they remain the current compatibility/internal names for these controls.
 
 ## API usage and model settings
 
 exxperts does **not** call OpenAI / Anthropic directly for normal chat turns.
-The CLI wrapper and the web server both hand the conversation to the
+The web server hands the conversation to the
 underlying runtime, which owns provider auth, model transport,
 streaming, usage accounting, and default generation parameters.
 
@@ -75,8 +64,7 @@ Where API calls happen:
 
 | Path | What calls APIs |
 |---|---|
-| Web room chat | `apps/web-server/src/index.ts` creates a runtime agent session; the runtime calls the selected LLM provider. |
-| CLI chat | `bin/exxperts-cli.cjs` starts the runtime CLI with the exxperts extensions. |
+| Web room chat | `apps/web-server/src/room-socket.ts` creates a runtime agent session; the runtime calls the selected LLM provider. |
 | Memory lifecycle workers | Remember, Memorize, and Review proposals each run an isolated, tool-less worker session (`apps/web-server/src/persistent-agent-worker-runtime.ts`). |
 | Scheduled room runs | Background schedule execution runs room turns headlessly. |
 
@@ -149,7 +137,7 @@ nested inside; every `~/.exxperts-<name>` directory counts as a profile,
 including hand-made ones and raw copies (`cp -r ~/.exxperts
 ~/.exxperts-snapshot`), which are normalized into the nested layout on first
 load. Which profile is loaded is recorded in
-`~/.exxperts/app/run/active-profile.json`; the supervisor (the `exxperts web`
+`~/.exxperts/app/run/active-profile.json`; the supervisor (the `exxperts`
 launcher, the desktop shell, or the dev harness) reads it on every server
 start and, for a non-standard profile, starts the server with
 `EXXPERTS_STATE_HOME` pointed at the profile directory. That one variable
@@ -160,8 +148,7 @@ dotfiles a room's tools read all keep resolving against the login home.
 Switching happens in
 Settings → Profiles: the server updates the pointer and exits with code 75,
 the supervisor restarts it, and the open page signs itself into the new
-session. The CLI reads the pointer at launch and announces which profile it
-runs against. A server started without one of these supervisors refuses to
+session. A server started without one of these supervisors refuses to
 switch (the route answers 409) instead of exiting into nothing.
 
 The whole state family (standard tree plus profiles) lives in one data
@@ -183,8 +170,8 @@ the desktop app, and the dev harness. `EXXPERTS_DATA_DIR` is the operator
 knob; `EXXPERTS_STATE_HOME` is internal plumbing the launchers set from it and
 is not a supported way to configure an install. Use cases and examples:
 [data-profiles.md](data-profiles.md#where-exxperts-keeps-its-data).
-Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
-(in `apps/web-server`).
+Smokes: `node scripts/run-smokes.mjs state-home-move` and `node scripts/run-smokes.mjs data-dir`
+(from the repo root).
 
 ## Storage layout
 
@@ -196,7 +183,7 @@ Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
 | `~/.exxperts/app/background-runs/` | Scheduled-run history | yes |
 | `~/.exxperts/app/persistent-agent-ai-profile.json` | The Default models (Conversation and Memory) | yes |
 | `~/.exxperts/app/openai-compatible-gateways.json` | Saved OpenAI-compatible gateways (name, base URL, approved models with image support and context window, plus the per-model prices and caching capability detection read), when configured | yes |
-| `~/.exxperts/app/openai-compatible-ai-profile.json` | First gateway's profile policy, kept as a mirror for the terminal setup wizard | yes |
+| `~/.exxperts/app/openai-compatible-ai-profile.json` | First gateway's profile policy | yes |
 | `~/.exxperts/app/usage.jsonl` | The Wallet ledger: one line per turn with tokens and cost; gateway turns are booked at the gateway's published price, a turn from before a price was on file is estimated at today's rate and marked with an approximation sign, and a turn nobody can price shows "no price on file" | yes |
 | `~/.exxperts/app/agents/`, `~/.exxperts/app/skills/` | User-created agents/skills | yes |
 | `~/.exxperts/app/artifacts/` | Approved artifacts (created on first use) | yes |
@@ -204,7 +191,7 @@ Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
 | `~/.exxperts/app/content-policy.json` | Content policy config | yes |
 | `~/.exxperts/app/web-search.json` | Web-search provider config | yes |
 | `~/.exxperts/app/searxng/settings.yml` | Generated local SearXNG settings | yes |
-| `~/.exxperts/agent/mcp.json` | MCP server config (also `~/.config/mcp/mcp.json`; a plain terminal session without a room also reads `.mcp.json` and `.pi/mcp.json` in its folder) | yes |
+| `~/.exxperts/agent/mcp.json` | MCP server config (also `~/.config/mcp/mcp.json`) | yes |
 | `~/.exxperts/agent/` | Embedded runtime provider/auth/model/session state | yes |
 | `~/.exxperts/app/run/active-profile.json` | Pointer to the loaded data profile (Settings → Profiles; absent = the standard `~/.exxperts`) | no (transient) |
 | `~/.exxperts-<name>/` | Additional data profiles, each a self-contained `.exxperts` tree; the standard `~/.exxperts` never moves | yes |

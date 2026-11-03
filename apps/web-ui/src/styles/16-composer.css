@@ -1,0 +1,1102 @@
+/* Composer --------------------------------------------------------- */
+
+.composer {
+	border-top: none;
+	padding: 4px 18px 18px;
+	background: transparent;
+	position: relative; /* anchor for the toast stack floating above it */
+}
+.composer-layout {
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	max-width: min(calc(var(--chat-rail-width) + 48px), 100%);
+	margin: 0 auto;
+}
+/* One rounded prompt box, a touch wider than the transcript rail. */
+.composer-box {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	padding: 12px 12px 10px;
+	box-sizing: border-box;
+	position: relative; /* anchor for the @-mention consult popover */
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+/* The box holds focus whenever a room is open, so focus is only a slightly
+   firmer edge, never an outline; it borrows no accent colour. */
+.composer-box:focus-within {
+	border-color: color-mix(in srgb, var(--fg) 28%, var(--border));
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 6px 20px rgba(0, 0, 0, 0.07);
+}
+
+/* Consult MR-3 — composer @-mention popover. Styling follows the mockup
+   (consult-ui-mockups.html): raised surface, popover shadow, lila prefix
+   highlight via --exx-plan, right-aligned memory-freshness hint. */
+.mention-pop {
+	position: absolute;
+	bottom: calc(100% + 8px);
+	left: 10px;
+	width: 330px;
+	max-width: calc(100% - 20px);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 12px;
+	box-shadow: var(--exx-shadow-popover);
+	padding: 6px;
+	z-index: 30;
+}
+.mention-pop .pop-kicker {
+	font-size: 10.5px;
+	color: var(--exx-text-muted);
+	padding: 6px 10px 6px;
+	/* A scrolled row slides under a line, never straight under the words. */
+	border-bottom: 1px solid var(--exx-border-soft);
+	margin-bottom: 4px;
+}
+.mention-pop .mention-rows {
+	/* ~5 two-line rows visible; longer lists scroll while kicker + footer stay pinned. */
+	max-height: 262px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.mention-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	cursor: pointer;
+}
+.mention-row.sel {
+	background: var(--exx-surface-hover);
+}
+.mention-row .m-lines {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+}
+.mention-row .m-name {
+	font-weight: 700;
+	font-size: 14px;
+	color: var(--exx-text);
+	overflow-wrap: anywhere;
+}
+.mention-row .m-name .hl {
+	color: var(--exx-plan);
+}
+.mention-row .m-fresh {
+	font-size: 11.5px;
+	color: var(--exx-text-muted);
+}
+.mention-pop .pop-foot {
+	font-size: 11px;
+	color: var(--exx-text-disabled);
+	padding: 6px 10px 4px;
+	border-top: 1px solid var(--exx-border-soft);
+	margin-top: 4px;
+}
+/* The keys on a line of their own, the memory line under them. */
+.mention-pop .pop-keys { display: block; }
+/* No keyboard hint where there is no hover: a touch screen has no arrow keys. */
+@media (hover: none) {
+	.mention-pop .pop-keys { display: none; }
+}
+.mention-pop-disabled {
+	cursor: default;
+}
+.composer textarea {
+	/* NOT flex: 1 — a flex-basis of 0 in this column layout overrides the
+	 * height the auto-grow effect writes, collapsing the box to min-height. */
+	flex: none;
+	resize: none;
+	background: transparent;
+	color: var(--fg);
+	border: none;
+	border-radius: 0;
+	padding: 2px 6px;
+	font-family: inherit;
+	font-size: 14px;
+	/* Whole pixels: with a fraction (1.45 of the phone's 16px is 23.2px) a
+	   textarea and the layer over it round their lines to different pixels. */
+	line-height: 1.45;
+	line-height: round(1.45em, 1px);
+	/* The grow cap: the draft expands to 40% of the viewport, then scrolls. */
+	max-height: 40vh;
+	min-height: 46px;
+	box-sizing: border-box;
+	overflow-x: hidden;
+	overflow-y: auto; /* shows only when content exceeds max-height */
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+/* The box and, over it, the layer that colours a picked room's name. The
+   layer takes the box's size and text metrics from alignMirror in
+   components/in-room-chat.tsx, so its letters sit where the box's would. */
+.composer-input {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.composer-mirror {
+	position: absolute;
+	box-sizing: border-box;
+	overflow: hidden;
+	color: var(--fg);
+	pointer-events: none;
+}
+.composer-mirror .composer-mention {
+	color: var(--exx-plan);
+}
+/* While an input method composes the box draws its own text; the layer adds only the name. */
+.composer-mirror.name-only {
+	color: transparent;
+}
+.composer-box-bottom {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	min-width: 0;
+}
+.composer-box-status {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+}
+/* Manual retry once the auto-reconnect gave up; sits beside the status pill. */
+.composer-reconnect-btn {
+	margin-left: 8px;
+	flex: 0 0 auto;
+}
+.composer-box-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+}
+.composer-context-anchor {
+	position: relative;
+	min-width: 0;
+	display: flex;
+}
+/* Context health is a footnote, not an action: no border, no fill, smaller and
+   dimmer than the buttons opposite it. The coloured dot still carries the
+   zone, so nothing is lost by quieting the frame around it. The number stays
+   muted, not disabled: it is read, so it keeps 4.5:1 in every state. */
+.composer-context-pill {
+	--context-health-color: var(--muted);
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	border: none;
+	border-radius: 999px;
+	padding: 3px 6px;
+	color: var(--muted);
+	background: transparent;
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 1.2;
+	cursor: pointer;
+}
+.composer-context-pill:hover,
+.composer-context-pill:focus-visible {
+	color: var(--fg-soft);
+	background: color-mix(in srgb, var(--context-health-color) 10%, transparent);
+	outline: none;
+}
+.composer-context-pill.green { --context-health-color: var(--success); }
+.composer-context-pill.yellow { --context-health-color: var(--warning); }
+.composer-context-pill.red { --context-health-color: var(--error); }
+.composer-context-pill.unknown { --context-health-color: var(--muted); }
+.composer-context-pill.offline { --context-health-color: var(--error); }
+.composer-context-pill-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.composer-context-popover {
+	position: absolute;
+	left: 0;
+	bottom: calc(100% + 10px);
+	min-width: 264px;
+	max-width: 340px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+	color: var(--dim);
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	font-size: 11px;
+	line-height: 1.4;
+}
+.composer-context-popover-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 16px;
+}
+.composer-context-popover-row strong {
+	color: var(--fg);
+	font-weight: 700;
+	text-align: right;
+}
+.composer-context-popover-note {
+	margin: 3px 0 0;
+	color: var(--muted);
+	font-size: 10px;
+}
+.composer textarea::-webkit-scrollbar { width: 8px; }
+.composer textarea::-webkit-scrollbar-thumb { background: var(--fg); border-radius: 4px; }
+.composer textarea::-webkit-scrollbar-thumb:hover { background: var(--fg-soft); }
+.composer textarea::-webkit-scrollbar-track { background: transparent; }
+.composer textarea:focus { outline: none; }
+/* One height for the composer's bottom row: attach, the box's other actions
+   and Send. Set on the row so a single number moves all of them together. */
+.composer-box-controls {
+	--composer-control-size: 34px;
+}
+.send-btn {
+	flex: 0 0 auto;
+	width: var(--composer-control-size, 34px);
+	height: var(--composer-control-size, 34px);
+	background: var(--fg);
+	color: var(--bg);
+	border: none;
+	border-radius: 10px;
+	padding: 0;
+	font-weight: 900;
+	font-size: 17px;
+	line-height: 1;
+}
+.send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.composer-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+/* The box's other controls sit quietly next to the send button, on the same
+   height and the same radius family. */
+.composer-actions .icon-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	height: var(--composer-control-size, 34px);
+	padding: 0 11px;
+	font-size: 12px;
+	line-height: 1;
+	text-align: center;
+	background: transparent;
+	/* Ghost: the border box is kept so hover cannot shift the row, but nothing
+	   is drawn on it at rest. Send is the one solid control here, on purpose. */
+	border-color: transparent;
+	color: var(--fg-soft);
+	border-radius: 10px;
+}
+/* Icon-only buttons are squares, so a glyph never sits in a wider slot than
+   its neighbours. */
+.icon-btn-square {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	width: 30px;
+	height: 30px;
+}
+.composer-actions .icon-btn-square {
+	width: var(--composer-control-size, 34px);
+	padding: 0;
+}
+.ui-icon {
+	display: block;
+	flex: 0 0 auto;
+}
+.composer-actions .icon-btn:hover:not(:disabled),
+.composer-actions .icon-btn:focus-visible {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	border-color: transparent;
+	color: var(--fg);
+	outline: none;
+}
+.composer-actions .icon-btn:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* One control with two segments, not two buttons pushed together. The halves
+   are transparent inside the container and carry only their own wash, so the
+   caret can never light up as a detached box.
+   Deliberately NOT overflow:hidden, which would clip the menu below.
+   The three custom properties below are what keep this coherent: they are set
+   ONCE on the container and read by both segments, so a state that belongs to
+   the whole control (dimmed, or showing its divider) is expressed in one place
+   and cannot leave one half disagreeing with the other. They also inherit,
+   which keeps every theme and every state out of the specificity war that the
+   theme-level button rules would otherwise start. */
+.checkpoint-split {
+	--split-ink: var(--fg-soft);
+	--split-ink-hover: var(--fg);
+	--split-wash: color-mix(in srgb, var(--fg) 12%, transparent);
+	--split-divider: transparent;
+	position: relative;
+	display: inline-flex;
+	align-items: stretch;
+	height: var(--composer-control-size, 34px);
+	border: 1px solid transparent;
+	border-radius: 10px;
+	background: transparent;
+}
+/* The divider is a seam between two things being used, so it appears when the
+   control is in play and stays out of sight when it is only sitting there: a
+   hairline floating with no container around it reads as a stray mark. */
+.checkpoint-split:hover,
+.checkpoint-split:focus-within,
+.checkpoint-split:has(.checkpoint-split-toggle[aria-expanded="true"]) {
+	--split-divider: var(--border-soft);
+}
+/* One control, one dimmed state. When the main action cannot run, the label,
+   the divider and the chevron all dim together. The caret stays CLICKABLE,
+   because its menu is where the reason lives, but a bright caret inside a
+   greyed control looks like a bug rather than an invitation. */
+.checkpoint-split:has(.checkpoint-split-main:disabled) {
+	--split-ink: var(--dim);
+	--split-ink-hover: var(--fg-soft);
+	--split-wash: color-mix(in srgb, var(--fg) 7%, transparent);
+	--split-divider: transparent;
+}
+.checkpoint-split:has(.checkpoint-split-main:disabled):hover,
+.checkpoint-split:has(.checkpoint-split-main:disabled):focus-within {
+	--split-divider: color-mix(in srgb, var(--border-soft) 60%, transparent);
+}
+.checkpoint-split:has(:focus-visible) {
+	border-color: color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.composer-actions .checkpoint-split .icon-btn {
+	height: 100%;
+	border: none;
+	background: transparent;
+	color: var(--split-ink);
+}
+/* Inner corners sit one border inside the container's. */
+.composer-actions .checkpoint-split .checkpoint-split-main {
+	flex: 1 1 auto;
+	border-radius: 9px 0 0 9px;
+	/* Ghost rest shows no divider, so the label-to-chevron air IS the seam:
+	   keep it tight enough to read as one compound control, wide enough that
+	   the hover wash still shows two targets. */
+	padding-right: 7px;
+}
+.composer-actions .checkpoint-split .checkpoint-split-toggle {
+	flex: 0 0 auto;
+	width: 23px;
+	min-width: 0;
+	padding: 0;
+	border-radius: 0 9px 9px 0;
+	/* The seam, and the only border left inside the control. */
+	border-left: 1px solid var(--split-divider);
+}
+/* A segment answers for itself with a wash, at whatever strength the control
+   as a whole is currently allowed. */
+.composer-actions .checkpoint-split .icon-btn:hover:not(:disabled),
+.composer-actions .checkpoint-split .icon-btn:focus-visible {
+	background: var(--split-wash);
+	border-color: transparent;
+	color: var(--split-ink-hover);
+	outline: none;
+}
+.composer-actions .checkpoint-split .icon-btn:disabled,
+.composer-actions .checkpoint-split .icon-btn:disabled:hover {
+	background: transparent;
+	color: var(--split-ink);
+	cursor: not-allowed;
+}
+.checkpoint-split-menu {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 6px);
+	min-width: 232px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 4px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+}
+.checkpoint-split-menu button {
+	background: transparent;
+	border: none;
+	color: var(--fg);
+	text-align: left;
+	padding: 8px 10px;
+	border-radius: 6px;
+	font-size: 12.5px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.checkpoint-split-menu button:hover:not(:disabled),
+.checkpoint-split-menu button:focus-visible {
+	background: var(--fg);
+	color: var(--bg);
+	outline: none;
+}
+.checkpoint-split-menu button:disabled {
+	color: var(--dim);
+	cursor: not-allowed;
+}
+/* The row under the message box (wider screens): the context ring and
+   Remember on the left, the model and effort on the right, quiet text on the
+   page's background. The phone keeps them in the box and the header. */
+.composer-stack {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+.composer-under-row {
+	--composer-control-size: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	min-width: 0;
+	padding: 5px 4px 0;
+}
+.composer-under-left,
+.composer-under-right {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+/* One type for the whole row, the model name's: the ring's number, Remember,
+   the model and the command mode. The ring's number and the chevrons stay muted. */
+.composer-under-row .composer-context-pill,
+.composer-under-actions .icon-btn,
+.composer-under-row .model-pick-trigger,
+.composer-under-row .bash-mode-chip {
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	font-weight: 500;
+}
+/* The command-mode chip in the message box's rows, dressed as the model
+   control beside it: flat, borderless, the same type, a wash on hover. The
+   two states differ by their text alone: the room owner asked for no alarm
+   color on auto. Its menu opens upwards, since the chip sits at the foot of
+   the page. Scoped to the composer so these win over the chip's base rules. */
+.composer .bash-mode-chip {
+	gap: 4px;
+	height: 28px;
+	padding: 0 8px;
+	border-radius: 8px;
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: normal;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: normal;
+}
+.composer .bash-mode-chip:hover,
+.composer .bash-mode-chip:focus-visible,
+.composer .bash-mode-chip[aria-expanded="true"] {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.composer .bash-mode-menu {
+	bottom: calc(100% + 8px);
+}
+/* In the phone's box the chip sits beside Remember, so it takes the box
+   buttons' height and type (the phone sizes in 21-approval-preview.css). */
+@media (max-width: 760px) {
+	.composer-box-bottom .bash-mode-chip {
+		height: var(--composer-control-size, 34px);
+		padding: 0 9px;
+		font-size: 11.5px;
+		font-weight: 700;
+		line-height: 1;
+	}
+}
+.composer-under-controls {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+/* Under the box Remember sits at the column's left edge, so its menu opens
+   rightwards: anchored right it would run past the edge and be cut off when
+   a side pane narrows the chat. */
+.composer-under-actions .checkpoint-split-menu {
+	left: 0;
+	right: auto;
+}
+.composer-under-row .composer-context-pill {
+	padding: 4px 8px;
+}
+/* The ring is the meter: filled towards the recommended context in the zone's colour. */
+.context-ring {
+	display: block;
+	flex: 0 0 auto;
+}
+.context-ring-track {
+	stroke: color-mix(in srgb, var(--fg) 18%, transparent);
+}
+.context-ring-fill {
+	stroke: var(--context-health-color);
+}
+.composer-context-pill.offline .context-ring-track {
+	stroke: color-mix(in srgb, var(--error) 55%, transparent);
+}
+/* Before the room's first ready frame there is nothing to open. */
+.composer-context-waiting {
+	cursor: default;
+}
+.composer-context-popover-lead {
+	margin: 0 0 2px;
+	color: var(--fg);
+	font-size: 12px;
+	font-weight: 700;
+}
+
+/* The model and effort control: the model bright, the effort muted, no frame
+   at rest; a soft background on hover and focus. */
+.model-pick-control {
+	position: relative;
+	display: inline-flex;
+	min-width: 0;
+}
+.model-pick-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	height: 28px;
+	padding: 0 8px;
+	border: none;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+	font-size: 13px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.model-pick-trigger:hover,
+.model-pick-trigger:focus-visible,
+.model-pick-trigger[aria-expanded="true"] {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	outline: none;
+}
+.model-pick-trigger:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.model-pick-trigger-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--fg);
+	font-weight: 500;
+}
+/* The speedometer after the name keeps its size when a long name shortens;
+   its needle is in the brand lila, so the effort reads at a glance. */
+.model-pick-trigger .speedometer-icon {
+	flex: 0 0 auto;
+}
+.model-pick-trigger .speedometer-needle {
+	stroke: var(--exx-plan-shape);
+}
+.model-pick-trigger .speedometer-hub {
+	fill: var(--exx-plan-shape);
+}
+/* In the phone's header, under the room's name: small and muted. */
+.model-pick-in-header .model-pick-trigger {
+	height: auto;
+	gap: 4px;
+	margin-top: 2px;
+	padding: 2px 0;
+	font-size: 11.5px;
+	background: transparent;
+	box-shadow: none;
+	position: relative;
+}
+/* The line is the phone's only way into the panel: its tap area reaches
+   44px tall, over the room's name (plain text) and the bar's own padding. */
+.model-pick-in-header .model-pick-trigger::before {
+	content: "";
+	position: absolute;
+	left: -6px;
+	right: -6px;
+	top: 50%;
+	height: 44px;
+	transform: translateY(-50%);
+	/* Above the conversation's frame, which starts right under the bar. */
+	z-index: 1;
+}
+.model-pick-in-header .model-pick-trigger-name {
+	color: var(--fg-soft);
+	font-weight: 400;
+}
+
+/* The too-long window is the app's small confirm card: its answers sit at
+   the right, as the confirm question's (23-room-settings.css). */
+.model-switch-card .checkpoint-preview-actions {
+	justify-content: flex-end;
+}
+
+/* The panel: the effort first, then the models. Above the control on wider
+   screens; a bottom sheet on the phone, as Room settings' model sheet. A card
+   of the page's own paper, like the message box it opens from. */
+.model-pick-panel {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 8px);
+	z-index: 40;
+	width: 320px;
+	max-height: min(500px, 70vh);
+	overflow-y: auto;
+	padding: 4px 0;
+	background: var(--panel);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-card);
+	box-shadow: var(--exx-shadow-popover);
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	white-space: normal;
+	text-align: left;
+}
+.model-pick-sheet-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 94;
+	background: rgba(0, 0, 0, 0.35);
+}
+.model-pick-panel.model-pick-sheet {
+	position: fixed;
+	left: 0;
+	right: 0;
+	top: auto;
+	bottom: 0;
+	z-index: 95;
+	width: auto;
+	max-height: 75vh;
+	border-radius: 16px 16px 0 0;
+	padding: 8px 0 max(12px, env(safe-area-inset-bottom));
+}
+/* Only the models list scrolls when the panel is short: the grab handle, Back
+   and "Models" stay in place over it. */
+.model-pick-panel {
+	display: flex;
+	flex-direction: column;
+}
+.model-pick-panel > *,
+.model-pick-panel.model-pick-sheet::before {
+	flex: none;
+}
+.model-pick-panel > .model-pick-list {
+	flex: 0 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+}
+/* The sheet's grab handle, as a bottom sheet has. */
+.model-pick-panel.model-pick-sheet::before {
+	content: "";
+	display: block;
+	width: 36px;
+	height: 4px;
+	margin: 0 auto 6px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--fg) 22%, transparent);
+}
+/* The effort view: the closed control's speedometer opened up into a dial,
+   the brand lila up to the knob, the level named under the hub in the
+   display face; under a thin line, the model with its context window as the
+   way to the models. */
+.model-pick-effort {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	padding: 12px 0 0;
+}
+/* A quiet label in small capitals, as the page's section labels. */
+.model-pick-effort-kicker {
+	margin: 0;
+	padding: 0 16px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	line-height: 1.6;
+	text-transform: uppercase;
+}
+/* The dial's box: the slider fills it and the level's name sits under the hub. */
+.model-pick-effort-dial {
+	position: relative;
+	align-self: center;
+	width: 240px;
+	margin: 6px 0 4px;
+}
+.model-pick-effort-title {
+	position: absolute;
+	left: 50%;
+	/* The hub's height plus the needle's foot in the dial's drawing (EffortControl's DIAL). */
+	top: calc(100% * 126 / 150);
+	z-index: 1;
+	margin: 0;
+	transform: translate(-50%, -50%);
+	color: var(--exx-plan);
+	font-family: var(--exx-font-display);
+	font-size: 20px;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	line-height: 1.25;
+	white-space: nowrap;
+	cursor: default;
+}
+.model-pick-effort-hint {
+	margin: 0 16px 8px;
+	color: var(--muted);
+	font-size: 11.5px;
+	line-height: 1.4;
+	text-align: center;
+}
+/* The model under the dial: the row that leads to the models. */
+.model-pick-effort-model {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	margin: 8px 0 -4px;
+	padding: 12px 16px;
+	border: none;
+	border-top: 1px solid var(--border-soft);
+	border-radius: 0 0 var(--exx-radius-card) var(--exx-radius-card);
+	background: none;
+	color: var(--fg);
+	font: inherit;
+	font-size: 14px;
+	text-align: left;
+	cursor: pointer;
+}
+.model-pick-effort-model:hover,
+.model-pick-effort-model:focus-visible {
+	background: color-mix(in srgb, var(--fg) 7%, transparent);
+	outline: none;
+}
+.model-pick-effort-model:focus-visible {
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.model-pick-effort-model-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-pick-effort-model > svg {
+	flex: 0 0 auto;
+	color: var(--muted);
+}
+/* The effort slider, drawn as a dial: the whole box is one press area. */
+.effort-slider {
+	border-radius: 12px;
+	cursor: pointer;
+	touch-action: none;
+	outline: none;
+}
+/* A waiting dial fades its shapes only: the rungs' names stay readable, and
+   the line under the dial says why it waits. */
+.effort-slider.is-disabled {
+	cursor: not-allowed;
+}
+.effort-slider.is-disabled .effort-dial svg {
+	opacity: 0.5;
+}
+.effort-slider:focus-visible {
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--exx-plan) 45%, transparent);
+}
+.effort-dial {
+	position: relative;
+	aspect-ratio: 240 / 150;
+}
+.effort-dial svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+.effort-dial-track,
+.effort-dial-fill {
+	fill: none;
+	stroke-width: 10;
+	stroke-linecap: round;
+}
+.effort-dial-track {
+	stroke: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.effort-dial-fill {
+	stroke: var(--exx-plan-shape);
+}
+.effort-dial-tick {
+	fill: color-mix(in srgb, var(--fg) 52%, transparent);
+}
+.effort-dial-tick.is-on {
+	fill: var(--exx-paper);
+}
+/* The needle stays ink: the lila is the arc and the knob. */
+.effort-dial-needle {
+	stroke: var(--fg);
+	stroke-width: 2.5;
+	stroke-linecap: round;
+}
+.effort-dial-hub {
+	fill: var(--fg);
+}
+.effort-dial .effort-slider-thumb {
+	fill: var(--exx-paper);
+	stroke: var(--exx-plan-shape);
+	stroke-width: 3;
+}
+.effort-slider:focus-visible .effort-slider-thumb {
+	stroke-width: 5;
+}
+.effort-dial-label {
+	position: absolute;
+	transform: translate(-50%, -50%);
+	color: var(--muted);
+	font-size: 11.5px;
+	line-height: 1;
+	white-space: nowrap;
+	pointer-events: none;
+}
+/* The models view's top: a back arrow to the effort view and "Models". */
+.model-pick-list-head {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 36px;
+	padding: 4px 14px 4px 6px;
+	border-bottom: 1px solid var(--border-soft);
+}
+.model-pick-back {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: 6px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.model-pick-back:hover,
+.model-pick-back:focus-visible {
+	background: color-mix(in srgb, var(--fg) 7%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.model-pick-back:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.model-pick-list-title {
+	padding-left: 8px;
+	color: var(--fg);
+	font-size: 13px;
+	font-weight: 600;
+}
+.model-pick-back + .model-pick-list-title {
+	padding-left: 0;
+}
+/* The models: a check on the one in use, "Recommended" in lila words after
+   the name, each model's context window at the right (after its mark, when it
+   cannot be used as it is); one line each, so the list fits a laptop's height. */
+.model-pick-list {
+	padding: 4px 0;
+}
+.model-pick-list-note {
+	margin: 0;
+	padding: 10px 14px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+.model-pick-list .room-model-error.model-pick-list-note {
+	color: var(--error);
+}
+.model-pick-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 14px 7px 10px;
+	border: none;
+	background: none;
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+.model-pick-row:focus-visible {
+	background: color-mix(in srgb, var(--fg) 7%, transparent);
+	outline: none;
+}
+/* Only where a pointer hovers: on a touch sheet the tap that switches views
+   would leave the row under the finger shaded, as if picked. */
+@media (hover: hover) {
+	.model-pick-row:hover {
+		background: color-mix(in srgb, var(--fg) 7%, transparent);
+	}
+}
+.model-pick-check {
+	display: inline-flex;
+	flex: 0 0 auto;
+	width: 16px;
+	color: var(--exx-plan-shape);
+}
+.model-pick-row-name {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-pick-row.is-current .model-pick-row-name {
+	font-weight: 600;
+}
+.model-pick-row.is-greyed .model-pick-row-name {
+	color: var(--row-muted);
+}
+.model-pick-row-end {
+	display: inline-flex;
+	flex: 0 0 auto;
+	gap: 4px;
+	margin-left: auto;
+	padding-left: 4px;
+}
+.model-pick-row-hint {
+	color: var(--row-muted);
+	font-size: 12px;
+}
+.model-pick-row-context {
+	flex: 0 0 auto;
+	color: var(--row-muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.model-pick-row-hint + .model-pick-row-context::before {
+	content: "· ";
+}
+.model-pick-row[aria-disabled="true"] {
+	cursor: help;
+}
+.model-pick-sheet .model-pick-row {
+	padding: 11px 18px 11px 14px;
+	font-size: 15px;
+}
+.model-pick-sheet .model-pick-effort {
+	padding: 8px 0 0;
+}
+.model-pick-sheet .model-pick-effort-kicker {
+	padding: 0 18px;
+}
+/* On the phone the dial is larger, one tap area for a finger. */
+.model-pick-sheet .model-pick-effort-dial {
+	width: 270px;
+}
+.model-pick-sheet .effort-dial-label {
+	font-size: 12.5px;
+}
+.model-pick-sheet .model-pick-effort-model {
+	margin-bottom: 0;
+	padding: 14px 18px;
+	border-radius: 0;
+	font-size: 15px;
+}
+.model-pick-sheet .model-pick-list-head {
+	padding: 4px 18px 8px 10px;
+}
+/* A finger's reach: at least 44 px. */
+.model-pick-sheet .model-pick-back {
+	width: 44px;
+	height: 44px;
+}
+.model-pick-sheet .model-pick-list-title {
+	font-size: 15px;
+}
+.model-pick-sheet .room-model-menu-kicker {
+	padding: 10px 18px 4px;
+}
+
+.composer-hint {
+	flex-shrink: 0;
+	color: var(--dim);
+	font-size: 11px;
+}
+
+:root[data-theme="light"] .composer {
+	background: transparent;
+	color: var(--fg);
+}
+:root[data-theme="light"] .composer-box {
+	background: var(--panel);
+	border-color: var(--border-soft);
+}
+/* Restated here because the themed resting border above outranks the shared focus rule. */
+:root[data-theme="light"] .composer-box:focus-within {
+	border-color: color-mix(in srgb, var(--fg) 28%, var(--border-soft));
+}
+:root[data-theme="light"] .composer textarea {
+	background: transparent;
+	color: var(--fg);
+}
+:root[data-theme="light"] .composer textarea::placeholder {
+	color: var(--dim);
+}
+/* With the layer over it, the box draws only its caret and its selection's
+   ground; the layer's letters show on top. After the light theme's textarea
+   colour, which this must outrank. */
+.composer .composer-input textarea.has-mention {
+	color: transparent;
+	caret-color: var(--fg);
+}
+:root[data-theme="light"] .composer-hint {
+	color: var(--dim);
+}
+:root[data-theme="light"] .composer-context-pill {
+	background: transparent;
+}
+:root[data-theme="light"] .composer-context-pill:hover,
+:root[data-theme="light"] .composer-context-pill:focus-visible {
+	color: var(--fg-soft);
+	background: color-mix(in srgb, var(--context-health-color) 12%, transparent);
+}
+:root[data-theme="light"] .composer .send-btn {
+	background: var(--fg);
+	color: var(--bg);
+}
+/* The light theme used to restate these buttons because it wanted a different
+   answer: a bordered rest and a full inversion on hover, which then had to be
+   fought off again for the split's segments. Ghost needs no such split. Both
+   themes now want the same recipe, and it is already written in tokens that
+   resolve per theme, so the overrides are gone rather than duplicated. Removing
+   them is also what removes the specificity trap: nothing theme-level outranks
+   the shared button rules any more. */
+

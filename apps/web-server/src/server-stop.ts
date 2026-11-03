@@ -1,5 +1,6 @@
 // The server's graceful stop: the one place that decides what happens between
-// a stop signal (SIGTERM or SIGINT) and the process's exit.
+// a stop signal (SIGTERM or SIGINT), or the app's stop message, and the
+// process's exit.
 //
 // Three phases:
 // 1. At once: stop taking work. The scheduler's loops stop; every tracked live
@@ -26,16 +27,28 @@
 // signal one second or more after the first ends the process at once, still
 // through process.exit(0). SIGHUP is left alone.
 //
+// The app's stop message: a server its parent started with an IPC channel
+// (the desktop app) also stops on { type: SERVER_STOP_MESSAGE } through that
+// channel, as on a first signal. On Windows a signal from another process is
+// a forced kill, so the message is how the desktop app gets this stop there;
+// it sends it on every platform, and its signal comes only after the stop's
+// time limit, as a later signal. A server started without a channel (the
+// launcher, a terminal) installs no message listener.
+//
 // This module imports Node's own modules and fastify's types only.
 import fs from "node:fs";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 export const SERVER_STOPPING_CODE = "server_stopping";
 export const SERVER_STOPPED_REASON = "server_stopped";
+/** The type of the stop message a parent sends over the server's IPC channel; apps/desktop/src/server.ts sends it. */
+export const SERVER_STOP_MESSAGE = "exxperts:stop";
 
 export const SERVER_STOPPING_SENTENCE = "exxperts is stopping, so this cannot start now.";
-export const STOP_CUT_ANSWER_SENTENCE = "exxperts stopped before this answer finished. Send your message again if something is missing.";
+export { STOP_CUT_ANSWER_SENTENCE } from "./turn-ended-by.js";
 export const STOP_SCHEDULED_RUN_SENTENCE = "exxperts stopped before this scheduled task finished.";
+// A scheduled run cut by an end that was no stop (a crash, a kill), on an edition that does not run it again.
+export const INTERRUPTED_SCHEDULED_RUN_SENTENCE = "exxperts stopped unexpectedly before this scheduled task finished, so it was not run again. Ask in this room if you still need it.";
 export const STOP_QUESTIONS_SENTENCE =
 	"exxperts is stopping, so questions cannot be answered now. Finish without them; leave undone anything that needs approval, and say so in your answer.";
 
@@ -201,9 +214,13 @@ function waitMs(options: ServerStopOptions): number {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** What started the stop, as its log lines name it. */
+type StopCause = NodeJS.Signals | "stop message";
+
 /**
- * Installs the stop: the SIGTERM and SIGINT listeners, for the process's
- * life. Called once, by index.ts, once the server listens.
+ * Installs the stop: the SIGTERM and SIGINT listeners and, when the process
+ * has an IPC channel, the stop message's listener, for the process's life.
+ * Called once, by index.ts, once the server listens.
  */
 export function installServerStop(options: ServerStopOptions): void {
 	if (installed) throw new Error("the server stop is already installed");
@@ -219,7 +236,7 @@ export function installServerStop(options: ServerStopOptions): void {
 			schedulerTick: safeFlag(options.schedulerTickRunning),
 		};
 	};
-	const onSignal = (signal: NodeJS.Signals): void => {
+	const onSignal = (signal: StopCause): void => {
 		const now = Date.now();
 		if (firstSignalAt === 0) {
 			firstSignalAt = now;
@@ -235,6 +252,11 @@ export function installServerStop(options: ServerStopOptions): void {
 	};
 	process.on("SIGTERM", onSignal);
 	process.on("SIGINT", onSignal);
+	if (typeof process.send === "function") {
+		process.on("message", (message: unknown) => {
+			if ((message as { type?: unknown } | null)?.type === SERVER_STOP_MESSAGE) onSignal("stop message");
+		});
+	}
 }
 
 function safeCount(fn: () => number): number {
@@ -254,7 +276,7 @@ function safeFlag(fn: () => boolean): boolean {
 	}
 }
 
-async function runStop(options: ServerStopOptions, signal: NodeJS.Signals, counts: () => RunningCounts): Promise<void> {
+async function runStop(options: ServerStopOptions, signal: StopCause, counts: () => RunningCounts): Promise<void> {
 	// A closed pipe or terminal must not end the process mid-stop through an
 	// unhandled stream error.
 	process.stdout.on("error", noop);

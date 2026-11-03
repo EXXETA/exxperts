@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit, waitForServer } from "./smoke-server-process.js";
 import type { AbsorbRun, AbsorbRunGenerate } from "../src/absorb-run.js";
 import type { AbsorbGenerateResult } from "../src/persistent-agents.js";
 
@@ -104,23 +104,6 @@ const gateway = http.createServer((req, res) => {
 // Helpers
 // ---------------------------------------------------------------------------
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await sleep(150);
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
@@ -359,7 +342,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20_000);
 
 	const liveConversationId = `smokeconv_recall_${Date.now().toString(36)}`;
 	const seeded = await requestJson(`/api/persistent-agents/${encodeURIComponent(roomId)}/threads/${encodeURIComponent(liveConversationId)}`, {

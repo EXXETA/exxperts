@@ -6,6 +6,9 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(50);
 
 // A live Full access room with the terminal on reads and writes the person's
 // skills folder again, through the file tools the live session really gets:
@@ -235,7 +238,10 @@ class LiveServer {
 	}
 
 	// One prompt turn over the room's live connection; resolves with the result
-	// of every scripted call once the turn has ended on the server.
+	// of every scripted call once the turn has settled on the server.
+	// agent_end reaches the socket before that, and until then a settings save
+	// is refused as a turn in flight, so it waits on the room's status, the
+	// field that refusal reads.
 	async runTurn(agentId: string, conversationId: string, calls: ScriptedCall[]): Promise<string[]> {
 		const seeded = await this.json(`/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(conversationId)}`, {
 			method: "PUT",
@@ -257,6 +263,17 @@ class LiveServer {
 		const deadline = Date.now() + 60_000;
 		while (Date.now() < deadline) {
 			if (turnResults && frames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
+				let activeThread: any;
+				await waitUntil(async () => {
+					const status = await this.json(`/api/persistent-agents/${encodeURIComponent(agentId)}/status`);
+					activeThread = status.body?.activeThread;
+					return status.status === 200 && activeThread?.inFlight === false;
+				}, "the turn has settled on the server", 20_000).catch((error: Error) => {
+					// JSON.stringify(undefined) is undefined: a status request that failed
+					// before any answer must still surface its own error, not a TypeError.
+					const seen = JSON.stringify(activeThread) ?? "none read";
+					throw new Error(`${error.message}; the room's active thread: ${seen.slice(0, 400)}`, { cause: error });
+				});
 				try { socket.close(); } catch {}
 				const results = turnResults as string[];
 				assert(results.length === calls.length, `expected ${calls.length} tool results, got ${results.length}`);

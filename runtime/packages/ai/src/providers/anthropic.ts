@@ -27,8 +27,10 @@ import type {
 	Tool,
 	ToolCall,
 	ToolResultMessage,
+	Usage,
 } from "../types.js";
 import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+import { addCitation, webLink } from "../utils/citation-offsets.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
@@ -430,6 +432,22 @@ async function* iterateAnthropicEvents(
 	}
 }
 
+/**
+ * Keeps a citation of a page a person can open: a web search result, or a
+ * search result whose source is a web address. Claude sends no offsets, so
+ * the citation covers its whole block.
+ */
+function addAnthropicCitation(block: TextContent, citation: unknown): void {
+	const cited = citation as { type?: unknown; url?: unknown; source?: unknown; title?: unknown } | null;
+	const link =
+		cited?.type === "web_search_result_location"
+			? webLink(cited.url, cited.title)
+			: cited?.type === "search_result_location"
+				? webLink(cited.source, cited.title)
+				: undefined;
+	if (link) addCitation(block, link);
+}
+
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -520,7 +538,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			// what the turn has already spent instead of replacing it. That sum is
 			// what the turn COST, and every request in it resent the whole
 			// conversation, so it is not what the turn left behind.
-			const usageBase = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+			const usageBase = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 };
 			// What the turn leaves behind is measured from the first request's
 			// prompt AS SUBMITTED, which is the one the next turn will resend.
 			//
@@ -619,6 +637,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					started = true;
 				}
 				const rawBlocks = declaresServerTool ? new Map<number, Record<string, any>>() : null;
+				// The provider's own tool calls by block index, while their arguments arrive.
+				const serverTools = new Map<number, { id: string; name: string; json: string }>();
 				let rawStopReason: string | undefined;
 
 				for await (const event of iterateAnthropicEvents(response, options?.signal)) {
@@ -633,6 +653,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						output.usage.output = usageBase.output + (event.message.usage.output_tokens || 0);
 						output.usage.cacheRead = usageBase.cacheRead + (event.message.usage.cache_read_input_tokens || 0);
 						output.usage.cacheWrite = usageBase.cacheWrite + (event.message.usage.cache_creation_input_tokens || 0);
+						setOneHourWrites(output.usage, usageBase.cacheWrite1h, event.message.usage);
 						// The prompt as this request was submitted, pinned before the
 						// response has had a chance to grow it. Only the first response
 						// of the turn sets it, and only when it actually reported
@@ -670,6 +691,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							}
 							// Proxies can put content in the start event itself instead of
 							// streaming it as deltas; hardcoding "" would silently drop it.
+							// Their citations too.
+							const startCitations = (event.content_block as { citations?: unknown }).citations;
+							if (Array.isArray(startCitations)) for (const citation of startCitations) addAnthropicCitation(block, citation);
 							if (typeof event.content_block.text === "string" && event.content_block.text.length > 0) {
 								block.text += event.content_block.text;
 								stream.push({
@@ -719,6 +743,19 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							};
 							output.content.push(block);
 							stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
+						} else if (event.content_block.type === "server_tool_use") {
+							// Kept out of the content (the raw blocks carry it for a
+							// continuation), but said, so a long search is not silence.
+							const { id, name } = event.content_block;
+							const input = event.content_block.input as Record<string, unknown> | undefined;
+							serverTools.set(event.index, { id, name, json: "" });
+							stream.push({ type: "server_tool_start", id, name, ...(input && Object.keys(input).length > 0 ? { input } : {}), partial: output });
+						} else if (typeof (event.content_block as { tool_use_id?: unknown }).tool_use_id === "string") {
+							// A server tool's result block (web_search_tool_result and its
+							// kin): a list is results, an object is the tool's error.
+							const result = event.content_block as { tool_use_id: string; content?: unknown };
+							const ok = Array.isArray(result.content) || !/error/.test(String((result.content as { type?: unknown } | undefined)?.type ?? ""));
+							stream.push({ type: "server_tool_end", id: result.tool_use_id, ok, partial: output });
 						}
 					} else if (event.type === "content_block_delta") {
 						if (event.delta.type === "text_delta") {
@@ -745,6 +782,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 									partial: output,
 								});
 							}
+						} else if (event.delta.type === "citations_delta") {
+							// Each arrives before its block stops, so `text_end`, and an
+							// error that ends the stream, already carry it.
+							const block = blocks.find((b) => b.index === event.index);
+							if (block?.type === "text") addAnthropicCitation(block, event.delta.citation);
+						} else if (event.delta.type === "input_json_delta" && serverTools.has(event.index)) {
+							serverTools.get(event.index)!.json += event.delta.partial_json;
 						} else if (event.delta.type === "input_json_delta") {
 							const index = blocks.findIndex((b) => b.index === event.index);
 							const block = blocks[index];
@@ -767,6 +811,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							}
 						}
 					} else if (event.type === "content_block_stop") {
+						const serverTool = serverTools.get(event.index);
+						if (serverTool) {
+							serverTools.delete(event.index);
+							const input = serverTool.json ? parseStreamingJson(serverTool.json) : {};
+							if (Object.keys(input).length > 0) stream.push({ type: "server_tool_start", id: serverTool.id, name: serverTool.name, input, partial: output });
+						}
 						const index = blocks.findIndex((b) => b.index === event.index);
 						const block = blocks[index];
 						if (block) {
@@ -823,6 +873,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						if (event.usage.cache_creation_input_tokens != null) {
 							output.usage.cacheWrite = usageBase.cacheWrite + event.usage.cache_creation_input_tokens;
 						}
+						setOneHourWrites(output.usage, usageBase.cacheWrite1h, event.usage);
 						// Anthropic doesn't provide total_tokens, compute from components
 						output.usage.totalTokens =
 							output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
@@ -869,6 +920,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				usageBase.output = output.usage.output;
 				usageBase.cacheRead = output.usage.cacheRead;
 				usageBase.cacheWrite = output.usage.cacheWrite;
+				usageBase.cacheWrite1h = output.usage.cacheWrite1h ?? 0;
 				// The turn resumes as new blocks, so the last thing written before the
 				// pause and the first thing written after it would otherwise run
 				// together into one word. The break belongs at the START of the
@@ -984,6 +1036,24 @@ export function usesThinkingBlockBinding(model: Model<"anthropic-messages">): bo
 }
 
 /**
+ * Whether a room-state message (UserMessage.roomState) may go out as a
+ * mid-conversation system message: the models Anthropic's page on those
+ * messages lists, on a direct request. Not Sonnet 5 (the page says to use the
+ * top-level system field there), not the 4.x rows before Opus 4.8 (they answer
+ * 400 "role 'system' is not supported on this model"), and not the gateways,
+ * Copilot or Bedrock. The id is matched whole, with an optional date suffix,
+ * so an unlisted later row stays on plain user text until it is added here.
+ * The caller also keeps the subscription (OAuth) path on user text: role
+ * "system" has not been checked there.
+ */
+function sendsRoomStateAsSystem(model: Model<"anthropic-messages">): boolean {
+	if (!isDirectAnthropicProvider(model.provider)) return false;
+	return /^claude-(?:(?:fable|mythos)-5(?:[-.]1)?|mythos-preview|opus-(?:5|5[-.]5|4[-.]8)|(?:sonnet|haiku)-5[-.]5)(?:-\d{8})?$/.test(
+		model.id,
+	);
+}
+
+/**
  * The documented remedy on a binding model: the API drops each thinking block
  * whose prefix no longer matches (and every thinking block after it),
  * unbilled, answers normally, and lists the drops in input_transformations.
@@ -1030,9 +1100,10 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 	const base = buildBaseOptions(model, options, apiKey);
 	if (!options?.reasoning) {
 		// No level means off. A row that withholds off (thinkingLevelMap.off is
-		// null: the Fable and Mythos families, Opus 5.5 and Sonnet 5.5) cannot
-		// stop thinking, and "disabled" is a 400 there, so the request goes out
-		// at the cheapest rung the dial offers, the one a stored off settles on.
+		// null: the Fable and Mythos families, Opus 5.5, and Sonnet 5.5 outside
+		// Anthropic's own API) cannot stop thinking, and "disabled" is a 400
+		// there, so the request goes out at the cheapest rung the dial offers,
+		// the one a stored off settles on.
 		// The self-heal for a disabled refusal stays for rows the catalogue does
 		// not know about.
 		if (model.thinkingLevelMap?.off === null && supportsAdaptiveThinking(model)) {
@@ -1283,7 +1354,14 @@ function buildParams(
 				};
 			}
 		} else if (options?.thinkingEnabled === false) {
-			params.thinking = { type: "disabled" };
+			// A row whose off names a thinking type (Sonnet 5.5's "between_tools")
+			// refuses "disabled" and stops thinking that way instead. The SDK
+			// types lag that value.
+			const offType = model.thinkingLevelMap?.off;
+			params.thinking =
+				typeof offType === "string"
+					? ({ type: offType } as unknown as NonNullable<MessageCreateParamsStreaming["thinking"]>)
+					: { type: "disabled" };
 		}
 	}
 
@@ -1317,6 +1395,8 @@ function convertMessages(
 	cacheControl?: CacheControlEphemeral,
 ): MessageParam[] {
 	const params: MessageParam[] = [];
+	// Where the room-state messages landed in params, for the role pass below.
+	const roomStateIndexes = new Set<number>();
 
 	// Transform messages for cross-provider compatibility
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
@@ -1338,6 +1418,7 @@ function convertMessages(
 		if (msg.role === "user") {
 			if (typeof msg.content === "string") {
 				if (msg.content.trim().length > 0) {
+					if (msg.roomState) roomStateIndexes.add(params.length);
 					params.push({
 						role: "user",
 						content: sanitizeSurrogates(msg.content),
@@ -1368,6 +1449,7 @@ function convertMessages(
 					return true;
 				});
 				if (filteredBlocks.length === 0) continue;
+				if (msg.roomState) roomStateIndexes.add(params.length);
 				params.push({
 					role: "user",
 					content: filteredBlocks,
@@ -1495,10 +1577,15 @@ function convertMessages(
 		}
 	}
 
-	// Add cache_control to the last user message to cache conversation history
+	if (roomStateIndexes.size > 0 && !isOAuthToken && sendsRoomStateAsSystem(model)) {
+		sendRoomStateAsSystem(params, roomStateIndexes);
+	}
+
+	// Add cache_control to the last user message to cache conversation history,
+	// or to a final room-state system message, which ends the same prefix.
 	if (cacheControl && params.length > 0) {
 		const lastMessage = params[params.length - 1];
-		if (lastMessage.role === "user") {
+		if (lastMessage.role === "user" || (lastMessage.role as string) === "system") {
 			if (Array.isArray(lastMessage.content)) {
 				const lastBlock = lastMessage.content[lastMessage.content.length - 1];
 				if (
@@ -1520,6 +1607,58 @@ function convertMessages(
 	}
 
 	return params;
+}
+
+/**
+ * Sends each run of consecutive room-state messages as role "system" where the
+ * API takes one (see systemRunFits). Anywhere else, as when the next user
+ * message follows a copy after a failed turn, that run stays user text. So does
+ * a run with an image, which is not system content.
+ */
+function sendRoomStateAsSystem(params: MessageParam[], roomStateIndexes: Set<number>): void {
+	for (let start = 0; start < params.length; start++) {
+		if (!roomStateIndexes.has(start)) continue;
+		let end = start;
+		while (roomStateIndexes.has(end + 1)) end++;
+		const run = params.slice(start, end + 1);
+		if (
+			systemRunFits(params, start, end) &&
+			run.every((m) => typeof m.content === "string" || m.content.every((block) => block.type === "text"))
+		) {
+			// The SDK's message types lag role "system".
+			for (let i = start; i <= end; i++) params[i] = { ...params[i], role: "system" } as unknown as MessageParam;
+		}
+		start = end;
+	}
+}
+
+/**
+ * The placement rule for a mid-conversation system message: it must
+ * immediately follow a user turn and either end the messages or be
+ * immediately followed by an assistant turn, and consecutive ones are judged
+ * together. Anywhere else the API answers 400.
+ */
+function systemRunFits(messages: { role: string }[], start: number, end: number): boolean {
+	const after = messages[end + 1];
+	return messages[start - 1]?.role === "user" && (after === undefined || after.role === "assistant");
+}
+
+/**
+ * Sends a system run back as user text where it no longer fits, as after the
+ * history-refusal retry drops an answer that held only thinking.
+ */
+function withMisplacedSystemRunsAsUser<T extends { role: string }>(messages: T[]): T[] {
+	const placed = [...messages];
+	for (let start = 0; start < placed.length; start++) {
+		if (placed[start].role !== "system") continue;
+		let end = start;
+		while (placed[end + 1]?.role === "system") end++;
+		if (!systemRunFits(placed, start, end)) {
+			for (let i = start; i <= end; i++) placed[i] = { ...placed[i], role: "user" };
+		}
+		start = end;
+	}
+	return placed;
 }
 
 function shouldUseFineGrainedToolStreamingBeta(model: Model<"anthropic-messages">, context: Context): boolean {
@@ -1647,13 +1786,18 @@ export function stripValidatedHistoryFromParams<T extends { messages: any[]; thi
 	return {
 		...params,
 		thinking: options?.keepThinking ? params.thinking : { type: "disabled" },
-		messages: params.messages
-			.map((message: any) => {
-				if (message?.role !== "assistant" || !Array.isArray(message.content)) return message;
-				const content = message.content.filter((block: any) => !stripped.has(String(block?.type)));
-				return { ...message, content };
-			})
-			.filter((message: any) => message?.role !== "assistant" || !Array.isArray(message.content) || message.content.length > 0),
+		messages: withMisplacedSystemRunsAsUser(
+			params.messages
+				.map((message: any) => {
+					if (message?.role !== "assistant" || !Array.isArray(message.content)) return message;
+					const content = message.content.filter((block: any) => !stripped.has(String(block?.type)));
+					return { ...message, content };
+				})
+				.filter(
+					(message: any) =>
+						message?.role !== "assistant" || !Array.isArray(message.content) || message.content.length > 0,
+				),
+		),
 	};
 }
 
@@ -1685,6 +1829,21 @@ function recordInputTransformations(output: AssistantMessage, model: Model<"anth
 		output,
 		createAssistantMessageDiagnostic("anthropic-thinking-dropped", error, { model: model.id, dropped }),
 	);
+}
+
+/**
+ * Records how many of the written tokens were written for one hour, which is
+ * billed at a higher rate than the five-minute write. The rest of
+ * `cache_creation_input_tokens` is five-minute writes, so that count is not
+ * kept twice. A report without the split (message_delta's usually, a proxy's)
+ * leaves the count as it was.
+ */
+function setOneHourWrites(usage: Usage, base: number, reported: unknown): void {
+	const split = (reported as { cache_creation?: { ephemeral_1h_input_tokens?: unknown } | null }).cache_creation;
+	if (!split || typeof split.ephemeral_1h_input_tokens !== "number") return;
+	const oneHour = base + split.ephemeral_1h_input_tokens;
+	if (oneHour > 0) usage.cacheWrite1h = oneHour;
+	else delete usage.cacheWrite1h;
 }
 
 /**

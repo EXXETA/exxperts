@@ -12,7 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit, waitForServer } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -53,7 +54,8 @@ const gateway = http.createServer((req, res) => {
 		let parsed: any = {};
 		try { parsed = JSON.parse(body); } catch {}
 		const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
-		const lastUser = [...messages].reverse().find((message) => message?.role === "user");
+		// A room-state copy after the person's message is the app's, not the marker's place.
+		const lastUser = [...messages].reverse().find((message) => message?.role === "user" && !JSON.stringify(message.content ?? "").includes(ROOM_STATE_HEADING));
 		const slow = /slow/.test(typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? ""));
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		const base = { id: `cmpl_${completions}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: String(parsed?.model ?? "room-model") };
@@ -75,23 +77,6 @@ async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promis
 	});
 	const text = await response.text();
 	return { status: response.status, body: text ? JSON.parse(text) : null };
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 const WebSocketImpl: any = (await import("ws")).default;
@@ -231,7 +216,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20_000);
 
 	const room = await requestJson("/api/persistent-agents", { method: "POST", body: JSON.stringify({ displayName: "Switch Race Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
 	assert(room.status === 201, `room creation: expected 201, got ${room.status}: ${JSON.stringify(room.body)}`);

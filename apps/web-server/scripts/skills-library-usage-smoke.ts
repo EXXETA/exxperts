@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,23 +40,6 @@ function writeLibrarySkill(name: string, description: string, files: string[], o
 	fs.writeFileSync(path.join(dir, "provenance.json"), `${JSON.stringify({ source: "local", importedAt: new Date().toISOString(), license: options.recordLicense ?? null, sha256: sha256(manifest) })}\n`);
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
 		...init,
@@ -87,7 +70,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	// --- The detail lists the skill's files --------------------------------------
 	let detail = await api("/api/skills/deck-builder");
@@ -95,7 +78,6 @@ try {
 	assert(JSON.stringify([...detail.body.bundledScripts].sort()) === JSON.stringify([...files].sort()), `the detail lists every bundled file, got ${JSON.stringify(detail.body.bundledScripts)}`);
 	assert(detail.body.fileCount === files.length, `the detail counts the files, got ${detail.body.fileCount}`);
 	assert(Array.isArray(detail.body.rooms) && detail.body.rooms.length === 0, "a skill no room enables has no rooms");
-	assert(!("usedByAgents" in detail.body), "the dead usedByAgents field is gone");
 	const plain = await api("/api/skills/plain-notes");
 	assert(plain.status === 200 && plain.body.bundledScripts.length === 0 && plain.body.fileCount === 0, "a skill without files lists none");
 

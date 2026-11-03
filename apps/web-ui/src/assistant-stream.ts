@@ -36,46 +36,73 @@
  * bubble from scratch — one logical answer, one item.
  *
  * Pacing: deltas arrive in provider/proxy bursts; revealing them whole reads
- * as stutter-then-jump. Text reveals at a reading-speed band (chars/second,
- * time-based so 60Hz and 120Hz displays behave identically) with a small
- * backlog lean, fractional carry between ticks, and a jank cap so one slow
- * frame cannot burst. When generation finishes ahead of the reveal, the tail
- * keeps draining and the authoritative-text reconciliation waits for the
- * buffer to empty ("draining" phase), so there is no end-of-message dump.
- * The host keeps the turn's "working" chrome up until that drain is done, so
- * the screen and the Stop button agree.
+ * as stutter-then-jump. The reveal follows how fast the model writes
+ * (characters received in the last second), keeps a cushion of text in hand
+ * that learns the stream's own pauses, and changes speed only in ramps, under
+ * a ceiling that rises only while far behind. It shows whole words and counts
+ * only the characters a reader sees (reveal-cut.ts). Time-based, so 60Hz and
+ * 120Hz displays behave identically, with a jank cap so one slow frame cannot
+ * burst. When generation finishes ahead of the reveal, the tail keeps the
+ * speed it had and the authoritative-text reconciliation waits for the buffer
+ * to empty ("draining" phase), so there is no end-of-message dump. The turn's
+ * buttons follow the server's turn, not this tail: sending flushes it first.
+ *
+ * Shared ids: in a turn the page sent with an id, the server names every
+ * answer part (thread-items-by-id.ts) on the frame that opens it, and the
+ * part takes that id instead of one made here. The server then also decides
+ * which message repeats an earlier part (`echoOf`), so such a turn's
+ * messages skip the page's own echo test.
  */
 
+import { cutWords, LONG_WORD, NOTHING_OPEN, openAfterLines, type OpenAtLine } from "./reveal-cut";
+
+/** The reveal's pace: it follows how fast the model writes, keeping a small cushion of text in hand. */
 export interface RevealPacing {
-	/** Reveal floor while the backlog is small. */
-	minCharsPerSec: number;
-	/** Reveal ceiling as the backlog grows. */
-	maxCharsPerSec: number;
-	/** +chars/s per buffered char, up to the ceiling. */
-	backlogLean: number;
+	/** Never slower than this while something waits. */
+	floorCharsPerSec: number;
+	/** The ceiling while the screen keeps up. */
+	capCharsPerSec: number;
+	/** The ceiling rises toward this while far behind: after a burst, a web search or a drop. */
+	catchUpCapCharsPerSec: number;
+	/** Waiting characters where the rise starts and where it reaches the catch-up ceiling. */
+	catchUpFromChars: number;
+	catchUpToChars: number;
+	/** Seconds of text kept in hand, so uneven pieces come out even: the stream's longest pause of the last 10 s (times 1.1), between these two. */
+	cushionMinS: number;
+	cushionMaxS: number;
+	/** How quickly the waiting text is brought back to the cushion. */
+	correctS: number;
+	/** Once the model is done, the rest is shown within about this long, the ceiling allowing. */
+	finishS: number;
+	/** Speed changes are ramps: at most this much faster or slower per second. */
+	rampUpPerSec: number;
+	rampDownPerSec: number;
 	/** Jank guard: one slow frame must not reveal a burst. */
 	maxTickDtMs: number;
 }
 
-// Anchored just above reading speed (~25 chars/s) and calibrated by eye —
-// treat these two numbers as the product knob, not as physics.
-export const DEFAULT_REVEAL_PACING: RevealPacing = {
-	minCharsPerSec: 74,
-	maxCharsPerSec: 131,
-	backlogLean: 0.05,
+// The model's own speed, evened out: the cushion learns the stream's pauses
+// (0.3-1 s), and the ceiling rises from 600 toward 1,000 a second only while
+// more than 900 characters wait. A 400-character paragraph takes about 0.7 s;
+// never more than about one line appears in a tenth of a second. The product's
+// one pace, with no setting.
+export const REVEAL_PACING: RevealPacing = {
+	floorCharsPerSec: 60,
+	capCharsPerSec: 600,
+	catchUpCapCharsPerSec: 1000,
+	catchUpFromChars: 900,
+	catchUpToChars: 2400,
+	cushionMinS: 0.3,
+	cushionMaxS: 1,
+	correctS: 0.5,
+	finishS: 1,
+	rampUpPerSec: 1500,
+	rampDownPerSec: 1000,
 	maxTickDtMs: 250,
 };
 
-// Arrival speed, reachable only through the hidden reveal-speed knob
-// ("arrival"): the lean drains any backlog in about 1/backlogLean seconds, so
-// the reveal trails the model by a fraction of a second while a burst still
-// lands over a few frames instead of in one.
-export const ARRIVAL_REVEAL_PACING: RevealPacing = {
-	minCharsPerSec: 400,
-	maxCharsPerSec: 4000,
-	backlogLean: 2,
-	maxTickDtMs: 250,
-};
+/** How long a word still being written waits for its end before it shows anyway. */
+const LAST_WORD_WAIT_MS = 250;
 
 /** How long a finalized answer quarantines replayed fragments of itself. */
 const RECENT_FINAL_FRAGMENT_WINDOW_MS = 10_000;
@@ -156,6 +183,33 @@ export function outputLimitNoticeForTurn(input: OutputLimitNoticeTurnInput): str
 
 export type AssistantStreamPhase = "idle" | "streaming" | "draining";
 
+/** The pace's memory for the open message. */
+export interface RevealPaceState {
+	/** Current reveal speed, chars/s. */
+	rate: number;
+	/** [time, chars] of each piece received in the last second. */
+	arrivals: [number, number][];
+	firstArrivalAt: number | null;
+	/** [time, ms since the previous piece] over the last 10 s. */
+	gaps: [number, number][];
+	lastPieceAt: number | null;
+	/** Since when the last, unfinished word has been waiting. */
+	heldSince: number | null;
+	/** What the revealed text leaves open (a code block, inline code), read up to its last line's start, openScannedTo. */
+	open: OpenAtLine;
+	openScannedTo: number;
+}
+
+function createRevealPaceState(): RevealPaceState {
+	return { rate: 0, arrivals: [], firstArrivalAt: null, gaps: [], lastPieceAt: null, heldSince: null, open: NOTHING_OPEN, openScannedTo: 0 };
+}
+
+/** How much of the turn was on screen: what a reconnect replay draws at once. */
+export interface ReplaySeen {
+	/** Characters over all the turn's parts, in the order they showed. */
+	chars: number;
+}
+
 export interface AssistantStreamState {
 	phase: AssistantStreamPhase;
 	/** Transcript item currently owned by the machine (null = none yet). */
@@ -172,25 +226,50 @@ export interface AssistantStreamState {
 	lastTickAt: number | null;
 	/** Fractional reveal budget carried between ticks. */
 	carry: number;
+	pace: RevealPaceState;
+	/** Characters the turn's closed parts showed (since the turn began or the page reattached): with the open part's, the turn's one reveal position. */
+	turnShown: number;
+	/** While a reconnect replays the turn: draw only this much of it at once, pace the rest. */
+	replaySeen: ReplaySeen | null;
 	/** Normalized texts of recently finalized answers (replay quarantine). */
 	recentFinals: { norm: string; at: number }[];
-	/** Errored item reserved for a provider auto-retry to stream into. */
-	retryReservation: { itemId: string; at: number } | null;
+	/** Errored item reserved for a provider auto-retry to stream into; `partIds`: every part the errored message opened. */
+	retryReservation: { itemId: string; at: number; partIds: string[] } | null;
 	/** When a too-short orphan head started waiting for more text. */
 	orphanHoldStartedAt: number | null;
 	/** Monotonic counter for generated item ids. */
 	counter: number;
+	/** The open message's text already closed into items of its own, before a step that came inside it. */
+	shownBefore: string;
+	/** The server's id for the part the open message writes next (a keyed turn); null: one is made here. */
+	partId: string | null;
+	/** The open message was opened with a server id: the server decides its echoes. */
+	messageKeyed: boolean;
+	/** The part the last message_end closed, until the next message or turn: a Stop right after it notes that part. */
+	endedPartId: string | null;
+	/** The parts the current message opened, so an echo or a retry can take them back. */
+	messageParts: string[];
+	/** A retried attempt's parts the retry does not write again: they go at the retry's first paint. */
+	retiredParts: string[];
 }
 
 export type AssistantStreamAction =
-	| { type: "message_start"; now: number }
+	/** `itemId`: the server's id for the message's first part. */
+	| { type: "message_start"; now: number; itemId?: string }
+	/** The server names the next part of the open message (a keyed turn's text after a step). */
+	| { type: "part_id"; itemId: string }
 	| { type: "delta"; text: string; now: number }
 	| { type: "text_end"; blockText: string; now: number }
-	| { type: "message_end"; finalText: string; stopReason?: string; now: number }
+	/** `echoOf`: the server found this message repeats that part and wrote none. */
+	| { type: "message_end"; finalText: string; stopReason?: string; now: number; echoOf?: string }
 	| { type: "auto_retry_start"; now: number }
+	/** A step starts inside the open message (a tool call, a thinking block, the provider's own web search): the text so far closes, and the rest opens below the step. */
+	| { type: "break"; now: number }
 	/** Paced reveal step; "drain" reveals everything at once (hidden tab, sync boundaries). */
 	| { type: "tick"; now: number; mode: "paced" | "drain" }
 	| { type: "interrupt"; now: number }
+	/** A reconnect replay starts (seen) or ends (null): see ReplaySeen. */
+	| { type: "replay_seen"; seen: ReplaySeen | null }
 	/** Drain and finalize everything immediately without an interrupt note. */
 	| { type: "flush"; now: number }
 	/** User sent a new prompt: drop reservations, keep quarantine history. */
@@ -201,10 +280,16 @@ export type AssistantStreamAction =
 export type AssistantStreamEffect =
 	/** Create the item if missing, else replace its text/streaming flag. */
 	| { kind: "upsert"; id: string; text: string; streaming: boolean }
+	/**
+	 * Take this item off the list: a part of an answer the server keeps none of. `echo`: a message that repeated an
+	 * earlier part, whose id the server never gives again. `retried`: an attempt the runtime asked again, whose ids
+	 * the retry may write under again, so the page's saves must not name them as removed.
+	 */
+	| { kind: "drop"; id: string; why: "echo" | "retried" }
 	/** Ask the host to schedule the next tick (rAF / hidden-tab timer). */
 	| { kind: "schedule_tick" }
-	/** The interrupted item (null = nothing was streaming; host adds a system line). */
-	| { kind: "interrupted"; id: string | null }
+	/** The interrupted item (null = nothing was streaming; host adds a system line); `ended`: nothing was open, and this part's message had just ended. */
+	| { kind: "interrupted"; id: string | null; ended?: true }
 	/** Illegal or suspicious transition — surfaced so real traces name the emitter. */
 	| { kind: "warn"; message: string; detail?: Record<string, unknown> };
 
@@ -223,10 +308,19 @@ export function createAssistantStreamState(): AssistantStreamState {
 		openedByMessageStart: false,
 		lastTickAt: null,
 		carry: 0,
+		pace: createRevealPaceState(),
+		turnShown: 0,
+		replaySeen: null,
 		recentFinals: [],
 		retryReservation: null,
 		orphanHoldStartedAt: null,
 		counter: 0,
+		shownBefore: "",
+		partId: null,
+		messageKeyed: false,
+		endedPartId: null,
+		messageParts: [],
+		retiredParts: [],
 	};
 }
 
@@ -236,6 +330,16 @@ export function normaliseAssistantText(v: string): string {
 
 export function isAssistantStreamActive(state: AssistantStreamState): boolean {
 	return state.phase !== "idle" || state.buffer.length > 0;
+}
+
+/** What of the turn's answer is on screen now, before its first words and between its parts too: what a reconnect draws at once. */
+export function seenOfOpenAnswer(state: AssistantStreamState): ReplaySeen {
+	return { chars: state.turnShown + state.displayed.length };
+}
+
+/** The part a reconnect's replay drew words into at once, whose blocks then skip their fade-in; null when it drew none. */
+export function partDrawnAtOnce(state: AssistantStreamState): string | null {
+	return state.displayed ? state.itemId : null;
 }
 
 function pruneRecentFinals(recentFinals: AssistantStreamState["recentFinals"], now: number): AssistantStreamState["recentFinals"] {
@@ -273,6 +377,42 @@ function isReplayOfRecentFinal(state: AssistantStreamState, text: string, now: n
 		|| state.recentFinals.some((f) => now - f.at < RECENT_FINAL_FRAGMENT_WINDOW_MS && f.norm.includes(probe));
 }
 
+/** The id for the item about to open: the server's when it named the part, else one made here. */
+function openItemId(state: AssistantStreamState, now: number): string {
+	const named = state.partId;
+	state.partId = null;
+	let id = named;
+	if (!id) {
+		state.counter += 1;
+		id = `stream_${state.counter}_${now.toString(36)}`;
+	}
+	state.messageParts = [...state.messageParts, id];
+	return id;
+}
+
+/** Writes the open part's words; the first words a retry shows also take its attempt's other parts away. */
+function upsertOpenPart(state: AssistantStreamState, effects: AssistantStreamEffect[], text: string, streaming: boolean): void {
+	for (const id of state.retiredParts) effects.push({ kind: "drop", id, why: "retried" });
+	state.retiredParts = [];
+	effects.push({ kind: "upsert", id: state.itemId!, text, streaming });
+}
+
+/** Back to idle with nothing written: the message's words belong to no part. */
+function closeWithoutPart(state: AssistantStreamState): void {
+	state.phase = "idle";
+	state.itemId = null;
+	state.displayed = "";
+	state.buffer = "";
+	state.finalText = null;
+	state.openedByMessageStart = false;
+	state.lastTickAt = null;
+	state.carry = 0;
+	state.shownBefore = "";
+	state.partId = null;
+	state.messageKeyed = false;
+	state.messageParts = [];
+}
+
 /**
  * Close the currently open item with the best text available and return to
  * idle. `authoritative` (when known) wins over displayed+buffer unless it
@@ -289,15 +429,17 @@ function finalizeNow(state: AssistantStreamState, effects: AssistantStreamEffect
 		if (!state.openedByMessageStart && isReplayOfRecentFinal(state, text, now)) {
 			effects.push({ kind: "warn", message: "[stream] dropped replayed fragment at finalize", detail: { chars: text.length } });
 		} else {
-			state.counter += 1;
-			state.itemId = `stream_${state.counter}_${now.toString(36)}`;
+			state.itemId = openItemId(state, now);
 		}
 	}
 	if (state.itemId && (state.displayed || text)) {
-		effects.push({ kind: "upsert", id: state.itemId, text: text || state.displayed, streaming: false });
+		upsertOpenPart(state, effects, text || state.displayed, false);
+		state.turnShown += (text || state.displayed).length;
 	}
 	if (text) rememberFinal(state, text, now);
 	const closedItemId = state.itemId;
+	// The message has ended once its authoritative text is known: draining, or handed in by message_end.
+	if (state.phase === "draining" || authoritative !== undefined) state.endedPartId = closedItemId;
 	state.phase = "idle";
 	state.itemId = null;
 	state.displayed = "";
@@ -306,7 +448,24 @@ function finalizeNow(state: AssistantStreamState, effects: AssistantStreamEffect
 	state.openedByMessageStart = false;
 	state.lastTickAt = null;
 	state.carry = 0;
+	state.pace = createRevealPaceState();
+	state.shownBefore = "";
+	state.partId = null;
+	state.messageKeyed = false;
 	return closedItemId;
+}
+
+/**
+ * The whole message's text, less what a break already closed into items of
+ * their own. A text that does not start with it is the block alone, kept as
+ * it is, unless `strict`: then it is dropped and the revealed text stands.
+ */
+function afterShown(state: AssistantStreamState, text: string, strict: boolean): string {
+	const shown = state.shownBefore.trim();
+	if (!shown) return text;
+	const whole = text.trimStart();
+	if (whole.startsWith(shown)) return whole.slice(shown.length).trimStart();
+	return strict ? "" : text;
 }
 
 /**
@@ -324,9 +483,62 @@ function finalizeNow(state: AssistantStreamState, effects: AssistantStreamEffect
 function reserveItemBeforeDrain(state: AssistantStreamState, effects: AssistantStreamEffect[], now: number, finalText: string): void {
 	if (state.itemId) return;
 	if (!state.openedByMessageStart && isReplayOfRecentFinal(state, finalText, now)) return;
-	state.counter += 1;
-	state.itemId = `stream_${state.counter}_${now.toString(36)}`;
+	state.itemId = openItemId(state, now);
 	effects.push({ kind: "upsert", id: state.itemId, text: state.displayed, streaming: true });
+}
+
+const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
+
+/** Notes a received piece for the pace: its size, and the pause before it. */
+function notePiece(pace: RevealPaceState, chars: number, now: number): RevealPaceState {
+	const arrivals = pace.arrivals.filter(([at]) => at > now - 1000);
+	arrivals.push([now, chars]);
+	const gaps = pace.gaps.filter(([at]) => at > now - 10_000);
+	if (pace.lastPieceAt !== null) gaps.push([now, now - pace.lastPieceAt]);
+	return { ...pace, arrivals, gaps, lastPieceAt: now, firstArrivalAt: pace.firstArrivalAt ?? now };
+}
+
+/** The reveal speed for this tick, chars/s. */
+function paceRate(state: AssistantStreamState, pacing: RevealPacing, now: number, dtMs: number): number {
+	const waiting = state.buffer.length;
+	const pace = state.pace;
+	const recent = pace.arrivals.filter(([at]) => at > now - 1000);
+	const span = clamp(now - (pace.firstArrivalAt ?? now), 250, 1000);
+	const arrival = (recent.reduce((sum, [, chars]) => sum + chars, 0) * 1000) / span;
+	const longestPause = pace.gaps.reduce((longest, [at, gap]) => (at > now - 10_000 ? Math.max(longest, gap) : longest), 0);
+	const cushion = clamp((longestPause * 1.1) / 1000, pacing.cushionMinS, pacing.cushionMaxS);
+	const behind = clamp((waiting - pacing.catchUpFromChars) / Math.max(1, pacing.catchUpToChars - pacing.catchUpFromChars), 0, 1);
+	const cap = pacing.capCharsPerSec + Math.max(0, pacing.catchUpCapCharsPerSec - pacing.capCharsPerSec) * behind;
+	// While the model writes: as fast as text arrives, plus a correction toward
+	// the cushion. Once it is done: no slower than now, finishing in about finishS.
+	const wanted = clamp(state.phase === "draining" ? Math.max(pace.rate, waiting / pacing.finishS) : arrival + (waiting - arrival * cushion) / pacing.correctS, pacing.floorCharsPerSec, cap);
+	const previous = pace.rate || pacing.floorCharsPerSec;
+	pace.rate = clamp(wanted, previous - (pacing.rampDownPerSec * dtMs) / 1000, previous + (pacing.rampUpPerSec * dtMs) / 1000);
+	return pace.rate;
+}
+
+/** How many buffered characters this paced tick shows, or 0 to wait. */
+function pacedCount(state: AssistantStreamState, pacing: RevealPacing, now: number): number {
+	const dtMs = state.lastTickAt === null ? 17 : Math.min(pacing.maxTickDtMs, Math.max(0, now - state.lastTickAt));
+	state.lastTickAt = now;
+	state.pace = { ...state.pace };
+	const rate = paceRate(state, pacing, now, dtMs);
+	const budget = (rate * dtMs) / 1000 + state.carry;
+	const lines = openAfterLines(state.displayed, state.pace.openScannedTo, state.pace.open);
+	state.pace.open = lines.open;
+	state.pace.openScannedTo = lines.scannedTo;
+	const cut = cutWords({
+		shown: state.displayed,
+		waiting: state.buffer,
+		budget,
+		complete: state.phase === "draining",
+		releaseLastWord: state.pace.heldSince !== null && now - state.pace.heldSince >= LAST_WORD_WAIT_MS,
+		open: lines.open,
+	});
+	state.pace.heldSince = cut.heldLastWord ? (state.pace.heldSince ?? now) : null;
+	// Bounded, so a word held for a while cannot release a burst.
+	state.carry = Math.min(budget - cut.cost, LONG_WORD + 4 + rate * 0.05);
+	return cut.chars;
 }
 
 /** Reveal a slice of the buffer according to pacing (or all of it). */
@@ -358,12 +570,7 @@ function reveal(state: AssistantStreamState, effects: AssistantStreamEffect[], n
 
 	let revealCount = state.buffer.length;
 	if (mode === "paced") {
-		const dtMs = state.lastTickAt === null ? 17 : Math.min(pacing.maxTickDtMs, Math.max(0, now - state.lastTickAt));
-		state.lastTickAt = now;
-		const rate = Math.min(pacing.maxCharsPerSec, pacing.minCharsPerSec + state.buffer.length * pacing.backlogLean);
-		const budget = (rate * dtMs) / 1000 + state.carry;
-		revealCount = Math.min(state.buffer.length, Math.floor(budget));
-		state.carry = budget - revealCount;
+		revealCount = pacedCount(state, pacing, now);
 		if (revealCount <= 0) {
 			effects.push({ kind: "schedule_tick" });
 			return;
@@ -371,6 +578,14 @@ function reveal(state: AssistantStreamState, effects: AssistantStreamEffect[], n
 	} else {
 		state.lastTickAt = null;
 		state.carry = 0;
+		// A reconnect replay draws at once only what was on screen before the
+		// drop, counted over the whole turn; the rest stays waiting and is
+		// paced once the replay is done.
+		const seen = state.replaySeen;
+		if (seen) {
+			revealCount = clamp(seen.chars - state.turnShown - state.displayed.length, 0, state.buffer.length);
+			if (revealCount <= 0) return;
+		}
 	}
 
 	// First paint of a new bubble: quarantine gate. A buffered remainder or
@@ -389,22 +604,19 @@ function reveal(state: AssistantStreamState, effects: AssistantStreamEffect[], n
 		return;
 	}
 
-	if (!state.itemId) {
-		state.counter += 1;
-		state.itemId = `stream_${state.counter}_${now.toString(36)}`;
-	}
+	if (!state.itemId) state.itemId = openItemId(state, now);
 	state.displayed += state.buffer.slice(0, revealCount);
 	state.buffer = state.buffer.slice(revealCount);
 
 	if (state.buffer) {
-		effects.push({ kind: "upsert", id: state.itemId, text: state.displayed, streaming: true });
+		upsertOpenPart(state, effects, state.displayed, true);
 		effects.push({ kind: "schedule_tick" });
 	} else if (state.phase === "draining") {
 		// Buffer just emptied with the authoritative text known: reconcile in
 		// the same paint instead of one frame later.
 		finalizeNow(state, effects, now);
 	} else {
-		effects.push({ kind: "upsert", id: state.itemId, text: state.displayed, streaming: true });
+		upsertOpenPart(state, effects, state.displayed, true);
 	}
 }
 
@@ -427,7 +639,7 @@ function drainAllAndFinalize(state: AssistantStreamState, effects: AssistantStre
 export function reduceAssistantStream(
 	previous: AssistantStreamState,
 	action: AssistantStreamAction,
-	pacing: RevealPacing = DEFAULT_REVEAL_PACING,
+	pacing: RevealPacing = REVEAL_PACING,
 ): AssistantStreamResult {
 	const state: AssistantStreamState = { ...previous };
 	const effects: AssistantStreamEffect[] = [];
@@ -444,6 +656,10 @@ export function reduceAssistantStream(
 				finalizeNow(state, effects, action.now);
 			}
 			state.retryReservation = null;
+			state.turnShown = 0;
+			state.replaySeen = null;
+			state.endedPartId = null;
+			state.retiredParts = [];
 			return { state, effects };
 		}
 
@@ -453,15 +669,30 @@ export function reduceAssistantStream(
 				// (agent loops): hard-finish the old item so texts never merge.
 				finalizeNow(state, effects, action.now);
 			}
+			state.pace = createRevealPaceState();
+			state.messageParts = [];
 			if (state.retryReservation && action.now - state.retryReservation.at < RETRY_RESERVATION_WINDOW_MS) {
 				// The retried attempt replaces the errored one: same bubble,
 				// text rebuilt from scratch — one logical answer, one item. The
 				// errored partial stays visible until the retry's first paint
 				// replaces it, so a retry that dies producing nothing leaves
-				// the partial (and its error line) intact.
-				state.itemId = state.retryReservation.itemId;
+				// the partial (and its error line) intact. In a keyed turn the
+				// server keeps no part of the attempt and names the retry's
+				// first part itself (its first part's id, also when a step
+				// split the attempt): the retry writes there, and the attempt's
+				// other parts go at its first paint.
+				const reserved = state.retryReservation;
+				state.itemId = action.itemId ?? reserved.itemId;
+				state.retiredParts = action.itemId === undefined ? [] : reserved.partIds.filter((id) => id !== state.itemId);
+				// The retry's first part is this message's, as if it had opened it: an echo takes it back too.
+				state.messageParts = [state.itemId];
 			}
 			state.retryReservation = null;
+			state.shownBefore = "";
+			// A retry writes under the id it took above.
+			state.partId = state.itemId ? null : action.itemId ?? null;
+			state.messageKeyed = action.itemId !== undefined;
+			state.endedPartId = null;
 			state.phase = "streaming";
 			state.displayed = "";
 			state.buffer = "";
@@ -469,6 +700,13 @@ export function reduceAssistantStream(
 			state.openedByMessageStart = true;
 			state.lastTickAt = null;
 			state.carry = 0;
+			return { state, effects };
+		}
+
+		case "part_id": {
+			// Only a part not yet open takes it: an open one keeps the id it shows under.
+			if (state.phase === "streaming" && !state.itemId) state.partId = action.itemId;
+			else effects.push({ kind: "warn", message: "[stream] part id while a part was open", detail: { itemId: action.itemId } });
 			return { state, effects };
 		}
 
@@ -501,48 +739,62 @@ export function reduceAssistantStream(
 				}
 			}
 			state.buffer += action.text;
+			if (action.text) state.pace = notePiece(state.pace, action.text.length, action.now);
 			if (state.buffer) effects.push({ kind: "schedule_tick" });
 			return { state, effects };
 		}
 
 		case "text_end": {
+			const blockText = afterShown(state, action.blockText, false);
 			// Reconciliation for a finished text block, only when the reveal has
 			// caught up — otherwise the tail keeps flowing and message_end
 			// reconciles. Guards against shrinking multi-block messages: the
 			// block text replaces the display only when it is at least as long.
-			if (state.phase === "streaming" && !state.buffer && action.blockText) {
+			if (state.phase === "streaming" && !state.buffer && blockText) {
 				if (!state.itemId) {
-					if (!state.openedByMessageStart && isReplayOfRecentFinal(state, action.blockText, action.now)) {
-						effects.push({ kind: "warn", message: "[stream] dropped replayed text_end of a finalized answer", detail: { chars: action.blockText.length } });
+					if (!state.openedByMessageStart && isReplayOfRecentFinal(state, blockText, action.now)) {
+						effects.push({ kind: "warn", message: "[stream] dropped replayed text_end of a finalized answer", detail: { chars: blockText.length } });
 						state.phase = "idle";
 						state.openedByMessageStart = false;
 						return { state, effects };
 					}
 					// No deltas ever displayed (e.g. non-streaming provider):
 					// reveal the block at the paced rhythm instead of dumping it.
-					state.buffer = action.blockText;
+					state.buffer = blockText;
 					effects.push({ kind: "schedule_tick" });
 					return { state, effects };
 				}
-				if (action.blockText.length >= state.displayed.length) {
-					state.displayed = action.blockText;
+				if (blockText.length >= state.displayed.length) {
+					state.displayed = blockText;
 					// Cursor off between blocks / during a tool phase.
-					effects.push({ kind: "upsert", id: state.itemId, text: state.displayed, streaming: false });
+					upsertOpenPart(state, effects, state.displayed, false);
 				}
 			}
 			return { state, effects };
 		}
 
 		case "message_end": {
+			const finalText = afterShown(state, action.finalText, true);
 			if (action.stopReason === "error") {
 				// Mid-stream provider failure: show what arrived, then reserve
 				// the bubble — an auto-retry regenerates the whole answer and
 				// must not become a second item. No paced tail for a doomed
 				// partial; the host renders the red error line.
 				const revealed = (state.displayed + state.buffer).trim();
-				const partial = action.finalText && action.finalText.length >= revealed.length ? action.finalText : state.displayed + state.buffer;
+				const partial = finalText && finalText.length >= revealed.length ? finalText : state.displayed + state.buffer;
 				const erroredItemId = finalizeNow(state, effects, action.now, partial);
-				state.retryReservation = erroredItemId ? { itemId: erroredItemId, at: action.now } : null;
+				// A retry that died before its first paint hands its attempt's parts on to the next.
+				const partIds = [...new Set([...state.retiredParts, ...state.messageParts, ...(erroredItemId ? [erroredItemId] : [])])];
+				state.retiredParts = [];
+				state.retryReservation = erroredItemId ? { itemId: erroredItemId, at: action.now, partIds } : null;
+				return { state, effects };
+			}
+
+			if (action.echoOf !== undefined) {
+				// The server wrote no part for it: what this message showed, from a text_end with no deltas too, goes.
+				for (const id of state.messageParts) if (id !== action.echoOf) effects.push({ kind: "drop", id, why: "echo" });
+				closeWithoutPart(state);
+				effects.push({ kind: "warn", message: "[stream] dropped duplicate message_end replay", detail: { chars: finalText.length } });
 				return { state, effects };
 			}
 
@@ -551,7 +803,7 @@ export function reduceAssistantStream(
 				// draining means the message boundary was lost — finalize the
 				// old answer instead of silently swapping its authoritative
 				// text (which would merge two answers into one bubble).
-				effects.push({ kind: "warn", message: "[stream] message_end while previous message was draining", detail: { chars: action.finalText.length } });
+				effects.push({ kind: "warn", message: "[stream] message_end while previous message was draining", detail: { chars: finalText.length } });
 				finalizeNow(state, effects, action.now);
 			}
 
@@ -560,14 +812,14 @@ export function reduceAssistantStream(
 				// at the paced rate; reveal() reconciles with this authoritative
 				// text once the buffer empties.
 				state.phase = "draining";
-				state.finalText = action.finalText;
-				reserveItemBeforeDrain(state, effects, action.now, action.finalText);
+				state.finalText = finalText;
+				reserveItemBeforeDrain(state, effects, action.now, finalText);
 				effects.push({ kind: "schedule_tick" });
 				return { state, effects };
 			}
 
 			if (state.itemId) {
-				finalizeNow(state, effects, action.now, action.finalText);
+				finalizeNow(state, effects, action.now, finalText);
 				return { state, effects };
 			}
 
@@ -580,19 +832,40 @@ export function reduceAssistantStream(
 			const wasOpenedByMessageStart = state.openedByMessageStart;
 			state.phase = "idle";
 			state.openedByMessageStart = false;
-			if (!action.finalText) return { state, effects };
-			if (isExactRecentFinal(state, action.finalText, action.now) || (!wasOpenedByMessageStart && isReplayOfRecentFinal(state, action.finalText, action.now))) {
-				effects.push({ kind: "warn", message: "[stream] dropped duplicate message_end replay", detail: { chars: action.finalText.length } });
+			if (!finalText) return { state, effects };
+			// A keyed message is an echo only by the server's word (above), never by this test.
+			const echo = !state.messageKeyed && (isExactRecentFinal(state, finalText, action.now) || (!wasOpenedByMessageStart && isReplayOfRecentFinal(state, finalText, action.now)));
+			if (echo) {
+				effects.push({ kind: "warn", message: "[stream] dropped duplicate message_end replay", detail: { chars: finalText.length } });
 				return { state, effects };
 			}
 			state.phase = "draining";
 			// Carry the boundary through the reveal: the reservation below and
 			// reveal()'s first-paint gate must not drop a legitimate answer.
 			state.openedByMessageStart = wasOpenedByMessageStart;
-			state.finalText = action.finalText;
-			state.buffer = action.finalText;
-			reserveItemBeforeDrain(state, effects, action.now, action.finalText);
+			state.finalText = finalText;
+			state.buffer = finalText;
+			reserveItemBeforeDrain(state, effects, action.now, finalText);
 			effects.push({ kind: "schedule_tick" });
+			return { state, effects };
+		}
+
+		case "break": {
+			// Only an open message can be broken; a draining one already ended.
+			if (state.phase !== "streaming") return { state, effects };
+			const text = state.displayed + state.buffer;
+			if (!text.trim()) return { state, effects };
+			const shownBefore = state.shownBefore + text;
+			const openedByMessageStart = state.openedByMessageStart;
+			const messageKeyed = state.messageKeyed;
+			// The words before the step show whole at once: the step goes right after them.
+			state.displayed = text;
+			state.buffer = "";
+			finalizeNow(state, effects, action.now);
+			state.phase = "streaming";
+			state.openedByMessageStart = openedByMessageStart;
+			state.messageKeyed = messageKeyed;
+			state.shownBefore = shownBefore;
 			return { state, effects };
 		}
 
@@ -616,10 +889,18 @@ export function reduceAssistantStream(
 			return { state, effects };
 		}
 
+		case "replay_seen": {
+			state.replaySeen = action.seen;
+			if (!action.seen && state.buffer) effects.push({ kind: "schedule_tick" });
+			return { state, effects };
+		}
+
 		case "interrupt": {
 			state.retryReservation = null;
 			const interruptedId = drainAllAndFinalize(state, effects, action.now);
-			effects.push({ kind: "interrupted", id: interruptedId });
+			if (interruptedId) effects.push({ kind: "interrupted", id: interruptedId });
+			else if (state.endedPartId) effects.push({ kind: "interrupted", id: state.endedPartId, ended: true });
+			else effects.push({ kind: "interrupted", id: null });
 			return { state, effects };
 		}
 	}

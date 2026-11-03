@@ -1,11 +1,10 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import type { PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentPurgeResponse, PersistentAgentRenameMemoryMention, PersistentAgentRenameResponse, PersistentAgentStatus, RoomModelLockView } from "../types";
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
+import type { PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentPurgeResponse, PersistentAgentRenameMemoryMention, PersistentAgentRenameResponse, PersistentAgentStatus } from "../types";
 import { renamePersistentRoom } from "../persistent-room-management-api";
 import { RoomSessionSection } from "./RoomSessionSection";
 import { ROOM_ANSWERING_SAVE_LINE, RoomWorkspaceSection } from "./RoomWorkspaceSection";
 import { RoomMaintenanceSection } from "./RoomMaintenanceSection";
 import { RoomModelSection } from "./RoomModelSection";
-import type { ConversationSwitchNotice } from "../room-models-api";
 import { RoomInstructionsSection } from "./RoomInstructionsSection";
 import { RoomSkillsSection } from "./RoomSkillsSection";
 import { RoomConnectorsSection } from "./RoomConnectorsSection";
@@ -13,16 +12,13 @@ import { RoomScheduledTasksSection } from "./RoomScheduledTasksSection";
 import { RoomDangerZone } from "./RoomDangerZone";
 import { confirmChoice } from "./confirm-dialog";
 import { SettingsDialog } from "./settings-dialog";
+import { ROOM_STATE_BADGE } from "./launcher-room-card";
 import { shownRoomName, trimHumanText } from "../../../web-server/src/room-name";
-
-function roomStatusLabel(status: PersistentAgentStatus["status"]): string {
-	return status === "needs_absorb" ? "memorize due" : status;
-}
 
 export type SettingsPane = "workspace" | "model" | "memory" | "instructions" | "skills" | "connectors" | "schedules" | "session" | "danger";
 
 const PANES: { id: SettingsPane; label: string }[] = [
-	{ id: "workspace", label: "Workspace" },
+	{ id: "workspace", label: "Folder" },
 	{ id: "model", label: "Model" },
 	{ id: "memory", label: "Memory" },
 	{ id: "instructions", label: "Instructions" },
@@ -59,7 +55,7 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, answering, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, onOpenConnectors, onConversationSwitched, initialPane }: { status: PersistentAgentStatus; /** Whether the room is answering, from the open room's own turn; without it, the room's last read status says. */ answering?: boolean; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; onOpenConnectors?: () => void; onConversationSwitched?: (conversationId: string, model: RoomModelLockView, notice: ConversationSwitchNotice) => void; initialPane?: SettingsPane }) {
+export function RoomSettingsModal({ status, answering, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, onOpenConnectors, onOpenAiSetup, initialPane }: { status: PersistentAgentStatus; /** Whether the room is answering, from the open room's own turn; without it, the room's last read status says. */ answering?: boolean; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; onOpenConnectors?: () => void; /** Opens Settings, AI setup at a provider's row (a refused key's Replace key); without it the Model pane offers none. */ onOpenAiSetup?: (providerId: string) => void; initialPane?: SettingsPane }) {
 	const roomAnswering = answering ?? status.activeThread?.inFlight === true;
 	// Save and close waits like Save while the room answers: the unsaved question
 	// greys it, and lifts that the moment the answer has finished.
@@ -96,7 +92,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	// fails keeps the dialog open on its pane, which shows the pane's error.
 	async function confirmLeavingUnsaved(): Promise<boolean> {
 		const drafts = [
-			workspaceDirtyRef.current ? { label: "The workspace section", pane: "workspace" as const, save: workspaceSaveRef } : null,
+			workspaceDirtyRef.current ? { label: "The Folder pane", pane: "workspace" as const, save: workspaceSaveRef } : null,
 			instructionsDirtyRef.current ? { label: "The instructions", pane: "instructions" as const, save: instructionsSaveRef } : null,
 		].filter((draft) => draft !== null);
 		if (drafts.length === 0) return true;
@@ -146,7 +142,11 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	const [renameNotes, setRenameNotes] = useState<string[]>([]);
 	const [renamePreview, setRenamePreview] = useState<{ name: string; mentions: PersistentAgentRenameMemoryMention[] } | null>(null);
 	const trimmedDraft = trimHumanText(nameDraft);
-	const canSaveName = trimmedDraft !== "" && trimmedDraft !== nameToEdit && !renaming;
+	// Save is greyed only for an empty name, which the line under the title
+	// explains; the name left as it is saves nothing and closes the field.
+	const nameEmpty = trimmedDraft === "";
+	const nameEmptyLineId = useId();
+	const canSaveName = !nameEmpty && !renaming;
 	function startNameEdit(): void {
 		setNameDraft(nameToEdit);
 		setRenameError(null);
@@ -174,6 +174,10 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	}
 	async function submitRename(): Promise<void> {
 		if (!canSaveName) return;
+		if (trimmedDraft === nameToEdit) {
+			cancelNameEdit();
+			return;
+		}
 		setRenaming(true);
 		setRenameError(null);
 		setRenameNotes([]);
@@ -211,7 +215,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 		}
 		void confirmLeavingUnsaved().then((ok) => { if (ok) onClose(); });
 	}
-	// The jumps to the skills library and to the connectors page close this
+	// The jumps to the skills library, the connectors page and AI setup close this
 	// modal too, so they pass the same unsaved-workspace gate as any other
 	// close: the modal owns the closing, the parent callback only navigates
 	// afterwards.
@@ -236,7 +240,9 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	}
 	// What the rename has to say (the preview, an error, the notes after it)
 	// floats under the title, so the header keeps its height and nothing
-	// below it moves.
+	// below it moves. The reason Save is greyed is a plain line under the field
+	// instead: a floating box over the panes read as a suggestion list.
+	const nameEmptyShown = editingName && nameEmpty && renamePreview === null;
 	const renameMessages = (renamePreview !== null || renameError || renameNotes.length > 0) && (
 		<div className="settings-dialog-head-note" role="status">
 			{renamePreview !== null && (
@@ -263,29 +269,32 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 		</div>
 	);
 	const title = editingName ? (
-		<form className="room-settings-rename-form" onSubmit={(e) => { e.preventDefault(); void submitRename(); }}>
-			<input
-				className="room-settings-rename-input"
-				type="text"
-				value={nameDraft}
-				autoFocus
-				aria-label="Room name"
-				disabled={renaming || renamePreview !== null}
-				onChange={(e) => setNameDraft(e.target.value)}
-			/>
-			{renamePreview === null && (
-				<>
-					<button className="rs-btn rs-btn-primary" type="submit" disabled={!canSaveName}>{renaming ? "Checking…" : "Save"}</button>
-					<button className="rs-btn" type="button" disabled={renaming} onClick={cancelNameEdit}>Cancel</button>
-				</>
-			)}
-		</form>
+		<>
+			<form className="room-settings-rename-form" onSubmit={(e) => { e.preventDefault(); void submitRename(); }}>
+				<input
+					className="room-settings-rename-input"
+					type="text"
+					value={nameDraft}
+					autoFocus
+					aria-label="Room name"
+					disabled={renaming || renamePreview !== null}
+					onChange={(e) => setNameDraft(e.target.value)}
+				/>
+				{renamePreview === null && (
+					<>
+						<button className="rs-btn rs-btn-primary" type="submit" disabled={!canSaveName} aria-describedby={nameEmptyShown ? nameEmptyLineId : undefined}>{renaming ? "Checking…" : "Save"}</button>
+						<button className="rs-btn" type="button" disabled={renaming} onClick={cancelNameEdit}>Cancel</button>
+					</>
+				)}
+			</form>
+			{nameEmptyShown && <p id={nameEmptyLineId} className="room-settings-meta room-settings-rename-hint" role="status">Type a name to save.</p>}
+		</>
 	) : (
 		<div className="settings-dialog-title-row">
 			<h2 id="room-settings-title" className="settings-dialog-title">{currentName}</h2>
 			<button className="settings-dialog-title-action" type="button" aria-label="Rename room" title="Rename this room" onClick={startNameEdit}>Rename</button>
 			{status.status !== "ready" && (
-				<span className={`room-settings-status ${status.status}`}>{roomStatusLabel(status.status)}</span>
+				<span className={`room-settings-status ${status.status}`}>{ROOM_STATE_BADGE[status.status]}</span>
 			)}
 		</div>
 	);
@@ -309,7 +318,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 				<RoomWorkspaceSection status={status} answering={roomAnswering} onRefresh={onRefresh} onDirtyChange={handleWorkspaceDirtyChange} registerSave={registerWorkspaceSave} onTerminalOnChange={setTerminalOn} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "model"}>
-				<RoomModelSection status={status} onRefresh={onRefresh} onSwitched={(conversationId, model, notice) => { requestClose(); onConversationSwitched?.(conversationId, model, notice); }} />
+				<RoomModelSection status={status} onRefresh={onRefresh} onOpenAiSetup={onOpenAiSetup ? (providerId) => closeThen(() => onOpenAiSetup(providerId)) : undefined} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "memory"}>
 				<RoomMaintenanceSection status={status} onRefresh={onRefresh} />

@@ -154,6 +154,7 @@ export function generateWeeklyCronSchedule(days: number[], time: string): string
 	return `0 ${parsed.minute} ${parsed.hour} * * ${dayField}`;
 }
 
+/** The days a weekly cron pattern runs on and its time; all seven days come back as a full list. */
 export function detectWeeklyCronSchedule(type: PersistentRoomScheduleType, schedule: string): ScheduleWeeklyRecurrenceDraft | null {
 	if (type !== "cron") return null;
 	const parts = schedule.trim().split(/\s+/);
@@ -165,9 +166,25 @@ export function detectWeeklyCronSchedule(type: PersistentRoomScheduleType, sched
 	const hour = Number(hourValue);
 	if (hour > 23 || minute > 59) return null;
 	const days = parseCronDayOfWeekList(dayOfWeek);
-	// A full seven-day list keeps its current reading (every day, not weekly).
-	if (!days || days.length === 7) return null;
+	if (!days) return null;
 	return { days, time: toNativeTimeValue(hour, minute) };
+}
+
+/** The line a saved schedule shows when the server cannot run its pattern. */
+export const SCHEDULE_CANNOT_RUN_LINE = "This schedule can't run: its pattern isn't supported yet. Edit it to use Daily or Weekly.";
+
+/** Whether the server runs this schedule: every cron pattern it runs is one Daily or Weekly can show. */
+export function scheduleCanRun(job: Pick<PersistentRoomScheduleJob, "type" | "schedule">): boolean {
+	return job.type !== "cron" || detectSimpleDailyCronSchedule(job.type, job.schedule) !== null || detectWeeklyCronSchedule(job.type, job.schedule) !== null;
+}
+
+/** "Every Monday and Friday at 08:30": the weekly draft's days and time, without an ending. */
+export function formatWeeklyDaysAtTime(weekly: ScheduleWeeklyRecurrenceDraft): string | null {
+	const days = normalizeWeeklyDays(weekly.days);
+	const time = formatNativeTimeSummary(weekly.time);
+	if (!days || !time) return null;
+	const phrase = describeDaySelection(days);
+	return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)} at ${time}`;
 }
 
 export function generateOneTimeInSchedule(countValue: string, unit: ScheduleOneTimeDelayUnit): string | null {
@@ -215,7 +232,7 @@ export function validateScheduleRecurrenceDraft(
 			return null;
 		}
 		case "advanced": {
-			if (!options.allowAutoType && draft.advanced.type === SCHEDULE_CREATE_TYPE_AUTO) return "Choose Once, Interval, or Cron for this advanced schedule.";
+			if (!options.allowAutoType && draft.advanced.type === SCHEDULE_CREATE_TYPE_AUTO) return "Choose Once or Interval for this advanced schedule.";
 			if (!draft.advanced.schedule.trim()) return "Enter a schedule expression.";
 			return null;
 		}
@@ -306,6 +323,14 @@ export function inferScheduleRecurrenceDraftFromJob(job: PersistentRoomScheduleJ
 		});
 	}
 	const weekly = detectWeeklyCronSchedule(job.type, job.schedule);
+	// A list of all seven days runs every day.
+	if (weekly && weekly.days.length === 7) {
+		return createDefaultScheduleRecurrenceDraft({
+			mode: "daily",
+			daily: { time: weekly.time },
+			advanced,
+		});
+	}
 	if (weekly) {
 		return createDefaultScheduleRecurrenceDraft({
 			mode: "weekly",

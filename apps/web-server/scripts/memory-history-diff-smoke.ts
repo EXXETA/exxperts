@@ -25,7 +25,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AbsorbRunGenerate } from "../src/absorb-run.js";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "memory-history-diff-smoke-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -319,23 +319,6 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	return env;
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 30_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await sleep(150);
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(pathname: string): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`);
 	const text = await response.text();
@@ -496,7 +479,7 @@ try {
 	server = spawn("npx", ["tsx", "src/index.ts"], { shell: process.platform === "win32", ...SMOKE_SERVER_SPAWN_TREE_OPTIONS, cwd: webServerDir, env: smokeEnv() });
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30_000);
 	const room = `/api/memory/rooms/${agentId}`;
 
 	const listed = await requestJson(`${room}/conversations`);

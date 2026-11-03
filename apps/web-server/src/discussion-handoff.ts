@@ -17,7 +17,7 @@ export const DISCUSSION_HANDOFF_MAX_CHARS = 8000;
 export const DISCUSSION_HANDOFF_TARGET_CHARS = 6000;
 export const DISCUSSION_HANDOFF_TARGET_WORDS = 1000;
 // The assessment twin of the same idea: the request parsers in
-// persistent-agents.ts cap assessmentMarkdown at ASSESSMENT_MAX_CHARS; the
+// persistent-agent-fold.ts and persistent-agent-maintenance-worker.ts cap assessmentMarkdown at ASSESSMENT_MAX_CHARS; the
 // assessment prompts ask for the soft target so a generated assessment stays
 // clear of the cap it will meet on the next request.
 export const ASSESSMENT_MAX_CHARS = 12000;

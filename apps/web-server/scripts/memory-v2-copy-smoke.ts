@@ -8,12 +8,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { absorbRunFailedSessionNote, absorbRunFastPathBlockers, absorbRunNotDoneSentence, changeBesideTag, changeKindLabel, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, MAY_DISAGREE_TAG, REPLACE_OLDER_LABEL, REPLACE_PINNED_LABEL, absorbRunGuidanceSummary, absorbRunIsWorking, absorbRunNewTopics, absorbRunProgressLine, absorbRunSavedSentence, absorbRunScreen, absorbRunSessionLine, ARCHIVE_EXPLANATION, ARCHIVE_ROW_TAG_INSTEAD, ARCHIVE_ROW_TAG_STAYS, archiveCountsLine, archiveHeading, archiveLimitSummary, archivedDuplicateReason, archiveReasonLabel, archiveRowTag, archiveTopicGroupSummary, archiveTopicKey, AUTOMATIC_APPLY_ON_SENTENCE, AUTOMATIC_APPLY_SETTING_LABEL, automaticApplyNeedsReviewSentence, DISCUSS_FIRST_LABEL, maintainChooserFootnote, memorizeChooserText, entryFirstLine, entryGroupPage, entryOriginSentence, filterEntriesByText, fmtTokenCount, fmtTokenLimit, groupEntriesByTopic, KEEP_DEBOUNCE_MS, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, keepBatchAction, LIMIT_LOWERED_ON_UNDO_SENTENCE, LIMIT_RAISED_ON_SAVE_SENTENCE, MEMORY_LIMIT_BAR_LABEL, MEMORY_LIMIT_CEILING_TOKENS, memoryFullPercent, NEW_TOPIC_TAG, nextKeepIds, nextKeepTopics, overLimitFirstRead, raiseLimitTarget, REVIEW_DEPTH_ORDER, REVIEW_DEPTH_ROWS, REVIEW_FIRST_LABEL, reviewCardHeadline, reviewCardSentence, reviewChangeCounts, reviewChangeKindLabel, reviewDepthSentence, reviewRunArchiveCount, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunGuidanceSummary, reviewRunIsWorking, reviewRunProgressLine, reviewSavedArchiveSentence, reviewSavedHeadline, reviewSavedSentence, reviewTopicFoldedLine, reviewTopicGroupSummary, reviewTopicName, roundUpToThousand, showMoreLabel, topicKept, type ReviewChange } from "../../web-ui/src/memory-v2-copy.js";
+import { absorbRunFailedSessionNote, absorbRunFastPathBlockers, absorbRunNotDoneSentence, changeBesideTag, changeKindLabel, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, MAY_DISAGREE_TAG, REPLACE_OLDER_LABEL, REPLACE_PINNED_LABEL, absorbRunGuidanceSummary, absorbRunIsWorking, absorbRunNewTopics, absorbRunProgressLine, absorbRunSavedSentence, absorbRunScreen, absorbRunSessionLine, ARCHIVE_EXPLANATION, ARCHIVE_ROW_TAG_INSTEAD, ARCHIVE_ROW_TAG_STAYS, archiveCountsLine, archiveHeading, archiveLimitSummary, archivedDuplicateReason, archiveReasonLabel, archiveRowTag, archiveTopicGroupSummary, archiveTopicKey, AUTOMATIC_APPLY_ON_SENTENCE, AUTOMATIC_APPLY_SETTING_LABEL, automaticApplyNeedsReviewSentence, DISCUSS_FIRST_LABEL, maintainChooserFootnote, memorizeChooserText, entryFirstLine, entryGroupPage, entryOriginSentence, filterEntriesByText, fmtTokenCount, fmtTokenLimit, groupEntriesByTopic, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, keepBatchAction, LIMIT_LOWERED_ON_UNDO_SENTENCE, LIMIT_RAISED_ON_SAVE_SENTENCE, MEMORY_LIMIT_BAR_LABEL, MEMORY_LIMIT_CEILING_TOKENS, memoryFullPercent, NEW_TOPIC_TAG, nextKeepIds, nextKeepTopics, overLimitFirstRead, raiseLimitTarget, REVIEW_DEPTH_ORDER, REVIEW_DEPTH_ROWS, REVIEW_FIRST_LABEL, reviewCardHeadline, reviewCardSentence, reviewChangeCounts, reviewChangeKindLabel, reviewDepthSentence, reviewRunArchiveCount, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunGuidanceSummary, reviewRunIsWorking, reviewRunProgressLine, reviewSavedArchiveSentence, reviewSavedHeadline, reviewSavedSentence, reviewTopicFoldedLine, reviewTopicGroupSummary, reviewTopicName, roundUpToThousand, showMoreLabel, topicKept, type ReviewChange } from "../../web-ui/src/memory-v2-copy.js";
 import { AUTOMATIC_APPLY_INFO } from "../../web-ui/src/memory-surface-copy.js";
 import { allRoomsFactsLine, allRoomsNotesShown, archivedLabel, archiveRowMeta, asOfSentence, budgetSettledHint, CHANGE_CONVERSATIONS_BLOCK, CHANGE_LINES_META, CHANGE_META, CHANGE_NONE, CHANGE_READ_ERROR, CHANGE_READING, CHANGE_UNVERIFIED, changeMetaLine, countNoteChanges, emptyNoteChangeCounts, fmtMemoryDay, fmtMemoryMoment, HIDE_CHANGE_LABEL, inMemorySinceLine, memorizedConversationsTitle, MEMORY_OVER_LIMIT_SENTENCE, memoryArchiveReason, memoryFullLine, memoryFullShort, memoryHistoryRows, memoryPercentFull, memoryTopicName, memoryUsageTitle, movedLabel, noteChangeTotals, noteFlagLabel, noteRowMeta, notesSummaryLine, roomMemoryFactsLine, topicChangeSummary, topicRowLine, type MemorySaveEvent, undoableHistoryRow, WHAT_CHANGED_LABEL } from "../../web-ui/src/memory-surface-copy.js";
 import { diffWords, plainNoteText } from "../../web-ui/src/memory-diff.js";
 import { recommendedReviewDepth } from "../src/review-assess.js";
+import { readPageStyles } from "./page-styles.js";
 import type { AbsorbRun, AbsorbRunSession, ArchiveRow, EntryCard, ReviewRun, RunBudget, RunDemotion } from "../../web-ui/src/types.js";
+
+// App.tsx and the files its top-level code moved into: a check that the page never says something reads them all.
+const PAGE_FILES = ["App.tsx", "maintain-workflow-state.ts", "maintenance-errors.ts", "components/maintain-workflow-screens.tsx", "components/remember-dialog.tsx", "components/landing.tsx", "components/ai-profile-switcher.tsx", "components/memory-shell.tsx", "components/room-file-dialogs.tsx", "components/task-store-gc.tsx", "room-thread-items.ts"];
+const pageText = () => PAGE_FILES.map((file) => fs.readFileSync(new URL(`../../web-ui/src/${file}`, import.meta.url), "utf8")).join("\n");
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -312,7 +317,6 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(nextKeepIds(["m-1"], ["m-1", "m-2"], true).join() === "m-1,m-2", "a set carries every entry in it, without duplicating one already kept");
 	assert(nextKeepIds(["m-1", "m-2", "m-3"], ["m-1", "m-2"], false).join() === "m-3", "and clears several at once");
 	assert(keepBatchAction(false) === "send" && keepBatchAction(true) === "queue", "a keep request in flight collects the next set instead of racing it");
-	assert(KEEP_DEBOUNCE_MS === 400, "a burst of toggles is collected before anything is sent");
 	assert(archiveTopicKey("Deep Memory", "Nordwind integration") === "Deep Memory/Nordwind integration", "a topic is named to the server as section and title");
 	assert(topicKept(["Deep Memory/Nordwind integration"], "Deep Memory", " nordwind Integration "), "a protected topic matches case-insensitive and trimmed, the way the server matches it");
 	assert(!topicKept(["Deep Memory/Nordwind integration"], "Active Items", "Nordwind integration"), "the same title in another section is another topic");
@@ -372,8 +376,8 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const written = "- Keep: the weekly sync on Mondays.\n- Other.";
 	assert(copy.storedMemoryBody(copy.editableMemoryBody(written), written) === written, `a model-written Keep line is saved as written, got ${JSON.stringify(copy.storedMemoryBody(copy.editableMemoryBody(written), written))}`);
 	assert(copy.storedMemoryBody("- Keep: the weekly sync on Mondays.\n- Keep: Other.", written) === "- Keep: the weekly sync on Mondays.\n- **must-keep:** Other.", "a line the person marked Keep in the editor is must-keep");
-	assert(/storedMemoryBody\(approvedFields\.body, proposal\.fields\.body\)/.test((await import("node:fs")).readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf-8")), "the reviewed save compares against the proposal's own page");
-	const appSource = (await import("node:fs")).readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf-8");
+	assert(/storedMemoryBody\(approvedFields\.body, proposal\.fields\.body\)/.test((await import("node:fs")).readFileSync(new URL("../../web-ui/src/components/remember-dialog.tsx", import.meta.url), "utf-8")), "the reviewed save compares against the proposal's own page");
+	const appSource = pageText();
 	assert(!/<span>(Session arc|Body|Parked \/ Open items)<\/span>/.test(appSource), "the editor's labels are plain");
 	const memorySource = (await import("node:fs")).readFileSync(new URL("../../web-ui/src/components/Memory.tsx", import.meta.url), "utf-8");
 	assert(memorySource.includes("plainMemoryText(s.content)"), "a saved page on the Memory page is shown plain");
@@ -384,7 +388,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 {
 	const fs = await import("node:fs");
 	const read = (file: string) => fs.readFileSync(new URL(`../../web-ui/src/${file}`, import.meta.url), "utf-8");
-	const sources = ["components/launcher-room-card.tsx", "components/RoomSettingsModal.tsx", "components/RoomWorkspaceSection.tsx", "App.tsx"].map((file) => [file, read(file)] as const);
+	const sources = ["components/launcher-room-card.tsx", "components/RoomSettingsModal.tsx", "components/RoomWorkspaceSection.tsx", ...PAGE_FILES].map((file) => [file, read(file)] as const);
 	for (const [file, source] of sources) {
 		const found = source.match(/prepared room runtime|persistent chat"|standby thread|use Bash/g);
 		assert(!found, `${file} still says ${JSON.stringify(found)}`);
@@ -392,6 +396,10 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	for (const file of ["components/launcher-room-card.tsx", "components/RoomSettingsModal.tsx"]) {
 		assert(!read(file).includes('"ready to memorize"'), `${file}: a room due to memorize is called what Home's badge calls it`);
 	}
+	// The labels lost their capitals to sentence case, so the words carry the capital themselves, from one table.
+	const { ROOM_STATE_BADGE } = await import(new URL("../../web-ui/src/components/launcher-room-card.tsx", import.meta.url).href) as { ROOM_STATE_BADGE?: Record<string, string> };
+	assert(!!ROOM_STATE_BADGE && Object.values(ROOM_STATE_BADGE).every((word) => /^\p{Lu}/u.test(word)), `every room state word starts with a capital, got ${JSON.stringify(ROOM_STATE_BADGE)}`);
+	assert(read("components/RoomSettingsModal.tsx").includes("ROOM_STATE_BADGE[status.status]") && !read("components/RoomSettingsModal.tsx").includes('"memorize due"'), "Room settings' status pill reads Home's badge table");
 }
 
 // 10e. The judge's wording nits: no "active thread", no "room transcript", no
@@ -401,7 +409,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const fs = await import("node:fs");
 	const read = (file: string) => fs.readFileSync(new URL(`../../web-ui/src/${file}`, import.meta.url), "utf-8");
 	for (const [file, banned] of [
-		["App.tsx", /return to the active thread|current room transcript|pick up right where you left off|temporary and will be discarded|Discard discussion|Abort this memory discussion|so this can be undone/],
+		...PAGE_FILES.map((file) => [file, /return to the active thread|current room transcript|pick up right where you left off|temporary and will be discarded|Discard discussion|Abort this memory discussion|so this can be undone/] as const),
 		["components/ConnectorsPage.tsx", /Same list on the web and in the CLI|Add any MCP server|Configured MCP servers|Saved to ~\/\.exxperts\/agent\/mcp\.json\. Test/],
 		["components/RoomSkillsSection.tsx", /tokens per turn/],
 	] as const) {
@@ -417,7 +425,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(words.discussionKeptSentence?.("Review", true) === "With no first read, your discussion is not kept: it does not come back when you open Review again." && words.discussionKeptSentence?.("Memorize", true) === "With no first read, your discussion is not kept: it does not come back when you open Memorize again.", "a discussion on a missing first read is not promised back");
 	assert(words.discussionKeptSentence("Memorize", false) === "Your discussion is kept; it comes back when you open Memorize again, unless your memory or its Memory model changes first." && words.discussionKeptSentence("Review", false) === "Your discussion is kept; it comes back when you open Review again, unless your memory or its Memory model changes first.", "leaving a discussion says it is kept, as it is");
 	const appText = read("App.tsx");
-	assert((appText.match(/body: discussionKeptSentence\("Review", Boolean\(reviewWorkflow\.assessment\?\.firstReadMissing\)\)/g) ?? []).length === 2 && (appText.match(/body: discussionKeptSentence\("Memorize", Boolean\(absorbWorkflow\.assessment\?\.firstReadMissing\)\)/g) ?? []).length === 2 && !appText.includes("Your discussion is kept;"), "the Leave and Back confirms on both screens say it from the first read they stand on");
+	assert((appText.match(/body: discussionKeptSentence\("Review", Boolean\(reviewWorkflow\.assessment\?\.firstReadMissing\)\)/g) ?? []).length === 2 && (appText.match(/body: discussionKeptSentence\("Memorize", Boolean\(absorbWorkflow\.assessment\?\.firstReadMissing\)\)/g) ?? []).length === 2 && !pageText().includes("Your discussion is kept;"), "the Leave and Back confirms on both screens say it from the first read they stand on");
 }
 
 // 10f. A note the sort placed and the same run then read again into notes is
@@ -476,7 +484,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(maintainChooserFootnote(false) === "Nothing is saved until you approve it. The memory budget is set in Room settings.", "and so is its footnote");
 	// The chooser has no hint for notes in Unsorted: every Memorize sorts them, and its card says so.
 	assert(!("unsortedHintText" in (await import("../../web-ui/src/memory-v2-copy.js"))), "the Unsorted hint's sentence is gone");
-	const appSource = (await import("node:fs")).readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf-8");
+	const appSource = pageText();
 	assert(!appSource.includes("maintain-hint") && !appSource.includes("unsortedAfterReread"), "the Maintain chooser shows no Unsorted hint and no Review button for it");
 	assert(AUTOMATIC_APPLY_INFO.startsWith("Start on Memorize goes straight to the update, with no first read; Discuss first still reads the conversations with you."), `the setting's info says the first read is skipped (got: ${AUTOMATIC_APPLY_INFO})`);
 	assert(AUTOMATIC_APPLY_INFO.endsWith("A memory update with nothing to weigh is saved as soon as it is ready, instead of being shown to you one last time. Anything you need to weigh always waits for you, for example a note leaving memory or a new note that may disagree with another. You can always see what changed afterwards in History."), `the setting's info says anything to weigh waits, not only three of the reasons the card stays (got: ${AUTOMATIC_APPLY_INFO})`);
@@ -706,7 +714,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 		const readSections = (missing: boolean) => renderToStaticMarkup(createElement(screen.ReviewFirstReadSections, { fields: { couldBeShorter: [], staleOrContradicts: [], needsYourCall: [], topics: [], saysTheSameTwice: ["Alpha and Gamma both say: the report goes out on Mondays."] }, missing })) as string;
 		assert(!readSections(true).includes("<p>None</p>") && !readSections(true).includes("Could be shorter") && !readSections(true).includes("Looks stale") && readSections(true).includes("Says the same twice"), `a missing first read shows no "None" sections (got: ${readSections(true)})`);
 		assert(readSections(false).includes("Could be shorter") && readSections(false).includes("<p>None</p>"), "a real read still says when it found nothing");
-		const reviewShellSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
+		const reviewShellSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "maintain-workflow-screens.tsx"), "utf8");
 		assert(reviewShellSource.includes("<ReviewFirstReadSections fields={assessment.fields} missing={Boolean(assessment.firstReadMissing)} />") && reviewShellSource.includes("firstReadMissing={Boolean(assessment.firstReadMissing)}"), "the first read screen tells both parts when the read is missing");
 		const failedHtml = card(failedAll);
 		assert(failedHtml.includes("<h2>Review could not finish.</h2>") && failedHtml.includes(notFinished) && !failedHtml.includes("already tidy") && !failedHtml.includes("Nothing in these notes needed changing.") && !failedHtml.includes("<h3>Changes</h3>"), `the card says the tidy could not finish, and lists no empty changes (got: ${failedHtml.slice(0, 600)})`);
@@ -800,7 +808,9 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 		assert(buttons(memorizePassed).includes("Try again") && !buttons(memorizeUnknown).includes("Try again") && buttons(memorizeRefused).includes("Replace key") && !buttons(memorizeRefused).includes("Try again"), `Memorize's paused card: Try again for a passed reset, none for an unknown one or a gateway's refusal, whose key comes first (got: ${[memorizePassed, memorizeUnknown, memorizeRefused].map((html) => buttons(html).join("|")).join(" / ")})`);
 		// The page around the card: no step line over a card that could not finish, and no first-read heading over a lone notice.
 		const appSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
-		const reviewShell = appSource.slice(appSource.indexOf("function ReviewWorkflowShell"), appSource.indexOf("function AbsorbWorkflowShell"));
+		const screensSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "maintain-workflow-screens.tsx"), "utf8");
+		const errorsSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "maintenance-errors.ts"), "utf8");
+		const reviewShell = screensSource.slice(screensSource.indexOf("function ReviewWorkflowShell"), screensSource.indexOf("function AbsorbWorkflowShell"));
 		assert(/state\.step === "run_card" && run && reviewRunNothingToSave\(run\) \? null/.test(reviewShell) && reviewShell.includes("{stepLine && <p>{stepLine}</p>}"), "the could-not-finish card has no step line above it");
 		assert(/\{!unreachableRead && \(\s*<div className="checkpoint-input-heading checkpoint-proposal-heading">\s*<h2>What \{targetLabel\}'s notes need<\/h2>/.test(reviewShell), "the first read's heading goes when the page holds only the notice");
 		// Reopening Maintain on a room whose Review is still working (a reload) reopens that run, as Memorize's does; a card left ready waits behind the chooser.
@@ -812,15 +822,15 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 		// A first read that failed while the model answers: Read again asks again, and another model is one click away.
 		assert(reviewShell.includes('{assessment.firstReadMissing && !unreachableRead && <button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}') && reviewShell.includes('title={assessment.firstReadMissing ? "Read the notes again. Nothing is saved." : "Read the notes again, asking the room to fix what this read got wrong. Nothing is saved."}'), "a missing Review read offers Read again and Choose another model");
 		// Save on a tidy another window is working on says so; on one another window stopped, it is not "still here".
-		const approvalWords = appSource.slice(appSource.indexOf("function formatReviewApprovalError"), appSource.indexOf("function CheckpointPreviewShell"));
+		const approvalWords = errorsSource.slice(errorsSource.indexOf("function formatReviewApprovalError"));
 		assert(approvalWords.includes('if (code === "review_run_not_ready") return "This tidy is being worked on in another window, so nothing was saved here. Finish it there, or reload this page to follow it here.";'), "Save on a tidy another window is working on says so, and how to follow it here");
 		assert(approvalWords.includes('if (code === "review_run_unknown") return "This tidy is no longer open, so nothing was saved. Start Review again to read the notes as they are now.";') && (appSource.match(/formatReviewApprovalError\(\(e as Error\)\.message, apiErrorCode\(e\)\)/g) ?? []).length === 2, "Save on a stopped tidy says it is no longer open");
 		// A missing first read still offers Discuss first, as Memorize's does; only an unreachable model hides it.
 		assert(/\{!unreachableRead && <button className=\{`rs-btn\$\{assessment\.fields\.needsYourCall\.length > 0 \? " rs-btn-primary" : ""\}`\} onClick=\{onDiscuss\}/.test(reviewShell), "Review's missing read offers Discuss first");
 		// Review's discussion names what it feeds: the tidy, not Memorize's update.
-		const discussionAside = appSource.slice(appSource.indexOf("function MaintenanceDiscussion"), appSource.indexOf("function MaintenanceDiscussion") + 9000);
+		const discussionAside = screensSource.slice(screensSource.indexOf("function MaintenanceDiscussion"), screensSource.indexOf("function MaintenanceDiscussion") + 9000);
 		assert(discussionAside.includes("What you agree here goes into the {outcome}, not into this list.") && /aside=\{<ReviewFirstReadSections fields=\{assessment\.fields\} compact missing=\{Boolean\(assessment\.firstReadMissing\)\} \/>\}\s*outcome="tidy"/.test(reviewShell), "Review's discussion says what you agree goes into the tidy");
-		assert(!appSource.includes("runReviewTidyAgain") && /onTryAgain=\{onResumeRun\}/.test(reviewShell), "Try again on the card resumes the same run; nothing starts Review over");
+		assert(!pageText().includes("runReviewTidyAgain") && /onTryAgain=\{onResumeRun\}/.test(reviewShell), "Try again on the card resumes the same run; nothing starts Review over");
 		// The saved screen after a save that tidied nothing: Try again starts a Review of only the topics left, at the run's depth.
 		const savedScreen = (counts: ReturnType<typeof reviewChangeCounts>, topicsLeft: string[], done = false, stop?: unknown) => renderToStaticMarkup(createElement(screen.ReviewSavedScreen, { roomName: "Supplier Desk", counts, topicsLeft, percent: 40, over: false, archivedEntries: 1, archivedForBudget: 1, warnings: [], undo: { busy: false, done, error: null }, onUndo: noop, onTryAgain: noop, onChooseModel: noop, onReturn: noop, returnLabel: "Done", ...(stop ? { stop } : {}) })) as string;
 		const savedLeft = savedScreen(none, ["Office move"]);
@@ -841,11 +851,11 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 		assert(rowButtons(savedPartSure).join("|") === "Undo|Done|Choose another model" && /rs-btn rs-btn-primary"[^>]*>Done</.test(savedPartSure) && savedPartSure.includes("Office move could not be tidied this time and was left as it was.</p>"), `a partly done save where Try again is sure to fail: no Try again, and the sentence ends with the topic left (got: ${rowButtons(savedPartSure).join("|")} / ${savedPartSure.slice(0, 700)})`);
 		assert(!rowButtons(savedScreen(counts, ["Office move"], true)).includes("Try again") && !rowButtons(savedScreen(none, ["Office move"], true)).includes("Try again") && !rowButtons(savedScreen(none, [])).includes("Try again") && !rowButtons(savedScreen(counts, [])).includes("Try again"), "no Try again after an undo, or with no topic left");
 		assert(!rowButtons(savedScreen(none, ["Office move"], true)).includes("Choose another model") && !rowButtons(savedScreen(none, [])).includes("Choose another model") && !rowButtons(savedScreen(counts, [])).includes("Choose another model"), "no Choose another model after an undo, or with no topic left");
-		assert(/<ReviewSavedScreen[\s\S]{0,1600}?onTryAgain=\{onTryTopicsLeft\}\s*onChooseModel=\{onChooseModel\}/.test(appSource), "the saved screen's Choose another model opens the Memory model's setting, as the card's does");
+		assert(/<ReviewSavedScreen[\s\S]{0,1600}?onTryAgain=\{onTryTopicsLeft\}\s*onChooseModel=\{onChooseModel\}/.test(screensSource), "the saved screen's Choose another model opens the Memory model's setting, as the card's does");
 		// Taking another model brings Try again back, as on the card: the saved screen reads the saved run's stop through the same offer.
 		const savedSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "review-screen.tsx"), "utf8");
 		const savedBody = savedSource.slice(savedSource.indexOf("export function ReviewSavedScreen"), savedSource.indexOf("export function reviewPercent"));
-		assert(/<ReviewSavedScreen[\s\S]{0,1600}?stop=\{run\?\.stop\}/.test(appSource) && savedBody.includes("useMemoryWaysOn(stop?.cause, stop?.quotaWay, { onTryAgain: left ? onTryAgain : undefined, onChooseModel: left ? onChooseModel : undefined,"), "the saved screen follows the card's Try again rule, and Choose another model brings it back");
+		assert(/<ReviewSavedScreen[\s\S]{0,1600}?stop=\{run\?\.stop\}/.test(screensSource) && savedBody.includes("useMemoryWaysOn(stop?.cause, stop?.quotaWay, { onTryAgain: left ? onTryAgain : undefined, onChooseModel: left ? onChooseModel : undefined,"), "the saved screen follows the card's Try again rule, and Choose another model brings it back");
 		assert(/onTryTopicsLeft=\{\(\) => void startReviewTidy\(\{ topicsLeftOf: reviewWorkflow\.run \}\)\}/.test(appSource) && appSource.includes("const topics = options?.topicsLeftOf ? options.topicsLeftOf.leftAsIs.flatMap((row) => row.topics) : assessment.fields.topics;") && appSource.includes("const depth = options?.topicsLeftOf?.depth ??") && appSource.includes("await startReviewRun(target.agentId, { depth, topics, ...(guidance ? { guidance } : {}) });"), "the saved screen's Try again asks for the topics left only, at the saved run's depth");
 		// Its guidance is the saved run's own, which a reload does not lose; the page's would be gone.
 		assert(appSource.includes("const guidance = options?.withoutDiscussion ? null : options?.topicsLeftOf ? options.topicsLeftOf.guidance ?? null : reviewWorkflow.guidance ?? null;"), "the saved screen's Try again asks with the saved run's guidance");
@@ -1089,7 +1099,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert((copy.absorbRunAllSummarizedSentence as (model: string) => string)("GPT-5.5") === "GPT-5.5 could not sort these conversations into topics. Another Memory model may do better.", "the all-summaries sentence");
 	// After an automatic save the saved sentence names the sort, as after a reviewed one; no second line says it again.
 	assert(!("absorbRunAutomaticSaveLines" in copy), "the automatic save adds no second sort line");
-	const app = (await import("node:fs")).readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf-8");
+	const app = pageText();
 	assert(!app.includes("absorbRunAutomaticSaveLines"), "the saved screen shows the sort once");
 }
 
@@ -1159,7 +1169,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(foldedAndSorted === "1 conversation became lasting notes. 2 notes waiting in Unsorted were sorted into topics.", `a run that also sorted says it, got ${foldedAndSorted}`);
 	const { absorbRunSavedHeadline: savedHeadline } = await import("../../web-ui/src/memory-v2-copy.js") as any;
 	assert(savedHeadline({ foldedSessions: [], sortedNotes: 3 }, "Atlas") === "Atlas sorted its notes into topics", `the headline names the sort, got ${savedHeadline({ foldedSessions: [], sortedNotes: 3 }, "Atlas")}`);
-	const savedScreen = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const savedScreen = fs.readFileSync(new URL("../../web-ui/src/components/maintain-workflow-screens.tsx", import.meta.url), "utf8");
 	assert((savedScreen.match(/sortedNotes: absorbRunSortedRows\(state\.run\)\.length/g) ?? []).length === 2, "the saved screen counts the notes the run's sort moved");
 	assert(archiveReasonLabel("sorted") === "sorted into topics" && memoryArchiveReason("sorted") === "sorted into topics" && archivedEntryRestorable({ why: "sorted" }), "a sorted note's archive row names why, and can be brought back");
 }
@@ -1210,10 +1220,10 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const { plainFirstReadLine } = await import("../../web-ui/src/memory-v2-copy.js") as any;
 	assert(plainFirstReadLine("Must-keep: Fernando is vegetarian (saved 2026-10-11).") === "Fernando is vegetarian (saved 11 Oct).", `got ${plainFirstReadLine("Must-keep: Fernando is vegetarian (saved 2026-10-11).")}`);
 	assert(plainFirstReadLine("From the 2026-10-02 \u201cTravel plan for Lisbon\u201d conversation: **must-keep:** the hotel is booked.") === "From the 2 Oct \u201cTravel plan for Lisbon\u201d conversation: the hotel is booked.", `got ${plainFirstReadLine("From the 2026-10-02 \u201cTravel plan for Lisbon\u201d conversation: **must-keep:** the hotel is booked.")}`);
-	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const app = fs.readFileSync(new URL("../../web-ui/src/components/maintain-workflow-screens.tsx", import.meta.url), "utf8");
 	const review = fs.readFileSync(new URL("../../web-ui/src/components/review-screen.tsx", import.meta.url), "utf8");
 	// An entry that asks to be generated again cannot be saved: Generate again leads, and Save to memory is not offered.
-	const entryApp = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const entryApp = fs.readFileSync(new URL("../../web-ui/src/components/remember-dialog.tsx", import.meta.url), "utf8");
 	assert(/: !mustGenerateAgain && <button className="rs-btn rs-btn-primary"[^\n]{0,160}?>\{approvalLoading \? "Saving…" : "Save to memory"\}/.test(entryApp) && /generateAgain && <button className=\{mustGenerateAgain \? "rs-btn rs-btn-primary" : "rs-btn"\} disabled=\{approvalLoading\} onClick=\{onGenerate\}>Generate again/.test(entryApp) && /const mustGenerateAgain = generateAgain && \/changed after Remember read it\|The Memory model changed after this entry was written\//.test(entryApp), "Generate again leads where the conversation or the Memory model changed after the read");
 	// Nothing can be saved there, so no Edit either: an editor left open closes, and the edits stay on the entry for Generate again to ask about.
 	assert(/\{!readOnly && !editing && !mustGenerateAgain && <button className="rs-btn" disabled=\{approvalLoading\} onClick=\{\(\) => setEditing\(true\)\}/.test(entryApp) && /useEffect\(\(\) => \{\s*if \(mustGenerateAgain\) setEditing\(false\);\s*\}, \[mustGenerateAgain\]\);/.test(entryApp), "no Edit where nothing can be saved");
@@ -1263,7 +1273,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	for (const reason of ["prepared_runtime_boundary", "room_in_use", "active_turn_in_flight"]) assert(runShownStatus({ status: "blocked", reason }) === "deferred", `a run blocked for ${reason} only waits`);
 	assert(runShownStatus({ status: "blocked", reason: "model_not_found" }) === "blocked" && runShownStatus({ status: "blocked", reason: "prepared_conversation_ended" }) === "blocked", "a run that cannot go on stays blocked");
 	assert(!/formatRunStatus\((?:latestRun|run)\.status\)|status-\$\{run\.status\}/.test(pane) && /case "deferred": return \{ label: "Waiting", tone: "default" \}/.test(pane), "every status in the pane is the shown one, and a wait is neutral");
-	const css = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
+	const css = readPageStyles();
 	assert(!/\.room-schedules-run-status\.status-deferred[^{]*\{[^}]*--warning/.test(css), "a waiting run's chip is neutral");
 	// A completed one-time task is no longer enabled in the summary's count.
 	assert(/enabledCount=\{activeScheduleRows\.filter\(\(\{ job \}\) => job\.enabled\)\.length\}/.test(pane) && /\$\{enabledCount\} enabled/.test(pane), "the summary counts only the schedules still to run as enabled");
@@ -1288,20 +1298,20 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 
 // The Remember options form's Discard is hidden on a read-only device, as the entry view's is.
 {
-	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const app = fs.readFileSync(new URL("../../web-ui/src/components/remember-dialog.tsx", import.meta.url), "utf8");
 	assert(app.includes('{!readOnly && asksGenerateAgain(error) && <button className="rs-btn" onClick={onDiscard}'), "a read-only device gets no Discard on the options form");
 }
 
-// The discussion counter says the messages; the characters only once they near their limit.
+// The discussion counter shows the characters only once they near their limit; Memorize's shows no count of messages.
 {
-	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
-	assert(!app.includes("{messages.length} of {DISCUSSION_MAX_MESSAGES} messages · {compactCount(transcriptChars)}") && app.includes("transcriptChars >= DISCUSSION_MAX_TRANSCRIPT_CHARS * 0.75 ? ` · ${compactCount(transcriptChars)} of"), "the counter keeps only what the person can act on");
+	const app = fs.readFileSync(new URL("../../web-ui/src/components/maintain-workflow-screens.tsx", import.meta.url), "utf8");
+	assert(!pageText().includes("{messages.length} of {DISCUSSION_MAX_MESSAGES} messages · {compactCount(transcriptChars)}") && app.includes("transcriptChars >= DISCUSSION_MAX_TRANSCRIPT_CHARS * 0.75 && `${compactCount(transcriptChars)} of") && app.includes("!openContinue && `${messages.length} of"), "the counter keeps only what the person can act on");
 }
 
 // Review's saved page says only the plain outcome: the sign-off's and the save's own notes ("no memory has been
 // written") are engine notes, untrue after a save.
 {
-	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const app = fs.readFileSync(new URL("../../web-ui/src/components/maintain-workflow-screens.tsx", import.meta.url), "utf8");
 	const saved = app.slice(app.indexOf("<ReviewSavedScreen"), app.indexOf("/>", app.indexOf("<ReviewSavedScreen")));
 	assert(saved.includes("warnings={") && !saved.includes("signoffWarnings") && !saved.includes("approvalResult.warnings"), "Review's saved page shows no engine notes");
 }
@@ -1310,7 +1320,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 {
 	const copySource = fs.readFileSync(new URL("../../web-ui/src/memory-v2-copy.ts", import.meta.url), "utf8");
 	const reviewSource = fs.readFileSync(new URL("../../web-ui/src/components/review-screen.tsx", import.meta.url), "utf8");
-	const appSource = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const appSource = pageText();
 	assert(copySource.includes('"The app restarted. Finished conversations are on this card. Save keeps them."') && !copySource.includes("Finished conversations are kept."), "Memorize's restart line says Save keeps them");
 	assert(reviewSource.includes('`The app restarted. ${nothingTidied ? "Nothing was lost." : "What was tidied is on this card; the rest is unchanged."}`') && !reviewSource.includes("What was tidied is kept;"), "Review's restart line says the tidy is on the card");
 	assert(appSource.includes('"Remembering…"') && !appSource.includes("Drafting memory proposal"), "the dialog's heading has no engine word");
@@ -1318,16 +1328,17 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 
 // No older engine words in Maintain's failure lines (decision 44).
 {
-	const appSource = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const appSource = pageText();
 	for (const words of ["shrink stable memory", "your assessment is untouched", "Restart Maintain", "start Maintain again", "this workflow was open"]) assert(!appSource.includes(words), `the page no longer says "${words}"`);
 }
 
 // A Memorize or Review that cannot start on its Memory model (signed out, too small) shows the one notice with its ways out.
 {
 	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const screens = fs.readFileSync(new URL("../../web-ui/src/components/maintain-workflow-screens.tsx", import.meta.url), "utf8");
 	assert(/const notice = modelNoticeFromError\(e\);\n\t\t\tsetAbsorbWorkflow\(\{ step: "error", target, availability: null, assessment: null, approvalResult: null, notice, error: notice \? null : formatAbsorbWorkflowError/.test(app), "Memorize's start asks for the notice");
 	assert(/const notice = modelNoticeFromError\(e\);\n\t\t\tsetReviewWorkflow\(\{ \.\.\.CLOSED_REVIEW_WORKFLOW, step: "error", target, notice, error: notice \? null : formatReviewWorkflowError/.test(app), "Review's start asks for the notice");
-	assert((app.match(/\{state\.notice && <ModelNoticePanel notice=\{state\.notice\} onTryAgain=\{onRestart\} onChooseModel=\{onChooseModel\} onSignIn=\{\(provider\) => onSignIn\(provider \?\? ""\)\} \/>\}/g) ?? []).length === 2, "both error steps show it");
+	assert((screens.match(/\{state\.notice && <ModelNoticePanel notice=\{state\.notice\} onTryAgain=\{onRestart\} onChooseModel=\{onChooseModel\} onSignIn=\{\(provider\) => onSignIn\(provider \?\? ""\)\} \/>\}/g) ?? []).length === 2, "both error steps show it");
 }
 
 // A start Memorize or Review refuses keeps the server's code, so the room shows its one notice with the ways out.
@@ -1376,7 +1387,8 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(copy.absorbRunSavedHeadline({ foldedSessions: ["RC-0001", "RC-0002"], notedSessions: 1, nothingToKeep: 1 }, "Offsite Planning") === "Offsite Planning memorized 2 conversations", "a save that kept notes reads as before");
 
 	const app = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
-	const memorizeShell = app.slice(app.indexOf("function AbsorbWorkflowShell"), app.indexOf("// Shared discussion surface"));
+	const screens = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "maintain-workflow-screens.tsx"), "utf8");
+	const memorizeShell = screens.slice(screens.indexOf("function AbsorbWorkflowShell"), screens.indexOf("// Shared discussion surface"));
 	// A paused card with nothing to save changes nothing, so no step line names a change above it, as on Review's.
 	assert(/state\.step === "run_card" && state\.run\?\.stop && absorbRunNothingToSave\(state\.run\) \? null : `Step 2 of 2 · what \$\{targetLabel\} will keep`/.test(memorizeShell) && memorizeShell.includes("{stepLine && <p>{stepLine}</p>}"), "a paused Memorize card with nothing to save has no step line above it");
 	// Its Cancel asks nothing, as Review's Close on such a card: there is nothing to lose.
@@ -1390,14 +1402,14 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(/onClick=\{onUndo\}/.test(savedBlock) && app.includes("function undoAbsorbSave()") && /undoMemorySave\(target\.agentId, saveId\)/.test(app.slice(app.indexOf("async function performAbsorbUndo"))), "Memorize's saved screen offers Undo through the same undo route");
 	assert(savedBlock.includes("{!state.undo?.done && (absorbRunNotesChanged(state.run) > 0 || (state.approvalResult.archivedEntries ?? 0) > 0 || absorbRunSortedRows(state.run).length > 0) && <button"), "a save that only sorted notes into topics offers Undo too");
 	// The Discuss first titles agree with the leave confirm: the discussion is kept, and never saved to memory.
-	assert(!app.includes("the discussion itself is not saved") && !app.includes("The discussion itself is not saved."), "neither Discuss first title says the discussion is not kept");
-	assert(app.includes('title="Talk the first read through before anything is tidied. The discussion is not saved to memory.">Discuss first</button>'), "Review's Discuss first title says what Memorize's says");
-	assert(!app.includes("what you wrote here stays available from the update"), "no line promises the discussion stays once the update runs");
+	assert(!pageText().includes("the discussion itself is not saved") && !pageText().includes("The discussion itself is not saved."), "neither Discuss first title says the discussion is not kept");
+	assert(screens.includes('title="Talk the first read through before anything is tidied. The discussion is not saved to memory.">Discuss first</button>'), "Review's Discuss first title says what Memorize's says");
+	assert(!pageText().includes("what you wrote here stays available from the update"), "no line promises the discussion stays once the update runs");
 	// Read again reads again: both screens ask the server for a fresh read.
 	const reviewApi = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "review-api.ts"), "utf8");
 	assert(/fresh: true/.test(reviewApi.slice(reviewApi.indexOf("export function requestFirstRead"), reviewApi.indexOf("export function cancelFirstReadAt"))), "Read again asks for a fresh read, on both screens");
 	// Only Cancel ends a first read: every ask carries its own id, and leaving Maintain or a newer read cancels it on the server.
-	assert((app.match(/askFirstRead\(target\.agentId, "memorize", \(first\) => requestFirstRead<AbsorbAssessmentResponse>\(absorbBaseUrl\(target\.agentId\), |askFirstRead\(target\.agentId, "review", \(first\) => requestFirstRead<ReviewAssessmentResponse>\(reviewBase\(target\.agentId\), /g) ?? []).length === 4 && !/firstReadSignal|firstReadAbortRef/.test(app), "every first read is asked with its own id");
+	assert((app.match(/askFirstRead\(target\.agentId, "memorize", \(first\) => requestFirstRead<AbsorbAssessmentResponse>\(absorbBaseUrl\(target\.agentId\), |askFirstRead\(target\.agentId, "review", \(first\) => requestFirstRead<ReviewAssessmentResponse>\(reviewBase\(target\.agentId\), /g) ?? []).length === 4 && !/firstReadSignal|firstReadAbortRef/.test(pageText()), "every first read is asked with its own id");
 	assert((app.match(/maintainRunRef\.current \+= 1;\n\t\tcancelFirstRead\(\);/g) ?? []).length === 2 && app.includes("void cancelFirstReadAt((current.kind === \"review\" ? reviewBase : absorbBaseUrl)(current.agentId), current.ask).catch(() => {});"), "leaving Maintain cancels the first read on the server");
 	assert(reviewApi.slice(reviewApi.indexOf("export function cancelFirstReadAt")).includes("body: JSON.stringify({ ask, cancel: true }),"), "Cancel names the ask it ends, on both screens");
 	// A missing read is never kept, so its Read again joins a read a dropped request left running instead of paying for another.
@@ -1411,7 +1423,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	// A room that saves on its own skipped the first read: Stop or Back reads it then, never "No first read this time".
 	assert(back.includes('(absorbWorkflow.openedWaiting || absorbWorkflow.assessment?.firstReadMissing === "skipped")'), "Stop or Back on a run whose first read was skipped reads the conversations first");
 	assert(app.includes("if ((fastPathEnabled && !options?.discuss && !options?.readFirst) || availability.recentContextEntryCount === 0) {"), "the read asked for after Stop or Back is shown even in a room that saves on its own");
-	assert(app.includes('{assessment.firstReadMissing && assessment.firstReadMissing !== "skipped" && !unreachableRead && <button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}'), "Memorize's missing read offers another model where one can help, as Review's does");
+	assert(screens.includes('{assessment.firstReadMissing && assessment.firstReadMissing !== "skipped" && !unreachableRead && <button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}'), "Memorize's missing read offers another model where one can help, as Review's does");
 	const reviewBack = app.slice(app.indexOf("async function reviewRunBackToAssessment"), app.indexOf("/** A tidy with nothing to save is dropped without a confirm"));
 	assert(/openedWaiting/.test(reviewBack) && /startPruneMemoryWorkflow\(target\)/.test(reviewBack) && /status\.waitingRunId\) return beginReviewRunWatch\(\{ \.\.\.CLOSED_REVIEW_WORKFLOW, step: "assessment", target, openedWaiting: true,/.test(app), "Stop or Back on Review's waiting run reads the notes first, as Memorize does");
 

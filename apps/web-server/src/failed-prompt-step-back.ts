@@ -7,7 +7,7 @@ import { answerStarted, failedTurnKey, failureCodesOf, quotaWayOf, turnFailureOf
 import type { GatewayFind, QuotaWay } from "../../web-ui/src/turn-failure-line.js";
 import { gatewayModelFind } from "./gateway-model-find.js";
 import { anthropicKeyNeedsWorkspace, type CredentialKey } from "./model-not-offered.js";
-import { userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
+import { SUMMARY_ENTRY_TYPES, typedMessageText } from "./edit-last-message.js";
 import { emptyAnswer } from "./usage-log.js";
 
 /** What the step back needs of a room's session. */
@@ -69,22 +69,12 @@ const RETURNED_PROMPT_KEPT = "failed-prompt-kept";
 const APP_TURN_FAILED = "app-turn-failed";
 const MARKS = new Set([RETURNED_PROMPT, RETURNED_PROMPT_HANDED, RETURNED_PROMPT_KEPT, APP_TURN_FAILED]);
 
-// A summary of the conversation: stepping back past it would leave the paid summary on an abandoned branch.
-const BOUNDARIES = new Set(["compaction", "branch_summary"]);
-
 /** The entry before this one that is a message, one of the marks above or a summary; the model or thinking level a bind writes is passed over. */
 function markOrMessageFrom(manager: SteppingSession["sessionManager"], entry: StepEntry | undefined): StepEntry | undefined {
-	while (entry && entry.type !== "message" && !BOUNDARIES.has(entry.type) && !(entry.type === "custom" && MARKS.has(entry.customType ?? ""))) {
+	while (entry && entry.type !== "message" && !SUMMARY_ENTRY_TYPES.has(entry.type) && !(entry.type === "custom" && MARKS.has(entry.customType ?? ""))) {
 		entry = entry.parentId ? manager.getEntry(entry.parentId) : undefined;
 	}
 	return entry;
-}
-
-function textOnly(content: unknown): string | undefined {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return undefined;
-	if (content.some((part) => (part as { type?: unknown })?.type !== "text")) return undefined;
-	return content.map((part) => String((part as { text?: unknown }).text ?? "")).join("");
 }
 
 /**
@@ -95,9 +85,11 @@ function textOnly(content: unknown): string | undefined {
  * cut off part way, whose text the person has read: the page keeps both above,
  * and its Try again continues the turn. So is a message that carries more than
  * the person typed (a file note, a transfer, an image), since only typed text
- * can go back into the box. `stopped`: Stop ended a retry wait. `shown`: the
- * text the room shows for the message; one the model was sent otherwise (an
- * older room's restored context before it) stays where it is.
+ * can go back into the box. The note the room puts in front of a message
+ * after a cut, a Stop or an edit is the room's, not the person's: the message
+ * goes back without it. `stopped`: Stop ended a retry wait. `shown`: the text the room
+ * shows for the message; one the model was sent otherwise (an older room's
+ * restored context before it) stays where it is.
  */
 export async function stepBackFromFailedPrompt(session: SteppingSession, options: { stopped?: boolean; shown?: string } = {}): Promise<ReturnedPrompt | undefined> {
 	// Read from the session file: while the runtime waits to try again, its own list has already let the failed attempt go.
@@ -110,8 +102,8 @@ export async function stepBackFromFailedPrompt(session: SteppingSession, options
 		entry = markOrMessageFrom(manager, entry.parentId ? manager.getEntry(entry.parentId) : undefined);
 	}
 	if (!from || attempts.length === 0 || !entry || entry.type !== "message" || entry.message?.role !== "user") return undefined;
-	const sent = textOnly(entry.message.content);
-	if (sent === undefined || !sent.trim() || userAuthoredPromptText(sent).trim() !== sent.trim() || sent.trim() !== (options.shown ?? "").trim()) return undefined;
+	const sent = typedMessageText(entry.message.content);
+	if (sent === undefined || sent !== (options.shown ?? "").trim()) return undefined;
 	if (attempts.some((attempt) => answerStarted(attempt.content))) return undefined;
 	const failed = attempts[0]!;
 	const words = String(failed.errorMessage ?? "");
@@ -122,7 +114,7 @@ export async function stepBackFromFailedPrompt(session: SteppingSession, options
 	const key = notice ? failedTurnKey(provider, words, codes) : undefined;
 	const gatewayFind = failure === "gateway-not-found" ? await gatewayModelFind(provider, String(failed.model ?? "")) : undefined;
 	const returned: ReturnedPrompt = {
-		text: sent.trim(),
+		text: sent,
 		...(options.stopped ? { stopped: true as const } : { failure }),
 		...(failure === "quota" ? { quotaWay: quotaWayOf(provider, words) } : {}),
 		...(gatewayFind ? { gatewayFind } : {}),

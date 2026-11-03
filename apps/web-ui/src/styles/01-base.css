@@ -1,0 +1,319 @@
+/*
+ * Exxeta brand — black/white anchors adapted into calm neutral app surfaces.
+ * Body: Sen.       Headers: Bandeins Strange (Exxeta's display font).
+ *
+ * Font files in /public/fonts/, logo in /public/brand/.
+ */
+
+@font-face {
+	font-family: "Sen";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("/fonts/Sen-Regular.ttf") format("truetype");
+}
+@font-face {
+	font-family: "Sen";
+	font-style: normal;
+	font-weight: 700 800;
+	font-display: swap;
+	src: url("/fonts/Sen-Bold.ttf") format("truetype");
+}
+@font-face {
+	font-family: "Bandeins Strange";
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url("/fonts/BandeinsStrange-Bold.otf") format("opentype");
+}
+@font-face {
+	font-family: "Bandeins Strange Variable";
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url("/fonts/BandeinsStrangeVariable.ttf") format("truetype-variations");
+}
+
+:root,
+:root[data-theme="dark"] {
+	/* Canvas and surfaces */
+	--exx-canvas: #242424;
+	--exx-surface: #2f2f2f;
+	--exx-surface-raised: #373737;
+	--exx-surface-hover: #414141;
+	--exx-surface-inset: #1f1f1f;
+
+	/* Brand/high-contrast anchors */
+	--exx-ink: #0f0f0f;
+	--exx-paper: #f4f1ec;
+	--exx-paper-soft: #e7e2d8;
+
+	/* Text */
+	--exx-text: #f2f0ec;
+	--exx-text-soft: #d5d0c8;
+	--exx-text-muted: #aaa39a;
+	--exx-text-disabled: #6f6a64;
+
+	/* Borders/dividers */
+	--exx-border: #55504a;
+	--exx-border-soft: #403d39;
+	--exx-divider: #3a3835;
+
+	/* Neutral action system */
+	--exx-action-primary-bg: var(--exx-paper);
+	--exx-action-primary-fg: var(--exx-ink);
+	--exx-action-primary-hover-bg: #ffffff;
+	--exx-action-secondary-bg: transparent;
+	--exx-action-secondary-fg: var(--exx-text-soft);
+	--exx-action-secondary-border: var(--exx-border-soft);
+
+	/* Focus/active */
+	--exx-focus: #d9d2c6;
+	--exx-active-bg: var(--exx-paper);
+	--exx-active-fg: var(--exx-ink);
+	--exx-active-muted-bg: #3b3935;
+
+	/* Semantic status */
+	--exx-success: #6bc77a;
+	--exx-warning: #e8a838;
+	--exx-danger: #e85858;
+	--exx-danger-strong: #ff5555;
+	/* The "thinker" blue — a live task working.
+	   Only a genuinely running task may pulse in it; green stays for done. */
+	--exx-working: #7da7e8;
+	/* Brand lila: plan-covered usage accent in the Wallet. */
+	--exx-plan: #8ca5ff;
+	/* Ink that keeps contrast on --exx-plan surfaces; themed with it. */
+	--exx-plan-ink: #101014;
+	/* Brand lila for shapes (the model picker's dial, needle and tick): the
+	   same in both themes, the state also being in words beside it. */
+	--exx-plan-shape: #8ca5ff;
+	/* Maintain action pills (drop/update/reorganize); darkened for light theme below. */
+	--exx-pill-drop: #f39b7f;
+	--exx-pill-update: #7aa7ff;
+	--exx-pill-reorganize: #c99cff;
+
+	/* Typography */
+	--exx-font-sans: "Sen", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	--exx-font-display: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	--exx-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+	--exx-font-size-base: 15px;
+	--exx-font-size-small: 13px;
+	--exx-font-size-xs: 11px;
+	--exx-line-height: 1.55;
+
+	/* Spacing */
+	--exx-sp-1: 4px;
+	--exx-sp-2: 8px;
+	--exx-sp-3: 12px;
+	--exx-sp-4: 16px;
+	--exx-sp-5: 24px;
+	--exx-sp-6: 32px;
+	--exx-sp-7: 48px;
+
+	/* Shape/elevation */
+	--exx-radius-sm: 6px;
+	--exx-radius-control: 8px;
+	--exx-radius-card: 12px;
+	--exx-radius-pill: 999px;
+	--exx-shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.18);
+	--exx-shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.34);
+	/* The edge of a dialog that dims the page (no shadow): the standard
+	   border in both themes, which the light block's --exx-border sets. */
+	--exx-edge-dialog: var(--exx-border);
+
+	/* Compatibility aliases for the existing stylesheet. */
+	--bg: var(--exx-canvas);
+	--bg-2: var(--exx-surface-inset);
+	--panel: var(--exx-surface);
+	--panel-2: var(--exx-surface-raised);
+	--panel-3: var(--exx-surface-hover);
+	--border: var(--exx-border);
+	--border-soft: var(--exx-border-soft);
+	--fg: var(--exx-text);
+	--fg-soft: var(--exx-text-soft);
+	--muted: var(--exx-text-muted);
+	--dim: var(--exx-text-disabled);
+	--dim-2: var(--exx-text-disabled);
+	--success: var(--exx-success);
+	--warning: var(--exx-warning);
+	--error: var(--exx-danger-strong);
+	--danger: var(--error);
+	/* Small words in the warning or error hue, on the panels and their tints:
+	   dark's red a step lighter so they read at 4.5:1 (the error red itself
+	   stays for marks, borders and fills). */
+	--warning-text: var(--warning);
+	--error-text: #ff8080;
+	--user-bubble: var(--exx-surface-inset);
+	--user-fg: var(--exx-text-soft);
+	/* Chart series and a diagram's pie slices: a calm blue first, then our own hues. */
+	--chart-1: #6390e0;
+	--chart-2: var(--exx-success);
+	--chart-3: var(--exx-warning);
+	--chart-4: var(--exx-pill-reorganize);
+	--chart-5: var(--exx-pill-drop);
+	--chart-6: var(--exx-text-muted);
+	--code-bg: var(--exx-surface-inset);
+	--code-fg: var(--exx-text);
+	/* Colours in code (code-highlight.ts): calm hues from our own tokens, each at least 4.5:1 on the code background. */
+	--code-foreground: var(--code-fg);
+	--code-token-keyword: var(--exx-pill-reorganize);
+	--code-token-string: var(--exx-success);
+	--code-token-string-expression: var(--exx-success);
+	--code-token-constant: var(--exx-warning);
+	--code-token-function: var(--exx-pill-update);
+	--code-token-link: var(--exx-pill-update);
+	--code-token-comment: var(--exx-text-muted);
+	--code-token-punctuation: var(--exx-text-soft);
+	--code-token-parameter: var(--code-fg);
+	--code-token-inserted: var(--exx-success);
+	--code-token-deleted: var(--exx-danger-strong);
+	--code-token-changed: var(--exx-warning);
+	--overlay-bg: color-mix(in srgb, var(--bg) 72%, transparent);
+	--contrast-bg: var(--exx-ink);
+	--contrast-fg: var(--exx-paper);
+	--chat-rail-width: 768px;
+}
+
+:root[data-theme="light"] {
+	--exx-canvas: #f3f0ea;
+	--exx-surface: #fffaf2;
+	--exx-surface-raised: #ebe6dc;
+	--exx-surface-hover: #e2ddd3;
+	--exx-surface-inset: #f8f5ef;
+
+	--exx-ink: #111111;
+	--exx-paper: #ffffff;
+	--exx-paper-soft: #fffaf2;
+
+	--exx-text: #171717;
+	--exx-text-soft: #34312d;
+	--exx-text-muted: #6d675f;
+	--exx-text-disabled: #928b82;
+
+	--exx-border: #c7c0b6;
+	--exx-border-soft: #ded8cf;
+	--exx-divider: #e4ded5;
+
+	--exx-action-primary-bg: #111111;
+	--exx-action-primary-fg: #fffaf2;
+	--exx-action-primary-hover-bg: #000000;
+	--exx-action-secondary-bg: transparent;
+	--exx-action-secondary-fg: var(--exx-text-soft);
+	--exx-action-secondary-border: var(--exx-border-soft);
+
+	--exx-focus: #111111;
+	--exx-active-bg: #111111;
+	--exx-active-fg: #fffaf2;
+	--exx-active-muted-bg: #e7e0d5;
+
+	--exx-success: #357a42;
+	--exx-warning: #9a650f;
+	--exx-danger: #c93535;
+	--exx-danger-strong: #b42323;
+	/* The thinker blue, darkened for contrast on the light canvas. */
+	--exx-working: #4a72c4;
+	/* Brand lila, darkened for contrast on the light canvas. */
+	--exx-plan: #4a63c4;
+	--exx-plan-ink: #ffffff;
+	--exx-plan-shape: #8ca5ff;
+	--exx-pill-drop: #a84e2e;
+	--exx-pill-update: #3d5fb8;
+	--exx-pill-reorganize: #7a4fb0;
+
+	--exx-font-sans: "Sen", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	--exx-font-display: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	--exx-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+	--exx-font-size-base: 15px;
+	--exx-font-size-small: 13px;
+	--exx-font-size-xs: 11px;
+	--exx-line-height: 1.55;
+
+	--exx-sp-1: 4px;
+	--exx-sp-2: 8px;
+	--exx-sp-3: 12px;
+	--exx-sp-4: 16px;
+	--exx-sp-5: 24px;
+	--exx-sp-6: 32px;
+	--exx-sp-7: 48px;
+
+	--exx-radius-sm: 6px;
+	--exx-radius-control: 8px;
+	--exx-radius-card: 12px;
+	--exx-radius-pill: 999px;
+	--exx-shadow-hover: 0 2px 8px rgba(17, 17, 17, 0.12);
+	--exx-shadow-popover: 0 8px 28px rgba(17, 17, 17, 0.18);
+
+	--bg: var(--exx-canvas);
+	--bg-2: var(--exx-surface-inset);
+	--panel: var(--exx-surface);
+	--panel-2: var(--exx-surface-raised);
+	--panel-3: var(--exx-surface-hover);
+	--border: var(--exx-border);
+	--border-soft: var(--exx-border-soft);
+	--fg: var(--exx-text);
+	--fg-soft: var(--exx-text-soft);
+	--muted: var(--exx-text-muted);
+	--dim: var(--exx-text-disabled);
+	--dim-2: var(--exx-text-disabled);
+	--success: var(--exx-success);
+	--warning: var(--exx-warning);
+	--error: var(--exx-danger-strong);
+	--danger: var(--error);
+	/* Light's amber a step deeper for small words on its tints, 4.5:1. */
+	--warning-text: #8a5a0d;
+	--error-text: var(--error);
+	--user-bubble: var(--exx-surface-raised);
+	--user-fg: var(--exx-text);
+	/* Chart series and a diagram's pie slices: a calm blue first, then our own hues. */
+	--chart-1: #3d5fb8;
+	--chart-2: var(--exx-success);
+	/* The warning hue a step darker, so the slice's label reads at 4.5:1. */
+	--chart-3: #915f0e;
+	--chart-4: var(--exx-pill-reorganize);
+	--chart-5: var(--exx-pill-drop);
+	--chart-6: var(--exx-text-muted);
+	--code-bg: var(--exx-surface-inset);
+	--code-fg: var(--exx-text);
+	/* Colours in code (code-highlight.ts): calm hues from our own tokens, each at least 4.5:1 on the code background. */
+	--code-foreground: var(--code-fg);
+	--code-token-keyword: var(--exx-pill-reorganize);
+	--code-token-string: var(--exx-success);
+	--code-token-string-expression: var(--exx-success);
+	--code-token-constant: var(--exx-warning);
+	--code-token-function: var(--exx-pill-update);
+	--code-token-link: var(--exx-pill-update);
+	--code-token-comment: var(--exx-text-muted);
+	--code-token-punctuation: var(--exx-text-soft);
+	--code-token-parameter: var(--code-fg);
+	--code-token-inserted: var(--exx-success);
+	--code-token-deleted: var(--exx-danger-strong);
+	--code-token-changed: var(--exx-warning);
+	--overlay-bg: color-mix(in srgb, var(--bg) 72%, transparent);
+	--contrast-bg: var(--exx-ink);
+	--contrast-fg: var(--exx-paper);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+	background: var(--bg);
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-size: var(--exx-font-size-base);
+	line-height: var(--exx-line-height);
+	overflow: hidden;
+	-webkit-font-smoothing: antialiased;
+}
+
+button { font-family: inherit; font-size: inherit; cursor: pointer; }
+a { color: var(--fg); text-decoration: underline; }
+strong, b { font-weight: 700; }
+
+:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+
+.display { font-family: var(--exx-font-display); font-weight: 700; letter-spacing: -0.01em; }
+

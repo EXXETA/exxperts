@@ -80,6 +80,16 @@ export function nameEndsInKey(name: string): boolean {
 	return /\bkey$/i.test(name.trim());
 }
 
+/**
+ * A gone credential's state on a shared server, where nobody signs in and
+ * only the admin can change the AI setup: a provider signed out or without
+ * its key is just not available there; a refused key, or one outside a
+ * workspace, keeps its clue for the admin.
+ */
+export function sharedCredentialState(gone: CredentialGone): string {
+	return gone === "signed-out" || gone === "key-missing" ? "isn't available on this server" : credentialGoneWords(gone).state;
+}
+
 /** "{provider} {state}", or "No Claude API key is saved" where the name already ends in "key". */
 export function providerCredentialClause(provider: string, gone: CredentialGone): string {
 	if (gone === "key-missing" && nameEndsInKey(provider)) return `No ${provider} is saved`;
@@ -92,10 +102,10 @@ export function modelCredentialWords(model: string, provider: string | null | un
 	return { subject: named, state: credentialGoneWords(gone).state };
 }
 
-/** Why a model cannot answer for its credential, after the model's name. */
-export function credentialGoneWhy(gone: CredentialGone): string {
+/** Why a model cannot answer for its credential, after the model's name; `shared` on a shared server. */
+export function credentialGoneWhy(gone: CredentialGone, shared = false): string {
 	if (gone === "key-no-workspace") return "cannot answer because its key isn't tied to a workspace";
-	return `cannot answer because its provider ${credentialGoneWords(gone).state}`;
+	return `cannot answer because its provider ${shared ? sharedCredentialState(gone) : credentialGoneWords(gone).state}`;
 }
 
 /**
@@ -104,11 +114,13 @@ export function credentialGoneWhy(gone: CredentialGone): string {
  * `model` is the model as the picker names it, with its provider
  * ("GPT-6.1 Sol on OpenAI", see modelOnProvider). `signsIn` is false for a
  * key provider or a gateway, whose signed-out row has no key saved.
+ * `shared` on a shared server, where only the admin can bring a provider back.
  */
-export function roomModelUnavailableLine(model: string, reason: "signed-out" | "not-offered", task: "conversation" | "memory", of: RoomModelRefusalOf = "room", signsIn = true, bare?: { model: string; provider: string }): string {
+export function roomModelUnavailableLine(model: string, reason: "signed-out" | "not-offered", task: "conversation" | "memory", of: RoomModelRefusalOf = "room", signsIn = true, bare?: { model: string; provider: string }, shared = false): string {
 	const row = task === "memory" ? "memory model" : "model";
 	const subject = of === "room" ? `This room's ${row}` : of === "defaults" ? `The default ${row}` : `The ${row} of ${of.room}`;
 	const settings = typeof of === "object" ? "its Room settings, Model" : "Room settings, Model";
+	if (reason === "signed-out" && shared) return `${subject}, ${model}, ${sharedCredentialState("signed-out")}. ${of === "defaults" ? "Tell your admin." : `Choose another model in ${settings}, or tell your admin.`}`;
 	const gone = credentialGoneWords(signsIn ? "signed-out" : "key-missing");
 	const words = reason === "signed-out" && !signsIn && bare ? modelCredentialWords(bare.model, bare.provider, model, "key-missing") : { subject: model, state: reason === "signed-out" ? gone.state : "is no longer offered" };
 	const wayOut = of !== "defaults"

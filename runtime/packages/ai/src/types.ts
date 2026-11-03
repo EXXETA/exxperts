@@ -221,10 +221,32 @@ export interface TextSignatureV1 {
 	phase?: "commentary" | "final_answer";
 }
 
+/**
+ * A page the provider's own search tied to an answer. Citations and sources
+ * are shown to people and never sent back to a provider.
+ */
+export interface SourceLink {
+	url: string;
+	title?: string;
+}
+
+/**
+ * A source tied to a place in a text block. `start` and `end` are UTF-16 code
+ * units (JavaScript string indexes) in the block's final text, after citation
+ * markers are stripped, with `end` exclusive. An absent `start` means the
+ * start of the block and an absent `end` its end, so a citation with neither
+ * covers the whole block.
+ */
+export interface TextCitation extends SourceLink {
+	start?: number;
+	end?: number;
+}
+
 export interface TextContent {
 	type: "text";
 	text: string;
 	textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
+	citations?: TextCitation[];
 }
 
 export interface ThinkingContent {
@@ -256,6 +278,12 @@ export interface Usage {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	/**
+	 * How many of `cacheWrite` were written to last an hour, which Anthropic
+	 * bills at a higher rate than the five-minute write the catalogue's
+	 * `cacheWrite` price is for. Set only by providers that report the split.
+	 */
+	cacheWrite1h?: number;
 	totalTokens: number;
 	/**
 	 * How much context this turn actually leaves behind, which is not the same
@@ -295,6 +323,12 @@ export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent)[];
 	timestamp: number; // Unix timestamp in milliseconds
+	/**
+	 * Set when the message is the host's hidden copy of the room's live state,
+	 * not the person's words, so a provider that can may send it with system
+	 * standing. A provider that does not read it sends plain user text.
+	 */
+	roomState?: true;
 }
 
 export interface AssistantMessage {
@@ -323,6 +357,8 @@ export interface AssistantMessage {
 	 * reconstructed.
 	 */
 	rawContent?: unknown[];
+	/** Sources the provider ties to the answer but to no place in its text. */
+	sources?: SourceLink[];
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -392,6 +428,11 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
+	// A tool the provider runs itself (its own web search). It is no content
+	// block, so it has an id instead of a contentIndex. A start comes again
+	// with `input` once the call's arguments are known.
+	| { type: "server_tool_start"; id: string; name: string; input?: Record<string, unknown>; partial: AssistantMessage }
+	| { type: "server_tool_end"; id: string; ok: boolean; partial: AssistantMessage }
 	| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">; message: AssistantMessage }
 	| { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
 

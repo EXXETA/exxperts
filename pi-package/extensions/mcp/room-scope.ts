@@ -54,7 +54,7 @@ import {
 } from "../../../apps/web-server/src/persistent-room-mcp-settings.js";
 
 // Non-literal specifiers keep tsc from resolving the adapter's raw .ts
-// sources (same pattern as index.ts and connectors-panel.ts).
+// sources (same pattern as index.ts).
 const ADAPTER_CONFIG = "pi-mcp-adapter/config.ts" as string;
 const ADAPTER_CACHE = "pi-mcp-adapter/metadata-cache.ts" as string;
 const ADAPTER_TYPES = "pi-mcp-adapter/types.ts" as string;
@@ -593,7 +593,7 @@ export interface RoomMcpMigrationResult {
 
 /**
  * The update-day migration, callable from EVERY room door (web-server boot,
- * CLI room registration): whichever surface boots first migrates, and the
+ * a room session's registration): whichever comes first migrates, and the
  * marker makes the race converge. The adapter's loadMcpConfig silently
  * degrades a corrupt config file to "no servers", which would make this
  * migration grant every legacy room an EMPTY list and stamp the irreversible

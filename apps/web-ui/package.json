@@ -10,11 +10,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "mermaid": "^11.16.0",
+    "katex": "^0.18.10",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "mermaid": "^12.2.0",
+    "micromark-extension-gfm": "^3.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "shiki": "^4.5.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

@@ -2,13 +2,16 @@
 // renders them: a single tilde shows as written and only ~~text~~ crosses out;
 // an answer keeps its single line breaks while lists, tables, code and quotes
 // look as before; a backslash in a Windows path shows as written while other
-// Markdown escapes still work; a failed step says it failed in its own words;
-// and the older content check's block shows the person one plain line while
-// the model keeps its own text, with no notice under the card.
+// Markdown escapes still work; an answer that streams is drawn in its blocks,
+// each finished one once, and looks as drawn whole; a failed step says it
+// failed in its own words; and the older content check's block shows the
+// person one plain line while the model keeps its own text, with no notice
+// under the card.
 // Offline: no server, no provider.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPageStyles } from "./page-styles.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -99,7 +102,7 @@ await check("a backslash in a Windows path shows as written; other escapes still
 });
 
 const plainText = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-const css = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
+const css = readPageStyles();
 
 await check("a fenced block is code at any indentation and inside a quote", () => {
 	const nested = render(["- Step one", "  - Open a terminal and run:", "", "     ```", "     dir C:\\exxtest\\.git", "     ```"].join("\n"), true);
@@ -162,14 +165,104 @@ await check("a path with a space, a relative path or a variable keeps its backsl
 	assert(plainText(render("\\_not emphasis\\_ and \\*not bold\\* and 1\\. item", true)) === "_not emphasis_ and *not bold* and 1. item", "escapes outside paths still work");
 });
 
-await check("maths delimiters show as written", () => {
-	assert(plainText(render("The circle is \\( x^2 + y^2 = r^2 \\) here.", true)) === "The circle is \\( x^2 + y^2 = r^2 \\) here.", `inline maths keeps its delimiters, got ${render("The circle is \\( x^2 + y^2 = r^2 \\) here.", true)}`);
-	assert(plainText(render("\\[ a + b = c \\]", true)) === "\\[ a + b = c \\]", `display maths keeps its delimiters, got ${render("\\[ a + b = c \\]", true)}`);
-	assert(plainText(render("An escaped \\[draft\\] tag.", true)) === "An escaped [draft] tag.", "escaped brackets around a word still read as brackets");
-	assert(plainText(render("\\(a^2\\) and \\(b_1\\), for each \\(n\\)", true)) === "\\(a^2\\) and \\(b_1\\), for each (n)", "two spans keep their delimiters; a lone letter reads as before");
-	assert(plainText(render("Use \\[x\\] or \\[y\\] then \\[z\\] here", true)) === "Use [x] or [y] then [z] here", "a span ends at its own closer, so escaped brackets around words never pair up across it");
-	assert(plainText(render("`\\(x^2\\)` and `2*3*4` and `__init__.py`", true)) === "\\(x^2\\) and 2*3*4 and __init__.py", "code shows maths, stars and underscores as written");
-	// While an answer streams, the closing delimiter has not arrived yet: the opening one shows from the start.
+const mathsModule: any = await import(new URL("../../web-ui/src/components/Maths.tsx", import.meta.url).href);
+await mathsModule.loadMaths();
+const isMaths = (html: string) => html.includes('class="katex"');
+const formulas = (html: string) => (html.match(/<annotation encoding="application\/x-tex">([^<]*)<\/annotation>/g) ?? []).map((tag) => plainText(tag));
+
+await check("maths is typeset: inline, centred blocks, and single dollars behind a price guard", () => {
+	const typeset: Array<[string, string[], boolean]> = [
+		["The circle is \\( x^2 + y^2 = r^2 \\) here.", ["x^2 + y^2 = r^2"], false],
+		["for each \\(n\\) and \\(a^2\\)", ["n", "a^2"], false],
+		["\\[ a + b = c \\]", ["a + b = c"], true],
+		["\\[\na + b\n= c\n\\]", ["a + b\n= c"], true],
+		["$$\nE = mc^2\n$$", ["E = mc^2"], true],
+		["Inline $$E = mc^2$$ too", ["E = mc^2"], true],
+		["With $x$ and $4\\in A$ and $\\Delta t$.", ["x", "4\\in A", "\\Delta t"], false],
+		["- a list item\n\n  $$\n  x_1\n  $$", ["x_1"], true],
+		["> quoted\n>\n> $$\n> y_2\n> $$", ["y_2"], true],
+		["```math\n\\int_0^1 x\\,dx\n```", ["\\int_0^1 x\\,dx"], true],
+		// A TeX command right after the opener is maths, not a path's folder.
+		["Use \\(\\alpha\\) and \\(\\frac{a}{b}\\) here.", ["\\alpha", "\\frac{a}{b}"], false],
+		// A dollar in code never pairs with one in prose, and an escaped dollar is the formula's own.
+		["`$HOME` ($x$)", ["x"], false],
+		["With $x+\\$y$ here", ["x+\\$y"], false],
+	];
+	for (const [markdown, tex, display] of typeset) {
+		const html = render(markdown, true);
+		assert(JSON.stringify(formulas(html)) === JSON.stringify(tex), `${JSON.stringify(markdown)} typesets ${JSON.stringify(tex)}, got ${html}`);
+		assert(html.includes("maths-display") === display, `${JSON.stringify(markdown)} is ${display ? "a centred block" : "inline"}, got ${html}`);
+	}
+	const prose: Array<[string, string]> = [
+		["It costs $5 and $10 a month.", "It costs $5 and $10 a month."],
+		["Between $5-$10.", "Between $5-$10."],
+		["R$ 12.345 or R$ 98.765", "R$ 12.345 or R$ 98.765"],
+		["US$ 1,200 and US$5", "US$ 1,200 and US$5"],
+		["From $5 to 8$ total", "From $5 to 8$ total"],
+		["C:\\Users\\me\\[old] and \\\\server\\share\\(x)", "C:\\Users\\me\\[old] and \\\\server\\share\\(x)"],
+		["`\\(x\\)` and `$x$`", "\\(x\\) and $x$"],
+		["An escaped \\[draft\\] tag.", "An escaped [draft] tag."],
+		["Use \\[x\\] or \\[y\\] then \\[z\\] here", "Use [x] or [y] then [z] here"],
+		["Escaped \\$x\\$ stays", "Escaped $x$ stays"],
+		// A dollar in prose never pairs with one in code after it: the formula would cut the code span.
+		["Set $VALUE with `$HOME`.", "Set $VALUE with $HOME."],
+	];
+	for (const [markdown, text] of prose) {
+		const html = render(markdown, true);
+		assert(!isMaths(html) && plainText(html) === text, `${JSON.stringify(markdown)} is not maths, got ${html}`);
+	}
+	const linked = render("[x](C:\\a\\(b)\\c)", true);
+	assert(!isMaths(linked) && linked.includes("<code>C:\\a\\(b)\\c</code>"), `a bracket in a link's path is not maths, got ${linked}`);
+	const fenced = render("```\n$x$ and \\(y\\)\n```", true);
+	assert(!isMaths(fenced) && fenced.includes("$x$ and \\(y\\)"), `code keeps maths as written, got ${fenced}`);
+});
+
+await check("a formula that does not parse shows as written; one being written keeps its last good picture", async () => {
+	const broken = render("See \\(\\frac{a}{\\) here", true);
+	assert(!isMaths(broken) && !broken.includes("katex-error") && plainText(broken) === "See \\(\\frac{a}{\\) here", `a finished formula that fails shows as written, got ${broken}`);
+	const streaming = (text: string) => renderToStaticMarkup(createElement(markdown.MarkdownRenderer, { answer: true, streaming: true }, text));
+	const quiet = streaming("Before.\n\n$$\n\\frac{a}{");
+	assert(!isMaths(quiet) && quiet.includes("maths-pending") && !quiet.includes("frac"), `a formula being written shows a quiet box before its first good picture, never raw TeX, got ${quiet}`);
+	// A closing line shorter than its opener closes nothing: the formula is still being written.
+	const longer = streaming("Before.\n\n$$$\n\\frac{a}{b}\n$$");
+	assert(longer.includes("maths-pending") && !longer.includes("frac"), `a $$ line under a $$$ opener leaves the formula open, got ${longer}`);
+	for (const text of ["Before.\n\n```math\n\\frac{a}{", "Before.\n\n```ma", "Before.\n\n```math"]) {
+		const box = streaming(text);
+		assert(!isMaths(box) && box.includes("maths-pending") && !box.includes("<pre"), `a math fence being written, its language included, is the quiet box, never code: ${JSON.stringify(text)} gave ${box}`);
+	}
+	const { JSDOM } = await import("jsdom");
+	const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>');
+	const globals = globalThis as any;
+	const previous = { window: globals.window, document: globals.document };
+	globals.window = dom.window;
+	globals.document = dom.window.document;
+	const ownNavigator = !("navigator" in globalThis);
+	if (ownNavigator) globals.navigator = dom.window.navigator;
+	try {
+		const { createRoot } = pageRequire("react-dom/client");
+		const { act } = pageRequire("react");
+		globals.IS_REACT_ACT_ENVIRONMENT = true;
+		const container = dom.window.document.getElementById("root")!;
+		const root = createRoot(container);
+		const draw = (text: string) => act(async () => root.render(createElement(markdown.MarkdownRenderer, { answer: true, streaming: true }, text)));
+		await draw("$$\n\\frac{a}{b}");
+		const good = container.querySelector(".maths-display annotation")?.textContent;
+		assert(good === "\\frac{a}{b}", `a formula that parses so far is typeset, got ${container.innerHTML}`);
+		await draw("$$\n\\frac{a}{b} + \\frac{c}{");
+		assert(container.querySelector(".maths-display annotation")?.textContent === good && !container.textContent!.includes("\\frac{c}"), `half-written TeX keeps the last good picture, got ${container.innerHTML}`);
+		await draw("$$\n\\frac{a}{b} + \\frac{c}{d}\n$$");
+		assert(container.querySelector(".maths-display annotation")?.textContent === "\\frac{a}{b} + \\frac{c}{d}", `the finished formula is typeset, got ${container.innerHTML}`);
+		await act(async () => root.unmount());
+	} finally {
+		globals.window = previous.window;
+		globals.document = previous.document;
+		if (ownNavigator) delete globals.navigator;
+		delete globals.IS_REACT_ACT_ENVIRONMENT;
+	}
+});
+
+await check("an inline formula still arriving keeps its opening delimiter when nothing holds it", () => {
+	// Without the stream repair (a finished render of a cut text), the opener shows as written.
 	const arriving = render("The circle is \\( x^2 + y", true);
 	assert(plainText(arriving) === "The circle is \\( x^2 + y", `maths still arriving keeps its opening delimiter, got ${arriving}`);
 });
@@ -210,7 +303,8 @@ await check("a link to a folder keeps the backslash before its closing bracket",
 
 await check("text that starts with a byte order mark reads like any other", () => {
 	const marked = render("\uFEFFSaved to C:\\exxtest\\.env, see \\(x^2\\) and \\_draft\\_.", true);
-	assert(plainText(marked) === "Saved to C:\\exxtest\\.env, see \\(x^2\\) and _draft_.", `paths, maths and escapes read as without the mark, got ${marked}`);
+	const unmarked = render("Saved to C:\\exxtest\\.env, see \\(x^2\\) and \\_draft\\_.", true);
+	assert(marked === unmarked && plainText(marked).startsWith("Saved to C:\\exxtest\\.env, see ") && formulas(marked)[0] === "x^2", `paths, maths and escapes read as without the mark, got ${marked}`);
 });
 
 await check("a long line full of backslashes renders in moments", () => {
@@ -266,16 +360,6 @@ await check("file names and products keep their underscores and stars", () => {
 	const product = render("2*3*4 = 24 and 5*x + 3*y.", true);
 	assert(!product.includes("<em>") && plainText(product) === "2*3*4 = 24 and 5*x + 3*y.", `a product shows its stars, got ${product}`);
 	assert(render("This is *italic* and **bold**.", true).includes("<em>italic</em>"), "emphasis still works");
-});
-
-await check("tables scroll inside the bubble; a task list shows a box and no bullet", () => {
-	// The frame's fit and its scroll shadow are measured in a browser by answer-table-frame-smoke.ts.
-	const table = render("| Step | Time |\n| --- | --- |\n| Export | 5 min |", true);
-	assert(/<div class="md-table-scroll"><table>/.test(table), `a table sits in its own scrolling frame, got ${table}`);
-	assert(/\.md \.md-table-scroll\s*\{[^}]*overflow-x:\s*auto/.test(css) && /\.md \.md-table-scroll\s*\{[^}]*max-width:\s*100%/.test(css) && !/\.md table\s*\{[^}]*display:\s*block/.test(css), "a wide table scrolls inside its frame, and the table keeps its own layout");
-	assert(/\.md ul > \.task-list-item\s*\{[^}]*list-style:\s*none/.test(css) && !/\.md \.task-list-item\s*\{[^}]*list-style:\s*none/.test(css), "only a bulleted task item drops its marker; a numbered one keeps its number");
-	const tasks = render("- [x] Export finished\n- [ ] Import checked", true);
-	assert(tasks.includes('class="task-list-item"') || tasks.includes("task-list-item"), `the task list items carry their class, got ${tasks}`);
 });
 
 const chip = (item: Record<string, unknown>): string => renderToStaticMarkup(createElement(message.Message, { item: { kind: "tool", id: "t1", args: {}, ...item } }));
@@ -509,9 +593,202 @@ await check("the content check says when it matched in the text, not the path", 
 	}
 });
 
-await check("the room's prompt asks for file paths as code", async () => {
-	const source = fs.readFileSync(new URL("../src/persistent-agents.ts", import.meta.url), "utf8");
-	assert(source.includes("- Write file paths as \\`inline code\\`, so they show exactly as written."), "one short line under Rendering");
+// An answer that streams is drawn in its top-level blocks (answer-blocks.ts); one that opens finished is drawn whole.
+const answerBlocks = () => import(new URL("../../web-ui/src/components/answer-blocks.ts", import.meta.url).href);
+const renderStreaming = (text: string): string => renderToStaticMarkup(createElement(markdown.MarkdownRenderer, { answer: true, streaming: true }, text));
+// Whole and in blocks differ only in the line breaks the whole render puts between top-level elements.
+const sameLook = (html: string) => html.replace(/>\n+/g, ">").trim();
+const BLOCK_CORPUS = [
+	"# Heading",
+	"",
+	"Setext title",
+	"---",
+	"",
+	"A paragraph with **bold**, `code`, C:\\exxtest\\notes.md and \\(x^2 + 1\\) maths, __init__.py and 2*3*4.",
+	"A second line of the same paragraph.",
+	"",
+	// A lone "#" starts an empty heading until the next character turns it back into the paragraph's second line.
+	"The step that failed is",
+	"#5 on the list.",
+	"",
+	"Maths left open at a block's end \\( x^2 + y",
+	"",
+	"- loose item",
+	"",
+	"- second loose item",
+	"  - nested",
+	"",
+	"1. first",
+	"2. second",
+	"",
+	"  ```",
+	"  an indented fence",
+	"  ```",
+	"",
+	"| Setting | Where |",
+	"| --- | --- |",
+	"| `capacity` | C:\\gateway\\limits.json |",
+	"",
+	"```ts",
+	"const x = 1;",
+	"",
+	"const y = 2;",
+	"```",
+	"",
+	"> a quote",
+	"> on two lines",
+	"",
+	"See [the docs](https://example.com/docs).",
+	"",
+	"Text with a <b>bold tag</b> and more.",
+	"",
+	"<details><summary>More</summary>",
+	"",
+	"Inside the box.",
+	"",
+	"</details>",
+	"",
+	"The end, with \\[ a + b \\] last.",
+].join("\n");
+
+await check("an answer drawn in blocks looks the same as drawn whole, at every point of its writing", async () => {
+	const { createAnswerSplitter } = await answerBlocks();
+	const blocks = createAnswerSplitter()(BLOCK_CORPUS);
+	assert(blocks.length > 10 && blocks.map((block: { raw: string }) => block.raw).join("") === BLOCK_CORPUS, `the corpus splits into blocks that join to the text, got ${blocks.length}`);
+	// Line endings as a model may send them: LF, CR LF, or CR alone.
+	for (const [ending, corpus] of [["LF", BLOCK_CORPUS], ["CR", BLOCK_CORPUS.replace(/\n/g, "\r")]]) {
+		// The page keeps one splitter while the answer grows, so later prefixes reuse its settled blocks.
+		const growing = createAnswerSplitter();
+		for (let end = 1; end <= corpus.length; end++) {
+			const text = corpus.slice(0, end);
+			assert(JSON.stringify(growing(text)) === JSON.stringify(createAnswerSplitter()(text)), `${ending}: at ${end} characters the growing split differs from a fresh one`);
+			// The block being written is drawn repaired (stream-repair-smoke.ts), and a table is marked while it streams.
+			const settled = growing(text).map((block: { raw: string }) => block.raw);
+			const whole = sameLook(render(settled.slice(0, -1).join("") + markdown.repairAnswerTail(settled.at(-1) ?? ""), true));
+			const drawn = sameLook(renderStreaming(text)).replace(/ data-streaming="true"/g, "");
+			assert(whole === drawn, `${ending}: at ${end} characters the split differs:\n whole  ${whole}\n blocks ${drawn}`);
+		}
+	}
+	// A byte order mark is skipped only at the start of the answer: inside it, it is text.
+	const marked = "Intro.\n\n\uFEFF# Literal";
+	assert(sameLook(renderStreaming(marked)) === sameLook(render(marked, true)) && !renderStreaming(marked).includes("<h1"), `a byte order mark inside the answer stays text, got ${renderStreaming(marked)}`);
+});
+
+await check("a link definition or a footnote keeps the answer whole", async () => {
+	const { createAnswerSplitter } = await answerBlocks();
+	const withDefinition = "See [the guide][g].\n\nMore text.\n\n[g]: https://example.com/guide";
+	const footnote = "A claim.[^1]\n\nMore.\n\n[^1]: The source.";
+	for (const text of [withDefinition, footnote]) {
+		assert(createAnswerSplitter()(text).length === 1, `${JSON.stringify(text)} stays one block`);
+		assert(renderStreaming(text) === render(text, true), `${JSON.stringify(text)} draws as a whole answer, got ${renderStreaming(text)}`);
+	}
+	assert(renderStreaming(withDefinition).includes('href="https://example.com/guide"'), "the reference still links");
+	const split = createAnswerSplitter();
+	split(withDefinition);
+	assert(split("").every((block: { raw: string }) => block.raw === ""), "after an answer kept whole, the same splitter follows an empty text");
+	assert(JSON.stringify(split("Another answer.")) === JSON.stringify([{ raw: "Another answer.", start: 0 }]), "and then a new one");
+	assert(createAnswerSplitter()("See [the guide](https://example.com/guide).\n\nMore text.").length === 2, "an inline link splits as any paragraph");
+});
+
+await check("splitting an answer costs time in step with its length", async () => {
+	const { createAnswerSplitter } = await answerBlocks();
+	// The fastest of three runs, so one slow moment on the machine does not decide it.
+	const fastest = (text: string) => Math.min(...[0, 1, 2].map(() => {
+		const started = performance.now();
+		createAnswerSplitter()(text);
+		return performance.now() - started;
+	}));
+	fastest("Paragraph.\n\n".repeat(400));
+	const short = fastest("Paragraph.\n\n".repeat(4000));
+	const long = fastest("Paragraph.\n\n".repeat(40000));
+	assert(long / short < 25, `ten times the blocks took ${Math.round(long / short)} times as long (${Math.round(short)} ms, ${Math.round(long)} ms)`);
+});
+
+/** Runs `body` against a live page: a JSDOM window and a React root. */
+async function onLivePage(body: (root: any, container: HTMLElement, act: (work: () => Promise<void> | void) => Promise<void>) => Promise<void>): Promise<void> {
+	const { JSDOM } = await import("jsdom");
+	const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>');
+	const globals = globalThis as any;
+	const previous = { window: globals.window, document: globals.document };
+	globals.window = dom.window;
+	globals.document = dom.window.document;
+	const ownNavigator = !("navigator" in globalThis);
+	if (ownNavigator) globals.navigator = dom.window.navigator;
+	globals.IS_REACT_ACT_ENVIRONMENT = true;
+	try {
+		const { createRoot } = pageRequire("react-dom/client");
+		const { act } = pageRequire("react");
+		const container = dom.window.document.getElementById("root")!;
+		const root = createRoot(container);
+		await body(root, container, act);
+		await act(() => root.unmount());
+	} finally {
+		for (const key of ["window", "document"] as const) {
+			if (previous[key] === undefined) delete globals[key];
+			else globals[key] = previous[key];
+		}
+		if (ownNavigator) delete globals.navigator;
+		delete globals.IS_REACT_ACT_ENVIRONMENT;
+	}
+}
+
+await check("a finished block does not draw again when words arrive after it", async () => {
+	// The page's components build their elements through the global React (the smoke compiles them that way), so counting its createElement counts their draws.
+	const react = (globalThis as any).React;
+	const drawn = new Map<unknown, number>();
+	(globalThis as any).React = { ...react, createElement: (type: unknown, ...rest: unknown[]) => (drawn.set(type, (drawn.get(type) ?? 0) + 1), react.createElement(type, ...rest)) };
+	try {
+		await onLivePage(async (root, container, act) => {
+			const head = "# Title\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nSee [the docs](https://example.com) and";
+			const pieces = [" more", " words", " arrive", " here."];
+			const draw = (text: string) => act(() => root.render(createElement(markdown.MarkdownRenderer, { answer: true, streaming: true }, text)));
+			await draw(head);
+			const first = { heading: drawn.get("h1"), table: drawn.get("table"), link: drawn.get("a") };
+			assert(first.heading === 1 && first.table === 1 && first.link === 1, `the first draw shows each once, got ${JSON.stringify(first)}`);
+			let text = head;
+			for (const piece of pieces) await draw((text += piece));
+			assert(drawn.get("h1") === 1 && drawn.get("table") === 1, `the heading and the table drew once while ${pieces.length} pieces arrived, got heading ${drawn.get("h1")}, table ${drawn.get("table")}`);
+			assert(drawn.get("a") === 1 + pieces.length, `the block being written draws again with each piece, got ${drawn.get("a")}`);
+			assert(container.textContent!.endsWith("See the docs and more words arrive here."), `the page shows the latest words, got ${container.textContent}`);
+		});
+	} finally {
+		(globalThis as any).React = react;
+	}
+});
+
+await check("a finished diagram fence is drawn, also with lone carriage returns or ended by its list item, and one cut off at the end stays code", () => {
+	const drawn = (html: string) => html.includes("mermaid-diagram") && !html.includes("code-block");
+	const carriageReturns = render("```mermaid\rflowchart LR\rA --> B\r```", true);
+	assert(drawn(carriageReturns), `a fence with lone carriage returns is a diagram, got ${carriageReturns}`);
+	const inItem = render("- First:\n\n  ```mermaid\n  flowchart LR\n  A --> B\n- Second", true);
+	assert(drawn(inItem), `a fence its list item ends is a diagram, got ${inItem}`);
+	const cut = render("Here:\n\n```mermaid\nflowchart LR\nA --> B", true);
+	assert(!cut.includes("mermaid-diagram") && cut.includes("code-block"), `an answer that ended inside its fence keeps it as code, got ${cut}`);
+});
+
+await check("a finished answer draws as today", async () => {
+	const text = "## Steps\n\n1. one\n2. two\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```ts\nconst x = 1;\n```\n\n```mermaid\ngraph TD; A-->B\n```\n\nSee [the docs](https://example.com).";
+	// One that opens finished: drawn whole, exactly as before.
+	const opened = render(text, true);
+	assert(opened.includes(">\n<") && renderToStaticMarkup(createElement(markdown.MarkdownRenderer, { answer: true, streaming: false }, text)) === opened, "an answer that opens finished is drawn whole");
+	await onLivePage(async (root, container, act) => {
+		// The diagram is drawn after the answer renders; with no browser to draw in, it settles on its fallback.
+		const diagramSettled = async () => {
+			for (let tries = 0; tries < 100 && !container.querySelector(".mermaid-diagram-svg, .mermaid-fallback"); tries++) await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+			assert(container.querySelector(".mermaid-diagram-svg, .mermaid-fallback"), `a finished answer hands its diagram to the diagram renderer, got ${container.innerHTML}`);
+		};
+		await act(() => root.render(createElement(markdown.MarkdownRenderer, { answer: true, streaming: true }, text)));
+		// Its fence is closed, so the diagram goes to the diagram renderer while the answer still streams, never to a code block.
+		await diagramSettled();
+		assert(!container.querySelector("code.language-mermaid")?.closest(".code-block"), `while it streams a closed diagram goes to the diagram renderer, got ${container.innerHTML}`);
+		await act(() => root.render(createElement(markdown.MarkdownRenderer, { answer: true, streaming: false }, text)));
+		await diagramSettled();
+		const ended = container.innerHTML;
+		await act(() => root.render(createElement("div", null)));
+		await act(() => root.render(createElement(markdown.MarkdownRenderer, { answer: true }, text)));
+		await diagramSettled();
+		assert(sameLook(ended) === sameLook(container.innerHTML), `an answer that streamed and ended looks as one that opened finished:\n streamed ${ended}\n opened   ${container.innerHTML}`);
+	});
 });
 
 // Last: the page's server context stays shared for the rest of this process once it is read.

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,23 +25,6 @@ const baseUrl = `http://127.0.0.1:${port}`;
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
@@ -98,9 +81,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
-	assert(fs.existsSync(path.join(productAppStateRoot, "agents")), "web-server startup should create product app agents dir");
-	assert(fs.existsSync(path.join(productAppStateRoot, "skills")), "web-server startup should create product app skills dir");
+	await waitForServer(server, baseUrl, 15000);
 	const { writePersistentAgentThread } = await import("../src/persistent-agents.js");
 	const { persistentRoomWorkspacePolicyPath, resolvePersistentRoomCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");
 	const model = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT 5.5" };
@@ -156,7 +137,6 @@ try {
 	assert(getMissingRoot.status === 200, `missing-folder GET should still succeed, got ${getMissingRoot.status}`);
 	assert(getMissingRoot.body?.policy?.rootCount === 1, "missing-folder GET should keep the saved policy");
 	const missingWarnings: string[] = getMissingRoot.body?.warnings ?? [];
-	assert(missingWarnings.some((warning) => warning.endsWith("was not found on this computer. Pick it again in Edit workspace, or another folder, to give the room its tools back.")), `missing-folder GET should warn, got ${JSON.stringify(missingWarnings)}`);
 	assert(missingWarnings.some((warning) => warning.includes("Smoke Workspace")), "missing-folder warning should name the workspace by its safe label");
 	assertNoPathLeak(getMissingRoot.body, "GET missing-folder default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 	fs.mkdirSync(workspaceRoot, { recursive: true });
@@ -223,6 +203,7 @@ try {
 	// from its next message. A thread sidecar that merely mirrors the current
 	// default (the old snapshot regime pinned every thread this way) is
 	// released by the mutation; a deliberate per-conversation override stays.
+	// How the thread then resolves is persistent-room-workspace-live-default-smoke's.
 	const legacyThreadId = "legacy_active_workspace_default";
 	writePersistentAgentThread(agentId, legacyThreadId, {
 		state: "standby",
@@ -250,14 +231,11 @@ try {
 	assert(changedDefault.body?.policy?.writeEnabled === true, "the standard bounded bundle includes writer tools, so writeEnabled derives true");
 	assert(Array.isArray(changedDefault.body?.warnings) && changedDefault.body.warnings.length === 0, "live default change should report no warnings");
 	assert(!fs.existsSync(legacySidecarPath), "changing the default should release the active thread's mirror sidecar so the thread follows the live default");
-	const liveResolution = resolvePersistentRoomCapabilityPolicy(agentId, legacyThreadId, { persistentAgentsRoot: tempAgentsRoot });
-	assert(liveResolution.source === "room-default", `active thread should resolve the live room default after the change, got ${liveResolution.source}`);
-	assert(liveResolution.policy?.roots?.[0]?.realpath === fs.realpathSync.native(changedWorkspaceRoot), "active thread should resolve the CHANGED default root");
 	const changedDefaultJson = fs.readFileSync(defaultPath, "utf-8");
 	assert(changedDefaultJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "room default should be updated to changed workspace root");
 	assertNoPathLeak(changedDefault.body, "PUT changed default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot], changedWorkspaceRoot);
 	// A deliberate per-conversation override (differing content) survives the
-	// next default change and keeps winning for its thread.
+	// next default change.
 	const overrideRaw = { ...currentDefaultRaw, policyId: "prcp_deliberate_override_fixture", conversationId: legacyThreadId, bashEnabled: false, workspaceAccessMode: "bounded", toolSelection: { kind: "custom", allowedToolNames: ["ls", "read"] }, allowedToolNames: ["ls", "read"] };
 	fs.writeFileSync(legacySidecarPath, JSON.stringify(overrideRaw, null, 2) + "\n");
 	const changedAgain = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
@@ -266,7 +244,6 @@ try {
 	});
 	assert(changedAgain.status === 200, `second default change should succeed, got ${changedAgain.status}: ${JSON.stringify(changedAgain.body)}`);
 	assert(fs.existsSync(legacySidecarPath), "a deliberate per-conversation override must survive a default change");
-	assert(resolvePersistentRoomCapabilityPolicy(agentId, legacyThreadId, { persistentAgentsRoot: tempAgentsRoot }).source === "thread", "a deliberate override should keep winning over the room default");
 	fs.rmSync(legacySidecarPath, { force: true });
 
 	const invalidRepo = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {

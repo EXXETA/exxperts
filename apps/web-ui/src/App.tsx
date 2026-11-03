@@ -1,43 +1,32 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { AssetsPanel } from "./components/assets-panel";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
 import { ToastStack, type ToastView } from "./components/toast-stack";
 import { usePausedSkillsNotice } from "./paused-skills-notice";
 import { readReviseConflicts, reviseConflictSentence } from "../../web-server/src/revise-conflict-notice";
-import { modelNotOnAccount, modelNotOnAccountSentence, providerAccountName } from "../../web-server/src/model-not-on-account";
-import { anthropicKeyNeedsWorkspace, credentialGoneOf, credentialGoneWhy, credentialGoneWords, modelNotOffered, providerCredentialClause, roomModelUnavailableLine, signInFailed, type CredentialKey } from "../../web-server/src/model-not-offered";
+import { modelNotOnAccountSentence, providerAccountName } from "../../web-server/src/model-not-on-account";
+import { credentialGoneOf, credentialGoneWhy, credentialGoneWords, providerCredentialClause, roomModelUnavailableLine, sharedCredentialState, type CredentialKey } from "../../web-server/src/model-not-offered";
 import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, shelfTruthForRoom, type AssetLedgerRowInput, type AssetRowView, type ShelfFileRowInput } from "./assets-panel";
 import { commitRoomFileDelete, fileToBase64, listRoomFiles, renameRoomFile, roomFileUrl, saveRoomFileToFolder, stageRoomFileDelete, undoRoomFileDelete, uploadRoomFile, type RoomShelfFile } from "./room-files-api";
 import { chooseSystemFolder, fetchPersistentRoomWorkspaceDefault } from "./persistent-room-workspace-api";
 import { shownRoomName } from "../../web-server/src/room-name";
 import { Dashboard } from "./components/Dashboard";
-import { Memory } from "./components/Memory";
-import { InRoomChatShellView, stoppedNoticeShows, type ConnectionStopped } from "./components/in-room-chat";
+import { InRoomChatShellView, stoppedNoticeShows, type ConnectionStopped, type LastMessageEdit } from "./components/in-room-chat";
+import { composerHint } from "./composer-hint";
 import type { FailureLineActions } from "./components/Message";
 import { BashModeChip } from "./components/BashModeChip";
-import { isMacPlatform, roomSettingsChordHint } from "./platform";
-import { CreateRoomPanel } from "./components/create-room-panel";
-import { useEscapeKey } from "./components/use-escape-key";
+import { isMacPlatform, isTouchScreen, roomSettingsChordHint } from "./platform";
 import { confirmChoice, confirmDialog } from "./components/confirm-dialog";
-import { PersistentAgentCard } from "./components/launcher-room-card";
-import { RoomSortControl, ROOM_ARRANGE_HINT_ID, ROOM_SORT_MIN_ROOMS } from "./components/RoomSortControl";
 import { useHomeRoomOrder } from "./use-home-room-order";
-import type { HomeRoomOrderView } from "./home-room-order";
-import { orderRooms, type RoomOrderChoice, type RoomOrderMode } from "../../web-server/src/room-order";
-import { confirmLeavingArrangement, createRoomArrangement, moveByKey, type RoomArrangement } from "./home-room-arrange";
-import { createCardDrag, ROOM_LONG_PRESS_MS, type CardDrag, type CardDragView, type Rect, type SlotLayout } from "./home-room-drag";
-import { arrangeSlots, slotRestBox, useArrangeEdgeScroll, useRoomArrangeMotion } from "./use-room-arrange-motion";
-import { fmtMemoryDay, NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } from "./memory-surface-copy";
-import { fmtTokensK } from "./components/RoomMaintenanceSection";
+import { confirmLeavingArrangement } from "./home-room-arrange";
+import { NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } from "./memory-surface-copy";
 import { ProductSidebar, type AppearancePreference, type ThemeMode } from "./components/product-shell";
 import { SettingsOverlay, type SettingsSection } from "./components/settings-overlay";
 import { isSignInFailure } from "./sign-in-failure";
-import { GroupHeader, PaneHeader } from "./components/pane-header";
-import { roomFilesSentence } from "./components/RoomDangerZone";
+import { PaneHeader } from "./components/pane-header";
 import { sharedServerReleases, WhatsNewDialog, type WhatsNewSections } from "./components/whats-new-dialog";
-import { fetchRemoteClientContext, knownRemoteClientContext, SHARED_SERVER_ADMIN_LINE, showsComputerOnlyControls, useRemoteClientContext } from "./remote-client-context";
+import { fetchRemoteClientContext, sharedServerRole, knownRemoteClientContext, pagePersonProtocols, personHasChanged, refreshRemoteClientContext, reloadForNewPerson, showsComputerOnlyControls, usePersonChanged, useRemoteClientContext } from "./remote-client-context";
 import { RemoteAccessPage } from "./components/remote-access-page";
 import { StateProfileSection } from "./components/state-profile-section";
 import { GlobalInstructionsSection } from "./components/GlobalInstructionsSection";
@@ -45,2940 +34,98 @@ import { ConnectorsPage } from "./components/ConnectorsPage";
 import { WebSearchSettingsSection } from "./components/web-search-settings-section";
 import { SkillsPage } from "./components/SkillsPage";
 import { Preview } from "./components/Preview";
-import { ConnectionLostBanner } from "./components/connection-lost-banner";
+import { ConnectionLostBanner, PersonChangedCover, SignedOutBanner } from "./components/connection-lost-banner";
 import { appendErrorLineOnce, CONNECT_DEADLINE_MS, createConnectionHealthState, msUntilWarn, OPEN_DWELL_MS, reduceConnectionHealth, type ConnectionHealthAction, type ConnectionHealthState } from "./connection-health";
-import { MarkdownRenderer } from "./components/Markdown";
 import { RoomSettingsModal, type SettingsPane } from "./components/RoomSettingsModal";
-import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, useProviderLogin } from "./components/add-provider-panel";
-import { AiDefaultsGroup } from "./components/ai-defaults-group";
 import { ApiRequestError, apiErrorCode, apiFetch, fetchJson, isServiceUnreachableLine, isUnexplainedRequestFailure, withoutServiceLine } from "./api";
-import { askUntilAnswered, editorLimitLine, lostUndoLanded, sameNoteWords, SAVE_ANSWER_LOST_SENTENCE, SAVE_NOT_LANDED_SENTENCE, saveAnswerLost, settleLostRunSave, UNDO_NOT_LANDED_SENTENCE } from "./memory-save-answer";
-import { MEMORY_PAGE_MAX_CHARS, memoryTextHasWords, memoryTypedText, rememberPageFromParts } from "../../web-server/src/memory-typed-text";
-import { ModelNoticePanel, modelNoticeFromError, modelWaitLine, type ModelNotice, type ModelWait } from "./components/model-notice";
-import { canonicalModelName, distinctModelNames, modelDisplayName, modelOnProvider, modelTooltipName, providerDisplayName } from "./model-names";
+import { askUntilAnswered, lostUndoLanded, sameNoteWords, SAVE_ANSWER_LOST_SENTENCE, SAVE_NOT_LANDED_SENTENCE, saveAnswerLost, settleLostRunSave, UNDO_NOT_LANDED_SENTENCE } from "./memory-save-answer";
+import { modelNoticeFromError, offersCredentialButton, type ModelNotice, type ModelWait } from "./components/model-notice";
+import { canonicalModelName, modelDisplayName, modelOnProvider, providerDisplayName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
-import { withUnansweredApprovals } from "./components/Approval";
-import { formatAbsorbRunSaveError, isStaleMaintenanceMessage, logMaintenanceWarnings } from "./maintenance-warnings";
+import { approvalAsking, confirmApprovalLabels, declinedAnswerOf, withUnansweredApprovals } from "./components/Approval";
+import { formatAbsorbRunSaveError, logMaintenanceWarnings } from "./maintenance-warnings";
 import { appRouteHash, parseAppRouteHash, type AppRoute } from "./app-route";
-import { fetchRememberReadEstimate, isPlainRememberSentence, REMEMBER_DAMAGED_SENTENCE, rememberDamagedSentence, RECENT_SESSIONS_BLOCK_CAP, recentSessionsHeadsUp, rememberFillsRoomHeadsUp, REMEMBER_SAVED_REOPEN_SENTENCE, REMEMBER_SAVED_ELSEWHERE_SENTENCE, isRememberOutcome, isPlainProductSentence, quickRememberNeedsPreview, rememberEstimateSentence, rememberFailureSentence, rememberRefusedWholeSentence, rememberSendsTranscript, rememberProgressSentence, type RememberReadEstimate, rememberRestartSentence } from "./remember-read";
-import { couldNotShortenLine, failureLine, isGatewayFind, isRetryNote, isTurnRunningNote, lineBeforeChooseModel, lineWithMessage, messageSentAgain, NOT_SENT_AGAIN, overflowLineOf, providerSentence, returnedFailureLine, retryNoteLine, savedFailureLineShown, STOPPED_LINE, TURN_RUNNING_LINE, turnFailureLine, type CarriedFile, type FailureCause, type GatewayFind, type MessageWhere, type QuotaWay, type RetryFailure, type ReturnedPromptFrame, type TurnFailure } from "./turn-failure-line";
+import { isPlainRememberSentence, recentSessionsHeadsUp, REMEMBER_SAVED_REOPEN_SENTENCE, REMEMBER_SAVED_ELSEWHERE_SENTENCE, quickRememberNeedsPreview, rememberRefusedWholeSentence, rememberSendsTranscript, rememberRestartSentence } from "./remember-read";
+import { answerStopNote, couldNotShortenLine, EDIT_REFUSED_LINE, failureLine, isAwayLimitStop, isGatewayFind, isRetryNote, isTurnRunningNote, lineBeforeChooseModel, lineWithMessage, messageSentAgain, NOT_SENT_AGAIN, overflowLineOf, providerSentence, returnedFailureLine, retryNoteLine, isStopLine, STOPPED_FOR_NEXT_LINE, STOPPED_LINE, TURN_RUNNING_LINE, turnEndedLine, turnFailureLine, type CarriedFile, type FailureCause, type GatewayFind, type MessageWhere, type QuotaWay, type RetryFailure, type ReturnedPromptFrame, type TurnFailure } from "./turn-failure-line";
 import { estimateTokens, estimateTokensFromChars, modelTokenFactor } from "../../web-server/src/token-estimate";
-import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, keepAbsorbRunEntries, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry, chooseAbsorbRunBeside, moveAbsorbRunSortedNote } from "./absorb-run-api";
-import { editableMemoryBody, plainFirstReadLine, plainMemoryText, storedMemoryBody, absorbRunSortedRows, absorbRunAllSummarizedSentence, absorbRunOutageModelName, ABSORB_CHOOSE_MODEL_LABEL, DISCUSS_FIRST_LABEL, DISCUSS_FIRST_TITLE, maintainChooserFootnote, memorizeChooserText, memorizeNotesText, ABSORB_RUN_ACTIVE_ACTION, ABSORB_RUN_ACTIVE_SENTENCE, absorbRunAllSummarized, absorbRunFastPathBlockers, FIRST_READ_MISSING_SENTENCE, AUTOMATIC_APPLY_ON_SENTENCE, absorbRunIsWorking, absorbRunNewTopics, absorbRunSavedSentence, KEEP_DEBOUNCE_MS, keepBatchAction, LIMIT_LOWERED_ON_UNDO_SENTENCE, LIMIT_RAISED_ON_SAVE_SENTENCE, OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE, nextKeepIds, nextKeepTopics, overLimitFirstRead, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunSavedHeadline, absorbRunFullPercent, absorbRunNotesChanged, absorbRunNothingToSave, reviewChangeCounts, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunIsWorking, reviewRunNothingToSave, reviewRunTopicsLeft, REVIEW_RUN_ACTIVE_ACTION, REVIEW_RUN_ACTIVE_SENTENCE, reviewBudgetOnlyConfirmBody, discussionKeptSentence } from "./memory-v2-copy";
-import { AbsorbRunCard, AbsorbRunFailedScreen, placeholderAbsorbRun, type NoteEdit, type SortedMove } from "./components/absorb-run-screen";
-import { closeSidebarOnPhone } from "./sidebar-collapse";
-import { ReviewCard, ReviewDepthPicker, ReviewFirstReadSections, ReviewRunFailedScreen, ReviewRunProgressScreen, ReviewSavedScreen, reviewPercent, type ReviewUndoState } from "./components/review-screen";
+import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, keepAbsorbRunEntries, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry, chooseAbsorbRunBeside, moveAbsorbRunSortedNote, absorbBaseUrl, fetchAbsorbStatus, requestAbsorbDiscussionSignoff, requestAbsorbDiscussionTurn, withAbsorbStatusFields } from "./absorb-run-api";
+import { absorbRunFastPathBlockers, AUTOMATIC_APPLY_ON_SENTENCE, absorbRunIsWorking, KEEP_DEBOUNCE_MS, keepBatchAction, nextKeepIds, nextKeepTopics, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunNothingToSave, reviewRunFastPathBlockers, reviewRunIsWorking, reviewRunNothingToSave, reviewBudgetOnlyConfirmBody, discussionKeptSentence } from "./memory-v2-copy";
+import { closeSidebarOnPhone, usePhoneWidth } from "./sidebar-collapse";
+import { type ReviewUndoState } from "./components/review-screen";
 import { approveReviewRun, cancelFirstReadAt, cancelReviewRun, editReviewRunEntry, fetchReviewRun, fetchReviewStatus, keepReviewRunEntries, requestFirstRead, reviewBase, requestReviewDiscussionSignoff, requestReviewDiscussionTurn, resumeReviewRun, ReviewRunActiveError, setReviewRunBudget, startReviewRun, type ReviewDiscussionMessage } from "./review-api";
 import { undoMemorySave } from "./memory-entries-api";
-import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalSourceMetadata, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewAvailability, ReviewDepth, ReviewStatusResponse, ReviewDiscussionTokenBudget, ReviewGuidance, ReviewRun, ReviewRunApprovalResponse, RoomModelLockView, WebChatModelOption, WebChatModelStatus } from "./types";
-import type { ConversationSwitchNotice } from "./room-models-api";
-import { archivePersistentRoom, fetchArchivedPersistentRooms, fetchPersistentRoomMaintenanceSettings, purgePersistentRoom, restorePersistentRoom, updatePersistentRoomMaintenanceSettings, type PersistentRoomPurgeError } from "./persistent-room-management-api";
-import { ARRIVAL_REVEAL_PACING, createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, outputLimitNoticeForTurn, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
+import type { AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, PersistentAgentAiProfileSelectionStatus, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewDepth, ReviewRun, RoomModelLock, RoomModelLockView, WebChatModelOption, WebChatModelStatus } from "./types";
+import { conversationSwitchRefusal, switchConversationModel, withStoredSwitchLines, withSwitchLine, type ConversationSwitchNotice } from "./room-models-api";
+import { archivePersistentRoom, fetchPersistentRoomMaintenanceSettings, purgePersistentRoom, updatePersistentRoomMaintenanceSettings, type PersistentRoomPurgeError } from "./persistent-room-management-api";
+import { createAssistantStreamState, isAssistantStreamActive, outputLimitNoticeForTurn, partDrawnAtOnce, reduceAssistantStream, seenOfOpenAnswer, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState } from "./assistant-stream";
+import { readTurnEndedBy } from "../../web-server/src/turn-ended-by";
+import { isAnswerPartId, keyOfId, readShownPrompt } from "../../web-server/src/thread-items-by-id";
+import { thinkingTextStore } from "./thinking-text-store";
 import { consultStack, createConsultState, reduceConsult, type ConsultAction, type ConsultExchange, type ConsultState } from "./consult-stream";
 import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./task-stream";
 import { ConsultDock } from "./components/delegation-card";
 import { TaskRunView } from "./components/task-run-view";
 import { ArtifactViewer } from "./components/ArtifactViewer";
-import { EffortControl } from "./components/EffortControl";
-import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon } from "./components/icons";
+import { ModelPickControl } from "./components/model-pick-control";
+import { ModelSwitchWindow } from "./components/model-switch-window";
+import { GearIcon, PaperclipIcon, TrashIcon } from "./components/icons";
 // The handoff grammar + queue helpers are the ONE shared source of truth, imported
 // straight from the server workspace's pure module (no node/server deps; vite
 // bundles it) so transfer here and the checkpoint formatter there agree exactly.
 import { buildConsultHandoffBlockFromStack, composeOutgoingPromptWithHandoffs, readConsultHandoffQueue, type ConsultHandoffExchange } from "../../web-server/src/consult-handoff";
 import { isSpecialistHandoffBlock } from "../../web-server/src/specialist-handoff";
-import type { MentionCandidateRoom } from "./mention-popover";
+import { resolveLeadingMention, type MentionCandidateRoom } from "./mention-popover";
+import { boxWithHandBack, bubbleIdOf, QUEUE_REFUSED_FILES, QUEUE_REFUSED_TOO_LONG, cutSettling, firstConsult, handBackAll, heldFromPage, keptChanges, laterIds, nextBatch, nextConsult, queuedBubbles, queuedForAnswer, readMessageIds, readMessageList, reduceOutgoing, type ListedMessage, type OutgoingAction, type OutgoingMessage } from "./outgoing-messages";
+import { fitsHeldLimits } from "../../web-server/src/held-message-limits";
+import { currentDraftStartedAt, messageDeclinesQuestion } from "./question-keys";
+import { deriveTrailingConsultIds, endLiveThinking, frameItemId, failureKindOf, formatDirectResumeError, hasUserInput, hasUserVisibleTurn, leftByFailedAttempt, type MaintainTarget, newConversationId, nid, PendingRemovals, type PersistentAgentTarget, type PersistentAgentThread, type PersistentChatConfig, reconnectedThread, type SessionUsage, stopWorkInFlight, threadRecordToLocalThread, threadSaveBody, withoutStopLineUnderStoppedCard, ZERO_USAGE } from "./room-thread-items";
+import { clampRightPaneWidth, equalSplitPaneWidth, getDefaultKnowledgePaneWidth, KNOWLEDGE_PANE_WIDTH_STORAGE_KEY } from "./right-pane-width";
+import { WORKSPACE_NUDGE_STORAGE_PREFIX, type WorkspaceHint, workspaceHintOf } from "./workspace-nudge";
+import { releaseStaged, type SentMessage, STAGED_IMAGE_EXTENSIONS, type StagedAttachment, TEXT_FILE_EXTENSIONS } from "./composer-staging";
+import { readEffortPayload } from "./room-effort";
+import { createPersistentAgent, fetchPersistentAgentStatuses } from "./room-list-api";
+import { AiProfileSwitcherSection, type CurrentModel, nameInput, NO_CURRENT_MODEL, type RegistryModel } from "./components/ai-profile-switcher";
+import { Landing } from "./components/landing";
+import { MemoryShell } from "./components/memory-shell";
+import { AssetDeleteDialog, type ExportCollision, ExportCollisionDialog, FileDeleteDialog, SaveAsDialog } from "./components/room-file-dialogs";
+import { TaskStoreGcBanner, TaskStoreGcDialog, type TaskStoreGcView } from "./components/task-store-gc";
+import { ABSORB_LOADING_MESSAGES, ABSORB_WAITING_MESSAGES, type AbsorbWorkflowState, assessmentRetryFeedback, type CheckpointDensity, CLOSED_ABSORB_WORKFLOW, CLOSED_REVIEW_WORKFLOW, missingFirstRead, missingReviewFirstRead, REVIEW_LOADING_MESSAGES, REVIEW_WAITING_MESSAGES, reviewAssessmentRetryFeedback, type ReviewWorkflowState } from "./maintain-workflow-state";
+import { formatAbsorbWorkflowError, formatMaintenanceDraftError, formatRememberError, formatReviewApprovalError, formatReviewWorkflowError, REMEMBER_OTHER_CONVERSATION_OPEN, ROOM_MOVED_ON_SENTENCE, roomFilledBy } from "./maintenance-errors";
+import { AbsorbWorkflowShell, MaintainChooserShell, type MaintainConfirm, MaintainConfirmDialog, ReviewWorkflowShell } from "./components/maintain-workflow-screens";
+import { type CheckpointApprovalEditFields, checkpointEditsKey, checkpointFieldsOf, CheckpointPreviewShell, CheckpointSplitButton, sameCheckpointFields } from "./components/remember-dialog";
 
 type MainView = "home" | "chat" | "dashboard" | "memory";
-type CheckpointDensity = "compact" | "standard" | "rich";
-// "running", "run_card" and "run_failed" are the Memorize v2 steps: propose
-// starts a run the client polls instead of returning a finished draft.
-type AbsorbWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "proposing" | "running" | "run_card" | "run_failed" | "approving" | "saved" | "unavailable" | "error";
-type ReviewWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "running" | "run_card" | "run_failed" | "approving" | "saved" | "unavailable" | "error";
-type AbsorbWorkflowState = {
-	step: AbsorbWorkflowStep;
-	target: MaintainTarget | null;
-	availability: AbsorbAvailability | null;
-	/** The conversations waiting, from the status read at the start; the card shell lists them before the run reports. */
-	conversations?: { id: string; title: string; date: string }[];
-	assessment: AbsorbAssessmentResponse | null;
-	// The Memory model could not answer the first read, the discussion or the sign-off.
-	notice?: ModelNotice | null;
-	approvalResult: AbsorbApprovalResponse | null;
-	discussionMessages?: AbsorbDiscussionMessage[];
-	discussionTokenBudget?: AbsorbDiscussionTokenBudget | null;
-	discussionSending?: boolean;
-	// Non-fatal server notes from a successful turn; rendered amber, never red.
-	discussionWarnings?: string | null;
-	// Disclosures from the signoff that produced the current draft (a trimmed
-	// summary, a shortened transcript): rendered on the proposal screen, never dropped.
-	signoffWarnings?: string[];
-	assessmentHandoff?: AbsorbDiscussionSignoffResponse["assessmentHandoff"] | null;
-	// Room setting known up front so automation is disclosed BEFORE the write,
-	// not after (the flow otherwise promises "nothing is saved yet").
-	fastPathEnabled?: boolean;
-	fastPathApplied?: boolean;
-	fastPathBlockedReasons?: string[];
-	// Memorize v2: the run this flow is watching. runId is known from the 202
-	// answer, the run itself from the first poll that lands.
-	runId?: string | null;
-	run?: AbsorbRun | null;
-	// A keep toggle, a budget change or an approval is in flight: the card's
-	// actions are disarmed so two requests never race over one run.
-	runBusy?: boolean;
-	// Set once the poll retries ran out; the run may well still be going.
-	runPollError?: string | null;
-	// A previous run this room never finished, which is refusing the next one.
-	// Its id is the only thing that can stop it from here.
-	activeRunConflictId?: string | null;
-	// The first read's raise-the-limit action is writing the room setting and
-	// reading the status back.
-	limitRaising?: boolean;
-	// The limit the room had before the first read raised it: sent with the
-	// run so its save records the raise and an undo takes the limit back. The
-	// original value survives a second raise; a new Memorize starts without it.
-	limitRaisedFrom?: number;
-	undo?: ReviewUndoState;
-	// The run was opened because it was waiting, so no first read was asked for.
-	openedWaiting?: boolean;
-	error: string | null;
-};
-
-const CLOSED_ABSORB_WORKFLOW: AbsorbWorkflowState = {
-	step: "closed",
-	target: null,
-	availability: null,
-	assessment: null,
-	approvalResult: null,
-	error: null,
-};
-
-type ReviewWorkflowState = {
-	step: ReviewWorkflowStep;
-	target: MaintainTarget | null;
-	// The run was opened because it was waiting, so no first read was asked for.
-	openedWaiting?: boolean;
-	// What the room says about its notes, from the first read that landed.
-	availability: ReviewAvailability | null;
-	// Why Review cannot start, in the server's own words.
-	unavailableReason?: string | null;
-	assessment: ReviewAssessmentResponse | null;
-	// The Memory model could not answer the first read, the discussion or the sign-off: the notice and its ways out.
-	notice?: ModelNotice | null;
-	// How far this tidy goes. Null follows the room's own recommendation, and
-	// the request then carries whatever the picker is showing.
-	depth?: ReviewDepth | null;
-	// What the person agreed in the discussion, carried into the tidy.
-	guidance?: ReviewGuidance | null;
-	discussionMessages?: ReviewDiscussionMessage[];
-	discussionTokenBudget?: ReviewDiscussionTokenBudget | null;
-	discussionSending?: boolean;
-	// Non-fatal server notes from a successful turn; rendered amber, never red.
-	discussionWarnings?: string | null;
-	// Room setting known up front so automation is disclosed BEFORE the write,
-	// not after (the flow otherwise promises "nothing is saved yet").
-	fastPathEnabled?: boolean;
-	fastPathApplied?: boolean;
-	fastPathBlockedReasons?: string[];
-	// The tidy this flow is watching. runId is known from the answer that starts
-	// it, the run itself from the first poll that lands.
-	runId?: string | null;
-	run?: ReviewRun | null;
-	// A keep toggle, a limit change or an approval is in flight: the card's
-	// actions are disarmed so two requests never race over one tidy.
-	runBusy?: boolean;
-	// Set once the poll retries ran out; the tidy may well still be going.
-	runPollError?: string | null;
-	// A previous tidy this room never finished, which is refusing the next one.
-	// Its id is the only thing that can stop it from here.
-	activeRunConflictId?: string | null;
-	approvalResult: ReviewRunApprovalResponse | null;
-	// Undo of the save this screen reports: in flight, done, or refused with a reason.
-	undo?: ReviewUndoState;
-	error: string | null;
-};
-
-const CLOSED_REVIEW_WORKFLOW: ReviewWorkflowState = {
-	step: "closed",
-	target: null,
-	availability: null,
-	assessment: null,
-	approvalResult: null,
-	error: null,
-};
-
-// The same for the Review first read, whose parser words a missing section its
-// own way; the read's prompt only accepts those sentences back.
-function reviewAssessmentRetryFeedback(assessment: { warnings: string[] } | null | undefined): string[] | undefined {
-	const feedback = (assessment?.warnings ?? []).filter((warning) => /^the first read has no "/.test(warning));
-	return feedback.length ? feedback : undefined;
-}
-
-// Reassess carries the parser's own findings on the current assessment (raw
-// server vocabulary, which is what the worker prompt expects) so the regenerated
-// assessment fixes the named sections instead of re-rolling blind.
-/**
- * The first read the client stands in when the request for one failed without
- * the server saying why, or when a room that saves without the card started
- * Memorize without one: "None.", like the server's own missing first read,
- * with no source, so there is nothing to discuss and Continue goes on without.
- */
-function missingFirstRead(agentId: PersistentAgentId, availability: AbsorbAvailability, why: "unreachable" | "skipped" = "unreachable"): AbsorbAssessmentResponse {
-	return {
-		agentId,
-		writesMemory: false,
-		process: { type: "absorb-consolidation-worker", model: availability.model ?? { provider: "", model: "" } },
-		availability,
-		assessmentMarkdown: "None.",
-		fields: { whatToRemember: [], whatToForget: [], stableMemoryChanges: { deepMemory: [], activeItems: [], recentContext: "" }, needsJudgment: [] },
-		warnings: [],
-		firstReadMissing: why,
-		// The conversations a first read would have covered, listed under the notice as the server lists them.
-		waitingConversations: (availability.sessions ?? []).map(({ title, date }) => ({ title, date })),
-	};
-}
-
-/** Review with no first read: the tidy reads every topic. */
-function missingReviewFirstRead(agentId: PersistentAgentId, status: ReviewStatusResponse): ReviewAssessmentResponse {
-	const availability: ReviewAvailability = { available: true, reason: "available", message: "", topics: status.topics, notes: status.notes, ...status.budget, recommendedDepth: status.recommendedDepth };
-	return { agentId, writesMemory: false, availability, assessmentMarkdown: "None.", fields: { couldBeShorter: [], staleOrContradicts: [], needsYourCall: [], topics: [] }, warnings: [], source: { l1bFingerprint: { algorithm: "sha256", value: "" } }, firstReadMissing: true };
-}
-
-function assessmentRetryFeedback(assessment: { warnings: string[] } | null | undefined): string[] | undefined {
-	const feedback = (assessment?.warnings ?? []).filter((warning) => warning.startsWith("assessment missing"));
-	return feedback.length ? feedback : undefined;
-}
-
-
-const CHECKPOINT_REMEMBER_MAX_CHARS = 500;
-const ABSORB_WAITING_MESSAGES = [
-	"Absorbing wisdom…",
-	"Meditating on recent conversations…",
-	"Letting the lessons settle…",
-	"Filing memories where they belong…",
-	"Distilling what mattered…",
-	"Choosing what to carry forward…",
-	"Turning conversations into notes…",
-	"Beepbopping memory…",
-];
-const REVIEW_WAITING_MESSAGES = [
-	"Finding dense signal…",
-	"Pruning the bonsai…",
-	"Weighing every memory…",
-	"Folding duplicates together…",
-	"Tightening the threads…",
-	"Checking what still rings true…",
-	"Letting go of the stale bits…",
-	"Polishing what stays…",
-];
-const REVIEW_LOADING_MESSAGES = [
-	"Reading the notes…",
-	"Sorting the topics…",
-	"Walking the archive shelves…",
-	"Looking for stale threads…",
-	"Measuring density and drift…",
-	"Listening for what still matters…",
-];
-const ABSORB_LOADING_MESSAGES = [
-	"Connecting to the Matrix…",
-	"Inferencing really hard…",
-	"Listening for memory signal…",
-	"Sorting signal from glitter…",
-	"Compressing the universe gently…",
-	"Asking the neurons to focus…",
-	"Untangling recent conversations…",
-	"Finding the good bits…",
-	"Meditating on what happened…",
-	"Rereading the recent chapters…",
-	"Looking for lessons worth keeping…",
-	"Dusting off the archive shelves…",
-];
-const CHECKPOINT_DENSITY_OPTIONS: Array<{ id: CheckpointDensity; label: string; budget: string }> = [
-	{ id: "compact", label: "Compact", budget: "Just the essentials" },
-	{ id: "standard", label: "Standard", budget: "The decisions and threads that matter" },
-	{ id: "rich", label: "Rich", budget: "A fuller record of the session" },
-];
-type PersistentAgentThread = {
-	state: "live" | "standby";
-	agentId: PersistentAgentId;
-	displayName: string;
-	conversationId: string;
-	model: WebChatModelOption;
-	items: ChatItem[];
-};
-// A just-created room is not in the room list yet; its create answer brings
-// the model rows along.
-type PersistentAgentTarget = { id: PersistentAgentId; displayName?: string; models?: PersistentAgentStatus["models"] };
-type MaintainTarget = { agentId: PersistentAgentId; displayName: string };
-type PersistentChatConfig = Pick<PersistentAgentThread, "agentId" | "displayName" | "conversationId" | "model"> | null;
-
-interface SessionUsage {
-	turns: number;
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	totalTokens: number;
-	/** What the last turn LEFT BEHIND, when the provider measured it separately from what it cost. */
-	contextTokens: number | null;
-}
-
-function threadRecordToLocalThread(record: PersistentAgentThreadRecord, fallbackDisplayName = "Persistent room"): PersistentAgentThread {
-	if (record.state === "closed") throw new Error("This room thread is closed and cannot be resumed.");
-	const model: WebChatModelOption = { provider: record.model.provider, model: record.model.model, label: record.model.label || `${record.model.provider}/${record.model.model}` };
-	return {
-		state: record.state === "active" ? "live" : "standby",
-		agentId: record.agentId,
-		displayName: fallbackDisplayName,
-		conversationId: record.threadId,
-		model,
-		items: settleLoadedItems(Array.isArray(record.items) ? record.items as ChatItem[] : []).filter((item) => !isSavedModelWaitLine(item) && !isSavedRetryNote(item) && !isTurnRunningNote(item)).map(withSavedFailureLineShown),
-	};
-}
-
-// Which of the plain lines a failed attempt calls for: an overflow by the server's cause, the model not on the account or no longer offered by its words.
-function failureKindOf(detail: string, failure?: TurnFailure): { contextOverflow: boolean; notOnAccount: boolean; notOffered: boolean } {
-	// A context overflow is a size problem, not a sign-in problem: the
-	// "check AI setup" advice would send the user to the wrong place.
-	const contextOverflow = failure === "overflow";
-	const notOnAccount = !contextOverflow && modelNotOnAccount(detail);
-	const notOffered = !contextOverflow && !notOnAccount && (modelNotOffered(detail) || failure === "not-offered");
-	return { contextOverflow, notOnAccount, notOffered };
-}
-
-// A saved failure line as it shows on the way in: an older build's read into fields, a plan's reset worded for now (turn-failure-line.ts).
-function withSavedFailureLineShown(item: ChatItem): ChatItem {
-	return item.kind === "system" && item.level === "error" && typeof item.text === "string" ? savedFailureLineShown(item) : item;
-}
-
-// Older builds wrote the "signed out" or "no longer offered" refusal into the
-// conversation as a red line. The room says it once, in the notice above the
-// composer, so a saved copy is not shown again.
-const SAVED_MODEL_WAIT_LINE = /is signed out, so this conversation cannot continue on |^This room's (?:memory )?model, .+, is (?:signed out|no longer offered)\./;
-// A retry note saved while the runtime was retrying: the retry ended long ago, with the app or the connection.
-function isSavedRetryNote(item: ChatItem): boolean {
-	return item.kind === "system" && isRetryNote(String(item.text ?? ""));
-}
-function isSavedModelWaitLine(item: ChatItem): boolean {
-	return item.kind === "system" && item.level === "error" && SAVED_MODEL_WAIT_LINE.test(String(item.text ?? ""));
-}
 
 /**
- * A thread on disk can carry a reply mid-flight: the browser saves while an
- * answer streams (the `streaming` mark lets a reload draw the caret in the
- * right place), and if that tab died before its next save the mark stays.
- * Opened later, nothing is streaming any more: such a segment is shown as
- * settled, and one that never received a character (the slot reserved for
- * a reply the moment its message ended) is dropped rather than shown as a
- * permanent "…". A turn still cooking is reattached separately and rebuilds
- * its tail from the anchor, so this loses nothing live.
+ * This window's hold on the room's running turn. "reconnecting": the
+ * connection dropped and the turn goes on at the server, so the answer waits
+ * for the replay instead of being called cut. "elsewhere": another window took
+ * the room, so this one shows what it had, stops saving and offers Open here.
  */
-function settleLoadedItems(items: ChatItem[]): ChatItem[] {
-	const settled: ChatItem[] = [];
-	for (const item of items) {
-		if (item.kind === "assistant" && item.streaming) {
-			if (!String(item.text ?? "").trim()) continue;
-			settled.push({ ...item, streaming: false });
-			continue;
-		}
-		settled.push(item);
-	}
-	return settled;
-}
-
-// Consult MR-5: reconstruct which consult items still show the pending hint when
-// a thread is restored — the `count` most recent consult items in the transcript,
-// since each un-consumed transfer contributes exactly one queued block and one
-// (trailing) consult item.
-function deriveTrailingConsultIds(items: ChatItem[], count: number): Set<string> {
-	const ids = new Set<string>();
-	if (count <= 0) return ids;
-	for (let i = items.length - 1; i >= 0 && ids.size < count; i--) {
-		const item = items[i];
-		if (item.kind === "consult") ids.add(item.id);
-	}
-	return ids;
-}
-
-const ZERO_USAGE: SessionUsage = {
-	turns: 0,
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	cost: 0,
-	totalTokens: 0,
-	contextTokens: null,
-};
-
-let __nextId = 1;
-const nid = () => `i_${Date.now().toString(36)}_${__nextId++}_${Math.random().toString(36).slice(2, 7)}`;
-
-// The reveal band is a taste knob, not physics: `localStorage.setItem(
-// "exxperts.revealSpeed", "brisk" | "arrival" | "instant")` overrides the
-// default reading-speed band without a rebuild (reload to apply). Cached —
-// useRef initializer expressions run on every render and this reads
-// localStorage.
-let cachedRevealPacing: RevealPacing | null = null;
-function readRevealPacing(): RevealPacing {
-	if (cachedRevealPacing) return cachedRevealPacing;
-	let pacing = DEFAULT_REVEAL_PACING;
-	try {
-		const value = localStorage.getItem("exxperts.revealSpeed");
-		if (value === "brisk") pacing = { ...DEFAULT_REVEAL_PACING, minCharsPerSec: 90, maxCharsPerSec: 150 };
-		if (value === "arrival") pacing = ARRIVAL_REVEAL_PACING;
-		if (value === "instant") pacing = { ...DEFAULT_REVEAL_PACING, minCharsPerSec: 1e6, maxCharsPerSec: 1e6 };
-	} catch {}
-	cachedRevealPacing = pacing;
-	return pacing;
-}
-const newConversationId = () => `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-const DIRECT_RESUME_INCOMPATIBLE_MODEL_MESSAGE = "This conversation's model is not available now. Choose another model in Room settings, Model, to continue it.";
-
-function formatDirectResumeError(error: unknown): string {
-	const message = error instanceof Error ? error.message : String(error ?? "");
-	if (/model is not approved/i.test(message)) return DIRECT_RESUME_INCOMPATIBLE_MODEL_MESSAGE;
-	return message || "Could not continue this conversation.";
-}
-
-/**
- * A tool call that was in flight when its turn ended will never get a result:
- * the toolResult event that would settle it is exactly what the abort or the
- * failure prevented. Left alone it spins forever, in the transcript and on
- * disk, its bundle keeps claiming the room is still reading, and the reply's
- * copy button waits on it. Stopped rather than failed, because the tool
- * itself did nothing wrong.
- */
-function stopRunningToolItems(items: ChatItem[]): ChatItem[] {
-	return items.some((it) => it.kind === "tool" && it.status === "running")
-		? items.map((it) => (it.kind === "tool" && it.status === "running" ? { ...it, status: "stopped" as const } : it))
-		: items;
-}
-
-function hasUserInput(items: ChatItem[]): boolean {
-	return items.some((item) => item.kind === "user" && item.text.trim().length > 0);
-}
-
-function hasUserVisibleTurn(items: ChatItem[]): boolean {
-	return items.some((item) => (item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
-}
-// A stored width means the user dragged the divider. The old key also captured
-// auto-persisted defaults, which would mask the equal-split open size forever,
-// so the key is bumped once instead of migrating those values.
-const KNOWLEDGE_PANE_WIDTH_STORAGE_KEY = "exxperts.rightPane.width";
-const WORKSPACE_NUDGE_STORAGE_PREFIX = "exxperts.workspaceNudgeDismissed.";
-const RIGHT_PANE_MIN_WIDTH = 360;
-// Keep at least this much of the workbench for the chat column when the pane
-// grows; without it a wide pane can squeeze the chat (a 1fr track) to zero.
-const RIGHT_PANE_MIN_CHAT_WIDTH = 360;
-const RIGHT_PANE_RESIZER_WIDTH = 8;
-
-function getRightPaneMaxWidth(hostWidth?: number) {
-	// Clamp against the workbench (chat + divider + pane) when we can measure
-	// it; the window is only a bootstrap fallback (initial state, no ref yet).
-	if (typeof hostWidth === "number" && hostWidth > 0) {
-		return Math.floor(hostWidth - RIGHT_PANE_RESIZER_WIDTH - RIGHT_PANE_MIN_CHAT_WIDTH);
-	}
-	if (typeof window === "undefined") return 820;
-	return Math.floor(window.innerWidth * 0.7);
-}
-
-function clampRightPaneWidth(width: number, hostWidth?: number) {
-	const max = Math.max(RIGHT_PANE_MIN_WIDTH, getRightPaneMaxWidth(hostWidth));
-	return Math.max(RIGHT_PANE_MIN_WIDTH, Math.min(max, Math.round(width)));
-}
-
-function getDefaultKnowledgePaneWidth() {
-	if (typeof window === "undefined") return 520;
-	return clampRightPaneWidth(window.innerWidth * 0.5);
-}
-
-function equalSplitPaneWidth(hostWidth?: number) {
-	// The pane opens sharing the workbench with the chat half and half; the
-	// sidebar sits outside the workbench, so this splits what they share.
-	if (typeof hostWidth === "number" && hostWidth > 0) {
-		return clampRightPaneWidth(Math.floor((hostWidth - RIGHT_PANE_RESIZER_WIDTH) / 2), hostWidth);
-	}
-	return getDefaultKnowledgePaneWidth();
-}
-
-function authSourceLabel(source?: AuthStatusResponse["providers"][number]["source"], label?: string): string {
-	if (source === "stored") return "stored locally";
-	if (source === "environment") return `environment variable${label ? `: ${label}` : ""}`;
-	if (source === "runtime") return label || "runtime override";
-	if (source === "fallback") return label || "custom provider config";
-	if (source === "models_json_key" || source === "models_json_command") return label || "models.json";
-	return "not connected";
-}
-
-
-// Home asks for AI setup only when no room could run: nothing set up yet, or
-// no provider signed in. A room whose own pick is signed out runs on the
-// default meanwhile and says so in its Model pane.
-function homeAiProfileStatus(modelStatus: WebChatModelStatus | null, aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null): { message: string; ready: boolean | undefined } | null {
-	if (!modelStatus && !aiProfileStatus) return null;
-	const configured = aiProfileStatus ? aiProfileStatus.state.source !== "default" : true;
-	if (!configured) return { message: "AI setup needed", ready: false };
-	const anyReady = modelStatus?.providers ? modelStatus.providers.some((provider) => provider.ready) : aiProfileStatus?.profiles.some((profile) => profile.ready);
-	return { message: "AI setup needed", ready: anyReady };
-}
-
-function fetchPersistentAgentStatuses(): Promise<PersistentAgentStatus[]> {
-	return fetchJson<PersistentAgentStatus[]>("/api/persistent-agents");
-}
-
-function createPersistentAgent(request: PersistentAgentCreateRequest): Promise<PersistentAgentCreateResponse> {
-	return fetchJson<PersistentAgentCreateResponse>("/api/persistent-agents", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify(request),
-	});
-}
-
-function absorbBaseUrl(agentId: PersistentAgentId): string {
-	return `/api/persistent-agents/${encodeURIComponent(agentId)}/absorb`;
-}
-
-/**
- * The first read answers with its own availability, which says nothing about
- * the limit; the status read does. The assessment step keeps both: the
- * read's verdict, and the status's limit and pre-pass numbers under it.
- */
-function withAbsorbStatusFields(availability: AbsorbAvailability, status: AbsorbAvailability | null): AbsorbAvailability {
-	if (!status) return availability;
-	return {
-		...availability,
-		version: availability.version ?? status.version,
-		sessions: availability.sessions ?? status.sessions,
-		budget: availability.budget ?? status.budget,
-		prepass: availability.prepass ?? status.prepass,
-		// The Memory model as the status named it, for the notices that name it.
-		model: availability.model ?? status.model,
-	};
-}
-
-function fetchAbsorbStatus(agentId: PersistentAgentId): Promise<AbsorbAvailability> {
-	return fetchJson<AbsorbAvailability>(`${absorbBaseUrl(agentId)}/status`);
-}
-
-function requestAbsorbDiscussionTurn(agentId: PersistentAgentId, request: { source: AbsorbProposalSourceMetadata; assessmentMarkdown: string; messages: AbsorbDiscussionMessage[]; userMessage: string }): Promise<AbsorbDiscussionTurnResponse> {
-	return fetchJson<AbsorbDiscussionTurnResponse>(`${absorbBaseUrl(agentId)}/discuss`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify(request),
-	});
-}
-
-function requestAbsorbDiscussionSignoff(agentId: PersistentAgentId, request: { source: AbsorbProposalSourceMetadata; assessmentMarkdown: string; messages: AbsorbDiscussionMessage[]; userMessage?: string }): Promise<AbsorbDiscussionSignoffResponse> {
-	return fetchJson<AbsorbDiscussionSignoffResponse>(`${absorbBaseUrl(agentId)}/discuss/signoff`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify(request),
-	});
-}
-
-// Registry rows spell a model as { provider, model, label }; the shared naming
-// module takes { provider, model, modelLabel }. One adapter, so every surface
-// here goes through the same canonical implementation instead of its own.
-type RegistryModel = { label?: string; model: string; provider?: string };
-function nameInput(model: RegistryModel) {
-	return { model: model.model, modelLabel: model.label, provider: model.provider };
-}
-function registryModelTooltip(model: RegistryModel): string {
-	return modelTooltipName(nameInput(model)) || model.model;
-}
-
-// A comma-separated model list where each name carries its provider on hover.
-type CurrentModel = { name: string; provider: string | null };
-const NO_CURRENT_MODEL: CurrentModel = { name: "", provider: null };
-
-function ModelNameList({ models }: { models: RegistryModel[] }) {
-	const names = distinctModelNames(models.map(nameInput));
-	return (
-		<>
-			{models.map((model, index) => (
-				<span key={`${model.provider ?? ""}/${model.model}/${index}`}>
-					{index > 0 ? ", " : ""}
-					<span title={registryModelTooltip(model)}>{names[index] || model.model}</span>
-				</span>
-			))}
-		</>
-	);
-}
-
-// A provider's models in product vocabulary: the ones its rooms may pick, and
-// the connection. Which model runs memory work is the rooms' choice (the
-// defaults above, or Room settings, Model), not the provider's.
-// keySaved: the stored credential is a key, so it reads "key saved", as the row's subline does.
-function AiProfileModelsDetail({ profile, keySaved }: { profile: PersistentAgentAiProfileStatus; keySaved: boolean }) {
-	const roomModels = profile.processes?.persistentRoom.models ?? [];
-	return (
-		<div className="ai-profile-models" role="presentation">
-			<div className="ai-profile-models-row"><span>Rooms</span><span>{roomModels.length > 0 ? <ModelNameList models={roomModels} /> : "no room models listed"}</span></div>
-			<div className="ai-profile-models-row"><span>Connection</span><span>{profile.provider.configured ? `${keySaved ? "key saved" : "signed in"} · ${authSourceLabel(profile.provider.source, profile.provider.label)}` : "not signed in"}</span></div>
-		</div>
-	);
-}
-
-/** The profile row's management popover, rendered through a portal to <body>.
- *  The rows live inside scroll containers (the settings modal's content pane,
- *  the onboarding page) that clip an in-place absolute menu at the fold; the
- *  portal escapes every ancestor clip and containing-block trap (the modal
- *  backdrop's backdrop-filter would otherwise capture position:fixed). The
- *  menu hangs right-aligned under its anchor and flips above it when the
- *  viewport bottom would cut it; a ResizeObserver re-measures when the
- *  contents swap (the remove-confirm is taller than the item list). */
-function AiProfileRowMenu({ anchorRef, onDismiss, children }: { anchorRef: React.RefObject<HTMLElement | null>; onDismiss: () => void; children: ReactNode }) {
-	const menuRef = useRef<HTMLSpanElement>(null);
-	const [pos, setPos] = useState<{ top: number | undefined; bottom: number | undefined; left: number } | null>(null);
-	useLayoutEffect(() => {
-		function measure() {
-			const menu = menuRef.current;
-			const anchor = anchorRef.current;
-			if (!menu || !anchor) return;
-			const rect = anchor.getBoundingClientRect();
-			const height = menu.offsetHeight;
-			const spaceBelow = window.innerHeight - rect.bottom - 12;
-			const spaceAbove = rect.top - 12;
-			const up = height > spaceBelow && spaceAbove > spaceBelow;
-			const left = Math.max(8, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8));
-			const next = up
-				? { top: undefined, bottom: window.innerHeight - rect.top + 6, left }
-				: { top: rect.bottom + 6, bottom: undefined, left };
-			setPos((prev) => (prev && prev.top === next.top && prev.bottom === next.bottom && prev.left === next.left ? prev : next));
-		}
-		measure();
-		// Content swaps (confirm state) change the height; window scrolls and
-		// resizes move the anchor. The capture-phase scroll listener sees the
-		// modal pane's scrolls too.
-		const observer = new ResizeObserver(measure);
-		if (menuRef.current) observer.observe(menuRef.current);
-		window.addEventListener("resize", measure);
-		window.addEventListener("scroll", measure, true);
-		return () => {
-			observer.disconnect();
-			window.removeEventListener("resize", measure);
-			window.removeEventListener("scroll", measure, true);
-		};
-	}, [anchorRef]);
-	return createPortal(
-		<>
-			<span className="ai-profile-menu-backdrop" onClick={onDismiss} />
-			<span
-				className="ai-profile-menu"
-				role="menu"
-				ref={menuRef}
-				style={pos ? { top: pos.top, bottom: pos.bottom, left: pos.left } : { visibility: "hidden" }}
-			>
-				{children}
-			</span>
-		</>,
-		document.body,
-	);
-}
-
-function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth, onSignedIn, focus, serviceBack }: { status: PersistentAgentAiProfileSelectionStatus | null; authStatus: AuthStatusResponse | null; onRefresh: () => void; onRefreshAuth: () => void; /** A sign-in or a key was just saved here. */ onSignedIn?: () => void; focus?: { providerId: string } | null; /** Counts the page's reconnects after an outage. */ serviceBack: number }) {
-	// On a remote device the provider/gateway setup routes are local-only
-	// (remote-route-policy is the truth), so those controls render as facts
-	// with one honest line instead of failing per tap. On a shared server only
-	// its admin may change them, so they read the same way.
-	const remoteClient = useRemoteClientContext();
-	const remoteSetupLocked = remoteClient.remote || remoteClient.sharedServer;
-	const [addProviderOpen, setAddProviderOpen] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	// A key saved without its service's check (it could not be reached): one plain line.
-	const [keyNotice, setKeyNotice] = useState<string | null>(null);
-	const [modelsOpenId, setModelsOpenId] = useState<string | null>(null);
-	const [editProfile, setEditProfile] = useState<PersistentAgentAiProfileStatus | null>(null);
-	// Opened to sign a provider in again (a room stopped on it): its row is
-	// brought into view once the rows are there, once per request.
-	const focusedRef = useRef<typeof focus>(null);
-	useEffect(() => {
-		if (!focus || focusedRef.current === focus || !status) return;
-		const row = document.querySelector(`[data-provider-id="${CSS.escape(focus.providerId)}"]`);
-		if (!row) return;
-		focusedRef.current = focus;
-		row.scrollIntoView({ block: "center" });
-	}, [focus, status]);
-	// Which gateway the modal is for: gateways are plural now, so "open" is not
-	// enough to know whose base URL or model set is being edited.
-	const [gatewayEdit, setGatewayEdit] = useState<{ id: string; label: string } | null>(null);
-	const [gatewayApproveId, setGatewayApproveId] = useState<string | null>(null);
-	const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
-	// The trigger of the open menu, captured at click time: the portaled
-	// popover positions itself off this element's live rect.
-	const menuAnchorRef = useRef<HTMLElement | null>(null);
-	const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
-	const [removing, setRemoving] = useState(false);
-	const [keyProfileId, setKeyProfileId] = useState<string | null>(null);
-	const [loginCatalog, setLoginCatalog] = useState<LoginProviderCatalogEntry[] | null>(null);
-
-	// Refetched when the profile SET changes (not on every status refresh):
-	// setting up a gateway or custom provider adds catalog entries the
-	// auth-type lookup must know about. And when the service answers again
-	// after an outage: a read that got no answer is asked again.
-	const profileSetKey = status?.profiles.map((profile) => profile.id).join(",") ?? "";
-	useEffect(() => {
-		fetchJson<{ providers: LoginProviderCatalogEntry[] }>("/api/auth/providers")
-			.then((result) => setLoginCatalog(result.providers))
-			.catch(() => {});
-	}, [profileSetKey, serviceBack]);
-
-	// OAuth is the default when the catalog has not loaded — that keeps the
-	// built-in subscription rows' labels sensible even if the lookup fails.
-	function providerUsesOAuth(providerId: string): boolean {
-		const entry = loginCatalog?.find((provider) => provider.id === providerId);
-		return entry ? entry.authTypes.includes("oauth") : true;
-	}
-
-	function providerAcceptsApiKey(providerId: string): boolean {
-		const entry = loginCatalog?.find((provider) => provider.id === providerId);
-		return entry?.authTypes.includes("api_key") ?? false;
-	}
-
-	// Browser sign-in shares the same state machine as the Add-provider panel
-	// (URL + device-code instructions + 2s polling live in useProviderLogin).
-	// API-key providers (OpenAI-compatible gateways, custom providers) get an
-	// inline key form instead.
-	const login = useProviderLogin(() => {
-		onRefresh();
-		onRefreshAuth();
-		onSignedIn?.();
-	});
-	// The service answers again after an outage: a line saying it could not be reached is no longer true.
-	useEffect(() => {
-		setError(withoutServiceLine);
-		login.setError(withoutServiceLine);
-	}, [serviceBack]);
-
-	async function signIn(profile: PersistentAgentAiProfileStatus) {
-		setError(null);
-		// Resolve the auth type from the live catalog even when the initial
-		// fetch has not landed yet, so API-key providers are never misrouted
-		// into the OAuth flow.
-		let catalog = loginCatalog;
-		if (!catalog) {
-			try {
-				catalog = (await fetchJson<{ providers: LoginProviderCatalogEntry[] }>("/api/auth/providers")).providers;
-				setLoginCatalog(catalog);
-			} catch {}
-		}
-		const entry = catalog?.find((provider) => provider.id === profile.provider.id);
-		if (entry && !entry.authTypes.includes("oauth")) {
-			setKeyProfileId(keyProfileId === profile.id ? null : profile.id);
-			return;
-		}
-		await login.signIn(profile.provider.id);
-	}
-
-	async function saveApiKey(profile: PersistentAgentAiProfileStatus, key: string) {
-		setError(null);
-		setKeyNotice(null);
-		const saved = await fetchJson<{ notice?: string }>("/api/auth/api-key", {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ provider: profile.provider.id, key }),
-		});
-		setKeyNotice(saved.notice ?? null);
-		setKeyProfileId(null);
-		onRefresh();
-		onRefreshAuth();
-		onSignedIn?.();
-	}
-
-	async function signOut(profile: PersistentAgentAiProfileStatus) {
-		setError(null);
-		try {
-			await fetchJson("/api/auth/logout", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ provider: profile.provider.id }),
-			});
-			onRefresh();
-			onRefreshAuth();
-		} catch (e) {
-			setError((e as Error).message);
-		}
-	}
-
-	function closeMenu() {
-		setMenuOpenId(null);
-		setConfirmRemoveId(null);
-	}
-	useEscapeKey(closeMenu, menuOpenId !== null);
-	// A key row is a transient surface like the menu above it, and closes the
-	// same way. Without this it could only be escaped by reloading the page.
-	useEscapeKey(() => setKeyProfileId(null), keyProfileId !== null);
-	// Removing a provider disconnects it: profile, approved models, and the
-	// stored credential all go. Built-ins cannot be removed, only signed out.
-	async function removeProfile(profile: PersistentAgentAiProfileStatus) {
-		setRemoving(true);
-		setError(null);
-		try {
-			// Removing one gateway leaves every other gateway's models and key alone.
-			const url = profile.kind === "gateway"
-				? `/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(profile.id)}`
-				: `/api/persistent-agent-ai-profiles/custom/${encodeURIComponent(profile.id)}`;
-			await fetchJson(url, { method: "DELETE" });
-			closeMenu();
-			onRefresh();
-			onRefreshAuth();
-		} catch (e) {
-			setError((e as Error).message);
-		} finally {
-			setRemoving(false);
-		}
-	}
-	const emptyCard = (
-		<div className="ai-profile-card">
-			<p className="cli-note ai-profile-card-empty">Profile status is still loading.</p>
-		</div>
-	);
-	return (
-		<section className="ai-setup-section ai-profile-switcher-section" aria-label="AI setup">
-			<PaneHeader
-				title="AI setup"
-				line="Your providers, and the models rooms use until they set their own."
-				actions={!remoteSetupLocked && (
-					<button className="rs-btn add-provider-toggle" type="button" aria-expanded={addProviderOpen} onClick={() => setAddProviderOpen((value) => !value)}>Add provider</button>
-				)}
-			/>
-			<AiDefaultsGroup serviceBack={serviceBack} refreshKey={(status?.profiles ?? []).map((profile) => `${profile.id}:${profile.ready ? 1 : 0}:${[...profile.requiredModels, ...(profile.processes?.persistentRoom.models ?? [])].map((model) => `${model.provider}/${model.model}`).join("+")}`).join(",")} />
-			<div className="settings-group">
-			<GroupHeader kicker="Providers" />
-			{status ? (
-				status.profiles.length > 0 ? (
-					<div className="ai-profile-card">
-						<div className="ai-profile-rows">
-							{status.profiles.map((profile) => {
-								const roomModelCount = profile.processes?.persistentRoom.models.length ?? 0;
-								const roomModelsLabel = `${roomModelCount} room model${roomModelCount === 1 ? "" : "s"}`;
-								const signingIn = login.signingInProvider === profile.provider.id;
-								// One quiet subline per row, describing the row's own state.
-								// "Setup needed" is reserved for signed-in-but-still-broken.
-								const signedInWithOAuth = authStatus?.providers.find((provider) => provider.id === profile.provider.id)?.signedInWithOAuth;
-								const keyRefused = profile.provider.keyRefused !== undefined;
-								// A sign-in the last call found gone reads as signed out, and its way on is Sign in, not Replace key.
-								const signInGone = profile.provider.keyRefused === "signed-out";
-								const subline = signingIn
-									? "finish signing in in your browser…"
-									: keyRefused
-										? signInGone ? "signed out" : profile.provider.keyRefused === "no-workspace" ? "not accepted at the last try: key isn't tied to a workspace" : "not accepted at the last try"
-										: profile.ready
-										? signedInWithOAuth === false ? "key saved" : "signed in"
-										: profile.provider.configured
-											? "setup needed"
-											// The models toggle beside the row already carries the count;
-											// repeating it here read as a glitch, loudest on phones where
-											// the toggle wraps directly under this line.
-											: "signed out";
-								const sublineWarn = !signingIn && profile.provider.configured && (!profile.ready || keyRefused);
-								const modelsOpen = modelsOpenId === profile.id;
-								return (
-									<div key={profile.id} data-provider-id={profile.provider.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}${keyProfileId === profile.id ? " key-open" : ""}`}>
-										<div className={`ai-profile-row${profile.ready && !keyRefused ? "" : " notready"}`}>
-											<span className="ai-profile-main">
-												<span className="ai-profile-text">
-													<span className="ai-profile-name">{profile.label}</span>
-													<span className={`ai-profile-sub sub-default${sublineWarn ? " warn" : ""}`}>{subline}</span>
-												</span>
-											</span>
-											<span className="ai-profile-side">
-												{roomModelCount > 0 && (
-													<button
-														className="ai-profile-models-toggle"
-														aria-expanded={modelsOpen}
-														title="Show or hide this profile's models"
-														onClick={() => setModelsOpenId(modelsOpen ? null : profile.id)}
-													>
-														{roomModelsLabel} <span className="disclosure-chevron" aria-hidden="true" />
-													</button>
-												)}
-												{signingIn ? (
-													<button className="ai-profile-foot-link" onClick={() => void login.cancel()} title="Stop this sign-in attempt">Cancel</button>
-												) : (
-													<>
-														{/* The key row carries its own Cancel now, for every row rather
-														    than only the not-ready ones, so this offers the way IN and the
-														    form offers the way out. */}
-														{keyRefused && !signInGone && keyProfileId !== profile.id && !remoteSetupLocked && (
-															<button className="rs-btn ai-profile-signin" onClick={() => profile.kind === "gateway" ? setGatewayEdit({ id: profile.id, label: profile.label }) : setKeyProfileId(profile.id)}>Replace key</button>
-														)}
-														{((!profile.ready && !keyRefused) || signInGone) && keyProfileId !== profile.id && !remoteSetupLocked && (
-															<button className="rs-btn ai-profile-signin" disabled={login.signingInProvider !== null} onClick={() => void signIn(profile)}>
-																{providerUsesOAuth(profile.provider.id) ? "Sign in" : "Add API key"}
-															</button>
-														)}
-														{/* Management stays reachable in every state — broken (expired
-														    token, missing model) AND fully signed out. A signed-out custom
-														    profile must still offer Remove, or the row becomes a dead end;
-														    items that need a credential gate themselves below. */}
-													{!remoteSetupLocked && <span className="ai-profile-menu-anchor">
-														<button
-															className="ai-profile-menu-btn"
-															aria-haspopup="menu"
-															aria-expanded={menuOpenId === profile.id}
-															aria-label={`Manage ${profile.label}`}
-															title={`Manage ${profile.label}: models, keys, sign-out`}
-															onClick={(e) => { if (menuOpenId === profile.id) { closeMenu(); } else { menuAnchorRef.current = e.currentTarget; setMenuOpenId(profile.id); setConfirmRemoveId(null); setKeyProfileId(null); } }}
-														>···</button>
-														{menuOpenId === profile.id && (
-															<AiProfileRowMenu anchorRef={menuAnchorRef} onDismiss={closeMenu}>
-																{confirmRemoveId === profile.id ? (
-																	<>
-																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its models.</span>
-																		<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={() => void removeProfile(profile)}>{removing ? "Removing…" : "Remove"}</button>
-																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)} title="Cancel — keep this profile">Keep it</button>
-																	</>
-																) : (
-																	<>
-																		{/* A toggle, not an opener: a 0-room-model profile renders no
-																		    "N room models" collapse control, so without the Hide branch
-																		    the opened panel would be uncloseable. */}
-																		<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setModelsOpenId(modelsOpen ? null : profile.id); closeMenu(); }}>{modelsOpen ? "Hide models" : "View models"}</button>
-																		{profile.kind === "custom" && (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }} title="Choose which models rooms may use">Approve models</button>
-																		)}
-																		{profile.kind === "gateway" && (
-																			<>
-																				{/* Approve models edits the model set only; Edit gateway
-																				    owns the base URL and API key. */}
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveId(profile.id); closeMenu(); }} title="Choose which models rooms may use">Approve models</button>
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }} title="Change the gateway URL or API key">Edit gateway</button>
-																			</>
-																		)}
-																		{/* A subscription sign-in is renewed by signing in again; only a
-																		    key is replaced. Switching a subscription row to a key is Sign
-																		    out, then Add key. */}
-																		{profile.provider.configured && authStatus?.providers.find((provider) => provider.id === profile.provider.id)?.signedInWithOAuth ? (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signIn(profile); }}>Sign in again</button>
-																		) : providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setKeyProfileId(profile.id); closeMenu(); }}>Replace API key</button>
-																		)}
-																		{/* No credential stored → nothing to sign out of. */}
-																		{profile.provider.configured && (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signOut(profile); }}>Sign out</button>
-																		)}
-																		{profile.kind !== "builtin" && (
-																			<button className="ai-profile-menu-item danger" role="menuitem" onClick={() => setConfirmRemoveId(profile.id)}>
-																				{profile.kind === "gateway" ? "Remove gateway…" : "Remove provider…"}
-																			</button>
-																		)}
-																	</>
-																)}
-															</AiProfileRowMenu>
-														)}
-													</span>}
-													</>
-												)}
-											</span>
-										</div>
-										{signingIn && login.instructions && (
-											<div className="add-provider-instructions ai-profile-signin-instructions">{login.instructions}</div>
-										)}
-										{keyProfileId === profile.id && (
-											<ApiKeyForm className="ai-profile-key-form" providerName={profile.label} onSave={(key) => saveApiKey(profile, key)} onCancel={() => setKeyProfileId(null)} />
-										)}
-										{modelsOpen && <AiProfileModelsDetail profile={profile} keySaved={signedInWithOAuth === false} />}
-									</div>
-								);
-							})}
-						</div>
-					</div>
-				) : (
-					emptyCard
-				)
-			) : (
-				emptyCard
-			)}
-			</div>
-			{/* The providers to add open under the list (the header's Add
-			    provider button). One key form at a time across the whole page:
-			    the panel closes the row form when it opens its own, and closes
-			    its own when a row opens one. The signature is how the panel
-			    learns this list moved: removing a gateway profile here deletes
-			    the gateway the panel lists below, and a renamed one would keep
-			    its old name there. A string rather than the status object, so a
-			    refetch that changed nothing costs no fetch. */}
-			{remoteSetupLocked ? (
-				<p className="cli-note">{remoteClient.sharedServer ? SHARED_SERVER_ADMIN_LINE : "Providers and gateways are set up on the computer itself."}</p>
-			) : (
-				<AddProviderPanel
-					open={addProviderOpen}
-					onOpenChange={setAddProviderOpen}
-					onProfilesChanged={() => { onRefresh(); onRefreshAuth(); }}
-					onKeyFormOpen={() => setKeyProfileId(null)}
-					keyFormBlocked={keyProfileId !== null}
-					profilesSignature={(status?.profiles ?? []).map((profile) => `${profile.id}:${profile.label}`).join("|")}
-					serviceBack={serviceBack}
-				/>
-			)}
-			{status?.state.message && <p className="cli-note">{status.state.message}</p>}
-			{status?.customProfiles?.errors?.map((message) => <p key={message} className="cli-note">{message}</p>)}
-			{(error ?? login.error) && <div className="checkpoint-proposal-error" role="alert">{error ?? login.error}</div>}
-			{keyNotice && !(error ?? login.error) && <p className="settings-help" role="status">{keyNotice}</p>}
-			{editProfile && (
-				<ConfigureProfileModal
-					providerId={editProfile.provider.id}
-					providerName={editProfile.label}
-					existingProfile={editProfile}
-					allowRemove={editProfile.kind === "custom"}
-					onClose={() => setEditProfile(null)}
-					onSaved={() => { onRefresh(); onRefreshAuth(); }}
-				/>
-			)}
-			{gatewayEdit && (
-				<GatewayConfigModal
-					gatewayId={gatewayEdit.id}
-					knownLabel={gatewayEdit.label}
-					onClose={() => setGatewayEdit(null)}
-					onSaved={() => { onRefresh(); onRefreshAuth(); }}
-				/>
-			)}
-			{gatewayApproveId && (
-				<GatewayApproveModelsModal
-					gatewayId={gatewayApproveId}
-					onClose={() => setGatewayApproveId(null)}
-					onSaved={() => { onRefresh(); onRefreshAuth(); }}
-				/>
-			)}
-		</section>
-	);
-}
-
-// Exported for the jsdom probe of arrange mode (a probe outside the app renders the real screen); the app itself never imports it.
-export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, serviceBack }: { roomOrder: HomeRoomOrderView; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; /** Told whenever arrange mode has unsaved moves or stops having them, and false when the screen goes; the app asks the leave question at its own exits. */ onArrangingChange: (dirty: boolean) => void; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; /** Counts the page's reconnects after an outage. */ serviceBack: number }) {
-	const [createOpen, setCreateOpen] = useState(false);
-	useEscapeKey(() => setCreateOpen(false), createOpen);
-	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
-	const [settingsRoomPane, setSettingsRoomPane] = useState<SettingsPane | undefined>(undefined);
-	// The modal must track the LIVE status for its room: a snapshot taken when
-	// it opened could carry stale mid-stream inFlight/working flags and e.g.
-	// keep Memento disabled forever (the home screen's arrival refreshes the
-	// statuses once, home-room-order.ts, not while the modal is open), and
-	// onRefresh must be able to update what the open modal shows.
-	const settingsRoom = settingsRoomId ? persistentAgentStatuses.find((status) => status.id === settingsRoomId) ?? null : null;
-	const openRoomSettings = (status: PersistentAgentStatus, pane?: SettingsPane): void => {
-		setSettingsRoomId(status.id);
-		setSettingsRoomPane(pane);
-		onRefreshPersistentAgent();
-	};
-
-	// The ONE ordering (room-order.ts). While the saved order is withheld
-	// (home-room-order.ts: on every arrival, until that arrival's read has
-	// settled) nothing is drawn in the grid, the "New room" card included, so
-	// no card appears in one place and moves to another. With no rooms there
-	// is nothing to order and the empty state shows at once, as it always did.
-	const roomStatuses = persistentAgentStatuses;
-	// On a shared server the order is A to Z and cannot be changed (use-home-room-order.ts).
-	const { sharedServer } = useRemoteClientContext();
-	const orderedRoomStatuses = roomOrder.order ? orderRooms(persistentAgentStatuses, roomOrder.order, roomOrder.lastUsed) : [];
-	const gridDrawn = roomOrder.order !== null || roomStatuses.length === 0;
-
-	// Arrange mode. The arrangement itself is home-room-arrange.ts (plain,
-	// immutable); this screen holds it as ONE piece of state that dies with
-	// the screen. While arranging the grid is drawn from the arrangement, not
-	// from the saved order: the cards are the set at entry, minus rooms gone
-	// meanwhile (retain, below). Save is one choice handed to the controller
-	// (mode custom + the ids); Cancel and Escape drop the arrangement, and
-	// nothing is written. Moves, Cancel and Escape are not taken while a save
-	// is in flight: what was sent is what closes, and a write already sent
-	// cannot be cancelled.
-	const [arrangement, setArrangement] = useState<RoomArrangement | null>(null);
-	const [announcement, setAnnouncement] = useState("");
-	const arranging = arrangement !== null;
-	const arrangeDirty = arrangement?.dirty() ?? false;
-	const onArrangingChangeRef = useRef(onArrangingChange);
-	onArrangingChangeRef.current = onArrangingChange;
-	useEffect(() => { onArrangingChangeRef.current(arrangeDirty); }, [arrangeDirty]);
-	useEffect(() => () => onArrangingChangeRef.current(false), []);
-	useEffect(() => {
-		if (!arrangement) return;
-		const kept = arrangement.retain(new Set(persistentAgentStatuses.map((status) => status.id)));
-		if (kept !== arrangement) setArrangement(kept);
-	}, [arrangement, persistentAgentStatuses]);
-	// The live region is emptied whenever arrange mode closes (Cancel, Escape,
-	// a Save that landed): a sentence identical to the last one announced is
-	// not a change to the DOM and would be read by nobody, and the same
-	// position can come round again in a later arrange session.
-	const startArranging = (): void => setArrangement(createRoomArrangement(orderedRoomStatuses.map((status) => status.id)));
-	const cancelArranging = (): void => { if (!roomOrder.saving) { setAnnouncement(""); setArrangement(null); } };
-	// Registered once for the whole arrange session, never re-registered: the
-	// Escape stack is in enabling order, so an entry pushed again after a
-	// failed save would sit above an overlay opened during the save (the
-	// guide, Settings) and take the Escape meant for it. While saving the
-	// handler itself does nothing.
-	useEscapeKey(cancelArranging, arranging);
-	async function saveArrangement(): Promise<void> {
-		if (!arrangement || roomOrder.saving) return;
-		if (await onChooseRoomOrder({ mode: "custom", customOrder: arrangement.ids() })) { setAnnouncement(""); setArrangement(null); }
-	}
-	// Custom with nothing arranged yet opens arrange mode on the order on
-	// screen and writes nothing: Save is the first write, and a Cancel leaves
-	// the saved mode as it was. With an arrangement saved, Custom is a choice
-	// like any other.
-	const chooseMode = (mode: RoomOrderMode): Promise<boolean> => {
-		if (mode === "custom" && roomOrder.order && roomOrder.order.mode !== "custom" && roomOrder.order.customOrder.length === 0) {
-			startArranging();
-			return Promise.resolve(true);
-		}
-		return onChooseRoomOrder({ mode });
-	};
-	// The keyboard: each card is focusable while arranging, and a key moves
-	// the focused card (moveByKey: the arrows one place, Home and End to the
-	// ends), animated like a drag. The focus stays with the moved card: it is
-	// found again after the render, because the card's DOM node moves with it
-	// and a moved node loses focus. No key is taken while a card is held or a
-	// save is in flight.
-	const pendingFocusRef = useRef<string | null>(null);
-	// The ONE name a room has in arrange mode: its display name, and its id
-	// as well when another room shows the same name, so two rooms' cards
-	// never share a label and two consecutive moves never produce the same
-	// announcement (a repeated sentence is no change to the live region).
-	const arrangeName = (status: PersistentAgentStatus): string => `${shownRoomName(status.displayName) || status.id}${hasDuplicateDisplayName(status) ? ` (room ${status.id})` : ""}`;
-	// The ONE announcement of a move, whichever way it was made (a key, a drop).
-	const announceMoved = (status: PersistentAgentStatus, next: RoomArrangement): void => setAnnouncement(`${arrangeName(status)}, position ${next.positionOf(status.id)} of ${next.count()}`);
-	const moveByKeyboard = (status: PersistentAgentStatus, event: React.KeyboardEvent<HTMLDivElement>): void => {
-		if (!arrangement || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-		const next = moveByKey(arrangement, status.id, event.key);
-		if (next === null) return;
-		event.preventDefault(); // the arrows, Home and End are the card's while it has the focus, not the page's scroll
-		if (next === arrangement || roomOrder.saving || cardDrag.activeId() !== null) return;
-		pendingFocusRef.current = status.id;
-		setArrangement(next);
-		announceMoved(status, next);
-	};
-	useLayoutEffect(() => {
-		const pending = pendingFocusRef.current;
-		if (!pending) return;
-		pendingFocusRef.current = null;
-		const slot = arrangeSlots(gridRef.current).find((element) => element.dataset.arrangeSlot === pending);
-		slot?.focus({ preventScroll: true });
-		slot?.scrollIntoView({ block: "nearest" }); // a card moved off screen (End) is brought into view
-	}, [arrangement]);
-	const statusById = new Map(persistentAgentStatuses.map((status) => [status.id, status]));
-	const leaveGuarded = (leave: () => void) => (): void => { if (confirmLeavingArrangement(arrangeDirty)) leave(); };
-	// Dragging a card (slice 4). The gesture is home-room-drag.ts;
-	// this screen feeds it the pointer events of the card's slot (the wrapper
-	// around the card, whose own controls are inert while arranging) and the
-	// slots' boxes at rest, and draws what it says: while a card is held the grid is
-	// the arrangement as it would be after the drop (a moveTo preview, nothing
-	// written), so the others step aside and the gap is where it lands; the
-	// motion is use-room-arrange-motion.ts. The preview is drawn with the
-	// slots' CSS order, never by moving them in the DOM: a moved node loses
-	// the pointer capture (and the drag with it), and the focus. A drop ends
-	// in ONE moveTo and the same announcement as a button move; focus stays
-	// where it was. A finger or a pen picks a card up with a long press (the
-	// timer is this screen's, the rule the module's); moving sooner scrolls
-	// the page, and once a card is held the page does not scroll under the
-	// finger (touchmove is refused while held, and the long press's menu is
-	// refused while arranging). Near the top or bottom edge a held card
-	// scrolls the page slowly (use-room-arrange-motion.ts). Escape while a card is
-	// held puts it back and nothing else: its entry is enabled only while held,
-	// so it sits above arrange mode's and leaves the stack with the drag. A
-	// gesture the browser takes away (pointercancel, a lost capture) puts the
-	// card back too, as does the card's room vanishing or arrange mode closing
-	// under it (Escape, Enter on the focused Cancel, a save landing), for a
-	// press not yet held as well, whose handle unmounts with its release still
-	// to come; left in the module, the next session's first move would lift
-	// the card pressed before. Another pointer changes nothing while one
-	// holds a card: its release and its cancel are its own. A press while a save is in flight starts nothing, and a drop that
-	// lands during one is refused, as a key is.
-	const cardDragRef = useRef<CardDrag | null>(null);
-	if (!cardDragRef.current) cardDragRef.current = createCardDrag();
-	const cardDrag = cardDragRef.current;
-	const [dragView, setDragView] = useState<CardDragView | null>(null);
-	const dragging = dragView !== null;
-	const gridRef = useRef<HTMLElement | null>(null);
-	// The held card's box on screen at the press: it is drawn where the pointer carries it from there.
-	const grabRef = useRef<{ id: string; box: Rect } | null>(null);
-	const slotLayout = (heldId: string): SlotLayout => {
-		const grid = gridRef.current;
-		// In the order drawn: the preview's CSS order, the DOM's where none is set (a stable sort).
-		const slotElements = arrangeSlots(grid).sort((a, b) => Number(a.style.order || 0) - Number(b.style.order || 0));
-		const gridBox = grid?.getBoundingClientRect();
-		return {
-			slots: grid ? slotElements.map((element) => slotRestBox(grid, element, gridBox)) : [],
-			held: slotElements.findIndex((element) => element.dataset.arrangeSlot === heldId),
-		};
-	};
-	const pointOf = (event: React.PointerEvent): { x: number; y: number } => ({ x: event.clientX, y: event.clientY });
-	const longPressRef = useRef<number | null>(null);
-	const stopLongPress = (): void => { if (longPressRef.current !== null) window.clearTimeout(longPressRef.current); longPressRef.current = null; };
-	useEffect(() => stopLongPress, []);
-	// The pressing pointer and where it is, for the edge scroll.
-	const pointerRef = useRef<{ id: number; x: number; y: number } | null>(null);
-	const cancelDrag = (pointerId?: number): void => { cardDrag.cancel(pointerId); if (cardDrag.activeId() === null) stopLongPress(); setDragView(cardDrag.view()); };
-	const cancelByPointer = (event: React.PointerEvent<HTMLDivElement>): void => cancelDrag(event.pointerId);
-	const pressCard = (status: PersistentAgentStatus, event: React.PointerEvent<HTMLDivElement>): void => {
-		if (!arrangement || roomOrder.saving) return;
-		if (!cardDrag.press(status.id, pointOf(event), event.pointerType, event.button, event.pointerId)) return;
-		event.currentTarget.setPointerCapture(event.pointerId);
-		pointerRef.current = { id: event.pointerId, ...pointOf(event) };
-		const box = event.currentTarget.getBoundingClientRect();
-		grabRef.current = { id: status.id, box: { left: box.left, top: box.top, width: box.width, height: box.height } };
-		if (event.pointerType === "mouse") return;
-		const pointerId = event.pointerId;
-		stopLongPress();
-		longPressRef.current = window.setTimeout(() => { longPressRef.current = null; const held = cardDrag.hold(pointerId, slotLayout); if (held) setDragView(held); }, ROOM_LONG_PRESS_MS);
-	};
-	const carryCard = (event: React.PointerEvent<HTMLDivElement>): void => {
-		if (event.pointerId === pointerRef.current?.id) pointerRef.current = { id: event.pointerId, ...pointOf(event) };
-		setDragView(cardDrag.move(pointOf(event), event.pointerId, slotLayout));
-		if (cardDrag.activeId() === null) stopLongPress(); // a finger that moved before the long press: the page scrolls
-	};
-	const dropCard = (event: React.PointerEvent<HTMLDivElement>): void => {
-		// The drop is read first: releasing the capture may end the gesture (lostpointercapture) before a release read after it could land.
-		const landed = cardDrag.release(pointOf(event), event.pointerId, slotLayout);
-		if (cardDrag.activeId() === null) stopLongPress();
-		setDragView(cardDrag.view()); // null once the gesture ended; still the held card when another pointer went up
-		try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
-		if (!landed || !arrangement || roomOrder.saving) return;
-		const status = statusById.get(landed.id);
-		const next = arrangement.moveTo(landed.id, landed.position);
-		if (!status || next === arrangement) return;
-		setArrangement(next);
-		announceMoved(status, next);
-	};
-	useEscapeKey(cancelDrag, dragging);
-	useEffect(() => {
-		const active = cardDrag.activeId(); // pressed or held: a press under the threshold is a gesture too
-		if (active !== null && (!arrangement || arrangement.positionOf(active) === null)) cancelDrag();
-	}, [arrangement, dragView]);
-	useEffect(() => {
-		if (!dragging) return;
-		const onScroll = (): void => { setDragView(cardDrag.scrolled(slotLayout)); };
-		// Registered by hand: React's touchmove is passive and could not refuse the page's scroll.
-		const onTouchMove = (event: TouchEvent): void => { if (event.cancelable) event.preventDefault(); };
-		document.addEventListener("scroll", onScroll, { capture: true, passive: true });
-		document.addEventListener("touchmove", onTouchMove, { passive: false });
-		return () => {
-			document.removeEventListener("scroll", onScroll, { capture: true });
-			document.removeEventListener("touchmove", onTouchMove);
-		};
-	}, [dragging]);
-	useArrangeEdgeScroll(gridRef, dragging, pointerRef);
-	const arrangedStatuses = arrangement ? arrangement.ids().map((id) => statusById.get(id)).filter((status): status is PersistentAgentStatus => status !== undefined) : null;
-	// While a card is held, the arrangement after its drop, drawn by each slot's CSS order. The orders are
-	// negative so the "New room" card (order 0) stays last.
-	const preview = arrangement && dragView ? arrangement.moveTo(dragView.id, dragView.position) : null;
-	const previewOrder = (id: string): number | undefined => (preview ? (preview.positionOf(id) ?? 0) - 1 - preview.count() : undefined);
-	const grab = grabRef.current;
-	useRoomArrangeMotion(gridRef, arranging, dragView && grab?.id === dragView.id ? { id: dragView.id, grab: grab.box, dx: dragView.dx, dy: dragView.dy } : null);
-	const displayNameCounts = roomStatuses.reduce((counts, status) => {
-		const key = shownRoomName(status.displayName).toLocaleLowerCase();
-		if (!key) return counts;
-		counts.set(key, (counts.get(key) ?? 0) + 1);
-		return counts;
-	}, new Map<string, number>());
-	const hasDuplicateDisplayName = (status: PersistentAgentStatus): boolean => {
-		const key = shownRoomName(status.displayName).toLocaleLowerCase();
-		return key ? (displayNameCounts.get(key) ?? 0) > 1 : false;
-	};
-	const aiProfileStatus = homeAiProfileStatus(modelStatus, aiProfileSelection);
-	const providerLabels = Object.fromEntries((modelStatus?.providers ?? []).map((provider) => [provider.id, provider.label]));
-	// A room is created to be talked to: after Create, enter it the way its
-	// card's Enter would, on the room's conversation model. Without a model
-	// that can run (no provider signed in) the new card simply waits on Home.
-	const openCreatedRoom = (created: PersistentAgentCreateResponse | null): void => {
-		setCreateOpen(false);
-		onRefreshPersistentAgent();
-		if (created?.status?.models?.conversation.effective) void onOpenPersistentAgent(created.status);
-	};
-
-	return (
-		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={leaveGuarded(onOpenDashboard)} onMemory={leaveGuarded(onOpenMemory)} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="home" />
-			<div className="landing home-page">
-			<section className="landing-hero">
-				<div className={`landing-hero-head${arranging ? " is-arranging" : ""}`}>
-					<div>
-						<h1>Your rooms.</h1>
-						<p>{roomStatuses.length === 0 ? "Create your first room to get started." : "Pick up where you left off, or start a new room."}</p>
-					</div>
-					<div className="landing-hero-actions">
-						{roomOrder.order && !sharedServer && (arranging || roomStatuses.length >= ROOM_SORT_MIN_ROOMS) && (
-							<RoomSortControl order={roomOrder.order} saving={roomOrder.saving} saveError={roomOrder.saveError} onChoose={chooseMode} onArrange={startArranging} arranging={arrangement ? { onSave: () => void saveArrangement(), onCancel: cancelArranging } : null} />
-						)}
-						<div className="room-arrange-live" role="status" aria-live="polite">{announcement}</div>
-					</div>
-				</div>
-				{aiProfileStatus && aiProfileStatus.ready === false && (
-					<button type="button" className="home-ai-profile-status setup-needed" onClick={() => onOpenSettings("ai-setup")} title={sharedServer ? "Open Settings to see the AI setup" : "Open Settings to finish AI setup"}>
-						{aiProfileStatus.message}
-					</button>
-				)}
-				{persistentResumeError && (persistentResumeError === REMEMBER_SAVED_REOPEN_SENTENCE || persistentResumeError === REMEMBER_SAVED_ELSEWHERE_SENTENCE
-					? <div className="home-resume-status" role="status">{persistentResumeError}</div>
-					: <div className="home-resume-error" role="alert">{persistentResumeError}</div>
-				)}
-			</section>
-			<section ref={gridRef} className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}${arranging ? " is-arranging" : ""}`} aria-label="exxperts entry points">
-				{(arrangedStatuses ?? orderedRoomStatuses).map((status, index, list) => {
-					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} />;
-					if (!arrangedStatuses) return card;
-					const held = dragView?.id === status.id;
-					return (
-						<div
-							className={`room-arrange-slot${held ? " is-dragging" : ""}`}
-							key={status.id}
-							data-arrange-slot={status.id}
-							style={{ order: previewOrder(status.id) }}
-							tabIndex={0}
-							role="button"
-							aria-roledescription="movable room"
-							aria-label={`${arrangeName(status)}, position ${index + 1} of ${list.length}`}
-							aria-describedby={ROOM_ARRANGE_HINT_ID}
-							onKeyDown={(event) => moveByKeyboard(status, event)}
-							onPointerDown={(event) => pressCard(status, event)}
-							onPointerMove={carryCard}
-							onPointerUp={dropCard}
-							onPointerCancel={cancelByPointer}
-							onLostPointerCapture={cancelByPointer}
-							onContextMenu={(event) => event.preventDefault()}
-						>
-							{card}
-						</div>
-					);
-				})}
-				{gridDrawn && (
-					<button type="button" className="landing-card add-room-card" disabled={arranging} onClick={() => setCreateOpen(true)} aria-label="Create a new room">
-						<span className="add-room-plus" aria-hidden="true">+</span>
-						<span className="add-room-label">New room</span>
-					</button>
-				)}
-			</section>
-			{!arranging && <ArchivedRoomsSection activeRoomCount={roomStatuses.length} serviceBack={serviceBack} onRestored={onRefreshPersistentAgent} />}
-			</div>
-			{createOpen && (
-				<div className="room-settings-overlay create-room-overlay" role="dialog" aria-modal="true" aria-label="Create room" onClick={() => setCreateOpen(false)}>
-					<div className="room-settings-modal create-room-modal" onClick={(e) => e.stopPropagation()}>
-						<div className="room-settings-head">
-							<div className="room-settings-title-block">
-								<div className="room-settings-title-row">
-									<h2>Create a room</h2>
-								</div>
-							</div>
-							<button className="icon-btn" onClick={() => setCreateOpen(false)} aria-label="Close">Close</button>
-						</div>
-						<div className="room-settings-body">
-							<CreateRoomPanel onCreate={onCreatePersistentAgent} initialOpen variant="section" onCreated={openCreatedRoom} onCancel={() => setCreateOpen(false)} />
-						</div>
-					</div>
-				</div>
-			)}
-			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} initialPane={settingsRoomPane} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={() => onOpenSettings("skills")} onOpenConnectors={() => onOpenSettings("connectors")} />
-			)}
-		</div>
-	);
-}
-
-// Archived rooms live below the grid, folded away: they left Home on purpose,
-// so they only take up one line until asked. Hidden entirely when empty —
-// but a FAILED load is not "empty": this section is the only way back to an
-// archived room, so a fetch failure shows itself with a retry.
-function ArchivedRoomsSection({ activeRoomCount, serviceBack, onRestored }: { activeRoomCount: number; serviceBack: number; onRestored: () => void }) {
-	const [rooms, setRooms] = useState<ArchivedPersistentAgentSummary[] | null>(null);
-	const [loadFailed, setLoadFailed] = useState(false);
-	const [retryNonce, setRetryNonce] = useState(0);
-	const [open, setOpen] = useState(false);
-	const [armedId, setArmedId] = useState<PersistentAgentId | null>(null);
-	const [busy, setBusy] = useState<{ id: PersistentAgentId; action: "restore" | "purge" } | null>(null);
-	const [error, setError] = useState<string | null>(null);
-	const [note, setNote] = useState<string | null>(null);
-	// Set by this section's own restore/delete right before they trigger a
-	// refetch: their status note must survive that one refetch, while any
-	// OTHER cause (a room archived elsewhere, a retry) clears stale notes.
-	const keepNoteThroughRefetchRef = useRef(false);
-	useEscapeKey(() => setArmedId(null), armedId !== null);
-
-	// The active-room count changing means a room was archived, restored, or
-	// created somewhere — refetch so this section and the grid never disagree.
-	// A reconnect after an outage asks again too: a load that failed meanwhile
-	// would otherwise wait for Try again. That ask keeps what the section was
-	// saying: a restore's note or a failed restore is still true.
-	const serviceBackSeenRef = useRef(serviceBack);
-	useEffect(() => {
-		const reconnectAsk = serviceBackSeenRef.current !== serviceBack;
-		serviceBackSeenRef.current = serviceBack;
-		if (keepNoteThroughRefetchRef.current) {
-			keepNoteThroughRefetchRef.current = false;
-		} else if (!reconnectAsk) {
-			setNote(null);
-			setError(null);
-		}
-		let cancelled = false;
-		fetchArchivedPersistentRooms()
-			.then((rows) => {
-				if (cancelled) return;
-				setRooms(rows);
-				setLoadFailed(false);
-			})
-			.catch(() => { if (!cancelled) setLoadFailed(true); });
-		return () => { cancelled = true; };
-	}, [activeRoomCount, retryNonce, serviceBack]);
-
-	async function restoreRoom(room: ArchivedPersistentAgentSummary): Promise<void> {
-		setBusy({ id: room.id, action: "restore" });
-		setArmedId(null);
-		setError(null);
-		setNote(null);
-		const name = shownRoomName(room.displayName) || room.id;
-		try {
-			const response = await restorePersistentRoom(room.id);
-			setRooms((rows) => (rows ?? []).filter((row) => row.id !== room.id));
-			const parts = [`${name} is back on Home.`];
-			if (response.enabledSchedules > 0) parts.push(`Its ${response.enabledSchedules} scheduled task${response.enabledSchedules === 1 ? "" : "s"} resume${response.enabledSchedules === 1 ? "s" : ""} at the usual time${response.enabledSchedules === 1 ? "" : "s"}.`);
-			if (response.missedOnceSchedules > 0) parts.push(`${response.missedOnceSchedules} one-time task${response.missedOnceSchedules === 1 ? "" : "s"} missed ${response.missedOnceSchedules === 1 ? "its" : "their"} time while archived and need${response.missedOnceSchedules === 1 ? "s" : ""} a new one.`);
-			if (response.scheduleNotice) parts.push(response.scheduleNotice);
-			setNote(parts.join(" "));
-			keepNoteThroughRefetchRef.current = true;
-			onRestored();
-		} catch (e) {
-			setError((e as Error).message || "Failed to restore room.");
-		} finally {
-			setBusy(null);
-		}
-	}
-
-	async function deleteForever(room: ArchivedPersistentAgentSummary): Promise<void> {
-		if (armedId !== room.id) {
-			setArmedId(room.id);
-			setError(null);
-			setNote(null);
-			return;
-		}
-		setBusy({ id: room.id, action: "purge" });
-		setError(null);
-		try {
-			// Direct call: an archived room has no card, draft, badge, or bound
-			// session for the App-level purge handler to clean up.
-			const response = await purgePersistentRoom(room.id, `DELETE ${room.id} FOREVER`);
-			setRooms((rows) => (rows ?? []).filter((row) => row.id !== room.id));
-			setNote(
-				response.failed.length > 0
-					? `${shownRoomName(room.displayName) || room.id} was deleted, but ${response.failed.length} item${response.failed.length === 1 ? "" : "s"} on this machine could not be removed.`
-					: `${shownRoomName(room.displayName) || room.id} was deleted from this machine.`,
-			);
-		} catch (e) {
-			setError((e as Error).message || "Failed to delete room.");
-		} finally {
-			setBusy(null);
-			setArmedId(null);
-		}
-	}
-
-	// A failed load with nothing cached must not read as "no archived rooms".
-	if (loadFailed && (!rooms || rooms.length === 0)) {
-		return (
-			<section className="archived-rooms" aria-label="Archived rooms">
-				<div className="archived-rooms-note" role="alert">
-					Archived rooms could not be loaded.{" "}
-					<button type="button" className="rs-quiet archived-rooms-retry" onClick={() => setRetryNonce((n) => n + 1)}>Try again</button>
-				</div>
-			</section>
-		);
-	}
-	// The note must survive the last row disappearing, so the section only
-	// hides once the list is empty AND there is nothing left to say.
-	if (!rooms || (rooms.length === 0 && !note && !error)) return null;
-
-	const archivedDate = (archivedAt: number): string => new Date(archivedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-
-	return (
-		<section className="archived-rooms" aria-label="Archived rooms">
-			{rooms.length > 0 && (
-				<button type="button" className="archived-rooms-summary" aria-expanded={open} title="Show or hide archived rooms" onClick={() => { setOpen((v) => !v); setArmedId(null); }}>
-					<span className="archived-rooms-title">Archived rooms ({rooms.length})</span>
-					<span className="archived-rooms-toggle" aria-hidden="true">{open ? "▾" : "▸"}</span>
-				</button>
-			)}
-			{open && rooms.length > 0 && (
-				<div className="archived-rooms-panel">
-					{rooms.map((room) => (
-						<div key={room.id} className="archived-room-row">
-							<div className="archived-room-main">
-								<span className="archived-room-name" {...(room.archivedReason ? { title: room.archivedReason } : {})}>{shownRoomName(room.displayName) || room.id}</span>
-								<span className="archived-room-meta">
-									archived {archivedDate(room.archivedAt)} · {room.counts.memories} {room.counts.memories === 1 ? "memory" : "memories"} · {room.counts.files} file{room.counts.files === 1 ? "" : "s"}
-								</span>
-								{armedId === room.id && (
-									<span className="archived-room-meta archived-room-armed" role="alert">
-										Delete {shownRoomName(room.displayName) || room.id} forever? {roomFilesSentence(room.counts)}Everything is removed from this machine.
-									</span>
-								)}
-							</div>
-							<div className="archived-room-actions">
-								{armedId === room.id && <button type="button" className="rs-quiet" disabled={busy?.id === room.id} onClick={() => setArmedId(null)} title="Cancel — keep this room archived">Keep it</button>}
-								<button type="button" className="rs-btn" disabled={busy?.id === room.id} title="Bring this room back to Home" onClick={() => void restoreRoom(room)}>
-									{busy?.id === room.id && busy.action === "restore" ? "Restoring…" : "Restore"}
-								</button>
-								<button type="button" className="rs-btn rs-btn-danger" disabled={busy?.id === room.id} title="Erase this room and its files from this machine" onClick={() => void deleteForever(room)}>
-									{busy?.id === room.id && busy.action === "purge" ? "Deleting…" : "Delete forever"}
-								</button>
-							</div>
-						</div>
-					))}
-				</div>
-			)}
-			{note && <p className="archived-rooms-note" role="status">{note}</p>}
-			{error && <div className="workspaces-error archived-rooms-note">{error}</div>}
-		</section>
-	);
-}
-
-function MemoryShell({ onHome, onSettings, onDashboard, onMaintain, maintainBlocked, onOpenMemorySettings, theme, appearance, onSetAppearance }: { onHome: () => void; onSettings: (section?: SettingsSection) => void; onDashboard: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; onOpenMemorySettings: (target: { agentId: string; displayName: string }) => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void }) {
-	return (
-		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onSettings={onSettings} onDashboard={onDashboard} onMemory={() => {}} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="memory" />
-			<div className="landing dashboard-page">
-				<section className="landing-hero">
-					<h1>Memory.</h1>
-					<p>What your rooms remember, and how full their memory is.</p>
-				</section>
-				<Memory onMaintain={onMaintain} maintainBlocked={maintainBlocked} onOpenMemorySettings={onOpenMemorySettings} />
-			</div>
-		</div>
-	);
-}
-
-// In-flow replacement for the browser confirm at the Maintain flow's sensitive
-// moments: same visual language as the rest of the product, Escape cancels.
-type MaintainConfirm = { title: string; body: string; confirmLabel: string; cancelLabel: string; onConfirm: () => void };
-
-function MaintainConfirmDialog({ confirm, onClose }: { confirm: MaintainConfirm; onClose: () => void }) {
-	useEscapeKey(onClose, true);
-	return (
-		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label={confirm.title}>
-			<section className="checkpoint-input-card maintain-confirm-card">
-				<h2>{confirm.title}</h2>
-				<p>{confirm.body}</p>
-				<div className="checkpoint-preview-actions">
-					<button className="rs-btn" onClick={onClose}>{confirm.cancelLabel}</button>
-					<button className="rs-btn rs-btn-primary" autoFocus onClick={() => { onClose(); confirm.onConfirm(); }}>{confirm.confirmLabel}</button>
-				</div>
-			</section>
-		</div>
-	);
-}
-
-// A composer-staged attachment (files UI slice): already uploaded to the shelf
-// and parsed, waiting to ride the next message. The chip is the visible proof
-// the drop worked and carries the HONEST parse state before the user commits.
-type StagedAttachment = {
-	/** The allocated shelf name (collision rule already applied). Empty while uploading. */
-	name: string;
-	/** Chip key while the upload is in flight (the name is not known yet). */
-	stageId: string;
-	bytes: number;
-	extension: string;
-	status: "uploading" | "ready" | "failed";
-	/** "34 pages" · "image · stored…" · a parse-failure reason. */
-	parseNote: string;
-	pages?: number;
-	/**
-	 * A local object URL of the picture, set only for images: the composer
-	 * shows a staged picture AS a picture, before the upload has even landed.
-	 * Owned by the entry — every path that drops the entry revokes it
-	 * (releaseStaged), or the blob stays pinned in memory for the page's life.
-	 * A picture back in the box after a refusal shows the room's own copy.
-	 */
-	previewUrl?: string;
-};
-
-// The extensions the composer previews as a thumbnail tile (the same set the
-// bubble thumbnails use), for a file whose mime type the browser left blank.
-const STAGED_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
-// Files whose bytes are the text the model reads, for the estimate of a message's size.
-const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set([".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".log", ".xml", ".html", ".htm", ".yaml", ".yml"]);
-/** A sent message as the failure line weighs it: the typed text and the files it carried. */
-type SentMessage = { text: string; attachments?: ReadonlyArray<{ bytes: number; extension: string }> };
-
-/** Free the preview object URLs of entries leaving the staged row. */
-function releaseStaged(entries: readonly StagedAttachment[]): void {
-	for (const entry of entries) if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
-}
-
-// Export collision (assets contract §5): the three-button flow. Replace is the
-// destructive choice; Keep both auto-suffixes server-side; no filename typing.
-type ExportCollision = { fileName: string; place?: string; onReplace: () => void; onKeepBoth: () => void };
-
-function ExportCollisionDialog({ collision, onClose }: { collision: ExportCollision; onClose: () => void }) {
-	useEscapeKey(onClose, true);
-	return (
-		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="File already exists">
-			<section className="checkpoint-input-card maintain-confirm-card">
-				<h2>File already exists</h2>
-				<p>A file called “{collision.fileName}” is already in {collision.place ?? "the chosen folder"}.</p>
-				<div className="checkpoint-preview-actions">
-					<button className="rs-btn" autoFocus onClick={onClose}>Cancel</button>
-					<button className="rs-btn" onClick={() => { onClose(); collision.onKeepBoth(); }} title="Save with a new name; the existing file stays">Keep both</button>
-					<button className="rs-btn rs-btn-danger" onClick={() => { onClose(); collision.onReplace(); }} title="Overwrite the existing file">Replace</button>
-				</div>
-			</section>
-		</div>
-	);
-}
-
-// Per-task delete confirm (assets contract §4): destructive-styled, names the
-// task, cancel is the safe default.
-function AssetDeleteDialog({ title, onDelete, onCancel }: { title: string; onDelete: () => void; onCancel: () => void }) {
-	useEscapeKey(onCancel, true);
-	return (
-		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Delete task files">
-			<section className="checkpoint-input-card maintain-confirm-card">
-				<h2>Delete “{title}”?</h2>
-				<p>This removes its files for good. Snapshots you downloaded or saved to a folder stay.</p>
-				<div className="checkpoint-preview-actions">
-					<button className="rs-btn" autoFocus onClick={onCancel}>Cancel</button>
-					<button className="rs-btn rs-btn-danger" onClick={onDelete}>Delete</button>
-				</div>
-			</section>
-		</div>
-	);
-}
-
-// Unified delete (files-management slice): the informed confirm for files
-// whose loss costs more than a re-upload — room-made files (the room's work)
-// and files the room already read this session. Cancel is the safe default.
-function FileDeleteDialog({ fileName, reason, onDelete, onCancel }: { fileName: string; reason: string; onDelete: () => void; onCancel: () => void }) {
-	useEscapeKey(onCancel, true);
-	return (
-		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Delete file">
-			<section className="checkpoint-input-card maintain-confirm-card">
-				<h2>Delete “{fileName}”?</h2>
-				<p>{reason} Snapshots you downloaded or saved to a folder stay.</p>
-				<div className="checkpoint-preview-actions">
-					<button className="rs-btn" autoFocus onClick={onCancel}>Cancel</button>
-					<button className="rs-btn rs-btn-danger" onClick={onDelete}>Delete</button>
-				</div>
-			</section>
-		</div>
-	);
-}
-
-// 💾 Save… filename step (files-management slice): pre-filled with the shelf
-// name, editable before the folder picker opens; the export and its collision
-// flow key off the chosen name.
-function SaveAsDialog({ shelfName, onSave, onCancel }: { shelfName: string; onSave: (name: string) => void; onCancel: () => void }) {
-	const [draft, setDraft] = useState(shelfName);
-	useEscapeKey(onCancel, true);
-	const commit = () => {
-		const name = draft.trim();
-		if (name) onSave(name);
-	};
-	return (
-		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Save file as">
-			<section className="checkpoint-input-card maintain-confirm-card">
-				<h2>Save a snapshot</h2>
-				<p>Pick the file name; you choose the folder next.</p>
-				<input
-					className="save-as-input"
-					value={draft}
-					autoFocus
-					aria-label="File name"
-					onFocus={(e) => {
-						const dot = draft.lastIndexOf(".");
-						e.currentTarget.setSelectionRange(0, dot > 0 ? dot : draft.length);
-					}}
-					onChange={(e) => setDraft(e.target.value)}
-					onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
-				/>
-				<div className="checkpoint-preview-actions">
-					<button className="rs-btn" onClick={onCancel}>Cancel</button>
-					<button className="rs-btn rs-btn-primary" disabled={!draft.trim()} onClick={commit}>Choose folder…</button>
-				</div>
-			</section>
-		</div>
-	);
-}
-
-interface TaskStoreGcView {
-	totalBytes: number;
-	thresholdBytes: number;
-	proposal: { candidates: { taskId: string; title?: string; startedAt?: string; bytes: number }[]; reclaimBytes: number } | null;
-}
-
-function fmtMb(bytes: number): string {
-	return `${(bytes / 1_000_000).toFixed(bytes >= 100_000_000 ? 0 : 1)} MB`;
-}
-
-// Store-wide GC surfaces (assets contract §4): a quiet banner on Home once the
-// safety valve's threshold is crossed, and the approval dialog that names
-// exactly what would go. Nothing is deleted without the explicit confirm.
-function TaskStoreGcBanner({ assessment, onReview, onDismiss }: { assessment: TaskStoreGcView; onReview: () => void; onDismiss: () => void }) {
-	if (!assessment.proposal) return null;
-	return (
-		<div className="task-store-gc-banner" role="status">
-			<span>Old specialist files are taking up {fmtMb(assessment.totalBytes)} — {fmtMb(assessment.proposal.reclaimBytes)} can be freed safely.</span>
-			<button className="rs-btn" onClick={onReview} title="See which old task folders would be deleted">Review</button>
-			<button className="icon-btn" aria-label="Dismiss" title="Dismiss — nothing is deleted" onClick={onDismiss}>✕</button>
-		</div>
-	);
-}
-
-function TaskStoreGcDialog({ assessment, busy, onConfirm, onClose }: { assessment: TaskStoreGcView; busy: boolean; onConfirm: () => void; onClose: () => void }) {
-	useEscapeKey(onClose, true);
-	const proposal = assessment.proposal;
-	if (!proposal) return null;
-	return (
-		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Review task-store cleanup">
-			<section className="checkpoint-input-card maintain-confirm-card task-store-gc-card">
-				<h2>Free up task storage</h2>
-				<p>These {proposal.candidates.length} are from old work no conversation refers to anymore. Deleting them frees {fmtMb(proposal.reclaimBytes)} — your Files and saved snapshots stay.</p>
-				<div className="task-store-gc-list">
-					{proposal.candidates.map((candidate) => (
-						<div key={candidate.taskId} className="task-store-gc-row">
-							<span className="task-store-gc-title">{candidate.title || candidate.taskId}</span>
-							<span className="task-store-gc-meta">{candidate.startedAt ? new Date(candidate.startedAt).toLocaleDateString() : "—"} · {fmtMb(candidate.bytes)}</span>
-						</div>
-					))}
-				</div>
-				<div className="checkpoint-preview-actions">
-					<button className="rs-btn" autoFocus disabled={busy} onClick={onClose}>Cancel</button>
-					<button className="rs-btn rs-btn-danger" disabled={busy} onClick={onConfirm}>{busy ? "Deleting…" : `Delete ${proposal.candidates.length} task folders`}</button>
-				</div>
-			</section>
-		</div>
-	);
-}
-
-function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, onPrune, onReturn, returnLabel }: { target: MaintainTarget; roomStatus: PersistentAgentStatus | null; onAbsorb: () => void; onDiscussFirst: () => void; onPrune: () => void; onReturn: () => void; returnLabel: string }) {
-	useEscapeKey(onReturn, true);
-	const memoryStatus = roomStatus?.memoryStatus ?? null;
-	const memoryBudget = roomStatus?.memoryBudget ?? null;
-	const waiting = memoryStatus?.recentContextCount ?? null;
-	const sessionBlockCap = roomStatus?.recentContext?.blockCap ?? 20;
-	// Notes waiting for a topic, or for their first re-read, keep Memorize open with no conversation waiting.
-	const notesToSort = memoryStatus?.notesToSort ?? 0;
-	const nothingWaiting = waiting === 0 && notesToSort === 0;
-	// A room that saves a clean update without the card starts Memorize
-	// without a first read; Discuss first is its way to one.
-	const automatic = roomStatus?.fastPathSecondApproval === true;
-	// The belt for a deep link: the card and maintainBlockedReason already
-	// keep Maintain closed on a room whose memory is still its scaffold.
-	const nothingToReview = nothingToMaintain(memoryStatus);
-	const fullPercent = memoryBudget && memoryBudget.budgetTokens > 0 ? Math.round((memoryBudget.reviewTargetEstimatedTokens / memoryBudget.budgetTokens) * 100) : null;
-	const overLimit = fullPercent !== null && fullPercent > 100;
-	// One recommendation at a time: waiting conversations come first, because
-	// Memorize also makes room; a full room with nothing waiting points at Review.
-	const recommended: "memorize" | "review" | null = waiting !== null && waiting > 0 ? "memorize" : overLimit ? "review" : null;
-	const waitingWords = waiting === null ? null : waiting === 0 ? "Nothing waiting to be memorized" : <><strong>{waiting}</strong> {waiting === 1 ? "conversation" : "conversations"} waiting to be memorized</>;
-	const fullWords = fullPercent === null ? null : overLimit ? <>memory is <strong className="over">above its budget</strong></> : <>memory <strong>{fullPercent}%</strong> full</>;
-	const statusTitle = memoryBudget ? `The memory budget is set in Room settings: ${fmtTokensK(memoryBudget.reviewTargetEstimatedTokens)} of ${fmtTokensK(memoryBudget.budgetTokens)} tokens in use. A new conversation needs Memorize once the room holds ${sessionBlockCap}.` : undefined;
-	const memorizeCard = (
-		<button type="button" className={`maintain-action${recommended === "memorize" ? " recommended" : ""}`} disabled={nothingWaiting} title={nothingWaiting ? "Have a conversation with this room first." : undefined} onClick={onAbsorb}>
-			<span className="maintain-action-body">
-				<span className="maintain-action-head">
-					<span className="maintain-action-title">Memorize</span>
-					{recommended === "memorize" && <span className="maintain-action-tag">Recommended</span>}
-				</span>
-				<span className="maintain-action-text">{nothingWaiting
-					? `Nothing to memorize yet. Have a conversation with ${target.displayName} first.`
-					: waiting === 0 ? memorizeNotesText(notesToSort) : memorizeChooserText(waiting ?? 0, automatic)}</span>
-			</span>
-			<span className="maintain-action-go" aria-hidden="true">Start</span>
-		</button>
-	);
-	return (
-		<div className="absorb-workspace maintain-workspace" aria-label="Memory maintenance chooser">
-			<header className="absorb-workspace-header">
-				<div>
-					<p className="card-kicker">{target.displayName}</p>
-					<h1>Memory.</h1>
-					{(waitingWords || fullWords)
-						? <p className="maintain-status" title={statusTitle}>{waitingWords}{waitingWords && fullWords ? " · " : ""}{fullWords}</p>
-						: <p>What {target.displayName} remembers, and how to keep it in shape.</p>}
-				</div>
-				<button className="rs-btn" onClick={onReturn}>{returnLabel}</button>
-			</header>
-			<main className="absorb-workspace-main maintain-workspace-main">
-				<div className="maintain-chooser-column">
-					<section className="maintain-actions" aria-label="Memory maintenance workflows">
-						{automatic ? (
-							// Discuss first sits beside the card, never inside it: the card is one button.
-							// The row around them starts Memorize too, as its shading says; a click on a
-							// child is that child's own, so nothing fires twice.
-							<div className="maintain-action-row" onClick={(event) => { if (event.target === event.currentTarget && !nothingWaiting) onAbsorb(); }}>
-								{memorizeCard}
-								<button type="button" className="rs-btn maintain-action-aside" disabled={nothingWaiting} title={DISCUSS_FIRST_TITLE} onClick={(event) => { event.stopPropagation(); onDiscussFirst(); }}>{DISCUSS_FIRST_LABEL}</button>
-							</div>
-						) : memorizeCard}
-						<button type="button" className={`maintain-action${recommended === "review" ? " recommended" : ""}`} disabled={nothingToReview} title={nothingToReview ? NOTHING_TO_MAINTAIN_SENTENCE : "Tidy this room's notes"} onClick={onPrune}>
-							<span className="maintain-action-body">
-								<span className="maintain-action-head">
-									<span className="maintain-action-title">Review</span>
-									{recommended === "review" && <span className="maintain-action-tag">Recommended</span>}
-								</span>
-								<span className="maintain-action-text">{nothingToReview
-									? NOTHING_TO_MAINTAIN_SENTENCE
-									: "Make the notes shorter and clearer, and move what is finished or stale to the archive. You see every change before it is saved and can undo it after."}</span>
-							</span>
-							<span className="maintain-action-go" aria-hidden="true">Start</span>
-						</button>
-					</section>
-					<p className="maintain-footnote">{maintainChooserFootnote(automatic)}</p>
-				</div>
-			</main>
-		</div>
-	);
-}
-
-type CheckpointApprovalEditFields = { sessionArc: string; body: string; parked: string };
-
-/** The editor's fields for a proposal, as the Memory model wrote them. */
-function sameCheckpointFields(a: CheckpointApprovalEditFields, b: CheckpointApprovalEditFields): boolean {
-	return a.sessionArc === b.sessionArc && a.body === b.body && a.parked === b.parked;
-}
-
-function checkpointFieldsOf(proposal: CheckpointProposalResponse): CheckpointApprovalEditFields {
-	return {
-		sessionArc: proposal.fields.sessionArc,
-		// The editor shows a line's must-keep marker as "Keep:"; the save gives it back.
-		body: editableMemoryBody(proposal.fields.body),
-		// Nothing open shows as an empty field; an empty one saves as None.
-		parked: /^none\.?$/i.test(proposal.fields.parked?.trim() ?? "") ? "" : proposal.fields.parked?.trim() ?? "",
-	};
-}
-
-/** Which proposal a set of edits belongs to: edits outlive the dialog, never their proposal. */
-function checkpointEditsKey(proposal: CheckpointProposalResponse): string {
-	return `${proposal.agentId}\n${proposal.conversationId}\n${proposal.proposedRecentContext}`;
-}
-
+type TurnLink = "live" | "reconnecting" | "elsewhere";
+
+const ROOM_ELSEWHERE_SENTENCE = "This room is now open in another window.";
+
+/** Said in the working dot's place while the room shortens a long conversation. */
+const SHORTENING_LINE = "Shortening the conversation so far…";
+
+// While the answer is frozen for the person's message, what still arrives of it does not show.
+const FROZEN_STREAM_ACTIONS: ReadonlySet<AssistantStreamAction["type"]> = new Set(["message_start", "part_id", "delta", "text_end", "message_end", "break", "tick"]);
+// How long a held pick keeps asking while the server still says its answer runs, after the page saw it end.
+const SWITCH_ANSWERING_RETRY_MS = 30_000;
+// How often a switch whose answer was lost asks again where the conversation stands.
+const SWITCH_READ_RETRY_MS = 1_000;
 
 
 /**
- * The wait of a Memory model call a screen is waiting on as one request (a
- * first read, a discussion turn, a sign-off): the room's status says it, asked
- * every few seconds while the request is open.
+ * Editing the newest message: its bubble is a box (`editing`, with the text
+ * the bubble shows), or the edit was sent and the server has not taken or
+ * refused it yet (`sent`: the edited bubble, the items it replaces, the new
+ * bubble and its text).
  */
-function useMemoryCallWait(fetchStatus: ((agentId: PersistentAgentId) => Promise<{ wait?: ModelWait }>), agentId: PersistentAgentId | null): ModelWait | null {
-	const [wait, setWait] = useState<ModelWait | null>(null);
-	useEffect(() => {
-		setWait(null);
-		if (!agentId) return;
-		let stopped = false;
-		const timer = window.setInterval(() => {
-			fetchStatus(agentId).then((status) => { if (!stopped) setWait(status.wait ?? null); }, () => {});
-		}, 3_000);
-		return () => { stopped = true; window.clearInterval(timer); };
-	}, [fetchStatus, agentId]);
-	return wait;
-}
-
-function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, turnWait = false, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onContinueFromDiscussion, onContinueWithoutDiscussion, onContinue, onBackToAssessment, onReassess, onRestart, onSetDepth, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onEditRunEntry, onSaveRun, onTryTopicsLeft, onCloseEmptyRun, onRunBackToAssessment, onResumeRun, onUndo, onChooseModel, onSignIn, returnLabel }: { state: ReviewWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; turnWait?: boolean; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onContinueFromDiscussion: () => void; onContinueWithoutDiscussion: () => void; onContinue: () => void; onBackToAssessment: () => void; onReassess: () => void; onRestart: () => void; onSetDepth: (depth: ReviewDepth) => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onEditRunEntry: NoteEdit; onSaveRun: () => void; onTryTopicsLeft: () => void; onCloseEmptyRun: () => void; onRunBackToAssessment: () => void; onResumeRun: () => void; onUndo: () => void; onChooseModel: () => void; onSignIn: (provider: string) => void; returnLabel: string }) {
-	// A first read, a discussion turn or the sign-off waiting out a busy Memory model says so.
-	const callWait = useMemoryCallWait(fetchReviewStatus, state.target && (state.step === "assessing" || state.step === "signing_off" || (state.step === "discussing" && state.discussionSending)) ? state.target.agentId : null);
-	if (state.step === "closed") return null;
-	const loading = state.step === "checking" || state.step === "assessing";
-	const availability = state.availability;
-	const assessment = state.assessment;
-	const run = state.run ?? null;
-	const discussionMessages = state.discussionMessages ?? [];
-	const discussionBudget = state.discussionTokenBudget;
-	const targetLabel = state.target?.displayName ?? "this room";
-	const undo: ReviewUndoState = state.undo ?? { busy: false, done: false, error: null };
-	const topicCount = availability?.topics ?? 0;
-	// A first read that named stale notes is why the deeper tidy is offered
-	// first, so the picker says so in the same words the read used.
-	const staleFlagged = (assessment?.fields.staleOrContradicts.length ?? 0) > 0;
-	const lookAlike = (assessment?.fields.lookAlikeTopics?.length ?? 0) > 0;
-	const disagreeing = assessment?.fields.disagree?.length ?? 0;
-	// The Memory model could not be reached for the first read: its notice, with Try again, is the way on.
-	const unreachableRead = Boolean(state.notice && assessment?.firstReadMissing);
-	const savedCounts = reviewChangeCounts(run?.changes ?? []);
-	const savedBudget = state.approvalResult?.memoryBudget;
-	const savedPercent = savedBudget ? reviewPercent(savedBudget.reviewTargetEstimatedTokens, savedBudget.budgetTokens) : run ? reviewRunFullPercent(run) : 0;
-	const savedOver = savedBudget ? savedBudget.overBudget : run?.budget.overBudgetAfter === true;
-	const bodyReturns = state.step === "unavailable" || (state.step === "saved" && Boolean(state.approvalResult)) || state.step === "error";
-	const stepLine = loading
-		? "Reading the notes…"
-		: state.step === "assessment" || state.step === "discussing"
-			? "Step 1 of 2 · a first read of what the notes need"
-			: state.step === "running" || state.step === "run_card" || state.step === "signing_off" || state.step === "run_failed"
-				// A card that could not finish changes nothing, so no step names a change.
-				? (state.step === "run_card" && run && reviewRunNothingToSave(run) ? null : `Step 2 of 2 · what changes in ${targetLabel}'s memory`)
-				: state.step === "approving"
-					? (turnWait ? ROOM_TURN_WAIT_LINE : "Saving…")
-					: state.step === "saved"
-						? (undo.done ? "Undone" : "Saved")
-						: `Tidying what ${targetLabel} knows.`;
-	return (
-		<div className="absorb-workspace maintain-workspace review-workspace" aria-label="Review workflow">
-			<header className={`absorb-workspace-header${state.step === "discussing" ? " compact" : ""}`}>
-				<div>
-					<p className="card-kicker">{targetLabel}</p>
-					<h1>Review.</h1>
-					{stepLine && <p>{stepLine}</p>}
-				</div>
-				{state.step === "approving" ? (
-					<button className="rs-btn" disabled title="The changes are being saved and cannot be cancelled.">Saving…</button>
-				) : bodyReturns || state.step === "assessment" || state.step === "run_card" || state.step === "running" ? null : (
-					// The first read, the working screen, the card and every page with its
-					// own way back keep a single exit in their own action row.
-					<button className="rs-btn" onClick={onAbort}>{state.step === "saved" || state.step === "unavailable" || state.step === "error" ? returnLabel : "Cancel"}</button>
-				)}
-			</header>
-			<main className="absorb-workspace-main">
-				<section className="checkpoint-input-card absorb-workflow-card">
-				{callWait && <p className="checkpoint-read-note" role="status">{modelWaitLine(callWait)}</p>}
-					{loading ? (
-						<div className="checkpoint-generating-state absorb-loading-state">
-							<h2>{loadingMessage}</h2>
-							<span className="spinner spinner-lg" />
-							<p>{topicCount > 0 ? `Reading the notes in ${topicCount} ${topicCount === 1 ? "topic" : "topics"}.${callWait ? "" : " This usually takes a minute or two."}` : `Reading the notes.${callWait ? "" : " This usually takes a minute or two."}`}</p>
-						</div>
-					) : state.step === "unavailable" ? (
-						<div className="checkpoint-proposal-page absorb-unavailable-state">
-							<div className="checkpoint-input-heading">
-								<h2>Review cannot start yet</h2>
-								<p>{state.unavailableReason || "This room's notes cannot be tidied right now. Nothing was changed. Try again in a moment."}</p>
-							</div>
-							<div className="checkpoint-preview-actions">
-								<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
-								<button className="rs-btn rs-btn-primary" onClick={onRestart}>Back to Maintain</button>
-							</div>
-						</div>
-					) : state.step === "signing_off" || state.step === "approving" ? (
-						<div className="checkpoint-generating-state absorb-loading-state">
-							<h2>{state.step === "approving" ? "Saving…" : "Reading the discussion back…"}</h2>
-							<span className="spinner spinner-lg" />
-							<p>{state.step === "approving" ? "A copy of today's memory is kept, then the tidied notes are saved." : "What you agreed is folded into the tidy."}</p>
-							{state.step === "approving" && <p>This step finishes on its own and cannot be cancelled.</p>}
-						</div>
-					) : state.step === "running" ? (
-						run ? (
-							<>
-								{state.runPollError && <div className="checkpoint-proposal-error" role="alert">{state.runPollError}</div>}
-								<ReviewRunProgressScreen run={run} onCancel={onCancelRun} />
-							</>
-						) : (
-							<div className="checkpoint-generating-state absorb-loading-state">
-								<h2>{waitingMessage}</h2>
-								<span className="spinner spinner-lg" />
-								<p>The notes are tidied topic by topic. Every note keeps its date and anything you pinned. Nothing is saved until you approve.</p>
-								{state.runPollError && <div className="checkpoint-proposal-error" role="alert">{state.runPollError}</div>}
-								<div className="checkpoint-preview-actions">
-									<button className="rs-btn" onClick={onCancelRun} title="Stop this tidy and return to the first read. Nothing is saved.">Cancel</button>
-								</div>
-							</div>
-						)
-					) : state.step === "run_failed" ? (
-						<ReviewRunFailedScreen onBack={onRunBackToAssessment} onRetry={onContinue} />
-					) : state.step === "run_card" && run ? (
-						<ReviewCard
-							run={run}
-							roomName={targetLabel}
-							keepIds={keepIds}
-							busy={state.runBusy === true}
-							error={state.error}
-							fastPathBlockedReasons={state.fastPathBlockedReasons}
-							onToggleKeep={onToggleRunKeep}
-							onToggleKeepTopic={onToggleRunKeepTopic}
-							onRaiseBudget={onRaiseRunBudget}
-							onEditEntry={onEditRunEntry}
-							onCancel={onCancelRun}
-							onBack={onRunBackToAssessment}
-							backLabel="Back"
-							onSave={onSaveRun}
-							onClose={onCloseEmptyRun}
-							onTryAgain={onResumeRun}
-							onChooseModel={onChooseModel}
-							onSignIn={onSignIn}
-						/>
-					) : state.step === "saved" && state.approvalResult ? (
-						<ReviewSavedScreen
-							roomName={targetLabel}
-							counts={savedCounts}
-							topicsLeft={run ? reviewRunTopicsLeft(run) : []}
-							percent={savedPercent}
-							over={savedOver}
-							archivedEntries={state.approvalResult.archivedEntries}
-							archivedForBudget={state.approvalResult.archivedForBudget}
-							rebasedOnto={state.approvalResult.rebasedOnto}
-							limitRaised={state.approvalResult.budgetRaisedTo !== undefined}
-							openConversationKeepsMemory={state.approvalResult.openConversationKeepsMemory === true}
-							// Only the plain outcome: the sign-off's and the save's own notes are the engine's, not the person's.
-							warnings={state.fastPathApplied ? ["This room saves memory updates on its own, so these changes were saved without a second look."] : []}
-							undo={undo}
-							onUndo={onUndo}
-							onTryAgain={onTryTopicsLeft}
-							onChooseModel={onChooseModel}
-							stop={run?.stop}
-							onReturn={onAbort}
-							returnLabel={returnLabel}
-						/>
-					) : state.step === "error" ? (
-						<div className="checkpoint-proposal-page absorb-error-state">
-							<div className="checkpoint-input-heading">
-								<h2>Review could not start</h2>
-								{!/No memory was (?:updated|changed)/.test(state.error ?? "") && <p>No memory was changed. You can open Maintain again right away.</p>}
-							</div>
-							{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
-							{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onRestart} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
-							<div className="checkpoint-preview-actions">
-								<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
-								{!state.notice && <button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>}
-							</div>
-						</div>
-					) : state.step === "discussing" && assessment ? (
-						<div className="checkpoint-proposal-page absorb-discussion-page review-discussion-page">
-							<MaintenanceDiscussion
-								assessmentMarkdown={assessment.assessmentMarkdown}
-								aside={<ReviewFirstReadSections fields={assessment.fields} compact missing={Boolean(assessment.firstReadMissing)} />}
-								outcome="tidy"
-								notice={state.notice && <ModelNoticePanel notice={state.notice} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
-								generateLabel="Continue →"
-								backLabel="Back"
-								messages={discussionMessages}
-								budget={discussionBudget}
-								warnings={state.discussionWarnings ?? null}
-								error={state.error}
-								sending={Boolean(state.discussionSending)}
-								emptyHint="Tell the room what to keep as it is, what to shorten, and what to move to the archive. The tidy follows what you say here."
-								placeholder="Your answer or instruction…"
-								onSend={onSendDiscussionMessage}
-								onBack={onBackToAssessment}
-								onGenerate={onContinueFromDiscussion}
-								onDraftWithoutDiscussion={onContinueWithoutDiscussion}
-							/>
-						</div>
-					) : assessment ? (
-						<div className="checkpoint-proposal-page absorb-assessment-page review-assessment-page">
-							{/* With the Memory model out of reach the page holds only its notice, so no heading names a read. */}
-							{!unreachableRead && (
-								<div className="checkpoint-input-heading checkpoint-proposal-heading">
-									<h2>What {targetLabel}'s notes need</h2>
-									<p>{assessment.firstReadMissing ? FIRST_READ_MISSING_SENTENCE : `A first read${topicCount > 0 ? ` of ${topicCount} ${topicCount === 1 ? "topic" : "topics"}` : ""}.`}</p>
-								</div>
-							)}
-							{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
-							{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onReassess} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
-							{state.activeRunConflictId && (
-								<div className="memory-action-note absorb-run-conflict-note">
-									<span>{REVIEW_RUN_ACTIVE_SENTENCE}</span>
-									<button className="rs-btn" onClick={onStopAbandonedRun} title="Stop the tidy this room is still holding, then start this one.">{REVIEW_RUN_ACTIVE_ACTION}</button>
-								</div>
-							)}
-							{!unreachableRead && (
-								<>
-									<div className="absorb-assessment-grid absorb-assessment-flow">
-										<ReviewFirstReadSections fields={assessment.fields} missing={Boolean(assessment.firstReadMissing)} />
-									</div>
-									{availability && (
-										<ReviewDepthPicker availability={availability} staleFlagged={staleFlagged} lookAlike={lookAlike} disagreeing={disagreeing} firstReadMissing={Boolean(assessment.firstReadMissing)} chosen={state.depth ?? availability.recommendedDepth} onChoose={onSetDepth} />
-									)}
-									{assessment.fields.needsYourCall.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the tidy follows your answers. Continue lets the room decide on its own.</p>}
-								</>
-							)}
-							<div className="checkpoint-preview-actions">
-								<button className="rs-btn" onClick={onAbort}>Cancel</button>
-								{!unreachableRead && <button className="rs-btn" onClick={onReassess} title={assessment.firstReadMissing ? "Read the notes again. Nothing is saved." : "Read the notes again, asking the room to fix what this read got wrong. Nothing is saved."}>Read again</button>}
-								{assessment.firstReadMissing && !unreachableRead && <button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
-								{!unreachableRead && <button className={`rs-btn${assessment.fields.needsYourCall.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Talk the first read through before anything is tidied. The discussion is not saved to memory.">Discuss first</button>}
-								{!unreachableRead && <button className={`rs-btn${assessment.fields.needsYourCall.length > 0 ? "" : " rs-btn-primary"}`} onClick={onContinue} title="Tidy the notes and show every change before saving">Continue →</button>}
-							</div>
-							{state.fastPathEnabled && <p className="checkpoint-footnote">{AUTOMATIC_APPLY_ON_SENTENCE} · a clean tidy is saved without a second look</p>}
-						</div>
-					) : null}
-				</section>
-			</main>
-		</div>
-	);
-}
-
-function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, turnWait = false, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onGenerateFromDiscussion, onGenerate, onBackToAssessment, onReassess, onDraftWithoutDiscussion, onRestart, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onRaiseLimitBeforeRun, onReviewFirst, onEditRunEntry, onChooseRunBeside, onMoveRunSorted, onApproveRun, onRunBackToAssessment, onResumeRun, onUndo, onChooseModel, onSignIn, returnLabel }: { state: AbsorbWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; turnWait?: boolean; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onGenerateFromDiscussion: () => void; onGenerate: () => void; onBackToAssessment: () => void; onReassess: () => void; onDraftWithoutDiscussion: () => void; onRestart: () => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onRaiseLimitBeforeRun: (budgetTokens: number) => void; onReviewFirst: () => void; onEditRunEntry: NoteEdit; onChooseRunBeside: (entryId: string, choice: "replace" | "keep-both") => Promise<void>; onMoveRunSorted: SortedMove; onApproveRun: () => void; onRunBackToAssessment: () => void; onResumeRun: () => void; onUndo: () => void; onChooseModel: () => void; onSignIn: (provider: string) => void; returnLabel: string }) {
-	// A first read, a discussion turn or the sign-off waiting out a busy Memory model says so.
-	const callWait = useMemoryCallWait(fetchAbsorbStatus, state.target && (state.step === "assessing" || state.step === "signing_off" || (state.step === "discussing" && state.discussionSending)) ? state.target.agentId : null);
-	if (state.step === "closed") return null;
-	const loading = state.step === "checking" || state.step === "assessing";
-	const availability = state.availability;
-	const assessment = state.assessment;
-	const discussionMessages = state.discussionMessages ?? [];
-	const discussionBudget = state.discussionTokenBudget;
-	const targetLabel = state.target?.displayName ?? "this room";
-	// The Memory model could not be reached for the first read: its notice, with Try again, is the way on.
-	const unreachableRead = Boolean(state.notice && state.assessment?.firstReadMissing);
-	// The card shell shown from Continue until the run reports: the first read's
-	// conversations, all waiting, so no loading screen sits between the two.
-	const shellSessions = state.conversations ?? state.availability?.sessions ?? state.assessment?.availability.sessions ?? null;
-	const shellRun = state.target && shellSessions ? placeholderAbsorbRun(state.target.agentId, shellSessions) : null;
-	const bodyReturns = (state.step === "unavailable" && Boolean(availability)) || (state.step === "saved" && Boolean(state.approvalResult && state.run)) || state.step === "error";
-	const stepLine = loading
-		? "Reading the waiting conversations…"
-		: state.step === "assessment" || state.step === "discussing"
-			? "Step 1 of 2 · a first read of what the waiting conversations hold"
-			: state.step === "running" || state.step === "run_card" || state.step === "proposing"
-				// A paused card with nothing to save changes nothing, so no step names a change.
-				? (state.step === "run_card" && state.run?.stop && absorbRunNothingToSave(state.run) ? null : `Step 2 of 2 · what ${targetLabel} will keep`)
-				: state.step === "approving"
-					? (turnWait ? ROOM_TURN_WAIT_LINE : "Saving…")
-					: state.step === "saved"
-						? (state.undo?.done ? "Undone" : "Saved")
-						: `What ${targetLabel} keeps from its conversations.`;
-	return (
-		<div className="absorb-workspace maintain-workspace" aria-label="Memory absorption workflow">
-			<header className={`absorb-workspace-header${state.step === "discussing" ? " compact" : ""}`}>
-				<div>
-					<p className="card-kicker">{targetLabel}</p>
-					<h1>Memorize.</h1>
-					{stepLine && <p>{stepLine}</p>}
-				</div>
-				{state.step === "approving" ? (
-					<button className="rs-btn" disabled title="The memory update is being written and cannot be cancelled.">Updating memory…</button>
-				) : bodyReturns || state.step === "assessment" || state.step === "running" || state.step === "run_card" ? null : (
-					// Assessment, the run screens, the proposal and every page with its
-					// own way back keep a single exit in their action row.
-					<button className="rs-btn" onClick={onAbort}>{state.step === "saved" || state.step === "unavailable" || state.step === "error" ? returnLabel : "Cancel"}</button>
-				)}
-			</header>
-			<main className="absorb-workspace-main">
-				<section className="checkpoint-input-card absorb-workflow-card">
-				{callWait && <p className="checkpoint-read-note" role="status">{modelWaitLine(callWait)}</p>}
-				{loading ? (
-					<div className="checkpoint-generating-state absorb-loading-state">
-						<h2>{loadingMessage}</h2>
-						<span className="spinner spinner-lg" />
-						<p>{state.step === "assessing" && availability ? `Reading ${availability.recentContextEntryCount} waiting ${availability.recentContextEntryCount === 1 ? "conversation" : "conversations"}.${callWait ? "" : " This usually takes under a minute."}` : `Reading the waiting conversations.${callWait ? "" : " This usually takes under a minute."}`}</p>
-					</div>
-				) : state.step === "unavailable" && availability ? (
-					(() => {
-						const copy = absorbUnavailableCopy(availability);
-						return (
-							<div className="checkpoint-proposal-page absorb-unavailable-state">
-								<div className="checkpoint-input-heading">
-									<h2>{copy.heading}</h2>
-									<p>{copy.body}</p>
-								</div>
-								{copy.detail && (
-									<details className="absorb-candidate-disclosure absorb-detail-disclosure">
-										<summary>Technical detail</summary>
-										<p>{copy.detail}</p>
-									</details>
-								)}
-								<div className="checkpoint-preview-actions">
-									<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
-									<button className="rs-btn rs-btn-primary" onClick={onRestart}>Back to Maintain</button>
-								</div>
-							</div>
-						);
-					})()
-								) : (state.step === "proposing" || state.step === "signing_off") && shellRun ? (
-					<AbsorbRunCard run={shellRun} roomName={targetLabel} working headline={state.step === "signing_off" ? "Reading the discussion back…" : "Starting…"} keepIds={[]} busy={false} error={null} onToggleKeep={() => {}} onToggleKeepTopic={() => {}} onRaiseBudget={() => {}} onApprove={() => {}} onCancel={onAbort} onBackToAssessment={onAbort} />
-				) : state.step === "proposing" || state.step === "approving" || state.step === "signing_off" ? (
-					<div className="checkpoint-generating-state absorb-loading-state">
-						<h2>{state.step === "approving" ? "Saving to memory…" : state.step === "signing_off" ? "Reading the discussion back…" : "Starting…"}</h2>
-						<span className="spinner spinner-lg" />
-						<p>{state.step === "approving" ? "A copy of today's memory is kept, then the notes are saved." : state.step === "signing_off" ? "What you agreed becomes instructions for the memorize." : "Each conversation is read on its own and turned into notes."}</p>
-						{state.step === "approving" && <p>This step finishes on its own and cannot be cancelled.</p>}
-					</div>
-				) : state.step === "running" ? (
-					state.run ? (
-						<>
-							{state.runPollError && <div className="checkpoint-proposal-error" role="alert">{state.runPollError}</div>}
-							<AbsorbRunCard run={state.run} roomName={targetLabel} working keepIds={keepIds} busy={false} error={null} onToggleKeep={onToggleRunKeep} onToggleKeepTopic={onToggleRunKeepTopic} onRaiseBudget={onRaiseRunBudget} onEditEntry={onEditRunEntry} onApprove={onApproveRun} onCancel={onCancelRun} onBackToAssessment={onRunBackToAssessment} />
-						</>
-					) : shellRun ? (
-						<>
-							{state.runPollError && <div className="checkpoint-proposal-error" role="alert">{state.runPollError}</div>}
-							<AbsorbRunCard run={shellRun} roomName={targetLabel} working headline="Starting…" keepIds={[]} busy={false} error={null} onToggleKeep={() => {}} onToggleKeepTopic={() => {}} onRaiseBudget={() => {}} onApprove={() => {}} onCancel={onCancelRun} onBackToAssessment={onRunBackToAssessment} />
-						</>
-					) : (
-						<div className="checkpoint-generating-state absorb-loading-state">
-							<h2>Starting…</h2>
-							<span className="spinner spinner-lg" />
-							<p>Each conversation is read on its own and turned into notes.</p>
-							{state.runPollError && <div className="checkpoint-proposal-error" role="alert">{state.runPollError}</div>}
-							<div className="checkpoint-preview-actions">
-								<button className="rs-btn" onClick={onCancelRun} title="Stop this memory update and return to the assessment. Nothing is saved.">Cancel</button>
-							</div>
-						</div>
-					)
-				) : state.step === "run_failed" ? (
-					<AbsorbRunFailedScreen onBackToAssessment={onRunBackToAssessment} onRetry={onGenerate} />
-				) : state.step === "run_card" && state.run ? (
-					<AbsorbRunCard
-						run={state.run}
-						roomName={targetLabel}
-						memoryModel={availability?.model}
-						fastPathBlockedReasons={state.fastPathBlockedReasons}
-						keepIds={keepIds}
-						busy={state.runBusy === true}
-						error={state.error}
-						onToggleKeep={onToggleRunKeep}
-						onToggleKeepTopic={onToggleRunKeepTopic}
-						onRaiseBudget={onRaiseRunBudget}
-						onEditEntry={onEditRunEntry}
-						onChooseBeside={onChooseRunBeside}
-						onMoveSorted={onMoveRunSorted}
-						onApprove={onApproveRun}
-						onCancel={onCancelRun}
-						onBackToAssessment={onRunBackToAssessment}
-						onResume={onResumeRun}
-						onChooseModel={onChooseModel}
-						onSignIn={onSignIn}
-					/>
-				) : state.step === "saved" && state.approvalResult && state.run ? (
-					<div className="checkpoint-proposal-page checkpoint-saved-page absorb-saved-state">
-						<div className="checkpoint-input-heading checkpoint-proposal-heading">
-							<h2>{state.undo?.done ? "Undone." : absorbRunSavedHeadline({ ...state.approvalResult, sortedNotes: absorbRunSortedRows(state.run).length }, targetLabel)}</h2>
-							<p>{state.undo?.done ? `${targetLabel}'s memory is as it was before this update.` : <>{absorbRunSavedSentence({ ...state.approvalResult, sortedNotes: absorbRunSortedRows(state.run).length, newTopics: state.approvalResult.newTopics ?? absorbRunNewTopics(state.run) })} Memory is {absorbRunFullPercent(state.run)}% full.</>}</p>
-							{state.undo?.done && state.undo.limitLoweredTo !== undefined && <p>{LIMIT_LOWERED_ON_UNDO_SENTENCE(state.undo.limitLoweredTo)}</p>}
-							{!state.undo?.done && state.approvalResult.budgetRaisedTo !== undefined && <p>{LIMIT_RAISED_ON_SAVE_SENTENCE}</p>}
-							{!state.undo?.done && state.approvalResult.openConversationKeepsMemory && <p className="saved-open-conversation-line">{OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE}</p>}
-							{!state.undo?.done && state.fastPathApplied && <p className="absorb-fast-path-note">This room applies memory updates automatically, so this update was saved without a second look.</p>}
-						</div>
-						{/* Saved without a second look, so the notice the card would have shown is shown here. */}
-						{!state.undo?.done && state.fastPathApplied && absorbRunAllSummarized(state.run) && (
-							<div className="memory-action-note absorb-run-summaries-note" role="status">
-								<p>{absorbRunAllSummarizedSentence(availability?.model ? absorbRunOutageModelName(availability.model, availability.model) : "The Memory model")}</p>
-								<div className="absorb-run-note-actions"><button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button></div>
-							</div>
-						)}
-						{!state.undo?.done && <div className="absorb-review-strip">
-							<div className="absorb-review-status"><span>Conversations</span><strong>{(state.approvalResult.foldedSessions?.length ?? 0)} of {state.run.progress.total}</strong></div>
-							<div className="absorb-review-status"><span>Notes</span><strong>{absorbRunNotesChanged(state.run)} added or updated</strong></div>
-							{(state.approvalResult.archivedEntries ?? 0) > 0 && <div className="absorb-review-status"><span>Archive</span><strong>{state.approvalResult.archivedEntries} {state.approvalResult.archivedEntries === 1 ? "note" : "notes"}</strong></div>}
-							<div className="absorb-review-status"><span>Memory</span><strong>{absorbRunFullPercent(state.run)}% full</strong></div>
-						</div>}
-						{state.undo?.error && <div className="checkpoint-proposal-error" role="alert">{state.undo.error}</div>}
-						{state.approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{state.approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
-						<div className="checkpoint-preview-actions">
-							{!state.undo?.done && (absorbRunNotesChanged(state.run) > 0 || (state.approvalResult.archivedEntries ?? 0) > 0 || absorbRunSortedRows(state.run).length > 0) && <button className="rs-btn" disabled={state.undo?.busy} title={`Put ${targetLabel}'s memory back as it was before this update`} onClick={onUndo}>{state.undo?.busy ? "Undoing…" : "Undo"}</button>}
-							<button className="rs-btn rs-btn-primary" onClick={onAbort}>{returnLabel}</button>
-						</div>
-					</div>
-				) : state.step === "error" ? (
-					<div className="checkpoint-proposal-page absorb-error-state">
-						<div className="checkpoint-input-heading">
-							<h2>Memorizing could not start</h2>
-							<p>No memory was changed. You can open Maintain again right away.</p>
-						</div>
-						{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
-						{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onRestart} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
-						<div className="checkpoint-preview-actions">
-							<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
-							{!state.notice && <button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>}
-						</div>
-					</div>
-				) : state.step === "discussing" && assessment ? (
-					<div className="checkpoint-proposal-page absorb-discussion-page">
-						<MaintenanceDiscussion
-							assessmentMarkdown={assessment.assessmentMarkdown}
-							aside={<AbsorbFirstReadSections fields={assessment.fields} compact />}
-							notice={state.notice && <ModelNoticePanel notice={state.notice} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
-							generateLabel="Continue →"
-							backLabel="Back"
-							messages={discussionMessages}
-							budget={discussionBudget}
-							warnings={state.discussionWarnings ?? null}
-							error={state.error}
-							sending={Boolean(state.discussionSending)}
-							emptyHint="Answer the questions on the left, or tell the room what to keep, let go, or file under another topic. The update follows what you say here."
-							placeholder="Your answer or instruction…"
-							onSend={onSendDiscussionMessage}
-							onBack={onBackToAssessment}
-							onGenerate={onGenerateFromDiscussion}
-							onDraftWithoutDiscussion={onDraftWithoutDiscussion}
-						/>
-					</div>
-				) : assessment ? (
-					<div className="checkpoint-proposal-page absorb-assessment-page">
-						<div className="checkpoint-input-heading checkpoint-proposal-heading">
-							<h2>{assessment.availability.recentContextEntryCount === 0 ? "What the notes waiting in Unsorted hold" : assessment.availability.recentContextEntryCount === 1 ? "What this conversation holds" : `What these ${assessment.availability.recentContextEntryCount} conversations hold`}</h2>
-							{!unreachableRead && <p>{assessment.firstReadMissing ? FIRST_READ_MISSING_SENTENCE : "A first read."}</p>}
-						</div>
-						{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
-						{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onReassess} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
-						{state.activeRunConflictId && (
-							<div className="memory-action-note absorb-run-conflict-note">
-								<span>{ABSORB_RUN_ACTIVE_SENTENCE}</span>
-								<button className="rs-btn" onClick={onStopAbandonedRun} title="Stop the update this room is still holding, then draft this one.">{ABSORB_RUN_ACTIVE_ACTION}</button>
-							</div>
-						)}
-						{availability?.prepass?.demotionRequired && availability.budget && (() => {
-							// A room already over its limit is told so before anything runs,
-							// with the two other ways out of it: a higher limit, written at
-							// once because it is the person's explicit choice, or a Review.
-							const over = overLimitFirstRead({ reviewTargetTokens: availability.budget.reviewTargetTokens, budgetTokens: availability.budget.budgetTokens, entriesOverBudget: availability.prepass.entriesOverBudget });
-							const raising = state.limitRaising === true;
-							return (
-								<div className="absorb-over-limit-block" role="status">
-									<h3>{over.headline}</h3>
-									<p>{over.sentence}</p>
-									<div className="absorb-over-limit-actions">
-										{over.raise && <button className="rs-btn" disabled={raising} onClick={() => onRaiseLimitBeforeRun(over.raise!.target)} title="Write this budget to Room settings now, then read the room again.">{raising ? "Raising…" : over.raise.label}</button>}
-										<button className="rs-btn" disabled={raising} onClick={onReviewFirst} title="Leave this first read and open Review on the same room. Nothing is saved.">{over.reviewLabel}</button>
-									</div>
-								</div>
-							);
-						})()}
-						{!assessment.firstReadMissing && (
-							<div className="absorb-assessment-grid absorb-assessment-flow">
-								<AbsorbFirstReadSections fields={assessment.fields} />
-							</div>
-						)}
-						{assessment.firstReadMissing && (assessment.waitingConversations?.length ?? 0) > 0 && (
-							<div className="absorb-run-change-groups absorb-first-read-waiting">
-								{assessment.waitingConversations!.map((conversation, index) => (
-									<div className="absorb-run-change-group absorb-run-conversation plain" key={`${conversation.date}-${conversation.title}-${index}`}>
-										<span className="absorb-run-session-head">
-											<strong>{conversation.title}</strong>
-											{conversation.date && <span className="absorb-run-session-date">{fmtMemoryDay(conversation.date)}</span>}
-										</span>
-									</div>
-								))}
-							</div>
-						)}
-						{assessment.fields.needsJudgment.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the update follows your answers. Continue lets the room decide on its own.</p>}
-						<div className="checkpoint-preview-actions">
-							<button className="rs-btn" onClick={onAbort}>Cancel</button>
-							{!unreachableRead && <button className="rs-btn" onClick={onReassess} title={assessment.firstReadMissing ? "Read the conversations again. Nothing is saved." : "Read the conversations again, asking the model to fix what this read got wrong. Nothing is saved."}>Read again</button>}
-							{assessment.firstReadMissing && assessment.firstReadMissing !== "skipped" && !unreachableRead && <button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
-							{/* A first read the client could not ask for has no source, so nothing to discuss. */}
-							{assessment.source && !unreachableRead && <button className={`rs-btn${assessment.fields.needsJudgment.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Answer the questions and give instructions first; the discussion is not saved to memory">Discuss first</button>}
-							{!unreachableRead && <button className={`rs-btn${assessment.fields.needsJudgment.length > 0 ? "" : " rs-btn-primary"}`} onClick={onGenerate} title="Memorize the conversations and show what the room will keep">Continue →</button>}
-						</div>
-						{state.fastPathEnabled && <p className="checkpoint-footnote">{AUTOMATIC_APPLY_ON_SENTENCE} · a clean update is saved without a second look</p>}
-					</div>
-				) : null}
-				</section>
-			</main>
-		</div>
-	);
-}
-
-// Shared discussion surface for the Memorize and Review workflows,
-// styled to mirror the in-room chat (user bubbles right, rendered markdown
-// left) without coupling to the room components.
-// Mirrors the server's request caps on the discussion routes
-// (persistent-agents.ts parse*DiscussionMessages): a transcript past these is
-// rejected before any worker runs, so the composer shows where it stands
-// instead of letting the user find the wall on send.
-const DISCUSSION_MAX_MESSAGES = 40;
-const DISCUSSION_MAX_TRANSCRIPT_CHARS = 80000;
-const DISCUSSION_MAX_MESSAGE_CHARS = 12000;
-
-function compactCount(value: number): string {
-	return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
-}
-
-function MaintenanceDiscussion({ assessmentMarkdown, aside, outcome = "update", generateLabel = "Draft memory update", backLabel = "Back to assessment", messages, budget, warnings, error, notice, sending, emptyHint, placeholder, onSend, onBack, onGenerate, onDraftWithoutDiscussion }: { assessmentMarkdown: string; aside?: ReactNode; outcome?: "update" | "tidy"; generateLabel?: string; backLabel?: string; messages: Array<{ role: string; content: string }>; budget: { state: string; canContinue: boolean } | null | undefined; warnings: string | null; error: string | null; notice?: ReactNode; sending: boolean; emptyHint: string; placeholder: string; onSend: (text: string) => void; onBack: () => void; onGenerate: () => void; onDraftWithoutDiscussion: () => void }) {
-	const [input, setInput] = useState("");
-	const transcriptRef = useRef<HTMLElement | null>(null);
-	const transcriptChars = messages.reduce((total, message) => total + message.content.length, 0);
-	const transcriptFull = messages.length >= DISCUSSION_MAX_MESSAGES || transcriptChars >= DISCUSSION_MAX_TRANSCRIPT_CHARS;
-	const canContinue = (!budget || budget.canContinue) && !transcriptFull;
-	const counterTone = transcriptFull ? " full" : messages.length >= DISCUSSION_MAX_MESSAGES * 0.75 || transcriptChars >= DISCUSSION_MAX_TRANSCRIPT_CHARS * 0.75 ? " near" : "";
-	useEffect(() => {
-		const el = transcriptRef.current;
-		if (el) el.scrollTop = el.scrollHeight;
-	}, [messages.length, sending]);
-	function send() {
-		const text = input.trim();
-		if (!text || !canContinue || sending) return;
-		setInput("");
-		onSend(text);
-	}
-	const panel = (
-		<div className="absorb-discussion-panel">
-			{!aside && <div className="absorb-help-note">Temporary discussion. Discarded if you abort.</div>}
-			{!aside && (
-				<details className="absorb-candidate-disclosure absorb-detail-disclosure absorb-assessment-summary">
-					<summary>Initial assessment</summary>
-					<MarkdownPreview body={assessmentMarkdown} />
-				</details>
-			)}
-			{budget?.state === "soft_warning" && <div className="checkpoint-proposal-warnings">This discussion is getting long. Continue to the update soon.</div>}
-			{budget?.state === "hard_stop" && <div className="checkpoint-proposal-error" role="alert">This discussion has grown too long to carry on. Continue to the update with what you have agreed so far, or leave the discussion.</div>}
-			{warnings && <div className="checkpoint-proposal-warnings">{warnings}</div>}
-			{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
-			{notice}
-			{(error || notice || !canContinue) && !sending && (
-				// The way out that always exists: the draft from the assessment alone.
-				// The discussion stays in memory, so it is still there behind
-				// "Back to discussion" on the proposal screen.
-				<div className="absorb-discussion-remedy">
-					<span>{aside ? "You can still continue without this discussion." : "You can still draft from the assessment alone; this discussion is kept and stays available from the draft."}</span>
-					<button className="rs-btn" onClick={onDraftWithoutDiscussion} title={aside ? "Continue from the first read alone, leaving this discussion out. Nothing is saved until you approve." : "Draft the memory update from the initial assessment, leaving this discussion out. Nothing is saved until you approve."}>{aside ? "Continue without the discussion" : "Draft without the discussion"}</button>
-				</div>
-			)}
-			<section className="absorb-discussion-transcript" aria-label="Discussion transcript" ref={transcriptRef}>
-				{messages.length === 0 && !sending ? <p className="absorb-discussion-empty">{emptyHint}</p> : <div className="absorb-discussion-messages">
-					{messages.map((message, index) => (
-						<div className={`absorb-discussion-message ${message.role}`} key={`${index}-${message.role}-${message.content.slice(0, 24)}`}>
-							{message.role === "assistant" ? <MarkdownRenderer>{message.content}</MarkdownRenderer> : <p>{message.content}</p>}
-						</div>
-					))}
-					{sending && <div className="absorb-discussion-message assistant pending" aria-live="polite"><span className="spinner" /> Thinking…</div>}
-				</div>}
-			</section>
-			<div className="absorb-discussion-composer">
-				<div className="absorb-discussion-box">
-					<textarea
-						value={input}
-						onChange={(e) => setInput(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" && !e.shiftKey) {
-								e.preventDefault();
-								send();
-							}
-						}}
-						placeholder={canContinue ? placeholder : "Discussion limit reached"}
-						disabled={sending || !canContinue}
-						maxLength={DISCUSSION_MAX_MESSAGE_CHARS}
-						rows={2}
-					/>
-					<div className="absorb-discussion-box-bottom">
-						<div className={`absorb-discussion-counter${counterTone}`} aria-live="polite">
-							{aside ? (messages.length > 0 ? "When you are done, press Continue →. " : "Nothing here is saved; what you agree goes into the notes. ") : ""}
-							{messages.length} of {DISCUSSION_MAX_MESSAGES} messages
-							{transcriptChars >= DISCUSSION_MAX_TRANSCRIPT_CHARS * 0.75 ? ` · ${compactCount(transcriptChars)} of ${compactCount(DISCUSSION_MAX_TRANSCRIPT_CHARS)} characters` : ""}
-							{input.length >= DISCUSSION_MAX_MESSAGE_CHARS * 0.75 ? ` · this message ${compactCount(input.length)} of ${compactCount(DISCUSSION_MAX_MESSAGE_CHARS)}` : ""}
-							{transcriptFull ? " · limit reached: go on or go back" : ""}
-						</div>
-						<button className="absorb-discussion-send" aria-label="Send" title={sending ? "Waiting for the reply…" : "Send"} disabled={!input.trim() || sending || !canContinue} onClick={send}>↑</button>
-					</div>
-				</div>
-				<div className="absorb-discussion-actions">
-					<button className="rs-btn" title="Return to the first read. This discussion is not saved anywhere; memory is unchanged." onClick={onBack}>{backLabel}</button>
-					<button className="rs-btn rs-btn-primary absorb-discussion-generate" disabled={sending || messages.length === 0} title={messages.length === 0 ? "Send at least one message first" : "Go on with what you said here"} onClick={onGenerate}>{generateLabel}</button>
-				</div>
-			</div>
-		</div>
-	);
-	if (!aside) return panel;
-	return (
-		<div className="absorb-discussion-split">
-			<aside className="absorb-discussion-aside" aria-label="The first read">
-				<p className="absorb-discussion-aside-label">The first read, before this discussion. What you agree here goes into the {outcome}, not into this list.</p>
-				{aside}
-			</aside>
-			{panel}
-		</div>
-	);
-}
-
-// Assessment bullets carry inline markdown (e.g. **must-keep** markers) —
-// render it instead of showing raw asterisks.
-function BulletList({ items }: { items: string[] }) {
-	if (items.length === 0) return <p>None</p>;
-	return <ul className="absorb-bullet-list">{items.map((item, index) => <li key={`${index}-${item}`}><MarkdownRenderer>{item}</MarkdownRenderer></li>)}</ul>;
-}
-
-/** The first read, as the Memorize screens show it: on its own page and beside the discussion. */
-function AbsorbFirstReadSections({ fields, compact = false }: { fields: AbsorbAssessmentResponse["fields"]; compact?: boolean }) {
-	// The first read says what is worth keeping and what is not; where each
-	// note lands is shown on the card, note by note, once the run has read the
-	// conversations, so the model's rough filing plan is not shown twice.
-	return (
-		<>
-			<AssessmentSection title="Worth remembering" items={fields.whatToRemember.map(plainFirstReadLine)} wide={!compact} />
-			<AssessmentSection title="Can be let go" items={fields.whatToForget.map(plainFirstReadLine)} wide={!compact} />
-			{fields.needsJudgment.length > 0 && <AssessmentSection title="Needs your call" items={fields.needsJudgment.map(plainFirstReadLine)} wide={!compact} />}
-		</>
-	);
-}
-
-function AssessmentSection({ title, items, wide = false }: { title: string; items: string[]; wide?: boolean }) {
-	return (
-		<section className={`absorb-assessment-section${wide ? " wide" : ""}`}>
-			<h3>{title}</h3>
-			<BulletList items={items} />
-		</section>
-	);
-}
-
-function MarkdownPreview({ body }: { body: string }) {
-	const lines = body.split(/\r?\n/);
-	const blocks: JSX.Element[] = [];
-	let listItems: string[] = [];
-	function flushList(key: string) {
-		if (listItems.length === 0) return;
-		blocks.push(<ul key={key}>{listItems.map((item, index) => <li key={`${index}-${item}`}>{renderInlineMarkdown(item)}</li>)}</ul>);
-		listItems = [];
-	}
-	lines.forEach((line, index) => {
-		const trimmed = line.trim();
-		if (!trimmed) {
-			flushList(`list-${index}`);
-			return;
-		}
-		const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
-		if (listMatch) {
-			listItems.push(listMatch[1]);
-			return;
-		}
-		flushList(`list-${index}`);
-		const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
-		if (headingMatch) {
-			const level = Math.min(headingMatch[1].length + 3, 6);
-			const Heading = `h${level}` as keyof JSX.IntrinsicElements;
-			blocks.push(<Heading key={index}>{headingMatch[2]}</Heading>);
-			return;
-		}
-		blocks.push(<p key={index}>{renderInlineMarkdown(trimmed)}</p>);
-	});
-	flushList("list-final");
-	return <div className="absorb-markdown-preview">{blocks.length ? blocks : <p>None</p>}</div>;
-}
-
-function renderInlineMarkdown(text: string) {
-	const parts = text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
-	return parts.map((part, index) => part.startsWith("**") && part.endsWith("**") ? <strong key={index}>{part.slice(2, -2)}</strong> : <span key={index}>{part}</span>);
-}
-
-// A credential the Memory model cannot use, in the frame of the step's other
-// sentences. Read only from a worker failure's own detail, never from
-// arbitrary messages, with the server's matchers (model-not-offered.ts).
-function maintenanceCredentialLine(detail: string): string | null {
-	// A workspace 400 is always a key.
-	if (anthropicKeyNeedsWorkspace(detail)) {
-		const gone = credentialGoneWords("key-no-workspace");
-		return `The Memory model ${gone.state}. No memory was updated. ${gone.again} in Settings, AI setup, then run this step again.`;
-	}
-	// A missing or refused key, or an ended sign-in: the runtime says "No API
-	// key found" for a signed-out sign-in too, and the page cannot tell a key
-	// from a sign-in here.
-	if (/^No API key found for/i.test(detail) || signInFailed(detail)) return "The Memory model's key or sign-in is missing or was not accepted. No memory was updated. Check it in Settings, AI setup, then run this step again.";
-	return null;
-}
-
-// First line only, capped: a provider error can be a whole JSON body.
-function shortenWorkerFailureDetail(detail: string): string {
-	const line = detail.split("\n")[0].trim();
-	return line.length > 160 ? `${line.slice(0, 157)}…` : line;
-}
-
-// Request-level rejections and worker refusals used to reach the screen as
-// the server's own words — field names ("assessmentHandoff.text is too
-// large"), agent ids, token counts. Every one of them now has a sentence that
-// says what happened, that memory is unchanged, and what to do from the
-// screen the user is on. Returns null for messages the caller formats itself.
-function formatMaintenanceRequestError(message: string): string | null {
-	if (/assessmentHandoff\.text is too large/i.test(message)) return "The discussion summary handed to the drafting step was too long, so the draft was not generated. No memory was updated. Draft without the discussion, or go back to the assessment.";
-	if (/assessmentMarkdown is too large/i.test(message)) return "The assessment is too long for the next step. No memory was updated. Get a shorter one: Reassess from the assessment screen, or open Maintain again.";
-	if (/discussion (transcript|messages) (is|are) too large/i.test(message)) return "This discussion has reached its size limit. Generate the proposal from what you have, or go back to the assessment.";
-	if (/(discussion message \d+ content|userMessage) is too large/i.test(message)) return "That message is too long (12,000 characters max). Shorten it and send again.";
-	if (/userMessage is required/i.test(message)) return "Type a message first.";
-	if (/prompt for .+ is too large for the locked model/i.test(message)) {
-		// Memorize's guidance offers Review as the shrink path; Review's own
-		// guidance cannot (Review is what overflowed), so it only offers a model.
-		const remedy = /run Review to shrink/i.test(message)
-			? "Run Review to tidy the notes, or choose a Memory model that can read more at once in Room settings, Model, then try again."
-			: "Choose a Memory model that can read more at once in Room settings, Model, then run it again.";
-		return `This room's memory is too large for the Memory model to read in one request. No memory was updated. ${remedy}`;
-	}
-	if (/Request failed \(413\)|FST_ERR_CTP_BODY_TOO_LARGE|body is too large|Payload Too Large/i.test(message)) return "The request was too large for the server to accept. No memory was updated. Try again with a shorter discussion, or draft from the assessment alone.";
-	if (/Request failed \(\d+\)/.test(message)) return "The server could not complete this step. No memory was updated. Try again in a moment.";
-	// A worker turn that ended in the session's own error (F1). The sign-in
-	// class gets the one remedy that helps; anything else says the model did
-	// not respond, its detail going to the console only.
-	const workerFailed = /^.+? failed: ([\s\S]+)$/.exec(message);
-	const noApiKey = /^No API key found for/i.test(message);
-	if (workerFailed || noApiKey) {
-		const credential = maintenanceCredentialLine(workerFailed?.[1] ?? message);
-		if (credential) return credential;
-		const detail = shortenWorkerFailureDetail(workerFailed?.[1] ?? message);
-		console.info(`[maintenance] ${detail}`);
-		return "The Memory model could not respond. No memory was updated. Try again; if it repeats, choose another model in Room settings, Model.";
-	}
-	if (/was aborted before it answered/i.test(message)) return "This step was stopped before the Memory model answered. No memory was updated. Run it again.";
-	if (/produced no text/i.test(message)) return "The Memory model returned an empty reply. No memory was updated. Try again.";
-	if (/model not found/i.test(message)) return "The Memory model is not available. No memory was updated. Choose another Memory model in Room settings, Model.";
-	if (/was cut off at the model's output limit|came back at \d+ characters after \d+ attempt/i.test(message)) return message;
-	// The Review ops refusal is written server-side as one product sentence with its remedy; wrapping it would state the non-mutation twice.
-	if (/^The Review draft could not be built/.test(message)) return message;
-	// Last line of defence: a bare field-name rejection never reaches the screen as-is.
-	if (/^[A-Za-z][\w.]* (is|are) (required|too large|invalid)/.test(message) || /must be (user|one of)/.test(message)) {
-		console.info(`[maintenance] ${message}`);
-		return "The server could not take this request. No memory was updated. Open Maintain again.";
-	}
-	return null;
-}
-
-function formatAbsorbWorkflowError(message: string): string {
-	if (isStaleMaintenanceMessage(message)) return "Memory changed while this was open. No memory was updated. Open Maintain again to work from the latest memory.";
-	const request = formatMaintenanceRequestError(message);
-	if (request) return request;
-	if (/token budget exceeded|token limit|hard_stop/i.test(message)) return "This discussion has grown too long to carry on. Continue to the update with what you have agreed so far, or leave the discussion.";
-	// The server's own sentences pass; anything else goes to the console.
-	if (isPlainProductSentence(message)) return message;
-	console.info(`[maintenance] ${message}`);
-	return "The update stopped unexpectedly. No memory was updated. Try again.";
-}
-
-// The unavailable screens branch on the server's reason: the entry-count story
-// is only true for missing context, and "this unlocks on its own" is false for
-// profile or setup problems. The raw server message stays reachable in a
-// collapsed technical-detail disclosure.
-function absorbUnavailableCopy(availability: AbsorbAvailability): { heading: string; body: string; detail: string | null } {
-	if (availability.reason === "insufficient_recent_context" || availability.reason === "missing_recent_context") {
-		return {
-			heading: "Nothing waiting to be memorized",
-			body: availability.recentContextEntryCount === 0
-				? "This room has no waiting conversations. Have a conversation and use Remember; Memorize unlocks on its own."
-				: `Memorize needs at least ${availability.minimumRecentContextEntries} waiting ${availability.minimumRecentContextEntries === 1 ? "conversation" : "conversations"}. This room has ${availability.recentContextEntryCount}.`,
-			detail: null,
-		};
-	}
-	if (availability.reason === "not_ready") {
-		return {
-			heading: "Memorizing cannot start yet",
-			body: "This room is not ready for maintenance right now. No memory was changed. Try again in a moment, or check the room on the launcher.",
-			detail: availability.message || null,
-		};
-	}
-	return {
-		heading: "Memorizing cannot start yet",
-		body: "Memorizing cannot run for this room right now. No memory was changed. If this persists, check the Memory model in Room settings, Model.",
-		detail: availability.message || availability.error || null,
-	};
-}
-
-// Remember runs inside the room, where Maintain is not reachable — so its
-// failures must say what to do, not echo the engine's 409.
-const REMEMBER_OTHER_CONVERSATION_OPEN = "Remember stopped because another conversation is open now. Open Remember again.";
-/** A window still on a conversation the room moved on from (draft). */
-const ROOM_MOVED_ON_SENTENCE = "This room went on in another window. Reload to continue there.";
-function formatRememberError(message: string): string {
-	// Remember's own refusals are already written for the person: pass them through.
-	if (isPlainRememberSentence(message)) return message;
-	if (isStaleMaintenanceMessage(message)) return "This conversation changed after Remember read it. Generate again.";
-	return rememberDamagedSentence(message) ?? formatMaintenanceRequestError(message) ?? rememberFailureSentence(message);
-}
-
-/** A Maintain save waiting for a turn in the room to end (draft). */
-const ROOM_TURN_WAIT_LINE = "Waiting for the reply in this room to finish…";
-
-/** A save that brought the room to as many remembered conversations as it can hold. */
-function roomFilledBy(approval: { recentContextEntryCount?: number | null } | null): boolean {
-	return (approval?.recentContextEntryCount ?? 0) >= RECENT_SESSIONS_BLOCK_CAP;
-}
-
-// Draft failures land back on the assessment screen, so the copy reassures
-// that the assessment survived and points at the Draft action on that screen.
-function formatMaintenanceDraftError(message: string): string {
-	if (isStaleMaintenanceMessage(message)) return "Memory changed while this was open. No memory was updated. Open Maintain again to work from the latest memory.";
-	const request = formatMaintenanceRequestError(message);
-	if (request) return request;
-	console.info(`[maintenance] ${message}`);
-	return "This step could not finish. No memory was updated. Try again.";
-}
-
-// Review's own failures, in the room's words: what happened, whether anything
-// was saved, and the one thing to do next. The server's refusals are already
-// product-worded and pass through; anything else is one plain sentence.
-function formatReviewWorkflowError(message: string): string {
-	if (isStaleMaintenanceMessage(message)) return "The memory changed while Review was open. Nothing was saved. Start Review again to read the notes as they are now.";
-	const request = formatMaintenanceRequestError(message);
-	if (request) return request;
-	if (/token budget exceeded|token limit|hard_stop/i.test(message)) return "This discussion is as long as it can be. Continue from what you have said, or go back to the first read.";
-	// The server's own sentences pass; anything else goes to the console.
-	if (isPlainProductSentence(message)) return message;
-	console.info(`[maintenance] ${message}`);
-	return "Review stopped unexpectedly. Nothing was saved. Try again.";
-}
-
-// A save that failed lands back on the card, so the way out it names is the one
-// that screen has: reading the notes again from the start.
-function formatReviewApprovalError(message: string, code?: string): string {
-	// Stopped in another window: this card is not the run any more.
-	if (code === "review_run_unknown") return "This tidy is no longer open, so nothing was saved. Start Review again to read the notes as they are now.";
-	// Tidied again or being saved in another window; a reload follows a tidy still at work here.
-	if (code === "review_run_not_ready") return "This tidy is being worked on in another window, so nothing was saved here. Finish it there, or reload this page to follow it here.";
-	if (isStaleMaintenanceMessage(message)) return "The memory changed while this tidy was open. Nothing was saved. Start Review again to read the notes as they are now.";
-	const request = formatMaintenanceRequestError(message);
-	if (request) return request;
-	console.info(`[maintenance] ${message}`);
-	return "These changes could not be saved. The memory is unchanged and this tidy is still here.";
-}
-
-function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, progress, onCancelGenerate, error, notice, onChooseModel, onSignIn, approvalLoading, approvalError, approvalResult, quickRequested, skipsPreview, quickBlockedReasons, consultRunning, taskRunning, pendingConsultHandoffCount, pendingTaskHandoffCount, approvedFields, onFieldsChange, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onMemorizeAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; progress: { read: number; of: number; wait?: ModelWait } | null; onCancelGenerate: () => void; error: string | null; notice: ModelNotice | null; onChooseModel: () => void; onSignIn: (provider: string | undefined) => void; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; skipsPreview: boolean; quickBlockedReasons: string[] | null; consultRunning: boolean; taskRunning: boolean; pendingConsultHandoffCount: number; pendingTaskHandoffCount: number; approvedFields: CheckpointApprovalEditFields; onFieldsChange: (fields: CheckpointApprovalEditFields) => void; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedFields: CheckpointApprovalEditFields) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onMemorizeAfterCheckpoint: () => void; onClose: () => void }) {
-	const roomFilled = roomFilledBy(approvalResult);
-	const [editing, setEditing] = useState(false);
-	// A read-only device may not send Cancel, Save or Discard: it closes the dialog, and the Remember goes on.
-	const readOnly = useRemoteClientContext().capability === "read-only";
-	// One pass or N parts, said before anything is generated. Asked once when
-	// the dialog opens; a failed estimate just leaves the line out.
-	const [readEstimate, setReadEstimate] = useState<RememberReadEstimate | null>(null);
-	// Saving moves the room to the fresh, empty conversation it creates, which has nothing to estimate.
-	const saving = approvalLoading || !!approvalResult;
-	useEffect(() => {
-		if (saving) return;
-		let cancelled = false;
-		setReadEstimate(null);
-		fetchRememberReadEstimate(chat.agentId, chat.conversationId).then((estimate) => { if (!cancelled) setReadEstimate(estimate); }, () => {});
-		return () => { cancelled = true; };
-	}, [chat.agentId, chat.conversationId, saving]);
-	// While the proposal generates, Escape does not close the dialog: Cancel
-	// does, and says what it does. Closing would leave a paid request running.
-	useEscapeKey(() => {
-		if (editing) setEditing(false);
-		else onClose();
-	}, !approvalLoading && !loading);
-	useEffect(() => {
-		setEditing(false);
-	}, [proposal]);
-	// What Save sends: the parts, with the editor's "Keep:" given back as the marker.
-	const savedFields = proposal ? { ...approvedFields, body: storedMemoryBody(approvedFields.body, proposal.fields.body) } : approvedFields;
-	// Counted as the server counts the page it builds from these parts (L2).
-	const pageLength = proposal ? rememberPageFromParts(proposal.proposedRecentContext.split(/\r?\n/, 1)[0] ?? "", savedFields).length : 0;
-	const keepsWords = memoryTextHasWords(memoryTypedText(savedFields.body));
-	const pageLimit = editorLimitLine(pageLength, MEMORY_PAGE_MAX_CHARS, keepsWords);
-	// Before Save: the room's count after this save, when it nears the cap (the proposal counts before it).
-	const fillsHeadsUp = proposal ? rememberFillsRoomHeadsUp(proposal.compressionTelemetry?.recentContextEntryCount, chat.displayName) : null;
-	const quickSaves = quickRequested && skipsPreview;
-	// Save needs only what to keep, within the page's limit; when it cannot save, one line says what to do.
-	const approvalReady = pageLimit.canSave;
-	const approvalBlockedLine = !proposal ? null : !keepsWords ? (proposal.fields.body.trim() ? "Write what to keep before saving." : "The Memory model returned nothing to keep. Generate again, or Edit to write it.") : pageLimit.line;
-	// A line that asks to Generate again comes with the button for it.
-	const asksGenerateAgain = (line: string | null | undefined) => Boolean(line && /\bGenerate again\b/.test(line));
-	const generateAgain = !readOnly && (asksGenerateAgain(approvalError) || asksGenerateAgain(approvalBlockedLine));
-	// A conversation that changed after Remember read it cannot be saved as read: Generate again leads, Save goes.
-	// A Save lost on the way keeps Save first: saving again finds it saved.
-	const mustGenerateAgain = generateAgain && /changed after Remember read it|The Memory model changed after this entry was written/.test(approvalError ?? "");
-	// Nothing here can be saved, so an editor left open closes; the edits stay on the entry, and Generate again asks before it replaces them.
-	useEffect(() => {
-		if (mustGenerateAgain) setEditing(false);
-	}, [mustGenerateAgain]);
-	function updateApprovedField(field: keyof CheckpointApprovalEditFields, value: string) {
-		onFieldsChange({ ...approvedFields, [field]: value });
-	}
-	async function confirmDiscard() {
-		const ok = await confirmDialog({
-			title: "Discard this memory proposal?",
-			body: "It has not been saved. If you discard it, you go back to the conversation and the proposal is lost.",
-			confirmLabel: "Discard",
-			danger: true,
-		});
-		if (ok) onDiscard();
-	}
-	// Consult MR-5 checkpoint-time honesty (§2.3): one-line notices, NOT gates —
-	// they never block the checkpoint, they just tell the truth about consults.
-	const consultHonestyNotices: string[] = [];
-	if (consultRunning) consultHonestyNotices.push("A consult is still running; remembering will discard it.");
-	// Task parity (visuals V6): unlike a discarded consult, a task's files persist —
-	// the honest copy says what is and is not lost. The consult line below is the
-	// §2.3 locked verbatim string; the queue holds both block kinds, so each kind
-	// gets its own line.
-	if (taskRunning) consultHonestyNotices.push("A specialist task is still running; its result won't be part of what you remember (artifacts already written stay on disk).");
-	if (pendingConsultHandoffCount > 0) consultHonestyNotices.push("A transferred consult hasn't entered memory yet. Send a message before you save, so it is part of this conversation.");
-	if (pendingTaskHandoffCount > 0) consultHonestyNotices.push("A transferred task result hasn't entered memory yet. Send a message before you save, so it is part of this conversation.");
-	const honestyNoticesNode = consultHonestyNotices.length > 0 ? (
-		<div className="checkpoint-consult-notices" role="status">
-			{consultHonestyNotices.map((notice) => <div key={notice}>{notice}</div>)}
-		</div>
-	) : null;
-	return (
-		<div className="checkpoint-preview-backdrop" role="dialog" aria-modal="true" aria-label="Remember this conversation">
-			<section className={`checkpoint-input-card${proposal && !loading && !approvalResult ? " checkpoint-review-card" : ""}`}>
-				{loading ? (
-					<div className="checkpoint-generating-state">
-						<span className="spinner" />
-						<p className="card-kicker">Remember</p>
-						{/* Remember without the preview saves when the read ends: it says so from the start (decision 39). */}
-						<h2>{quickSaves ? "Saving memory…" : "Remembering…"}</h2>
-						<p>{quickSaves ? `Saving to ${chat.displayName}’s memory…` : `${rememberProgressSentence(progress)} Nothing is saved yet.`}</p>
-						{progress?.wait && <p className="checkpoint-read-note" role="status">{modelWaitLine(progress.wait)}</p>}
-						<div className="checkpoint-preview-actions">
-							{readOnly ? <button className="rs-btn" onClick={onClose}>Close</button> : <button className="rs-btn" onClick={onCancelGenerate}>Cancel</button>}
-						</div>
-					</div>
-				) : quickRequested && !quickBlockedReasons?.length && approvalLoading && !approvalResult ? (
-					<div className="checkpoint-generating-state">
-						<span className="spinner" />
-						<p className="card-kicker">Remember</p>
-						<h2>Saving memory…</h2>
-						<p>Saving to {chat.displayName}’s memory…</p>
-					</div>
-				) : approvalResult ? (
-					<div className="checkpoint-proposal-page checkpoint-saved-page">
-						<div className="checkpoint-input-heading">
-							<p className="card-kicker">Remembered</p>
-							<h2>Memory updated</h2>
-							<p>{roomFilled ? recentSessionsHeadsUp(approvalResult.recentContextEntryCount, chat.displayName) : (proposal && rememberRefusedWholeSentence(proposal)) || `This conversation is now part of ${chat.displayName}’s memory. Keep chatting starts a new conversation that knows it.`}</p>
-						</div>
-						{!roomFilled && !fillsHeadsUp && recentSessionsHeadsUp(approvalResult.recentContextEntryCount) && <div className="checkpoint-proposal-warnings checkpoint-sessions-headsup" role="status">{recentSessionsHeadsUp(approvalResult.recentContextEntryCount)}</div>}
-						{approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
-						{/* A full room has no Keep chatting: its next conversation waits for Memorize. */}
-						<div className="checkpoint-preview-actions">
-							{!roomFilled && <button className="rs-btn rs-btn-primary" onClick={onContinueAfterCheckpoint} title="Stay in this room with a new conversation">Keep chatting</button>}
-							<button className="rs-btn" onClick={onRestAfterCheckpoint}>Return Home</button>
-							{roomFilled && <button className="rs-btn rs-btn-primary" onClick={onMemorizeAfterCheckpoint}>Memorize</button>}
-						</div>
-					</div>
-				) : proposal ? (
-					<div className="checkpoint-proposal-page">
-						<div className="checkpoint-input-heading checkpoint-proposal-heading">
-							<p className="card-kicker">Memory proposal · not saved</p>
-							<h2>Review what {chat.displayName} will remember</h2>
-						</div>
-						<div className="checkpoint-proposal-result standalone">
-							{editing ? (
-								<div className="checkpoint-edit-field checkpoint-structured-editor">
-									<span className="checkpoint-field-label">Edit the entry before saving</span>
-									<label>
-										<span>What happened</span>
-										<textarea value={approvedFields.sessionArc} onChange={(e) => updateApprovedField("sessionArc", e.target.value)} rows={4} />
-									</label>
-									<label>
-										<span>What to keep</span>
-										<textarea value={approvedFields.body} onChange={(e) => updateApprovedField("body", e.target.value)} rows={14} />
-									</label>
-									<label>
-										<span>Still open</span>
-										<textarea value={approvedFields.parked} onChange={(e) => updateApprovedField("parked", e.target.value)} rows={5} />
-									</label>
-									<button className="rs-btn" onClick={() => setEditing(false)}>Done editing</button>
-								</div>
-							) : (
-								// The whole entry that will be saved, under the editor's section names; a part the model left empty is left out.
-								<div className="checkpoint-proposal-summary checkpoint-whole-entry">
-									{proposal.fields.title.trim() && <h3 className="checkpoint-entry-title">{plainMemoryText(proposal.fields.title.trim())}</h3>}
-									{approvedFields.sessionArc.trim() && (
-										<section>
-											<h4>What happened</h4>
-											<MarkdownRenderer>{plainMemoryText(approvedFields.sessionArc.trim())}</MarkdownRenderer>
-										</section>
-									)}
-									{approvedFields.body.trim() && (
-										<section>
-											<h4>What to keep</h4>
-											<MarkdownRenderer>{plainMemoryText(storedMemoryBody(approvedFields.body, proposal.fields.body).trim())}</MarkdownRenderer>
-										</section>
-									)}
-									{approvedFields.parked.trim() && !/^none\.?$/i.test(approvedFields.parked.trim()) && (
-										<section>
-											<h4>Still open</h4>
-											<MarkdownRenderer>{plainMemoryText(approvedFields.parked.trim())}</MarkdownRenderer>
-										</section>
-									)}
-								</div>
-							)}
-						</div>
-						{honestyNoticesNode}
-						{approvalError && <div className="checkpoint-proposal-error" role="alert">{approvalError}</div>}
-						{fillsHeadsUp && <div className="checkpoint-proposal-warnings checkpoint-sessions-headsup" role="status">{fillsHeadsUp}</div>}
-						<div className="checkpoint-preview-actions">
-							{!readOnly && approvalBlockedLine && <span className="proposal-approve-blocked-reason" role="status">{approvalBlockedLine}</span>}
-							{readOnly ? <button className="rs-btn" onClick={onClose}>Close</button> : !mustGenerateAgain && <button className="rs-btn rs-btn-primary" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(savedFields)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>}
-							{generateAgain && <button className={mustGenerateAgain ? "rs-btn rs-btn-primary" : "rs-btn"} disabled={approvalLoading} onClick={onGenerate}>Generate again</button>}
-							{!readOnly && !editing && !mustGenerateAgain && <button className="rs-btn" disabled={approvalLoading} onClick={() => setEditing(true)} title="Edit the entry before saving">Edit</button>}
-							{!readOnly && <button className="rs-btn" disabled={approvalLoading} onClick={() => void confirmDiscard()} title="Throw away this draft. Nothing is saved">Discard</button>}
-						</div>
-					</div>
-				) : notice ? (
-					// One notice with its ways out: the options form gives way to it.
-					<>
-						<div className="checkpoint-input-heading">
-							<p className="card-kicker">Remember</p>
-						</div>
-						<ModelNoticePanel notice={notice} onTryAgain={itemCount === 0 ? undefined : onGenerate} onChooseModel={onChooseModel} onSignIn={onSignIn} onClose={onClose} />
-					</>
-				) : (
-					<>
-						<div className="checkpoint-input-heading">
-							<p className="card-kicker">Remember</p>
-							<h2>What should carry forward?</h2>
-							<p>Choose how much to keep, and add anything specific you want this room to remember from this thread.</p>
-						</div>
-						<div className="checkpoint-density-group" aria-label="How much should this room keep?">
-							<div className="checkpoint-field-label">How much should this room keep?</div>
-							<div className="checkpoint-density-options">
-								{CHECKPOINT_DENSITY_OPTIONS.map((option) => (
-									<button key={option.id} className={`checkpoint-density-option ${density === option.id ? "selected" : ""}`} onClick={() => onDensityChange(option.id)}>
-										<strong>{option.label}</strong>
-										<span>{option.budget}</span>
-									</button>
-								))}
-							</div>
-						</div>
-						<label className="checkpoint-remember-field">
-							<div className="checkpoint-field-row">
-								<span className="checkpoint-field-label">What do you want to remember?</span>
-								<em>{rememberText.length}/{CHECKPOINT_REMEMBER_MAX_CHARS}</em>
-							</div>
-							<textarea
-								value={rememberText}
-								maxLength={CHECKPOINT_REMEMBER_MAX_CHARS}
-								onChange={(e) => onRememberTextChange(e.target.value.slice(0, CHECKPOINT_REMEMBER_MAX_CHARS))}
-								placeholder="Optional. Add the key nuance, decision, or thread that should not be lost."
-								rows={4}
-							/>
-						</label>
-						{readEstimate && rememberEstimateSentence(readEstimate) && <p className="checkpoint-read-note">{rememberEstimateSentence(readEstimate)}</p>}
-						{error && (isRememberOutcome(error) ? <p className="checkpoint-read-note" role="status">{error}</p> : <div className="checkpoint-proposal-error" role="alert">{error}</div>)}
-						{honestyNoticesNode}
-						<div className="checkpoint-preview-actions">
-							<button className="rs-btn" onClick={onClose}>Close</button>
-							{/* A Remember that did not finish can be let go without a new read. */}
-							{!readOnly && asksGenerateAgain(error) && <button className="rs-btn" onClick={onDiscard} title="Let this Remember go. Nothing is saved">Discard</button>}
-							{/* A damaged memory file meets every generate the same way: Close is the way out. */}
-							{error !== REMEMBER_DAMAGED_SENTENCE && <button className="rs-btn rs-btn-primary" disabled={itemCount === 0} onClick={onGenerate}>{asksGenerateAgain(error) ? "Generate again" : "Generate memory proposal"}</button>}
-						</div>
-					</>
-				)}
-			</section>
-		</div>
-	);
-}
-
-
-// Reasoning-effort capability as the server reports it. A server that predates
-// the control simply omits it, and the composer then shows no pill at all.
-//
-// `ladder` is the model's own dial: one rung per distinct effort, each carrying
-// the provider's name for it. A server that predates the ladder sends only the
-// token list, so one is built from it where every rung is its own label.
-function readEffortPayload(raw: any): { level: string; ladder: Array<{ level: string; label: string }> } | null {
-	if (typeof raw?.level !== "string" || !raw.level) return null;
-	const ladder = Array.isArray(raw?.ladder)
-		? raw.ladder
-				.filter((rung: any) => typeof rung?.level === "string" && rung.level && typeof rung?.label === "string" && rung.label)
-				.map((rung: any) => ({ level: String(rung.level), label: String(rung.label) }))
-		: Array.isArray(raw?.supported)
-			? raw.supported
-					.filter((entry: unknown) => typeof entry === "string" && entry)
-					.map((entry: string) => ({ level: entry, label: entry }))
-			: [];
-	if (ladder.length === 0) return null;
-	return { level: raw.level, ladder };
-}
-
-function CheckpointSplitButton({ hasUserInput, inFlight, skipsPreview, onQuickCheckpoint, onOpenFullCheckpoint }: { hasUserInput: boolean; inFlight: boolean; skipsPreview: boolean; onQuickCheckpoint: () => void; onOpenFullCheckpoint: () => void }) {
-	const [menuOpen, setMenuOpen] = useState(false);
-	const rootRef = useRef<HTMLDivElement | null>(null);
-	useEffect(() => {
-		if (!menuOpen) return;
-		function onPointerDown(event: PointerEvent) {
-			if (rootRef.current && !rootRef.current.contains(event.target as Node)) setMenuOpen(false);
-		}
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") setMenuOpen(false);
-		}
-		document.addEventListener("pointerdown", onPointerDown);
-		document.addEventListener("keydown", onKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", onPointerDown);
-			document.removeEventListener("keydown", onKeyDown);
-		};
-	}, [menuOpen]);
-	const checkpointTitle = inFlight ? "Stop or wait for the current response before remembering" : hasUserInput ? (skipsPreview ? "Saves without the preview unless something needs your review" : "Proposes what to remember from this conversation, for you to review") : "Send a message before remembering";
-	return (
-		<div className="checkpoint-split" ref={rootRef}>
-			<button className="icon-btn checkpoint-split-main" title={checkpointTitle} disabled={!hasUserInput || inFlight} onClick={() => { setMenuOpen(false); onQuickCheckpoint(); }}>Remember</button>
-			<button className="icon-btn checkpoint-split-toggle" title="More ways to remember" aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More ways to remember" disabled={inFlight} onClick={() => setMenuOpen((open) => !open)}><ChevronDownIcon /></button>
-			{menuOpen && (
-				<div className="checkpoint-split-menu" role="menu">
-					<button role="menuitem" title={hasUserInput ? "Choose summary density and add a steering note, then review before saving" : "Send a message before remembering"} disabled={!hasUserInput} onClick={() => { setMenuOpen(false); onOpenFullCheckpoint(); }}>Remember with options…</button>
-				</div>
-			)}
-		</div>
-	);
-}
+type LastMessageEditState =
+	| { phase: "editing"; id: string; text: string }
+	| { phase: "sent"; replaces: string; oldIds: string[]; newId: string; text: string };
 
 export function App() {
 	const [view, setView] = useState<MainView>("home");
@@ -3060,6 +207,19 @@ export function App() {
 	// the admin routes there regardless. Nor does a shared server, which is no
 	// one's own computer.
 	const clientContext = useRemoteClientContext();
+	// Another person signed in on this server: nothing of this page may go on talking as the first one.
+	const personChanged = usePersonChanged();
+	useEffect(() => {
+		if (!personChanged) return;
+		suppressReconnectRef.current = true;
+		cancelScheduledReconnect();
+		cancelScheduledHomeReconnect();
+		if (persistTimerRef.current !== null) {
+			window.clearTimeout(persistTimerRef.current);
+			persistTimerRef.current = null;
+		}
+		try { wsRef.current?.close(); } catch {}
+	}, [personChanged]);
 	const computerOnlyControls = showsComputerOnlyControls(clientContext);
 	// On a shared server the seen POST is not offered either: the browser's
 	// own record above is the only one.
@@ -3122,6 +282,15 @@ export function App() {
 	// everything that gates an action keeps reading `connected` alone.
 	const [socketSwapping, setSocketSwapping] = useState(false);
 	const socketSwapTimerRef = useRef<number | null>(null);
+	// A room socket from its opening until the server has caught it up: its
+	// ready, and the replay of a running answer when one follows. Until then
+	// the page cannot tell the room is answering, so the server's status says.
+	const [catchingUp, setCatchingUpState] = useState(false);
+	const catchingUpRef = useRef(false);
+	const setCatchingUp = (value: boolean) => {
+		catchingUpRef.current = value;
+		setCatchingUpState(value);
+	};
 	// The only connection state the user is ever shown: a sustained, confirmed
 	// inability to reach the engine, past a grace window, after retries that
 	// really failed. False through boot and through every ordinary swap.
@@ -3132,13 +301,26 @@ export function App() {
 	// (apiFetch). Any other answer, or none at all (an outage, a restart),
 	// is a real loss and the text shows. On this computer it shows at once.
 	const [signInChecked, setSignInChecked] = useState(false);
+	// A 401 the redirect did not act on (it never goes twice within 15 s): the
+	// session ended, and the banner says so with a way to sign in.
+	const [sessionEnded, setSessionEnded] = useState(false);
+	// Whether the first failed attempt of this outage has already asked.
+	const signInProbedRef = useRef(false);
+	// Each check has a number; only the newest one's answer counts, so an older one that comes back late cannot undo it.
+	const signInProbeSeqRef = useRef(0);
+	async function askIfSignedIn(): Promise<void> {
+		const mine = ++signInProbeSeqRef.current;
+		try {
+			const res = await apiFetch("/api/auth/status");
+			if (mine === signInProbeSeqRef.current) setSessionEnded(res.status === 401);
+			void res.body?.cancel();
+		} catch {}
+	}
 	useEffect(() => {
 		setSignInChecked(false);
 		if (!connectionWarning || !clientContext.sharedServer) return;
 		let cancelled = false;
-		void apiFetch("/api/auth/status")
-			.then((res) => res.body?.cancel(), () => {})
-			.finally(() => { if (!cancelled) setSignInChecked(true); });
+		void askIfSignedIn().finally(() => { if (!cancelled) setSignInChecked(true); });
 		return () => { cancelled = true; };
 	}, [connectionWarning, clientContext.sharedServer]);
 	const showConnectionLost = connectionWarning && (!clientContext.sharedServer || signInChecked);
@@ -3149,7 +331,9 @@ export function App() {
 	const [roomReconnectState, setRoomReconnectState] = useState<"idle" | "reconnecting" | "failed">("idle");
 	// The provider the open conversation is locked to, once the server said it
 	// is signed out ("" when the server did not name it); null otherwise.
-	const [signedOutProvider, setSignedOutProvider] = useState<string | null>(null);
+	// The provider the room was refused for at opening, with its key's state when it is a key connection.
+	const [signedOut, setSignedOut] = useState<{ provider: string; key?: CredentialKey } | null>(null);
+	const signedOutProvider = signedOut?.provider ?? null;
 	const signedOutProviderRef = useRef(signedOutProvider);
 	signedOutProviderRef.current = signedOutProvider;
 	// The room's model is no longer offered: stopped like a signed-out
@@ -3158,19 +342,42 @@ export function App() {
 	const [roomModelNotOffered, setRoomModelNotOffered] = useState(false);
 	// Another window moved this room to a new conversation: this one offers Reload, and sends nothing until then.
 	const [roomMovedOn, setRoomMovedOn] = useState(false);
+	const [turnLink, setTurnLinkState] = useState<TurnLink>("live");
+	const turnLinkRef = useRef<TurnLink>("live");
+	// Counts the waits through a dropped connection: a check begun in one wait never ends a later one.
+	const reconnectWaitRef = useRef(0);
+	const setTurnLink = (link: TurnLink) => {
+		if (link === "reconnecting" && turnLinkRef.current !== "reconnecting") reconnectWaitRef.current += 1;
+		turnLinkRef.current = link;
+		setTurnLinkState(link);
+	};
 	// A turn failed on the sign-in (a key that is gone or refused, a failed
 	// refresh) while the socket stayed up: the same one notice, until a
 	// sign-in in AI setup, the next message, or the conversation moves. The
 	// server reads the sign-ins again before every message, so the next send
 	// after a sign-in runs on it.
 	const [turnSignedOut, setTurnSignedOut] = useState<{ provider: string; key?: CredentialKey } | null>(null);
-	// The key or sign-in notice put the refused message back in the box: the notice says so until it goes or the message is sent.
-	const [messageBackWithNotice, setMessageBackWithNotice] = useState(false);
-	useEffect(() => { if (!turnSignedOut) setMessageBackWithNotice(false); }, [turnSignedOut]);
 	const turnSignedOutProvider = turnSignedOut?.provider ?? null;
 	const [busy, setBusy] = useState(false);
 	const [turnCancelling, setTurnCancelling] = useState(false);
 	const [turnInterruptedNote, setTurnInterruptedNote] = useState<string | null>(null);
+	// The room is shortening the conversation (from compaction_start to its end), which can take tens of seconds.
+	const [shortening, setShortening] = useState(false);
+	const [lastEdit, setLastEditState] = useState<LastMessageEditState | null>(null);
+	// Set with the state, not at the next render: the server's answer to a sent edit can arrive before that render.
+	const lastEditRef = useRef(lastEdit);
+	const setLastEdit = (next: LastMessageEditState | null) => {
+		lastEditRef.current = next;
+		setLastEditState(next);
+	};
+	// The message that can no longer be edited, by its bubble's id: the server said so when the room opened, the conversation was shortened since, or an edit of it was refused. A newer message is not held by it.
+	const [editBlockedId, setEditBlockedId] = useState<string | null>(null);
+	// An answer that starts meanwhile (another window), or the connection lost, ends an open edit as it was.
+	// A sent edit the server neither took nor refused when the room is idle again (it answered the prompt with an error) is over too: nothing stays dimmed.
+	useEffect(() => {
+		if (busy || !connected) cancelEdit();
+		if (!busy && lastEditRef.current?.phase === "sent") setLastEdit(null);
+	}, [busy, connected]);
 	const [sessionVersion, setSessionVersion] = useState(0);
 	const [usage, setUsage] = useState<SessionUsage>(ZERO_USAGE);
 	const [contextHealth, setContextHealth] = useState<ContextHealthStatus | null>(null);
@@ -3179,6 +386,45 @@ export function App() {
 	// Null until a room says so, and while a server predating the control runs.
 	const [roomEffort, setRoomEffort] = useState<{ level: string; ladder: Array<{ level: string; label: string }> } | null>(null);
 	const roomEffortRef = useRef<{ level: string; ladder: Array<{ level: string; label: string }> } | null>(null);
+	// A model picked for the open conversation, shown as its model until the
+	// room confirms or refuses the switch: "waiting" while the room answers
+	// (the switch goes when the answer ends), "sending" once it is asked. A
+	// reload drops it, so the control never names a model the room did not get.
+	const [heldModelPick, setHeldModelPick] = useState<{ agentId: string; conversationId: string; lock: RoomModelLock; phase: "waiting" | "sending" } | null>(null);
+	const heldModelPickRef = useRef(heldModelPick);
+	heldModelPickRef.current = heldModelPick;
+	// For the pick handler, which runs outside the render that computed it.
+	const roomInFlightRef = useRef(false);
+	// Switch requests on the wire, per conversation: a later pick in the same
+	// conversation waits for them, so the last pick is the one that stays. The
+	// tick redraws when one starts and re-runs the held-pick effect when one ends.
+	const switchesInFlightRef = useRef(new Map<string, number>());
+	// The model each conversation's newest switch goes to, while one is on the wire: the box names it.
+	const switchingToRef = useRef(new Map<string, RoomModelLock>());
+	const [switchesTick, setSwitchesTick] = useState(0);
+	// Conversations whose switch was written but answered with a failure: no
+	// writer of the page saves their lines until it has read what the switch
+	// stored (savePersistentAgentThread and the pagehide save ask savesHeldFor).
+	const switchOutcomeUnknownRef = useRef(new Set<string>());
+	const savesHeldFor = (agentId: string, conversationId: string) => switchOutcomeUnknownRef.current.has(`${agentId}\n${conversationId}`);
+	const switchesInFlightFor = (agentId: string, conversationId: string) => switchesInFlightRef.current.get(`${agentId}\n${conversationId}`) ?? 0;
+	// A model change the room has not settled holds every turn of this
+	// conversation where it goes out (sendMessage, continueAfterFailure), so no
+	// answer runs on the model being left: a held pick, or a switch still on the
+	// wire, which outlives the held pick when the page leaves and comes back.
+	function modelChangePendingFor(chat: PersistentChatConfig): boolean {
+		if (!chat) return false;
+		const held = heldModelPickRef.current;
+		return Boolean(held && held.agentId === chat.agentId && held.conversationId === chat.conversationId) || switchesInFlightFor(chat.agentId, chat.conversationId) > 0;
+	}
+	// The model panel opens from its control and from the chat's "Choose another model".
+	const [modelPanelOpen, setModelPanelOpen] = useState(false);
+	// The switch window, for a model this conversation is too long for.
+	const [modelSwitchAsk, setModelSwitchAsk] = useState<{ agentId: string; conversationId: string; lock: RoomModelLock; name: string } | null>(null);
+	// The model the next conversation continues on once this Remember saves:
+	// sent with every proposal of this Remember, and kept by the server with
+	// its job, which hands it back after a reload.
+	const rememberContinueOnRef = useRef<{ agentId: string; conversationId: string; lock: RoomModelLock } | null>(null);
 	// V5: the right pane is a single slot with two possible occupants — the
 	// approval preview and the artifact viewer. One state value = last-click-wins
 	// by construction; the pane header always names the occupant.
@@ -3280,10 +526,7 @@ export function App() {
 	// button's tooltip: read on entering the room and whenever Room settings
 	// (where it is changed) closes.
 	const [rememberSkipsPreview, setRememberSkipsPreview] = useState(false);
-	// First-open workspace nudge: a room with no workspace configured gets one
-	// dismissible in-room notice pointing at workspace settings. The dismissal
-	// is remembered per room in localStorage, so it never comes back.
-	const [workspaceNudgeRoomId, setWorkspaceNudgeRoomId] = useState<PersistentAgentId | null>(null);
+	const [workspaceHint, setWorkspaceHint] = useState<WorkspaceHint | null>(null);
 
 	// Escape closes the artifact/run pane, the keyboard twin of clicking its X
 	// or the selected rail row. A maximized pane restores first (one Escape per
@@ -3358,42 +601,59 @@ export function App() {
 	const [backgroundDoneToast, setBackgroundDoneToast] = useState<{ agentId: PersistentAgentId; displayName: string } | null>(null);
 	const [persistentThread, setPersistentThread] = useState<PersistentAgentThread | null>(null);
 	const [persistentChat, setPersistentChat] = useState<PersistentChatConfig>(null);
+	// Another conversation holds none of this one's edit.
+	useEffect(() => {
+		setLastEdit(null);
+		setEditBlockedId(null);
+	}, [persistentChat?.agentId, persistentChat?.conversationId]);
 	const [persistentResumeError, setPersistentResumeError] = useState<string | null>(null);
 	/** Bumped when the page reconnects after an outage: what failed meanwhile is asked for again. */
 	const [serviceBack, setServiceBack] = useState(0);
-	// Entering a room checks whether the workspace nudge is due there: only for
-	// rooms with NO workspace default, and only until it was dismissed once.
+	// Entering a room checks whether a folder hint is due there.
 	const workspaceNudgeAgentId = persistentChat?.agentId ?? null;
 	// The same policy fetch answers a second question: does this room's
-	// workspace default have Bash on? That fact gates the header's bash-mode
-	// chip — false (also the failed-fetch answer) simply means no chip.
+	// workspace default have Bash on? That fact gates the composer's
+	// command-mode chip: false (also the failed-fetch answer) simply means no chip.
 	const [roomBashEnabled, setRoomBashEnabled] = useState(false);
+	const phoneWidth = usePhoneWidth();
 	useEffect(() => {
-		setWorkspaceNudgeRoomId(null);
+		// Another room's hint goes; this room's stays until an answer replaces
+		// it, so a re-check that fails never hides a folder still missing.
+		setWorkspaceHint((hint) => (hint?.roomId === workspaceNudgeAgentId ? hint : null));
 		setRoomBashEnabled(false);
 		if (!workspaceNudgeAgentId) return;
-		let dismissed = false;
-		try { dismissed = localStorage.getItem(WORKSPACE_NUDGE_STORAGE_PREFIX + workspaceNudgeAgentId) !== null; } catch {}
 		let cancelled = false;
-		void fetchPersistentRoomWorkspaceDefault(workspaceNudgeAgentId)
-			.then((response) => {
-				if (cancelled) return;
-				setRoomBashEnabled(response.policy?.workspaceAccessMode === "localFiles" && response.policy?.bashEnabled === true);
-				if (!dismissed && response.policy === null) setWorkspaceNudgeRoomId(workspaceNudgeAgentId);
-			})
-			// The nudge is a nicety and the chip fails to hidden: a failed
-			// lookup just means neither shows.
-			.catch(() => {});
-		return () => { cancelled = true; };
+		const check = () => {
+			void fetchPersistentRoomWorkspaceDefault(workspaceNudgeAgentId)
+				.then((response) => {
+					if (cancelled) return;
+					setRoomBashEnabled(response.policy?.workspaceAccessMode === "localFiles" && response.policy?.bashEnabled === true);
+					setWorkspaceHint(workspaceHintOf(workspaceNudgeAgentId, response));
+				})
+				// The hint is a nicety and the chip fails to hidden: a failed
+				// lookup leaves both as they stand.
+				.catch(() => {});
+		};
+		check();
+		// A folder can go or come back outside the page, in Finder, so
+		// returning to the page asks again, without a reload.
+		const recheck = () => { if (document.visibilityState === "visible") check(); };
+		window.addEventListener("focus", recheck);
+		document.addEventListener("visibilitychange", recheck);
+		return () => {
+			cancelled = true;
+			window.removeEventListener("focus", recheck);
+			document.removeEventListener("visibilitychange", recheck);
+		};
 		// roomSettingsOpen: closing the settings modal re-checks, so a workspace
-		// set through the gear icon retires a nudge that was never dismissed —
+		// set through the gear icon retires a hint that was never dismissed,
 		// and the chip appears or disappears with a Bash toggle saved there.
 	}, [workspaceNudgeAgentId, roomSettingsOpen]);
 	function dismissWorkspaceNudge(): void {
-		if (workspaceNudgeRoomId) {
-			try { localStorage.setItem(WORKSPACE_NUDGE_STORAGE_PREFIX + workspaceNudgeRoomId, "1"); } catch {}
+		if (workspaceHint) {
+			try { localStorage.setItem(WORKSPACE_NUDGE_STORAGE_PREFIX + workspaceHint.roomId, "1"); } catch {}
 		}
-		setWorkspaceNudgeRoomId(null);
+		setWorkspaceHint(null);
 	}
 	// Name and provider move as one value: the face shows the name alone, the
 	// tooltip adds the provider, and the two can never drift apart.
@@ -3404,7 +664,12 @@ export function App() {
 	function setCurrentModelFromName(input: { model?: string; modelLabel?: string; provider?: string }, fallback = "") {
 		const canonical = canonicalModelName(input);
 		setCurrentModelState({ name: canonical.name || fallback, provider: canonical.provider ?? null });
+		if (input.provider && input.model && canonical.name) setRunningModelName({ provider: input.provider, model: input.model, name: canonical.name });
 	}
+	// The name the server's own frames give the model the room runs, keyed by
+	// that model: the model control shows it while the providers list loads,
+	// where a stored conversation's label can be a bare id.
+	const [runningModelName, setRunningModelName] = useState<{ provider: string; model: string; name: string } | null>(null);
 	const [checkpointPreviewOpen, setCheckpointPreviewOpen] = useState(false);
 	const [checkpointRememberText, setCheckpointRememberText] = useState("");
 	const [checkpointDensity, setCheckpointDensity] = useState<CheckpointDensity>("standard");
@@ -3518,6 +783,8 @@ export function App() {
 	// lock-bounce error frame is judged at event time, not render time).
 	const roomReconnectStateRef = useRef<"idle" | "reconnecting" | "failed">("idle");
 	const reconnectAttemptRef = useRef(0);
+	// A deliberate stand-down (the room is still answering): the trying stops on a shared server too.
+	const reconnectStoodDownRef = useRef(false);
 	// When the current outage began (first scheduled retry), null while connected.
 	const reconnectStartedAtRef = useRef<number | null>(null);
 	const reconnectTimerRef = useRef<number | null>(null);
@@ -3551,6 +818,11 @@ export function App() {
 	// rebuilds itself with the same shape of backoff the room socket uses.
 	const homeReconnectTimerRef = useRef<number | null>(null);
 	const homeReconnectAttemptRef = useRef(0);
+	// Set once the app has unmounted (a render error swaps in the error
+	// boundary's screen). The app's own teardown closes its socket, and that
+	// close, or a try whose request was out, arrives after: neither ladder may
+	// go on trying or setting state in a tree that is gone.
+	const unmountedRef = useRef(false);
 	// When the page last went hidden, so waking up can tell a laptop that slept
 	// through an outage from a user flicking between tabs. Only the former may
 	// reset the backoff ladder; the latter would pin it at one second.
@@ -3563,21 +835,22 @@ export function App() {
 	const turnCancellingRef = useRef(turnCancelling);
 	const turnInterruptedNoteRef = useRef<string | null>(turnInterruptedNote);
 	const toolByIdRef = useRef<Map<string, string>>(new Map());
-	const hiddenRoutineToolByIdRef = useRef<Map<string, { name: string; args: any }>>(new Map());
+	// A provider's own search, by its id: the step's item id, the server's in a keyed turn.
+	const serverToolByIdRef = useRef<Map<string, string>>(new Map());
+	// `itemId`: the server's id for the call's step, so a hidden call's error card carries it.
+	const hiddenRoutineToolByIdRef = useRef<Map<string, { name: string; args: any; itemId?: string }>>(new Map());
 	const retrievalActivityIdRef = useRef<string | null>(null);
+	// The thinking items of the message being written, by content block: one each,
+	// so each keeps its own words (blocks in a row are drawn as one row, ThoughtGroup).
+	const thinkingRowByBlockRef = useRef<Map<number, { id: string; startedAt: number }>>(new Map());
 	const itemsRef = useRef(items);
 	// All assistant text flows through one explicit state machine — see
 	// assistant-stream.ts. The refs here are only the host glue: the machine
 	// state, the scheduled tick handle, and the transient system lines the
 	// retry flow swaps in and out.
 	const streamStateRef = useRef<AssistantStreamState>(createAssistantStreamState());
-	const revealPacingRef = useRef<RevealPacing>(readRevealPacing());
-	// The answer is fully received but its tail is still appearing (the
-	// reducer's draining phase). The turn's chrome (Stop, the header spinner,
-	// the composer placeholder, Remember) keeps saying "working" until it is
-	// done; nothing server-side reads this. Set only when it flips.
-	const [revealing, setRevealing] = useState(false);
-	const revealingRef = useRef(false);
+	// The answer a reconnect's replay drew in one paint: the blocks drawn then do not fade in.
+	const [answerDrawnAtOnceId, setAnswerDrawnAtOnceId] = useState<string | null>(null);
 	// The consult (DelegationCard) client state machine — see consult-stream.ts.
 	// The ref is the source of truth the WS closures read; the state drives the
 	// docked card / folded pill render.
@@ -3626,8 +899,42 @@ export function App() {
 	const returnedPromptPendingRef = useRef(false);
 	// The failure line whose Try again continues its turn, from the click until the server starts that turn or turns it down.
 	const continuedLineRef = useRef<string | null>(null);
+	// The items each conversation lost on purpose (a message handed back to the box), until a save names them: handBack.
+	const pendingRemovalsRef = useRef(new PendingRemovals());
+	// A retried attempt's parts the page took off the screen. The retry may write under their ids again, at any time
+	// until the server's turn ends, which this page cannot know for sure: they are never named as removed, only left
+	// out of a saved copy this tab takes on, unless the server landed them (savedWithoutRetriedParts).
+	const retriedPartsRef = useRef(new PendingRemovals());
+	// The card each transferred answer's queue entry belongs to: a reconnect keeps an entry only this tab holds by its card.
+	const handoffCardByEntryRef = useRef(new Map<string, string>());
+	// The newest turn's key (thread-items-by-id.ts): the id this page sent it with, or the one its replayed parts name. Only its parts take a Stop's count.
+	const turnKeyRef = useRef<string | null>(null);
 	// The last turn's end said the server's stop cut it: such an answer keeps the connection-lost note at the close.
 	const turnCutByStopRef = useRef(false);
+	// Messages sent while the room answers, until the room has them (outgoing-messages.ts). The ref is what the send and frame paths read.
+	const [outgoing, setOutgoing] = useState<OutgoingMessage[]>([]);
+	const outgoingRef = useRef<OutgoingMessage[]>(outgoing);
+	// Edits on a message the running answer holds, by id, with its text, until the server answers; a new connection's ready says which it took out.
+	const editsAskedRef = useRef(new Map<string, string>());
+	function dispatchOutgoing(action: OutgoingAction): void {
+		const before = outgoingRef.current;
+		const next = reduceOutgoing(before, action);
+		outgoingRef.current = next;
+		setOutgoing(next);
+		// The server keeps what only this page has, so a reload or a closed window loses none; another conversation's stay with it.
+		const ws = wsRef.current;
+		if (action.type === "clear" || !ws || ws.readyState !== WebSocket.OPEN) return;
+		const { hold, drop } = keptChanges(before, next);
+		if (hold.length) ws.send(JSON.stringify({ type: "hold", messages: hold }));
+		for (const id of drop) ws.send(JSON.stringify({ type: "held_drop", id }));
+	}
+	// The person pressed Stop in this turn: what the server hands back after it is theirs, never sent on.
+	const stopByPersonRef = useRef(false);
+	// The answer stopped at the words on screen for the person's message: what still arrives of it waits here,
+	// and goes on screen only when the server says the message waits instead (`cut` false); after a cut it never shows.
+	const answerFreezeRef = useRef<{ backlog: AssistantStreamAction[]; cut: boolean } | null>(null);
+	// The cut came before anything of the answer showed: no line under it.
+	const cutQuietRef = useRef(false);
 	// The model whose call failed last, named by the retry note that follows it.
 	const failedTurnModelNameRef = useRef("");
 	const persistentChatRef = useRef<PersistentChatConfig>(persistentChat);
@@ -3844,6 +1151,8 @@ export function App() {
 		if (!persistentChat) setRoomSettingsOpen(false);
 	}, [persistentChat]);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	// The rooms an "@Room question" can name, as last rendered, for the send path.
+	const mentionCandidatesRef = useRef<MentionCandidateRoom[]>([]);
 	const attachFileInputRef = useRef<HTMLInputElement>(null);
 	const workbenchRef = useRef<HTMLDivElement>(null);
 
@@ -3931,15 +1240,20 @@ export function App() {
 		// the callers that own the current room's queue pass it (send/transfer via
 		// the debounced persist, the boundary carries/clears). Reconciliation saves
 		// for other threads omit it, so they never clobber a stored queue.
+		// While a lost switch's outcome is unknown the stored conversation wins: it is read, not overwritten.
+		if (savesHeldFor(thread.agentId, thread.conversationId)) return await fetchPersistentAgentThread(thread.agentId as PersistentAgentId, thread.conversationId);
+		// The removals this request names; a hand-back after it started waits for the next save.
+		const removed = pendingRemovalsRef.current.forSave(thread.agentId, thread.conversationId);
 		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(thread.agentId)}/threads/${encodeURIComponent(thread.conversationId)}`, {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ state, origin, model: thread.model, items: nextItems.filter((item) => !isTurnRunningNote(item)), ...(pendingHandoffs !== undefined ? { pendingHandoffs } : {}) }),
+			body: threadSaveBody({ state, origin, model: thread.model, items: nextItems, pendingHandoffs, removed }),
 		});
 		// The server refuses the body before the handler runs, so the stored
 		// conversation is the one from the last save that was accepted.
 		if (res.status === 413) throw new Error("This conversation is too large to save. What was saved before is kept.");
 		if (!res.ok) throw await persistentAgentResponseError(res, `Failed to save persistent-agent thread (${res.status})`);
+		pendingRemovalsRef.current.clear(thread.agentId, thread.conversationId, removed);
 		const body = await res.json() as { thread: PersistentAgentThreadRecord; runtime: PersistentAgentStatus["runtime"] };
 		applyPersistentRuntime(thread.agentId, body.runtime);
 		return body.thread;
@@ -4285,7 +1599,10 @@ export function App() {
 		try {
 			// The debounced persist owns the current live room — carry its queue so a
 			// transfer (enqueue) or a send (clear) reaches the thread record.
-			if (persistentChat && !closedByFullSaveRef.current) await savePersistentAgentThread(persistentChat, "active", "unknown", items, pendingHandoffsRef.current);
+			// A window another window took the room from saves nothing: the room's conversation goes on there.
+			// Nor does a room waiting to reconnect: its list may lack what another window wrote meanwhile, and the
+			// server keeps a save's own items whole, so the reconnect's save of the merged list goes first.
+			if (persistentChat && !closedByFullSaveRef.current && turnLinkRef.current !== "elsewhere" && roomReconnectStateRef.current !== "reconnecting") await savePersistentAgentThread(persistentChat, "active", "unknown", items, pendingHandoffsRef.current);
 		} catch {}
 	}
 
@@ -4490,8 +1807,8 @@ export function App() {
 	// where rAF pauses and nothing is being watched so the reveal just drains).
 	// ------------------------------------------------------------------
 
-	function applyStreamUpserts(upserts: Map<string, { text: string; streaming: boolean }>, s: ChatItem[]): ChatItem[] {
-		let next = s;
+	function applyStreamUpserts(upserts: Map<string, { text: string; streaming: boolean }>, s: ChatItem[], drops: ReadonlySet<string> = new Set()): ChatItem[] {
+		let next = drops.size ? s.filter((it) => !(it.kind === "assistant" && drops.has(it.id))) : s;
 		for (const [id, u] of upserts) {
 			if (next.some((it) => it.id === id && it.kind === "assistant")) {
 				next = next.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, text: u.text, streaming: u.streaming } : it));
@@ -4504,15 +1821,42 @@ export function App() {
 
 	function commitStreamState(state: AssistantStreamState) {
 		streamStateRef.current = state;
-		const draining = state.phase === "draining";
-		if (draining !== revealingRef.current) {
-			revealingRef.current = draining;
-			setRevealing(draining);
+	}
+
+	/**
+	 * The answer parts the stream took back. An echo's are named as removed in the next saves. A retried attempt's
+	 * are only remembered (retriedPartsRef): the retry may write under the same ids, which forgets them.
+	 */
+	function streamDropsOf(effects: AssistantStreamEffect[]): Set<string> {
+		const dropped = effects.flatMap((effect) => (effect.kind === "drop" ? [effect] : []));
+		const chat = persistentChatRef.current;
+		if (chat) {
+			const of = (why: "echo" | "retried") => dropped.flatMap((effect) => (effect.why === why ? [effect.id] : []));
+			pendingRemovalsRef.current.add(chat.agentId, chat.conversationId, of("echo"));
+			retriedPartsRef.current.add(chat.agentId, chat.conversationId, of("retried"));
+			const written = effects.flatMap((effect) => (effect.kind === "upsert" ? [effect.id] : []));
+			if (written.length) retriedPartsRef.current.clear(chat.agentId, chat.conversationId, written);
 		}
+		return new Set(dropped.map((effect) => effect.id));
+	}
+
+	/**
+	 * A saved copy this tab takes on, less the copies an earlier save left of a retried attempt's parts. A part the
+	 * server landed is the retry's and stays. This tab's next save then lacks the rest, so the server drops them too.
+	 */
+	function savedWithoutRetriedParts(chat: { agentId: string; conversationId: string }, saved: ChatItem[]): ChatItem[] {
+		const retired = new Set(retriedPartsRef.current.all(chat.agentId, chat.conversationId));
+		return retired.size ? saved.filter((item) => !retired.has(item.id) || item.landed === true) : saved;
 	}
 
 	function dispatchStream(action: AssistantStreamAction): AssistantStreamEffect[] {
-		const { state, effects } = reduceAssistantStream(streamStateRef.current, action, revealPacingRef.current);
+		if (action.type === "new_turn" || action.type === "reset") answerFreezeRef.current = null;
+		const freeze = answerFreezeRef.current;
+		if (freeze && FROZEN_STREAM_ACTIONS.has(action.type)) {
+			if (!freeze.cut) freeze.backlog.push(action);
+			return [];
+		}
+		const { state, effects } = reduceAssistantStream(streamStateRef.current, action);
 		commitStreamState(state);
 		const upserts = new Map<string, { text: string; streaming: boolean }>();
 		for (const effect of effects) {
@@ -4520,7 +1864,8 @@ export function App() {
 			else if (effect.kind === "schedule_tick") scheduleStreamTick();
 			else if (effect.kind === "warn") console.warn(effect.message, effect.detail ?? "");
 		}
-		if (upserts.size) setItems((s) => applyStreamUpserts(upserts, s));
+		const drops = streamDropsOf(effects);
+		if (upserts.size || drops.size) setItems((s) => applyStreamUpserts(upserts, s, drops));
 		return effects;
 	}
 
@@ -4571,15 +1916,16 @@ export function App() {
 	// this), with no interrupt note. Safe to call when idle.
 	function flushAssistantStream() {
 		cancelStreamTick();
-		const { state, effects } = reduceAssistantStream(streamStateRef.current, { type: "flush", now: performance.now() }, revealPacingRef.current);
+		const { state, effects } = reduceAssistantStream(streamStateRef.current, { type: "flush", now: performance.now() });
 		commitStreamState(state);
 		const upserts = new Map<string, { text: string; streaming: boolean }>();
 		for (const effect of effects) {
 			if (effect.kind === "upsert") upserts.set(effect.id, { text: effect.text, streaming: effect.streaming });
 			else if (effect.kind === "warn") console.warn(effect.message, effect.detail ?? "");
 		}
-		if (upserts.size) {
-			const update = (s: ChatItem[]) => applyStreamUpserts(upserts, s);
+		const drops = streamDropsOf(effects);
+		if (upserts.size || drops.size) {
+			const update = (s: ChatItem[]) => applyStreamUpserts(upserts, s, drops);
 			itemsRef.current = update(itemsRef.current);
 			setItems(update);
 		}
@@ -4630,8 +1976,9 @@ export function App() {
 		// Reattach catch-up: everything buffered so far is text that already
 		// exists server-side — drain it on a 0ms timer (same transport as the
 		// hidden-tab path, which keeps the dispatch out of the reducer's own
-		// effect loop) instead of pacing it like fresh tokens.
-		if (reattachReplayDrainRef.current) {
+		// effect loop) instead of pacing it like fresh tokens. After Stop the
+		// same: text that arrives before the abort lands is shown as it comes.
+		if (reattachReplayDrainRef.current || turnCancellingRef.current) {
 			if (streamTickRafRef.current !== null) {
 				window.cancelAnimationFrame(streamTickRafRef.current);
 				streamTickRafRef.current = null;
@@ -4683,13 +2030,14 @@ export function App() {
 		const onPageHide = () => {
 			flushAssistantStream();
 			const chat = persistentChatRef.current;
-			if (!chat || closedByFullSaveRef.current) return;
+			if (!chat || closedByFullSaveRef.current || turnLinkRef.current === "elsewhere" || savesHeldFor(chat.agentId, chat.conversationId)) return;
 			try {
 				void apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/threads/${encodeURIComponent(chat.conversationId)}`, {
 					method: "PUT",
 					headers: { "content-type": "application/json" },
 					keepalive: true,
-					body: JSON.stringify({ state: "active", origin: "unknown", model: chat.model, items: itemsRef.current.filter((item) => !isTurnRunningNote(item)), pendingHandoffs: pendingHandoffsRef.current }),
+					// Its answer is never read, so it clears no removal: a later save names them again.
+					body: threadSaveBody({ state: "active", origin: "unknown", model: chat.model, items: itemsRef.current, pendingHandoffs: pendingHandoffsRef.current, removed: pendingRemovalsRef.current.forSave(chat.agentId, chat.conversationId) }),
 				});
 			} catch {}
 		};
@@ -4715,11 +2063,16 @@ export function App() {
 	// scheduled then outlived the uncovering (measured: 24 s late after a
 	// 36 s outage). A background tab's timers are throttled by the browser
 	// anyway, and the loop gives up after two minutes of outage; the banner
-	// then offers Reconnect. The attempt cap is a backstop only, and the value
-	// a stand-down (room_cooking) jumps to.
+	// then offers Reconnect. The attempt cap is a backstop only.
 	const RECONNECT_MAX_ATTEMPTS = 60;
 	const RECONNECT_GIVE_UP_MS = 120_000;
 	const RECONNECT_MAX_DELAY_MS = 5_000;
+	// A shared server comes back by itself (a long stop, an upgrade), so a
+	// room there keeps trying past the give-up, about every 15 s plus a random
+	// spread: every open room dialling at once is what a returning server
+	// does not need.
+	const RECONNECT_SHARED_DELAY_MS = 15_000;
+	const RECONNECT_SHARED_SPREAD_MS = 5_000;
 
 	/** How long room chrome keeps quiet about a socket being replaced. */
 	const SWAP_QUIET_MS = 800;
@@ -4732,10 +2085,68 @@ export function App() {
 	// note was a lie and is rewritten to this honest one.
 	const CONNECTION_LOST_NOTE = "Response interrupted: the connection was lost.";
 	const CONNECTION_LOST_COOKING_NOTE = "Connection lost - the response continues in the background and will be here when you return.";
+	/** The line a turn's answer gets when the connection was lost before it had any text (thinking, or a step). */
+	const isConnectionLostLine = (item: ChatItem) => item.kind === "system" && (item.text === CONNECTION_LOST_NOTE || item.text === CONNECTION_LOST_COOKING_NOTE);
 
 	function setRoomReconnect(state: "idle" | "reconnecting" | "failed") {
 		roomReconnectStateRef.current = state;
 		setRoomReconnectState(state);
+		// The room stopped trying: only now is the answer known to be cut off here.
+		if (state === "failed" && turnLinkRef.current === "reconnecting") endReconnectingTurn(CONNECTION_LOST_NOTE);
+	}
+
+	/** A turn this window waited on through a dropped connection is over here: with `note`, the answer says why. */
+	function endReconnectingTurn(note: string | null) {
+		setTurnLink("live");
+		// The interrupt puts what arrived but was not yet shown on screen, above the note.
+		if (note) markCurrentAssistantInterrupted(note);
+		else flushAssistantStream();
+		setBusy(false);
+		busyRef.current = false;
+	}
+
+	/**
+	 * After a reconnect the server's ready says whether a replay follows
+	 * (`reattaching`). With one, the replay ends the wait. Without one the turn
+	 * is over: its landing in the thread is the whole answer, shown finished;
+	 * with no landing it was lost with the server, and the answer says so.
+	 */
+	async function endReconnectingTurnWithoutReplay(agentId: PersistentAgentId, ws: WebSocket): Promise<void> {
+		// Bound to the connection and the wait it began in: after the read, a newer connection or a later wait is not this one's to end.
+		const wait = reconnectWaitRef.current;
+		const chat = persistentChatRef.current;
+		const stillWaiting = () => !unmountedRef.current && !personHasChanged() && wsRef.current === ws && reconnectWaitRef.current === wait && turnLinkRef.current === "reconnecting" && persistentChatRef.current?.agentId === agentId;
+		if (!chat || !stillWaiting()) return;
+		// A read that fails says nothing about the turn: it is tried again while this wait lasts.
+		let record: PersistentAgentThreadRecord | null = null;
+		for (let attempt = 0; record === null; attempt++) {
+			record = await fetchPersistentAgentThread(agentId, chat.conversationId).catch(() => null);
+			if (!stillWaiting()) return;
+			if (record === null) {
+				await new Promise((resolve) => window.setTimeout(resolve, Math.min(8000, 1000 * 2 ** attempt)));
+				if (!stillWaiting()) return;
+			}
+		}
+		const fetched = threadRecordToLocalThread(record, chat.displayName);
+		fetched.items = savedWithoutRetriedParts(chat, fetched.items);
+		const shownIds = new Set(itemsRef.current.map((item) => item.id));
+		const detachedLanding = fetched.items.some((item) => typeof item.id === "string" && item.id.startsWith("detached-") && !shownIds.has(item.id));
+		if (!detachedLanding && !waitedTurnLanded(fetched.items)) {
+			endReconnectingTurn(CONNECTION_LOST_NOTE);
+			return;
+		}
+		endReconnectingTurn(null);
+		// A turn with shared ids landed under the ids this tab holds: the saved copy, with what only this tab holds.
+		const removed = new Set(pendingRemovalsRef.current.all(chat.agentId, chat.conversationId));
+		const items = detachedLanding ? fetched.items : reconnectedThread({ items: fetched.items, queue: [] }, { items: itemsRef.current, queue: [] }, removed, () => undefined).items;
+		setItems(items);
+		setPersistentThread({ ...fetched, items, state: "live" });
+	}
+
+	/** The turn this tab waited on landed: the saved copy holds an item the server named for its key, marked landed. */
+	function waitedTurnLanded(saved: ChatItem[]): boolean {
+		const key = turnKeyRef.current;
+		return key !== null && saved.some((item) => item.landed === true && keyOfId(item.id) === key);
 	}
 
 	// --- Honest connection health -------------------------------------------
@@ -4763,6 +2174,10 @@ export function App() {
 	}
 
 	function noteConnectionOpen() {
+		signInProbedRef.current = false;
+		// A check still out when the connection came back finds nothing worth saying.
+		signInProbeSeqRef.current += 1;
+		setSessionEnded(false);
 		applyConnectionHealth({ type: "opened", now: Date.now() });
 	}
 
@@ -4788,6 +2203,13 @@ export function App() {
 	 * toward a warning.
 	 */
 	function noteConnectionClosed(deliberate: boolean) {
+		// On a shared server an ended sign-in is the likeliest cause of a first
+		// failure outside a room, so it is asked about at once, not after the
+		// warning's grace window. (A room's retry reads through apiFetch itself.)
+		if (!deliberate && knownRemoteClientContext()?.sharedServer && !persistentChatRef.current && !signInProbedRef.current) {
+			signInProbedRef.current = true;
+			void askIfSignedIn();
+		}
 		applyConnectionHealth({ type: deliberate ? "swapped" : "attempt_failed", now: Date.now() });
 	}
 
@@ -4837,15 +2259,30 @@ export function App() {
 
 	function scheduleHomeReconnect(delayMs?: number) {
 		cancelScheduledHomeReconnect();
+		if (unmountedRef.current || personHasChanged()) return;
 		if (persistentChatRef.current) return; // the room ladder owns this socket
 		// No attempt cap: outside a room there is no transcript to protect and
 		// nothing for a manual affordance to hang off, so the app just keeps
 		// quietly trying and the banner does the talking if it stays broken.
 		const delay = delayMs ?? Math.min(15_000, 1000 * 2 ** homeReconnectAttemptRef.current);
-		homeReconnectTimerRef.current = window.setTimeout(() => {
+		homeReconnectTimerRef.current = window.setTimeout(async () => {
 			homeReconnectTimerRef.current = null;
 			if (persistentChatRef.current) return;
 			homeReconnectAttemptRef.current += 1;
+			// On a shared server a refused socket tells the page nothing: the cheap question first, so a person
+			// who changed ends the page instead of a rebuild being refused again on every try.
+			if (knownRemoteClientContext()?.sharedServer) {
+				const dropped = wsRef.current;
+				const answer = await refreshRemoteClientContext();
+				// The page or the app ended, or a room or a newer socket took over while the question was out.
+				if (answer === "person changed" || unmountedRef.current || persistentChatRef.current || wsRef.current !== dropped) return;
+				if (answer === "no answer") {
+					// A try that got no answer failed as a refused rebuild would: the lost-connection line counts it.
+					applyConnectionHealth({ type: "attempt_failed", now: Date.now() });
+					scheduleHomeReconnect();
+					return;
+				}
+			}
 			// Outside a room a bare version bump IS the reconnect: the socket
 			// carries no turn, no busy state and no transcript, so rebuilding it
 			// is the whole of the work a room's programmatic Resume has to do.
@@ -4862,17 +2299,27 @@ export function App() {
 
 	function scheduleRoomReconnect(delayMs?: number) {
 		cancelScheduledReconnect();
+		if (unmountedRef.current || personHasChanged()) return;
 		if (!persistentChatRef.current) {
 			setRoomReconnect("idle");
 			return;
 		}
 		if (reconnectStartedAtRef.current === null) reconnectStartedAtRef.current = Date.now();
-		if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS || Date.now() - reconnectStartedAtRef.current >= RECONNECT_GIVE_UP_MS) {
+		const sharedServer = knownRemoteClientContext()?.sharedServer === true;
+		const outageMs = Date.now() - reconnectStartedAtRef.current;
+		// On a shared server only a stand-down ends the trying; running out of
+		// attempts or time on a lost connection does not.
+		const gaveUp = reconnectStoodDownRef.current || (!sharedServer && (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS || outageMs >= RECONNECT_GIVE_UP_MS));
+		if (gaveUp) {
 			setRoomReconnect("failed");
 			return;
 		}
 		setRoomReconnect("reconnecting");
-		const delay = delayMs ?? Math.min(RECONNECT_MAX_DELAY_MS, 1000 * 2 ** reconnectAttemptRef.current);
+		const climb = Math.min(RECONNECT_MAX_DELAY_MS, 1000 * 2 ** Math.min(reconnectAttemptRef.current, 10));
+		// The early retries are spread too, plus or minus half: a server back after a short restart is not dialled by every room in step.
+		const delay = delayMs ?? (sharedServer
+			? outageMs >= RECONNECT_GIVE_UP_MS ? RECONNECT_SHARED_DELAY_MS + Math.random() * RECONNECT_SHARED_SPREAD_MS : climb * (0.5 + Math.random())
+			: climb);
 		reconnectTimerRef.current = window.setTimeout(() => {
 			reconnectTimerRef.current = null;
 			reconnectAttemptRef.current += 1;
@@ -4885,16 +2332,24 @@ export function App() {
 	function retryRoomReconnectNow() {
 		reconnectAttemptRef.current = 0;
 		reconnectStartedAtRef.current = null;
+		reconnectStoodDownRef.current = false;
 		scheduleRoomReconnect(0);
 	}
 
 	// The health re-check timer outlives individual sockets by design, so it is
-	// the one thing the socket effect's cleanup cannot own.
-	useEffect(() => () => {
-		if (connectionHealthTimerRef.current !== null) window.clearTimeout(connectionHealthTimerRef.current);
-		if (homeReconnectTimerRef.current !== null) window.clearTimeout(homeReconnectTimerRef.current);
-		if (socketSwapTimerRef.current !== null) window.clearTimeout(socketSwapTimerRef.current);
-		clearSocketTimers();
+	// the one thing the socket effect's cleanup cannot own. The ladders' timers
+	// end here too, and the mark stops what arrives after the unmount.
+	useEffect(() => {
+		// A development remount (StrictMode) runs the cleanup and then mounts again.
+		unmountedRef.current = false;
+		return () => {
+			unmountedRef.current = true;
+			if (connectionHealthTimerRef.current !== null) window.clearTimeout(connectionHealthTimerRef.current);
+			cancelScheduledHomeReconnect();
+			cancelScheduledReconnect();
+			if (socketSwapTimerRef.current !== null) window.clearTimeout(socketSwapTimerRef.current);
+			clearSocketTimers();
+		};
 	}, []);
 
 	async function reconnectPersistentRoom() {
@@ -4903,39 +2358,66 @@ export function App() {
 			setRoomReconnect("idle");
 			return;
 		}
+		// The person may have switched or left the room, or the conversation, while a request ran.
+		const stillThisRoom = () => persistentChatRef.current?.agentId === chat.agentId && persistentChatRef.current?.conversationId === chat.conversationId;
 		try {
-			const record = await fetchPersistentAgentThread(chat.agentId, chat.conversationId);
-			// The user may have switched or left the room while the fetch ran.
-			if (persistentChatRef.current?.conversationId !== chat.conversationId) {
-				setRoomReconnect("idle");
-				return;
+			// On a shared server a retry first asks the cheap question, and reads
+			// the thread only once the server answers it: after a long stop,
+			// every open room reading its whole thread as the server comes back
+			// is the load that keeps it down.
+			if (knownRemoteClientContext()?.sharedServer) {
+				const answer = await refreshRemoteClientContext();
+				// Another person is signed in: this page's data is not theirs, so nothing of it is read or saved.
+				// Nor once the app is gone.
+				if (answer === "person changed" || unmountedRef.current) return;
+				// An attempt for a room the person has left says nothing about the room they are in.
+				if (!stillThisRoom()) return;
+				if (answer === "no answer") {
+					scheduleRoomReconnect();
+					return;
+				}
 			}
+			const record = await fetchPersistentAgentThread(chat.agentId, chat.conversationId);
+			if (unmountedRef.current || personHasChanged() || !stillThisRoom()) return;
 			const fetched = threadRecordToLocalThread(record, chat.displayName);
-			// The debounced persist may not have landed before the drop (a hard
-			// server kill right after an exchange leaves the thread file behind
-			// the screen). Keep whichever transcript is richer and save it back,
-			// so the rebuilt session's context matches what is displayed. When the
-			// file is at least as fresh (another surface may have advanced the
-			// room while this tab was offline), the file wins — like Resume.
-			// One case beats the length heuristic outright: the server-side
-			// landing of a detached turn CONSOLIDATES — it strips
-			// the trailing partial assistant debris after the last user message
-			// and appends one `detached-*` item — so the landed file has FEWER
-			// items than the stale local transcript while being strictly newer.
-			// Whenever the file carries a landing item this transcript has never
-			// seen, the file wins unconditionally; length only referees the
-			// ordinary debounced-persist races.
+			fetched.items = savedWithoutRetriedParts(chat, fetched.items);
+			// The saved copy, with what only this tab holds: the debounced save
+			// may not have reached the server before the drop, and another
+			// window may have written while this tab was offline. The items this
+			// tab removed on purpose stay out, whoever's copy still holds them.
+			// A turn without shared ids that landed meanwhile (a `detached-*`
+			// item this tab never saw) consolidated its partial answer into
+			// that item: the saved copy wins whole, with its queue.
 			const localItemIds = new Set(itemsRef.current.map((item) => item.id));
 			const fetchedHasNewLanding = fetched.items.some((item) => typeof item.id === "string" && item.id.startsWith("detached-") && !localItemIds.has(item.id));
-			const localFresher = !fetchedHasNewLanding && itemsRef.current.length > fetched.items.length;
-			const liveThread = { ...fetched, state: "live" as const, items: localFresher ? itemsRef.current : fetched.items };
-			const restoredQueue = localFresher ? pendingHandoffsRef.current : readConsultHandoffQueue(record.pendingHandoffs);
-			if (!localFresher) applyPendingHandoffs(restoredQueue, deriveTrailingConsultIds(liveThread.items, restoredQueue.length));
-			await savePersistentAgentThread(liveThread, "active", "unknown", liveThread.items, restoredQueue);
+			const removed = new Set(pendingRemovalsRef.current.all(chat.agentId, chat.conversationId));
+			const savedQueue = readConsultHandoffQueue(record.pendingHandoffs);
+			const merged = fetchedHasNewLanding
+				? { items: fetched.items.filter((item) => !removed.has(item.id)), queue: savedQueue }
+				: reconnectedThread({ items: fetched.items, queue: savedQueue }, { items: itemsRef.current, queue: pendingHandoffsRef.current }, removed, (entry) => handoffCardByEntryRef.current.get(entry));
+			const landed = fetchedHasNewLanding || waitedTurnLanded(fetched.items);
+			if (landed && turnLinkRef.current === "reconnecting") endReconnectingTurn(null);
+			// The newest turn's answer is back whole: its line saying the connection was lost goes, also after the room gave up.
+			const newestTurn = merged.items.map((item) => item.kind).lastIndexOf("user");
+			// The turn waited on still runs, and its replay rebuilds its answer: until then the screen keeps
+			// this tab's copy of that turn's items, as the saved one can be older and shorter.
+			const waitedKey = turnLinkRef.current === "reconnecting" && !landed ? turnKeyRef.current : null;
+			const shownById = new Map(itemsRef.current.map((item) => [item.id, item] as const));
+			const items = landed
+				? merged.items.filter((item, i) => !(i > newestTurn && isConnectionLostLine(item)))
+				: waitedKey ? merged.items.map((item) => (keyOfId(item.id) === waitedKey ? shownById.get(item.id) ?? item : item)) : merged.items;
+			const liveThread = { ...fetched, state: "live" as const, items };
+			if (personHasChanged()) return;
+			const reply = await savePersistentAgentThread(liveThread, "active", "unknown", liveThread.items, merged.queue);
+			// The person may have changed, the app ended, or another room or conversation opened while the save was out: nothing goes on from it.
+			if (unmountedRef.current || personHasChanged() || !stillThisRoom()) return;
+			// What the room shows is the conversation as the server merged it.
+			liveThread.items = threadRecordToLocalThread(reply, chat.displayName).items;
+			applyPendingHandoffs(merged.queue, deriveTrailingConsultIds(liveThread.items, merged.queue.length));
 			// resetLiveUiState clears the composer — carry a draft typed while
 			// offline across the rebind.
 			const draft = textareaRef.current?.value ?? "";
-			resetLiveUiState(true);
+			resetLiveUiState(true, true);
 			// The reset keeps Remember's dialog and the note typed in it, and stops its following: the room asks the
 			// server again how its Remember stands (still reading, finished, or cut by a restart), so the dialog shows the truth.
 			checkpointProposalAbortRef.current?.abort();
@@ -4950,11 +2432,15 @@ export function App() {
 			// Still "reconnecting": the new socket's ready frame is the true end
 			// of the cycle (the room lock can still bounce this session).
 		} catch {
+			// A late failure belongs to the room that asked: if the person has gone to another room, its own ladder is the one that runs.
+			if (personHasChanged() || !stillThisRoom()) return;
 			scheduleRoomReconnect();
 		}
 	}
 
 	useEffect(() => {
+		// The one place a socket is made: once another person is signed in, none is, whoever asks.
+		if (personHasChanged()) return;
 		// Replacing a socket: the old one's timers die with it, the gating flag
 		// tells the truth from this instant (nothing is open), and the chrome is
 		// covered for the blink so it does not narrate the swap.
@@ -4966,6 +2452,7 @@ export function App() {
 			beginSocketSwap();
 		}
 		suppressReconnectRef.current = false;
+		setCatchingUp(!!persistentChat);
 		// Catch-up drain is per-connection state: a socket that died between
 		// turn_reattach and its replay_done marker must not leave the NEXT
 		// connection's live tokens rendering instantly.
@@ -4976,6 +2463,7 @@ export function App() {
 			cancelScheduledReconnect();
 			reconnectAttemptRef.current = 0;
 			reconnectStartedAtRef.current = null;
+			reconnectStoodDownRef.current = false;
 			if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
 			roomWaitsOnChoiceRef.current = false;
 		} else {
@@ -5005,13 +2493,26 @@ export function App() {
 		// Scheme follows the page: https (remote mode's TLS stage) needs wss,
 		// plain http (loopback and the tunnel's http stage) keeps ws.
 		const wsScheme = location.protocol === "https:" ? "wss" : "ws";
-		const ws = new WebSocket(`${wsScheme}://${wsHost}/ws?${wsParams.toString()}`);
+		const ws = new WebSocket(`${wsScheme}://${wsHost}/ws?${wsParams.toString()}`, pagePersonProtocols());
 		wsRef.current = ws;
 		// The server said it is stopping (server_stopping), on this connection only: the next one, after the restart, starts clean.
 		let serverStopping = false;
 		// A question asked on an earlier connection was declined when that one closed.
 		liveApprovalIdsRef.current = new Set();
 		setLiveApprovalIds(new Set());
+		// Open here (or any new room socket) takes the room back: this window saves again.
+		if (turnLinkRef.current === "elsewhere") setTurnLink("live");
+		// A reconnect's replay is drawn in one paint: the frames from
+		// turn_reattach to turn_reattach_replay_done (the server sends them in
+		// one go) are held and then applied in one pass, so the turn's old
+		// items are never gone for a frame before the replayed ones are drawn.
+		// A replay cut off before its marker is never applied: what is on screen
+		// stays, and the next connection replays the turn again from its start.
+		let heldReplay: any[] | null = null;
+		// The socket whose replay is held: its close drops what it held.
+		let replaySocket: WebSocket | null = null;
+		// The last turn frame applied (seq counts up from 1 per turn): a frame seen before is dropped.
+		let lastTurnSeq = 0;
 		// A port that accepts TCP and never finishes the upgrade leaves this
 		// socket in CONNECTING with no event ever coming: no failure, no retry,
 		// no warning, and a UI that looks usable. Closing it on the deadline
@@ -5053,6 +2554,7 @@ export function App() {
 			// meanwhile is asked for again (Home, an open Settings tab, the
 			// profile and sign-in status that AI setup shows).
 			if (connectionHealthRef.current.unhealthySince !== null) {
+				void refreshRemoteClientContext();
 				setServiceBack((n) => n + 1);
 				setPersistentResumeError(withoutServiceLine);
 				refreshSetupStatusRef.current();
@@ -5088,13 +2590,26 @@ export function App() {
 			}
 			// The retry dies with the connection: its note goes, so it never stands beside "the connection was lost".
 			clearTransientStreamNotes();
-			// The server aborts the in-flight turn on disconnect — say so on the
-			// bubble and unstick the room instead of leaving a complete-looking
-			// truncated answer behind a stuck busy state. The debounced persist
-			// writes the note to the thread file whenever the server is reachable.
+			// A replay cut off here is not drawn half: the next connection sends it whole.
+			if (replaySocket === ws) heldReplay = null;
+			reattachReplayDrainRef.current = false;
+			// A stop under way, or the server stopping: the turn really ends with
+			// this connection, so the bubble says so and the room is unstuck. The
+			// debounced persist writes the note whenever the server is reachable.
 			// An answer that ended whole while the server stopped (its end carried no stoppedByServer) lost nothing: its reveal goes on, unmarked.
 			const answerEndedInStop = serverStopping && !busyRef.current && !turnCancellingRef.current && !turnCutByStopRef.current;
-			if (!answerEndedInStop && (busyRef.current || turnCancellingRef.current || isAssistantStreamActive(streamStateRef.current))) {
+			// A finished answer whose last words are still appearing lost nothing either: its reveal goes on.
+			const onlyRevealing = !busyRef.current && !turnCancellingRef.current;
+			if (!serverStopping && busyRef.current && !turnCancellingRef.current) {
+				// A blip: the server keeps the turn running when the page drops,
+				// and the reconnect replays it. Nothing was cut, so nothing is said
+				// or saved: what arrived goes on appearing at the normal pace, Stop
+				// stays (unavailable while offline) and one quiet line says the
+				// room is reconnecting. The replay picks up from what is on screen
+				// then (turn_reattach). Only a reconnect that gives up says the
+				// connection was lost.
+				setTurnLink("reconnecting");
+			} else if (!answerEndedInStop && !onlyRevealing) {
 				markCurrentAssistantInterrupted(turnInterruptedNoteRef.current ?? CONNECTION_LOST_NOTE);
 				setBusy(false);
 				busyRef.current = false;
@@ -5114,11 +2629,35 @@ export function App() {
 		// is where the health accounting lives.
 		ws.onerror = () => { if (wsRef.current === ws) setConnected(false); };
 
+		function applyHeldReplay() {
+			const held = heldReplay;
+			heldReplay = null;
+			// A replaced socket's replay belongs to the room it was for.
+			if (held && wsRef.current === ws) for (const frame of held) handleFrame(frame);
+		}
 		ws.onmessage = (raw) => {
 			// A frame is the strongest possible proof the connection is real, so
 			// it settles the health run without waiting out the dwell timer.
 			if (wsRef.current === ws) noteConnectionSettled();
 			const msg = JSON.parse(raw.data);
+			if (msg.type === "turn_reattach" && wsRef.current === ws) {
+				heldReplay = [msg];
+				replaySocket = ws;
+				return;
+			}
+			if (heldReplay && replaySocket === ws) {
+				heldReplay.push(msg);
+				if (msg.type === "turn_reattach_replay_done") applyHeldReplay();
+				return;
+			}
+			handleFrame(msg);
+		};
+		function handleFrame(msg: any) {
+			if (msg.type === "turn_reattach") lastTurnSeq = 0;
+			if (typeof msg.seq === "number") {
+				if (msg.seq !== 1 && msg.seq <= lastTurnSeq) return;
+				lastTurnSeq = msg.seq;
+			}
 			// The server is stopping: it declines every open question, so from here no card takes a click.
 			// Read before ready too, since a connection still opening when the stop began gets it first.
 			if (msg.type === "server_stopping") {
@@ -5136,10 +2675,14 @@ export function App() {
 				// successor's reconnect ladder.
 				if (wsRef.current !== ws) return;
 				cancelScheduledReconnect();
-				setSignedOutProvider(null);
+				setSignedOut(null);
 				setRoomModelNotOffered(false);
 				reconnectAttemptRef.current = 0;
 				reconnectStartedAtRef.current = null;
+				reconnectStoodDownRef.current = false;
+				// No replay follows this ready: the turn waited on is over.
+				if (turnLinkRef.current === "reconnecting" && persistentChatRef.current && msg.reattaching !== true) void endReconnectingTurnWithoutReplay(persistentChatRef.current.agentId, ws);
+				if (msg.reattaching !== true) setCatchingUp(false);
 				if (roomReconnectStateRef.current !== "idle") {
 					setRoomReconnect("idle");
 					if (!roomWaitsOnChoiceRef.current) setReconnectedNotice(Date.now());
@@ -5158,6 +2701,41 @@ export function App() {
 				flushPendingEffort(ws);
 				// A message the model could not answer, handed back while this room was closed.
 				if (msg.returnedPrompt && typeof msg.returnedPrompt === "object") returnFailedPrompt(msg.returnedPrompt as ReturnedPromptFrame);
+				reconcileOutgoing(ws, { waiting: readMessageList(msg.waiting), held: readMessageList(msg.held), taken: readMessageIds(msg.taken) }, readMessageIds(msg.withdrawn));
+				setEditBlockedId(typeof msg.notEditable === "string" ? msg.notEditable : null);
+				return;
+			}
+			if (msg.type === "edit_applied") {
+				const line = msg.line && typeof msg.line.id === "string" && typeof msg.line.text === "string" ? { id: msg.line.id, text: msg.line.text } : null;
+				applySentEdit(String(msg.replaces ?? ""), line);
+				return;
+			}
+			if (msg.type === "edit_refused") {
+				refuseSentEdit(String(msg.replaces ?? ""));
+				// A message held from another window moved the conversation on: it shows now, as it would once the room opens again.
+				// Only the ones this page lacks: a message it sent meanwhile keeps its own way.
+				if (wsRef.current === ws) dispatchOutgoing({ type: "held", messages: readMessageList(msg.held).filter((message) => !outgoingRef.current.some((known) => known.id === message.id)) });
+				return;
+			}
+			if (msg.type === "steer_waiting" || msg.type === "steer_cut" || msg.type === "steer_refused") {
+				if (wsRef.current === ws) steerRouted(msg.type, String(msg.id ?? ""), msg.quiet === true);
+				return;
+			}
+			if (msg.type === "steer_withdrawn") {
+				if (wsRef.current === ws) steerWithdrawn(String(msg.id ?? ""), msg.edit === true);
+				return;
+			}
+			if (msg.type === "steer_withdraw_refused") {
+				// The room takes it in: no Edit is waiting on it any more.
+				if (wsRef.current === ws) editsAskedRef.current.delete(String(msg.id ?? ""));
+				return;
+			}
+			if (msg.type === "steer_taken") {
+				if (wsRef.current === ws) takeSteerIn(String(msg.id ?? ""), String(msg.text ?? ""));
+				return;
+			}
+			if (msg.type === "steer_returned") {
+				if (wsRef.current === ws) steersReturned(readMessageList(msg.messages), msg.held === true);
 				return;
 			}
 			if (msg.type === "prompt_returned") {
@@ -5189,7 +2767,9 @@ export function App() {
 				setRoomEffort(readEffortPayload(msg.effort));
 				const noticeText = typeof msg.notice?.text === "string" ? msg.notice.text : "";
 				const noticeId = typeof msg.notice?.id === "string" && msg.notice.id ? msg.notice.id : nid();
-				if (noticeText) setItems((s) => s.some((it) => it.id === noticeId) ? s : [...s, { kind: "system", id: noticeId, text: noticeText, level: "info" }]);
+				// A switch right after another took the place of its line: the page drops it too, so its next save does not write it back.
+				const replaces = typeof msg.notice?.replaces === "string" ? msg.notice.replaces : null;
+				if (noticeText) setItems((s) => withSwitchLine(s, { id: noticeId, text: noticeText, ...(replaces ? { replaces } : {}) }));
 				return;
 			}
 			if (msg.type === "effort") {
@@ -5211,8 +2791,14 @@ export function App() {
 				// busy on and the deltas stream exactly as if we never left; a
 				// turn that settled while this session was binding replays
 				// through its terminal frames the same way and ends quiet.
+				// After a blip the answer went on appearing while the page was
+				// away: the replay draws at once only what is on screen now, and
+				// paces the rest.
+				const blipSeen = turnLinkRef.current === "reconnecting" ? seenOfOpenAnswer(streamStateRef.current) : null;
 				dispatchStream({ type: "reset" });
 				clearTransientStreamNotes();
+				if (turnLinkRef.current === "reconnecting") setTurnLink("live");
+				if (blipSeen) dispatchStream({ type: "replay_seen", seen: blipSeen });
 				// Open the catch-up window: the replayed frames that follow carry
 				// text the user already generated while away — render them
 				// instantly (the replay_done marker closes the window and hands
@@ -5223,6 +2809,9 @@ export function App() {
 				setTurnInterruptedNote(null);
 				turnInterruptedNoteRef.current = null;
 				const reattachUserText = typeof msg.userText === "string" ? msg.userText.trim() : "";
+				// A keyed turn names its question: its id, its bubble's words (also when empty) and its file chips.
+				const keyedQuestion = typeof msg.promptId === "string" && msg.promptId ? { id: msg.promptId as string, shown: readShownPrompt({ text: msg.userText, files: msg.promptFiles })! } : null;
+				if (keyedQuestion) turnKeyRef.current = keyedQuestion.id;
 				// When the turn began: the restored prompt and the replayed
 				// segments are dated by it. Absent on the wire means no stamp.
 				const reattachStartedAt = typeof msg.startedAt === "number" && Number.isFinite(msg.startedAt) ? msg.startedAt : null;
@@ -5243,7 +2832,8 @@ export function App() {
 					// turns; everything after it is this turn's debris the replay
 					// rebuilds. Assistant AND tool items go (a persisted tool chip
 					// could never resolve anyway: its toolCallId map died with the
-					// old session); user and system items are never dropped.
+					// old session); user and system items stay, but for the line
+					// saying the connection was lost: the replay brings that answer back.
 					let cut: number;
 					if (hasAnchor && msg.anchorItemId === null) {
 						// The thread was empty when the turn began: everything
@@ -5270,7 +2860,15 @@ export function App() {
 							}
 						}
 					}
-					let next = s.filter((it, i) => !(i > cut && (it.kind === "assistant" || it.kind === "tool")));
+					let next = s.filter((it, i) => !(i > cut && (it.kind === "assistant" || it.kind === "tool" || it.kind === "thinking" || isConnectionLostLine(it))));
+					// A keyed turn's question goes back, under its own id, when the list lacks that id and it shows words or files.
+					if (keyedQuestion) {
+						const { id, shown } = keyedQuestion;
+						if (!next.some((it) => it.id === id) && (shown.text.trim() || shown.files.length)) {
+							next = [...next, { kind: "user" as const, id, text: shown.text, ...(shown.files.length ? { attachments: shown.files } : {}), ...(reattachStartedAt === null ? {} : { ts: reattachStartedAt }) }];
+						}
+						return next;
+					}
 					// Restore the prompt that started the cooking turn when the
 					// persisted tail does not carry it (the leave-save missed it):
 					// presence is judged by position after the anchor, never by
@@ -5293,13 +2891,21 @@ export function App() {
 				if (isAssistantStreamActive(streamStateRef.current)) {
 					dispatchStream({ type: "tick", now: performance.now(), mode: "drain" });
 				}
+				setAnswerDrawnAtOnceId(partDrawnAtOnce(streamStateRef.current));
+				if (streamStateRef.current.replaySeen) dispatchStream({ type: "replay_seen", seen: null });
 				// Live tokens from here on are dated by the clock again.
 				reattachStartedAtRef.current = null;
+				if (wsRef.current === ws) setCatchingUp(false);
 				return;
 			}
 			if (msg.type === "error") {
 				// A refusal ends a Try again's wait; only the three answers to the continue itself read it below.
 				if (msg.code !== "nothing_to_continue" && msg.code !== "turn_running" && msg.code !== "conversation_moved") continuedLineRef.current = null;
+				// Another window took the room over, and its questions with it: no card here takes a click.
+				if (msg.code === "room_displaced") {
+					liveApprovalIdsRef.current = new Set();
+					setLiveApprovalIds(new Set());
+				}
 				// Detach-vs-death: the original drop delivers no
 				// signal (the network is gone), so the server tells us HERE, on the
 				// reconnect bounce, that the room is still finishing the response in
@@ -5310,8 +2916,9 @@ export function App() {
 				// here, and the manual Reconnect button (failed state) covers the
 				// user who stays in the room until the answer has landed.
 				if (roomReconnectStateRef.current === "reconnecting" && msg.code === "room_cooking") {
+					if (turnLinkRef.current === "reconnecting") endReconnectingTurn(CONNECTION_LOST_COOKING_NOTE);
 					rewriteConnectionLostNoteForCookingRoom();
-					reconnectAttemptRef.current = RECONNECT_MAX_ATTEMPTS;
+					reconnectStoodDownRef.current = true;
 					return;
 				}
 				// The room's memory does not fit this model's window: the server
@@ -5331,7 +2938,7 @@ export function App() {
 					// picked.
 					setRoomReconnect("failed");
 					roomWaitsOnChoiceRef.current = true;
-					if (msg.code === "provider_signed_out") setSignedOutProvider(typeof msg.provider === "string" ? msg.provider : "");
+					if (msg.code === "provider_signed_out") setSignedOut({ provider: typeof msg.provider === "string" ? msg.provider : "", ...(msg.credentialKey ? { key: msg.credentialKey as CredentialKey } : {}) });
 					else setRoomModelNotOffered(true);
 					flushAssistantStream();
 					setBusy(false);
@@ -5364,7 +2971,7 @@ export function App() {
 					// Its files come back too, as Try again would send them again: those still in the room's Files.
 					const shown = [...itemsRef.current, { kind: "system", id: noteId }];
 					const again = sent ? messageSentAgain(shown, noteId, attachmentAccessRef.current.existingNames) : null;
-					if (!continued) setItems((s) => [...s.filter((item) => item !== sent), { kind: "system", id: noteId, text: TURN_RUNNING_LINE, level: "info" }]);
+					if (!continued) handBack(sent ? [sent] : [], (s) => [...s, { kind: "system", id: noteId, text: TURN_RUNNING_LINE, level: "info" }]);
 					if (sent) {
 						setComposerPrefill(sent.text);
 						setComposerResetNonce((value) => value + 1);
@@ -5393,13 +3000,37 @@ export function App() {
 					if (!busyRef.current && persistentChatRef.current) void dropTurnRunningNoteOnceSettled(persistentChatRef.current.agentId);
 					return;
 				}
+				// Another window took the room: what was shown stays, with no
+				// interrupted line; running steps go on there; this window stops
+				// saving and never dials back by itself (that would take the room
+				// from the other window). Open here takes it back.
+				if (msg.code === "room_displaced") {
+					if (wsRef.current !== ws) return;
+					// What only this window had queued waits as held messages, for the window that has the room now.
+					holdPageOnlyMessages();
+					suppressReconnectRef.current = true;
+					cancelScheduledReconnect();
+					setTurnLink("elsewhere");
+					setRoomReconnect("failed");
+					flushAssistantStream();
+					// This window no longer follows the turn: a thought it shows stops ticking.
+					setItems((s) => endLiveThinking(s));
+					setBusy(false);
+					busyRef.current = false;
+					setTurnCancelling(false);
+					turnCancellingRef.current = false;
+					setTurnInterruptedNote(null);
+					turnInterruptedNoteRef.current = null;
+					try { ws.close(); } catch {}
+					return;
+				}
 				if (msg.code === "conversation_moved") {
 					if (wsRef.current !== ws) return;
 					flushAssistantStream();
 					const sent = continuedLineRef.current !== null ? undefined : [...itemsRef.current].reverse().find((item) => item.kind === "user");
 					continuedLineRef.current = null;
 					if (sent) {
-						setItems((s) => s.filter((item) => item !== sent));
+						handBack([sent]);
 						setComposerPrefill(sent.text);
 						setComposerResetNonce((value) => value + 1);
 					}
@@ -5448,16 +3079,18 @@ export function App() {
 				// settle any tool call the failure cut off (its result is never
 				// coming) so the transcript does not keep a chip running forever.
 				flushAssistantStream();
-				// Refused before the room began the turn: the message goes back into an empty box, and its line says so.
+				// Refused before the room began the turn: the message goes back into an empty box, which shows it, so its line drops that nothing was lost.
 				const handedBack = msg.code === "room_settings_not_applied" || msg.code === "room_files_unreadable" ? sentMessageForEmptyBox() : null;
 				// A turn refused on the sign-in: the one notice, not the raw line.
 				if (isSignInFailure(String(msg.message ?? ""))) {
 					noteTurnSignInFailure(String(msg.message), undefined, msg.credentialKey);
-					setItems((s) => stopRunningToolItems(s));
+					setItems((s) => stopWorkInFlight(s));
 				} else {
 					// A failure that repeats on every reconnect attempt (a bind that
 					// cannot succeed) says so once, not once per attempt.
-					setItems((s) => appendErrorLineOnce(stopRunningToolItems(handedBack ? s.filter((item) => item !== handedBack) : s), { kind: "system", id: nid(), text: handedBack ? String(msg.message).replace("Nothing was lost.", "Your message is back in the box.") : msg.message, level: "error" }));
+					const line = { kind: "system" as const, id: nid(), text: handedBack ? String(msg.message).replace(" Nothing was lost.", "") : msg.message, level: "error" as const };
+					if (handedBack) handBack([handedBack], (s) => appendErrorLineOnce(stopWorkInFlight(s), line));
+					else setItems((s) => appendErrorLineOnce(stopWorkInFlight(s), line));
 				}
 				if (handedBack) {
 					setComposerPrefill(handedBack.text);
@@ -5493,6 +3126,18 @@ export function App() {
 				if (msg.contextHealth) setContextHealth(msg.contextHealth);
 				return;
 			}
+			// Stop answered a question for the person (in this window or another): its card stops asking, and its preview goes as an answer's does.
+			if (msg.type === "ui_request_closed") {
+				if (liveApprovalIdsRef.current.delete(String(msg.id ?? ""))) {
+					setLiveApprovalIds(new Set(liveApprovalIdsRef.current));
+					setRightPane((cur) => (cur?.kind === "preview" ? null : cur));
+				}
+				// The server closes only a question it never took an answer to, so a click the page already showed as the answer did not count.
+				if (msg.reason === "stopped") setItems((s) => withoutStopLineUnderStoppedCard(s.map((it) => (it.kind === "approval" && it.requestId === msg.id ? { ...it, done: undefined, stopped: true } : it))));
+				// The person's message declined it: the card reads as their no.
+				if (msg.reason === "declined") setItems((s) => s.map((it) => (it.kind === "approval" && it.requestId === msg.id && !it.done ? { ...it, done: declinedAnswerOf(it) } : it)));
+				return;
+			}
 			if (msg.type === "ui_request") {
 				if (msg.kind === "notify") {
 					if (String(msg.id ?? "").startsWith("compaction_")) dropTurnFailureLine();
@@ -5510,8 +3155,9 @@ export function App() {
 						liveApprovalIdsRef.current.add(msg.id);
 						setLiveApprovalIds(new Set(liveApprovalIdsRef.current));
 					}
+					// A question asked again (a person came back to the room, or another tab took it over) replaces its saved card.
 					setItems((s) => [
-						...s,
+						...s.filter((it) => !(it.kind === "approval" && it.requestId === msg.id)),
 						{
 							kind: "approval",
 							id: nid(),
@@ -5522,6 +3168,7 @@ export function App() {
 							detail: msg.detail,
 							options: msg.options,
 							placeholder: msg.placeholder,
+							openedAt: Date.now(),
 						},
 					]);
 				}
@@ -5538,7 +3185,7 @@ export function App() {
 			if (msg.type === "consult_end") {
 				// Every consult_end carries two standing invariant lines (exact
 				// strings from the server's buildConsultAnswer in
-				// persistent-agents.ts) — the card's subline already states both,
+				// persistent-agent-consult.ts), the card's subline already states both,
 				// so only room-specific warnings (e.g. the needs_absorb memory-lag
 				// warning) surface as a ⚠ notice.
 				const consultInvariantWarnings = new Set([
@@ -5721,7 +3368,7 @@ export function App() {
 			}
 			if (msg.type !== "event") return;
 			handleEvent(msg.event);
-		};
+		}
 
 		// Sleep/wake: backoff timers may not fire while the tab is hidden —
 		// retry the moment the user is back looking at a disconnected room.
@@ -5732,6 +3379,8 @@ export function App() {
 			}
 			const hiddenFor = pageHiddenAtRef.current === null ? 0 : Date.now() - pageHiddenAtRef.current;
 			pageHiddenAtRef.current = null;
+			// A room another window took comes back only through Open here.
+			if (turnLinkRef.current === "elsewhere") return;
 			if (roomReconnectStateRef.current !== "idle") { retryRoomReconnectNow(); return; }
 			// The same sleep/wake problem outside a room: a laptop that slept with
 			// Home open comes back to a dead socket and a timer that never fired.
@@ -5757,10 +3406,16 @@ export function App() {
 			cancelScheduledReconnect();
 			cancelScheduledHomeReconnect();
 			clearSocketTimers();
+			// A replay still held belongs to this binding: it never reaches the next one.
+			heldReplay = null;
 			// Never lose a received tail to a teardown: reveal it, then forget.
-			flushAssistantStream();
-			clearTransientStreamNotes();
-			dispatchStream({ type: "reset" });
+			// A turn waited on through a dropped connection keeps its open
+			// answer for the next socket's replay.
+			if (turnLinkRef.current !== "reconnecting") {
+				flushAssistantStream();
+				clearTransientStreamNotes();
+				dispatchStream({ type: "reset" });
+			}
 			// Socket close kills the consult server-side (no re-attach; a lost
 			// answer is re-derivable) — drop the card/pill with the connection.
 			dispatchConsult({ type: "reset" });
@@ -5776,7 +3431,7 @@ export function App() {
 	// that provider is signed in: a sign-in in this window refreshes the model
 	// status, and one made elsewhere (another tab, the CLI) is noticed when this
 	// window comes back to the front. Another room or conversation starts clean.
-	useEffect(() => { setSignedOutProvider(null); setRoomModelNotOffered(false); setTurnSignedOut(null); }, [persistentSocketKey]);
+	useEffect(() => { setSignedOut(null); setRoomModelNotOffered(false); setTurnSignedOut(null); }, [persistentSocketKey]);
 	useEffect(() => {
 		if (signedOutProvider === null) return;
 		const ready = modelStatus?.providers?.some((provider) => provider.ready && (signedOutProvider === "" || provider.id === signedOutProvider));
@@ -5819,14 +3474,150 @@ export function App() {
 		if (retrievalActivityIdRef.current) return;
 		const id = nid();
 		retrievalActivityIdRef.current = id;
+		// The text written before the lookup closes first, so its line sits under it. Not in a keyed message: the
+		// server keeps the text on both sides of a hidden lookup in one part, and so does the page.
+		if (!streamStateRef.current.messageKeyed) dispatchStream({ type: "break", now: performance.now() });
 		setItems((s) => [...s, { kind: "system", id, text: retrievalActivityText() }]);
+	}
+
+	/**
+	 * Puts a tool call's step in the room, or brings the one already there up to
+	 * date. Routine memory and knowledge lookups go behind the "checking relevant
+	 * context…" line, and a hand-off shows only its own cards, from the call's
+	 * first frame on. A step that already runs takes only whole arguments, and
+	 * a settled one keeps its state.
+	 */
+	function placeToolStep(toolId: string, name: string, args: Record<string, unknown>, status: "writing" | "running", serverItemId?: string) {
+		// The first id seen for a call stays its id: the server's, named on the call's frames in a keyed turn.
+		const keepHidden = () => hiddenRoutineToolByIdRef.current.set(toolId, { name, args, itemId: hiddenRoutineToolByIdRef.current.get(toolId)?.itemId ?? serverItemId });
+		if (isRoutineRetrievalTool(name)) {
+			keepHidden();
+			noteRetrievalActivity();
+			return;
+		}
+		if (name === "delegate_task") {
+			// The approval card and the task card ARE this tool's UI; a raw
+			// step above them is noise. Errors still surface via the
+			// hidden-tool path.
+			keepHidden();
+			return;
+		}
+		// Named after the call, so the step its first frame made is the one its whole arguments complete.
+		const itemId = (toolId ? toolByIdRef.current.get(toolId) : undefined) ?? serverItemId ?? (toolId ? `tool-${toolId}` : nid());
+		toolByIdRef.current.set(toolId, itemId);
+		// The text written before the step closes first, so the step sits under it.
+		if (!itemsRef.current.some((it) => it.id === itemId)) dispatchStream({ type: "break", now: performance.now() });
+		setItems((s) => {
+			if (!s.some((it) => it.id === itemId)) return [...s, { kind: "tool", id: itemId, name, args, status }];
+			return s.map((it) => (it.id === itemId && it.kind === "tool" && (it.status === "writing" || (it.status === "running" && status === "running")) ? { ...it, args, status } : it));
+		});
+	}
+
+	/**
+	 * A thinking block as the model writes it. Its start makes an item (a
+	 * block right after another is drawn in the same row); its words go to its
+	 * store, never into the items; its end stamps the row with the server's
+	 * clock, takes the final words when they differ, and drops a row with no
+	 * words that took under a second.
+	 */
+	function noteThinking(update: { type: string; contentIndex?: unknown; at?: unknown; delta?: unknown; content?: unknown; redacted?: unknown }) {
+		const block = typeof update.contentIndex === "number" ? update.contentIndex : -1;
+		const at = typeof update.at === "number" && Number.isFinite(update.at) ? Math.min(Date.now(), update.at - serverClockAheadRef.current) : Date.now();
+		if (update.type === "thinking_start") {
+			const id = `thinking-${nid()}`;
+			thinkingRowByBlockRef.current.set(block, { id, startedAt: at });
+			// The text written before the thinking closes first, so the row sits under it.
+			dispatchStream({ type: "break", now: performance.now() });
+			setItems((s) => [...s, { kind: "thinking", id, ts: at, ...(update.redacted === true ? { redacted: true as const } : {}) }]);
+			return;
+		}
+		const row = thinkingRowByBlockRef.current.get(block);
+		if (!row) return;
+		if (update.type === "thinking_delta") {
+			thinkingTextStore.append(row.id, typeof update.delta === "string" ? update.delta : "");
+			return;
+		}
+		if (typeof update.content === "string") thinkingTextStore.set(row.id, update.content);
+		const dropped = !thinkingTextStore.get(row.id).trim() && at - row.startedAt < 1000;
+		setItems((s) => s.flatMap((it) => (it.id !== row.id || it.kind !== "thinking" ? [it] : dropped ? [] : [{ ...it, ms: Math.max(0, at - it.ts) }])));
+	}
+
+	/**
+	 * A tool the provider runs itself (Claude's or ChatGPT's own web search) is
+	 * an ordinary step of the same name, under its own id: it runs from its
+	 * start, takes its query when the provider says it, and ends done or
+	 * failed. It sits where it ran: the text written before it closes first,
+	 * and the answer opens below it.
+	 */
+	function noteServerTool(update: { type: string; id?: unknown; name?: unknown; query?: unknown; ok?: unknown; at?: unknown; itemId?: unknown }) {
+		if (typeof update.id !== "string" || !update.id) return;
+		const itemId = serverToolByIdRef.current.get(update.id) ?? (typeof update.itemId === "string" && update.itemId ? update.itemId : `srv-${update.id}`);
+		serverToolByIdRef.current.set(update.id, itemId);
+		const at = typeof update.at === "number" && Number.isFinite(update.at) ? Math.min(Date.now(), update.at - serverClockAheadRef.current) : Date.now();
+		if (update.type === "server_tool_end") {
+			const status = update.ok === true ? "done" : "error";
+			setItems((s) => s.map((it) => (it.id === itemId && it.kind === "tool" && it.status === "running" ? { ...it, status, endedAt: Math.max(it.startedAt ?? at, at) } : it)));
+			return;
+		}
+		if (typeof update.name !== "string" || !update.name) return;
+		const name = update.name;
+		const args = typeof update.query === "string" && update.query ? { query: update.query } : null;
+		if (!itemsRef.current.some((it) => it.id === itemId)) dispatchStream({ type: "break", now: performance.now() });
+		setItems((s) => {
+			if (!s.some((it) => it.id === itemId)) return [...s, { kind: "tool", id: itemId, name, args: args ?? {}, status: "running", startedAt: at }];
+			return args ? s.map((it) => (it.id === itemId && it.kind === "tool" && it.status === "running" ? { ...it, args } : it)) : s;
+		});
+	}
+
+	/** What the page knew of a turn's thinking and shortening, gone with the conversation it belonged to. */
+	function forgetLiveTurnProgress() {
+		thinkingRowByBlockRef.current.clear();
+		thinkingTextStore.clear();
+		setShortening(false);
 	}
 
 	function handleEvent(ev: any) {
 		const now = performance.now();
 
 		if (ev.type === "message_start" && ev.message?.role === "assistant") {
-			dispatchStream({ type: "message_start", now });
+			thinkingRowByBlockRef.current.clear();
+			const itemId = frameItemId(ev);
+			if (itemId) turnKeyRef.current = keyOfId(itemId) ?? turnKeyRef.current;
+			dispatchStream({ type: "message_start", now, ...(itemId ? { itemId } : {}) });
+			return;
+		}
+
+		// Shortening may start after the turn's end (the conversation grew past the line), so only its own end clears it.
+		if (ev.type === "compaction_start" || ev.type === "compaction_end") {
+			setShortening(ev.type === "compaction_start");
+			// Only a shortening that wrote its summary blocks the newest bubble; while one runs, `shortening` hides the pencil.
+			if (ev.type === "compaction_end" && ev.result) setEditBlockedId([...itemsRef.current].reverse().find((item) => item.kind === "user")?.id ?? null);
+			return;
+		}
+
+		const update = ev.type === "message_update" ? ev.assistantMessageEvent : null;
+		if (update && /^thinking_(start|delta|end)$/.test(String(update.type ?? ""))) {
+			noteThinking(update);
+			return;
+		}
+
+		// A tool call as the model writes it: the step shows from its first frame and its label grows.
+		if (update && /^toolcall_(start|delta|end)$/.test(String(update.type ?? ""))) {
+			if (typeof update.id === "string" && update.id && typeof update.name === "string" && update.name && update.preview && typeof update.preview === "object") {
+				placeToolStep(update.id, update.name, update.preview as Record<string, unknown>, update.type === "toolcall_end" ? "running" : "writing", frameItemId(update));
+			}
+			return;
+		}
+
+		if (update && /^server_tool_(start|end)$/.test(String(update.type ?? ""))) {
+			noteServerTool(update);
+			return;
+		}
+
+		// A keyed turn's text after a step opens a new part, which the server names here.
+		if (update?.type === "text_start") {
+			const itemId = frameItemId(update);
+			if (itemId) dispatchStream({ type: "part_id", itemId });
 			return;
 		}
 
@@ -5947,34 +3738,13 @@ export function App() {
 					});
 				}
 			}
-			dispatchStream({ type: "message_end", finalText: extractAssistantText(ev.message), stopReason: ev.message.stopReason, now });
+			dispatchStream({ type: "message_end", finalText: extractAssistantText(ev.message), stopReason: ev.message.stopReason, now, ...(typeof ev.echoOf === "string" && ev.echoOf ? { echoOf: ev.echoOf } : {}) });
 
+			// The steps the model started while writing take their whole arguments; a provider that sent no start makes them now.
 			const content = ev.message.content as any[] | undefined;
 			if (Array.isArray(content)) {
-				const toolCalls = content.filter((c) => c?.type === "toolCall");
-				if (toolCalls.length) {
-					const visibleAdditions: ChatItem[] = [];
-					for (const c of toolCalls) {
-						const toolId = c.id ?? c.toolCallId;
-						const name = String(c.name ?? "");
-						const args = c.arguments ?? c.args ?? {};
-						if (isRoutineRetrievalTool(name)) {
-							hiddenRoutineToolByIdRef.current.set(toolId, { name, args });
-							noteRetrievalActivity();
-							continue;
-						}
-						if (name === "delegate_task") {
-							// The approval card and the task card ARE this tool's UI; a raw
-							// tool chip above them is noise. Errors still surface via the
-							// hidden-tool path.
-							hiddenRoutineToolByIdRef.current.set(toolId, { name, args });
-							continue;
-						}
-						const itemId = nid();
-						toolByIdRef.current.set(toolId, itemId);
-						visibleAdditions.push({ kind: "tool", id: itemId, name, args, status: "running" });
-					}
-					if (visibleAdditions.length) setItems((s) => [...s, ...visibleAdditions]);
+				for (const c of content) {
+					if (c?.type === "toolCall") placeToolStep(String(c.id ?? c.toolCallId ?? ""), String(c.name ?? ""), c.arguments ?? c.args ?? {}, "running");
 				}
 			}
 			return;
@@ -5989,7 +3759,7 @@ export function App() {
 			if (hidden) {
 				hiddenRoutineToolByIdRef.current.delete(msg.toolCallId);
 				if (!isError) return;
-				setItems((s) => [...s, { kind: "tool", id: nid(), name: hidden.name, args: hidden.args, status: "error", result: text }]);
+				setItems((s) => [...s, { kind: "tool", id: hidden.itemId ?? nid(), name: hidden.name, args: hidden.args, status: "error", result: text }]);
 				return;
 			}
 			const itemId = toolByIdRef.current.get(msg.toolCallId);
@@ -6014,7 +3784,17 @@ export function App() {
 			return;
 		}
 
+		// A step's end, by the same clock as its start: its row shows how long it took.
+		if (ev.type === "tool_execution_end" && typeof ev.endedAt === "number") {
+			const endedAt = Math.min(Date.now(), ev.endedAt - serverClockAheadRef.current);
+			const itemId = toolByIdRef.current.get(ev.toolCallId);
+			if (itemId) setItems((s) => s.map((it) => (it.id === itemId && it.kind === "tool" && it.startedAt !== undefined ? { ...it, endedAt: Math.max(it.startedAt, endedAt) } : it)));
+			return;
+		}
+
 		if (ev.type === "agent_start") {
+			// A replayed start is the turn the room still runs, which may be the one stopping.
+			if (!reattachReplayDrainRef.current) forgetStoppedTurnRead();
 			setBusy(true);
 			busyRef.current = true;
 		}
@@ -6025,15 +3805,44 @@ export function App() {
 			continuedLineRef.current = null;
 			if (ev.type === "agent_end") turnCutByStopRef.current = (ev as { stoppedByServer?: boolean }).stoppedByServer === true;
 			retryNoticeIdRef.current = null;
-			setItems((s) => withoutRetryNotes(s).filter((item) => !isTurnRunningNote(item)));
-			if (turnCancellingRef.current) {
-				markCurrentAssistantInterrupted(turnInterruptedNoteRef.current ?? "Response interrupted.");
+			// The turn is over: a step it never finished (a provider's search its failure cut) stops with it.
+			setItems((s) => stopWorkInFlight(withoutRetryNotes(s).filter((item) => !isTurnRunningNote(item))));
+			// The server says why a turn ended early, so the line is the same in every window that watched it.
+			const endedBy = readTurnEndedBy((ev as { endedBy?: unknown }).endedBy);
+			if (endedBy === "next" && cutQuietRef.current) {
+				// Cut before anything showed: the message joins the question, with no line.
+				cutQuietRef.current = false;
+				flushAssistantStream();
+				setTurnCancelling(false);
+				turnCancellingRef.current = false;
+				setTurnInterruptedNote(null);
+				turnInterruptedNoteRef.current = null;
+			} else if (turnCancellingRef.current || endedBy) {
+				markCurrentAssistantInterrupted(endedBy ? turnEndedLine(endedBy) : turnInterruptedNoteRef.current ?? "Response interrupted.");
 				setTurnCancelling(false);
 				turnCancellingRef.current = false;
 				setTurnInterruptedNote(null);
 				turnInterruptedNoteRef.current = null;
 			}
-			if (persistentChatRef.current) void refreshPersistentAgentStatus();
+			if (persistentChatRef.current) void refreshStatusUntilStopEnds(persistentChatRef.current);
+		}
+	}
+
+	/**
+	 * The room's status after a turn's end frame. The server sends that frame
+	 * before it lets a stopped turn go, so a read right then can still say the
+	 * turn is stopping, and the next turn would show Stop as already pressed:
+	 * read again until the server no longer says so for this conversation.
+	 */
+	async function refreshStatusUntilStopEnds(chat: { agentId: PersistentAgentId; conversationId: string }): Promise<void> {
+		for (let tries = 0; tries < 40; tries++) {
+			let stopping = false;
+			await refreshPersistentAgentStatus((statuses) => {
+				const thread = statuses.find((status) => status.id === chat.agentId)?.activeThread;
+				stopping = thread?.threadId === chat.conversationId && thread.cancelling === true;
+			});
+			if (!stopping || persistentChatRef.current?.conversationId !== chat.conversationId) return;
+			await new Promise((resolve) => window.setTimeout(resolve, 250));
 		}
 	}
 
@@ -6078,28 +3887,45 @@ export function App() {
 		// applied synchronously to itemsRef as well because room-exit paths
 		// persist the thread right after calling this.
 		cancelStreamTick();
-		const { state, effects } = reduceAssistantStream(streamStateRef.current, { type: "interrupt", now: performance.now() }, revealPacingRef.current);
+		const { state, effects } = reduceAssistantStream(streamStateRef.current, { type: "interrupt", now: performance.now() });
 		commitStreamState(state);
 		const upserts = new Map<string, { text: string; streaming: boolean }>();
-		let interruptedId: string | null = null;
+		let interrupted: { id: string; ended: boolean } | null = null;
 		for (const effect of effects) {
 			if (effect.kind === "upsert") upserts.set(effect.id, { text: effect.text, streaming: effect.streaming });
-			else if (effect.kind === "interrupted") interruptedId = effect.id;
+			else if (effect.kind === "interrupted") interrupted = effect.id ? { id: effect.id, ended: effect.ended === true } : null;
 			else if (effect.kind === "warn") console.warn(effect.message, effect.detail ?? "");
 		}
+		// The person's Stop marks where the answer's words end (`stoppedAt`), on a part of the newest keyed turn
+		// only: a lost connection, a server stop or a displaced room leave the part for the landed answer to replace.
+		const personStopped = turnCancellingRef.current;
+		const withNote = (it: Extract<ChatItem, { kind: "assistant" }>): ChatItem => {
+			// Already noted: the note ends its text. The answer may quote the note's words in its own.
+			const words = it.text.trim() ? it.text.trimEnd() : "";
+			if (words === reason || words.endsWith(`_${reason}_`)) return { ...it, streaming: false };
+			const stoppedAt = personStopped && turnKeyRef.current !== null && isAnswerPartId(it.id) && keyOfId(it.id) === turnKeyRef.current ? { stoppedAt: words.length } : {};
+			return { ...it, text: words ? `${words}\n\n_${reason}_` : reason, streaming: false, ...stoppedAt };
+		};
+		const drops = streamDropsOf(effects);
 		const update = (s: ChatItem[]) => {
-			let next = applyStreamUpserts(upserts, s);
-			if (interruptedId) {
-				next = next.map((it) => {
-					if (it.id !== interruptedId || it.kind !== "assistant") return it;
-					if (it.text.includes(reason)) return { ...it, streaming: false };
-					const text = it.text?.trim() ? `${it.text.trimEnd()}\n\n_${reason}_` : reason;
-					return { ...it, text, streaming: false };
-				});
-			} else if (!next.some((it) => it.kind === "system" && it.text === reason)) {
+			let next = applyStreamUpserts(upserts, s, drops);
+			const last = next.at(-1);
+			// The Stop came as the message ended: its part takes the note while nothing came after it.
+			const endedPart = interrupted?.ended && personStopped && last?.id === interrupted.id && last.kind === "assistant" ? last : null;
+			if (endedPart) {
+				next = next.map((it) => (it === endedPart ? withNote(endedPart) : it));
+			} else if (interrupted && !interrupted.ended) {
+				const openId = interrupted.id;
+				next = next.map((it) => (it.id === openId && it.kind === "assistant" ? withNote(it) : it));
+			} else if (isStopLine(reason) && last?.kind === "assistant") {
+				// Stop put the answer on screen whole and closed it before the turn ended: the line is still that answer's own,
+				// kept in its text as a saved stopped answer has it, so it shows under the text and above the copy button.
+				next = next.map((it) => (it === last && it.kind === "assistant" && answerStopNote(it.text).stopLine === null ? withNote(it) : it));
+			} else if (!next.slice(next.map((it) => it.kind).lastIndexOf("user") + 1).some((it) => it.kind === "system" && it.text === reason)) {
+				// Once per turn: an earlier turn's Stop line, a handed-back one included, says nothing of this one.
 				next = [...next, { kind: "system" as const, id: nid(), text: reason }];
 			}
-			return stopRunningToolItems(next);
+			return stopWorkInFlight(withoutStopLineUnderStoppedCard(next));
 		};
 		itemsRef.current = update(itemsRef.current);
 		setItems(update);
@@ -6155,8 +3981,8 @@ export function App() {
 
 	/**
 	 * A message the model could not answer, handed back by the server (it
-	 * stepped the conversation back to before it): its bubble and any part of
-	 * an answer go, the line under it says the message is back in the box, and
+	 * stepped the conversation back to before it): its bubble and what the
+	 * failed attempt left (`leftByFailedAttempt`) go, the line under it no longer says where the message is, and
 	 * the text goes back into the box. When the box holds something else the
 	 * person typed meanwhile, the message stays where it was instead, and the
 	 * server returns the conversation to it. The box is not saved, so a message
@@ -6169,16 +3995,20 @@ export function App() {
 		const textOf = (item: ChatItem | null) => String((item as { text?: unknown } | null)?.text ?? "");
 		const lastUser = current.map((item) => item.kind).lastIndexOf("user");
 		const tail = lastUser >= 0 ? current.slice(lastUser + 1) : [];
-		const bubble = lastUser >= 0 && tail.every((item) => item.kind === "system" || item.kind === "assistant") && textOf(current[lastUser]).trim() === typed ? current[lastUser] : null;
+		const bubble = lastUser >= 0 && tail.every(leftByFailedAttempt) && textOf(current[lastUser]).trim() === typed ? current[lastUser] : null;
 		const box = (textareaRef.current?.value ?? "").trim();
 		// Nowhere to put it now: the box holds other text and the bubble is gone. The next open offers it again.
 		if (!bubble && box && box !== typed) return;
 		const kept = !!bubble && !!box && box !== typed;
-		// With no bubble, a line already on screen belongs to something else: this one says its own.
+		// With no bubble, a line already on screen belongs to something else: this one says its own. Except a stop after a refusal
+		// already took the bubble: the Stop line the turn's end left last is this one's, so it is not said twice.
 		const after = bubble ? tail : [];
-		const line = after.filter((item) => item.kind === "system" && (returned.stopped ? textOf(item) === STOPPED_LINE : item.level === "error")).pop();
-		const stale = new Set((bubble ? tail : current.slice(-1)).filter((item) => item.kind === "system" && isRetryNote(textOf(item))));
-		const gone = new Set(kept || !bubble ? [] : [bubble, ...tail.filter((item) => item.kind === "assistant")]);
+		const ending = current.at(-1);
+		const stopEnding = returned.stopped && !bubble && ending?.kind === "system" && !ending.returnedId && isStopLine(textOf(ending)) ? ending : undefined;
+		const line = after.filter((item) => item.kind === "system" && (returned.stopped ? isStopLine(textOf(item)) : item.level === "error")).pop() ?? stopEnding;
+		// By id: the turn's end may have replaced these items with stopped copies since the page last drew.
+		const stale = new Set((bubble ? tail : current.slice(-1)).filter((item) => item.kind === "system" && isRetryNote(textOf(item))).map((item) => item.id));
+		const gone = kept || !bubble ? [] : [bubble, ...tail.filter((item) => item.kind !== "system")];
 		const name = (returned.model && modelDisplayName(returned.model)) || "The model";
 		// A failure that ended while nobody was in the room left no line: it is said here, from the cause the server kept. The key or sign-in notice says its own.
 		// The same message back on a later open: the line it left already says so, and stays the only one,
@@ -6189,18 +4019,17 @@ export function App() {
 		const where: MessageWhere = kept ? "above" : "back";
 		const placed = (item: ChatItem): ChatItem => (item.kind === "system" ? lineWithMessage(item, where) : item);
 		const said = returned.words && !returned.stopped && returned.model ? failureLineOf(returned.words, returned.model, returned.failure as TurnFailure | undefined, returned.quotaWay, { text: typed }, true, returned.gatewayFind) : null;
-		// The key or sign-in notice says the cause, the way on and that the message is back. On the way in none
+		// The key or sign-in notice says the cause and the way on. On the way in none
 		// shows yet, so it is raised here; one the failure's own frame just raised is kept as it is.
 		if (returned.notice && signedOutProviderRef.current === null) {
 			setTurnSignedOut((shown) => shown ?? { provider: returned.model?.provider || persistentChatRef.current?.model.provider || "", ...(returned.key ? { key: returned.key } : {}) });
 		}
-		if (returned.notice && (!box || box === typed)) setMessageBackWithNotice(true);
 		const added: ChatItem[] = !line && !returned.notice && !saidBefore
 			? [placed(said
 				? { kind: "system", id: nid(), level: "error" as const, ...said, ...marked }
 				: { kind: "system", id: nid(), ...(returned.stopped ? {} : { level: "error" as const, failure: (returned.failure as TurnFailure | undefined) ?? "other", ...(returned.model?.provider ? { provider: returned.model.provider } : {}) }), ...failureLine(returnedFailureLine(name, returned, knownRemoteClientContext()?.sharedServer === true, providerLabelOf(returned.model?.provider ?? "")), where), ...(returned.quotaWay ? { quotaWay: returned.quotaWay } : {}), ...(returned.gatewayFind ? { gatewayFind: returned.gatewayFind } : {}), ...marked })]
 			: [];
-		setItems((s) => [...s.filter((item) => !gone.has(item) && !stale.has(item)).map((item) => (line && item.id === line.id ? placed(lineWithGatewayFind({ ...item, ...marked } as ChatItem, returned.gatewayFind, returned.model)) : item)), ...added]);
+		handBack(gone, (s) => [...s.filter((item) => !stale.has(item.id)).map((item) => (line && item.id === line.id ? placed(lineWithGatewayFind({ ...item, ...marked } as ChatItem, returned.gatewayFind, returned.model)) : item)), ...added]);
 		if (kept) {
 			sendReturnedPromptHandled(true);
 			return;
@@ -6210,6 +4039,80 @@ export function App() {
 			setComposerResetNonce((value) => value + 1);
 		}
 		returnedPromptPendingRef.current = true;
+	}
+
+	/**
+	 * Takes handed-back items out of the conversation and records them as
+	 * removed on purpose in the same step, so neither a late save nor a
+	 * reconnect's copy brings them back. `andThen` changes the rest of the
+	 * list in the same update.
+	 */
+	function handBack(items: readonly ChatItem[], andThen: (s: ChatItem[]) => ChatItem[] = (s) => s): void {
+		const chat = persistentChatRef.current;
+		const ids = new Set(items.map((item) => item.id));
+		if (chat && ids.size) pendingRemovalsRef.current.add(chat.agentId, chat.conversationId, [...ids]);
+		const update = (s: ChatItem[]) => andThen(ids.size ? s.filter((item) => !ids.has(item.id)) : s);
+		itemsRef.current = update(itemsRef.current);
+		setItems(update);
+	}
+
+	/**
+	 * The newest message, when it may be edited: typed text only, the room
+	 * idle and not shortening, nothing shortened since, no edit on its way, and no queued or held
+	 * message waiting (the edit would go before it).
+	 */
+	function editableMessageId(): string | null {
+		if (busy || shortening || persistentRoomInFlight || !connected || turnLink !== "live" || lastEdit?.phase === "sent" || outgoing.length > 0) return null;
+		const newest = [...items].reverse().find((item) => item.kind === "user");
+		if (!newest || newest.kind !== "user" || newest.attachments?.length || !newest.text.trim() || newest.id === editBlockedId) return null;
+		return newest.id;
+	}
+
+	function startEdit(id: string): void {
+		const bubble = itemsRef.current.find((item) => item.id === id);
+		if (!bubble || bubble.kind !== "user") return;
+		setLastEdit({ phase: "editing", id, text: bubble.text });
+	}
+
+	/** Cancel: everything as it was. A sent edit is the server's to take or refuse. */
+	function cancelEdit(): void {
+		if (lastEditRef.current?.phase === "editing") setLastEdit(null);
+	}
+
+	/** Send the edited text in place of the newest message. Never with files: an edit is typed text only. */
+	function sendEdit(text: string): boolean {
+		const was = lastEditRef.current;
+		if (was?.phase !== "editing" || !text.trim()) return false;
+		return sendMessage(text, { attachments: [] }, { replaces: was.id, text: was.text });
+	}
+
+	/** The server took the edit: the replaced message and its answer leave the conversation, and the line says what was not undone. */
+	function applySentEdit(replaces: string, notUndone: { id: string; text: string } | null): void {
+		const sent = lastEditRef.current;
+		if (sent?.phase !== "sent" || sent.replaces !== replaces) return;
+		setLastEdit(null);
+		const gone = itemsRef.current.filter((item) => sent.oldIds.includes(item.id));
+		// The server's line, under the id its landing saves it with.
+		handBack(gone, (s) => {
+			if (!notUndone || s.some((item) => item.id === notUndone.id)) return s;
+			const at = s.findIndex((item) => item.id === sent.newId);
+			const line: ChatItem = { kind: "system", id: notUndone.id, text: notUndone.text, level: "info" };
+			return at < 0 ? [...s, line] : [...s.slice(0, at), line, ...s.slice(at)];
+		});
+	}
+
+	/** The server refused the edit (the room moved on meanwhile): the old message and answer stay, the edit goes back in the box. */
+	function refuseSentEdit(replaces: string): void {
+		const sent = lastEditRef.current;
+		if (sent?.phase !== "sent" || sent.replaces !== replaces) return;
+		setLastEdit(null);
+		setEditBlockedId(sent.replaces);
+		const bubble = itemsRef.current.find((item) => item.id === sent.newId);
+		handBack(bubble ? [bubble] : [], (s) => [...s, { kind: "system", id: nid(), text: EDIT_REFUSED_LINE, level: "info" }]);
+		// Beside whatever is already typed in the box.
+		putInBox(sent.text);
+		setBusy(false);
+		busyRef.current = false;
 	}
 
 	function sendReturnedPromptHandled(kept: boolean): void {
@@ -6222,7 +4125,7 @@ export function App() {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		setTurnCancelling(true);
 		turnCancellingRef.current = true;
-		const note = options.leaveAfter ? "Response interrupted because you left the room." : "Response interrupted by Stop.";
+		const note = options.leaveAfter ? "Response interrupted because you left the room." : STOPPED_LINE;
 		setTurnInterruptedNote(note);
 		turnInterruptedNoteRef.current = note;
 		ws.send(JSON.stringify({ type: "abort" }));
@@ -6236,12 +4139,294 @@ export function App() {
 		return (textareaRef.current?.value ?? "").trim() ? null : sent;
 	}
 
-	const send = (text: string): boolean => sendMessage(text, null);
+	const send = (text: string): boolean => sendFromBox(text, false);
+	const sendNowFromBox = (text: string): boolean => sendFromBox(text, true);
+
+	/** Whether the room answers now, as the send path must know it before the next render. */
+	function roomAnswering(): boolean {
+		return busyRef.current || turnCancellingRef.current || roomInFlightRef.current;
+	}
+
+	/** A leading "@Room question" naming another room, as the box routes it. */
+	function leadingConsult(text: string): { roomId: string; question: string } | null {
+		const chat = persistentChatRef.current;
+		if (!chat) return null;
+		const mention = resolveLeadingMention(text, mentionCandidatesRef.current, chat.agentId);
+		return mention?.kind === "consult" ? { roomId: mention.room.id, question: mention.question } : null;
+	}
+
+	/**
+	 * The box's message. With no answer running it goes as always. While the
+	 * room answers, Enter queues it and Cmd/Ctrl+Enter (`now`) sends it now,
+	 * stopping the answer at the words on screen; "@Room question" waits for the
+	 * answer's end and goes to that room as a consult.
+	 */
+	function sendFromBox(text: string, now: boolean): boolean {
+		const consult = leadingConsult(text);
+		if (!roomAnswering()) return consult ? requestConsult(consult.roomId, consult.question) : sendMessage(text, null);
+		if (queueRefusal(text)) return false;
+		return queueMessage(text, now, consult);
+	}
+
+	/** A consult the box asks for: while the room answers, it waits as a queued message. */
+	function requestConsult(targetRoomId: string, question: string): boolean {
+		if (!roomAnswering()) return handleConsultRequest(targetRoomId, question);
+		return queueMessage(`@${targetRoomId} ${question}`, false, { roomId: targetRoomId, question });
+	}
+
+	function queueMessage(text: string, now: boolean, consult: { roomId: string; question: string } | null): boolean {
+		const payload = text.trim();
+		const ws = wsRef.current;
+		// Not while the socket catches up: the ready's list of waiting messages would read one sent before it as held.
+		if (!payload || !ws || ws.readyState !== WebSocket.OPEN || catchingUpRef.current || closedByFullSaveRef.current || turnLinkRef.current !== "live") return false;
+		if (!fitsHeldLimits(outgoingRef.current, payload)) return false;
+		const id = nid();
+		const started = currentDraftStartedAt();
+		const declined = itemsRef.current.filter((item): item is Extract<ChatItem, { kind: "approval" }> => item.kind === "approval" && approvalAsking(item) && liveApprovalIdsRef.current.has(item.requestId) && messageDeclinesQuestion(item.openedAt, started));
+		if (consult) {
+			dispatchOutgoing({ type: "add", id, text: payload, state: "consult", consult });
+			// The consult goes to the other room, never to this one: the step it declines is told no here.
+			for (const item of declined) resolveApproval(item.requestId, false, confirmApprovalLabels(item).decline);
+			if (now) sendQueuedNow(id);
+			return true;
+		}
+		// While a cut for another message settles, this one waits for the new answer; while a Stop settles, it goes as the next one.
+		if (cutSettling(outgoingRef.current)) {
+			dispatchOutgoing({ type: "add", id, text: payload, state: "later" });
+			return true;
+		}
+		if (turnCancellingRef.current) {
+			dispatchOutgoing({ type: "add", id, text: payload, state: "next" });
+			return true;
+		}
+		dispatchOutgoing({ type: "add", id, text: payload, state: "routing" });
+		const shown = now ? freezeAnswer() : answerShownChars();
+		ws.send(JSON.stringify({ type: "steer", id, text: payload, shown, ...(declined.length ? { declines: true } : {}), ...(now ? { now: true } : {}) }));
+		return true;
+	}
+
+	/**
+	 * Why the box cannot queue its message while the room answers, or null: a
+	 * queued message carries words only, so files wait in the box for the
+	 * answer's end; and a message past the held limits
+	 * (held-message-limits.ts) is one the server could not keep.
+	 */
+	function queueRefusal(text: string): string | null {
+		if (stagedAttachmentsRef.current.length > 0 && !leadingConsult(text)) return QUEUE_REFUSED_FILES;
+		return fitsHeldLimits(outgoingRef.current, text.trim()) ? null : QUEUE_REFUSED_TOO_LONG;
+	}
+
+	/** How many characters of the message being written the page shows, as the server counts its text. */
+	function answerShownChars(): number {
+		const state = streamStateRef.current;
+		return isAssistantStreamActive(state) && state.itemId ? state.shownBefore.length + state.displayed.length : 0;
+	}
+
+	/** Stops the reveal where it is: what has arrived shows now, and nothing more until the server says where the message goes. */
+	function freezeAnswer(): number {
+		cancelStreamTick();
+		if (isAssistantStreamActive(streamStateRef.current)) dispatchStream({ type: "tick", now: performance.now(), mode: "drain" });
+		answerFreezeRef.current ??= { backlog: [], cut: false };
+		return answerShownChars();
+	}
+
+	/** The message waits after all: the answer goes on from where it stood. */
+	function thawAnswer(): void {
+		const freeze = answerFreezeRef.current;
+		if (!freeze || freeze.cut) return;
+		answerFreezeRef.current = null;
+		for (const action of freeze.backlog) dispatchStream(action);
+		scheduleStreamTick();
+	}
+
+	/** The answer stops for the person's messages: their Stop is not what ended it, and the line under it says so. */
+	function stopForNext(quiet: boolean): void {
+		answerFreezeRef.current = { backlog: [], cut: true };
+		cutQuietRef.current = quiet;
+		stopByPersonRef.current = false;
+		setTurnCancelling(true);
+		turnCancellingRef.current = true;
+		setTurnInterruptedNote(STOPPED_FOR_NEXT_LINE);
+		turnInterruptedNoteRef.current = STOPPED_FOR_NEXT_LINE;
+	}
+
+	/**
+	 * Send now under a queued bubble (`id`), or Cmd/Ctrl+Enter in an empty box
+	 * (the first queued message): the answer stops at the words on screen and
+	 * that message goes now, alone; a consult goes once the answer has
+	 * stopped. The others queued wait for the new answer. With no answer
+	 * running (a consult chosen first runs), it goes at once, on its own.
+	 */
+	function sendQueuedNow(id?: string): boolean {
+		const queued = queuedForAnswer(outgoingRef.current);
+		const target = id ? queued.find((message) => message.id === id) : queued[0];
+		if (!target) return false;
+		const ws = wsRef.current;
+		if (!roomAnswering()) {
+			const sent = target.consult ? handleConsultRequest(target.consult.roomId, target.consult.question) : sendMessage(target.text, { attachments: [] });
+			if (sent) dispatchOutgoing({ type: "gone", ids: [target.id] });
+			return true;
+		}
+		// While the socket catches up the answer on screen is not the replayed one yet: a cut there would cut it at nothing.
+		if (turnCancellingRef.current || catchingUpRef.current || !ws || ws.readyState !== WebSocket.OPEN) return true;
+		const shown = freezeAnswer();
+		stopForNext(shown === 0);
+		dispatchOutgoing({ type: "now", id: target.id });
+		ws.send(JSON.stringify({ type: "abort", shown, forNext: true }));
+		return true;
+	}
+
+	/** Where the server put a message sent while the room answered (steer-route.ts SteerRouted). */
+	function steerRouted(type: "steer_waiting" | "steer_cut" | "steer_refused", id: string, quiet: boolean): void {
+		const known = outgoingRef.current.some((message) => message.id === id);
+		if (type === "steer_waiting") {
+			thawAnswer();
+			if (known) dispatchOutgoing({ type: "waiting", id });
+			return;
+		}
+		if (type === "steer_cut") {
+			stopForNext(quiet);
+			// It goes alone; the server hands back the ones still waiting, and they wait for the new answer.
+			if (known) dispatchOutgoing({ type: "now", id });
+			return;
+		}
+		// No answer ran to take it: it goes as the next message, or back into the box after the person's Stop.
+		thawAnswer();
+		if (!known) return;
+		if (stopByPersonRef.current) handOutgoingBack([id]);
+		else dispatchOutgoing({ type: "next", ids: [id] });
+	}
+
+	/** The room took a queued message in: its bubble becomes the conversation's, where the room took it. */
+	function takeSteerIn(id: string, text: string): void {
+		if (!id) return;
+		dispatchOutgoing({ type: "gone", ids: [id] });
+		const itemId = bubbleIdOf(id);
+		const words = text.trim() || outgoingRef.current.find((message) => message.id === id)?.text || "";
+		if (!words) return;
+		const update = (s: ChatItem[]) => [...s.filter((item) => item.id !== itemId), { kind: "user" as const, id: itemId, text: words, ts: Date.now(), steered: true as const }];
+		itemsRef.current = update(itemsRef.current);
+		setItems(update);
+	}
+
+	/** The server handed back what the answer did not take. */
+	function steersReturned(messages: readonly ListedMessage[], held: boolean): void {
+		if (held) {
+			dispatchOutgoing({ type: "held", messages });
+			return;
+		}
+		const ids = messages.map((message) => message.id).filter((id) => outgoingRef.current.some((known) => known.id === id));
+		if (stopByPersonRef.current) handOutgoingBack(ids);
+		else dispatchOutgoing({ type: "next", ids });
+	}
+
+	/** Stop or Esc, or the server handing back after it: the queued messages go into the box, oldest first, above what is typed there. */
+	function handOutgoingBack(ids?: readonly string[]): void {
+		const all = handBackAll(outgoingRef.current);
+		const back = ids ? { ids: all.ids.filter((id) => ids.includes(id)), text: outgoingRef.current.filter((message) => ids.includes(message.id) && all.ids.includes(message.id)).map((message) => message.text).join("\n\n") } : all;
+		if (back.ids.length === 0) return;
+		dispatchOutgoing({ type: "gone", ids: back.ids });
+		putInBox(back.text);
+	}
+
+	function putInBox(text: string): void {
+		setComposerPrefill(boxWithHandBack(text, textareaRef.current?.value ?? ""));
+		setComposerResetNonce((value) => value + 1);
+	}
+
+	/**
+	 * Another window took the room: what only this one had queued waits as
+	 * held messages, which the server keeps (dispatchOutgoing). The ones the
+	 * running answer holds stay its own: it takes them in the other window.
+	 */
+	function holdPageOnlyMessages(): void {
+		const fromPage = queuedForAnswer(outgoingRef.current).filter((message) => message.state !== "waiting").map(({ id, text }) => ({ id, text }));
+		if (fromPage.length) dispatchOutgoing({ type: "held", messages: fromPage });
+	}
+
+	/**
+	 * A new connection says what the server has: the running answer's waiting
+	 * messages, the held ones and the ones the last turn took. What only this
+	 * page had and the server lacks goes to it again; a held one it no longer
+	 * has went in another window.
+	 */
+	function reconcileOutgoing(ws: WebSocket, ready: { waiting: readonly ListedMessage[]; held: readonly ListedMessage[]; taken: readonly string[] }, withdrawn: readonly string[]): void {
+		// Edits the server took out of the answer while their replies were lost with the old connection: their texts go back in the box, in the order sent, at once.
+		const edited = handBackAll(outgoingRef.current.filter((message) => withdrawn.includes(message.id) && editsAskedRef.current.has(message.id)));
+		editsAskedRef.current.clear();
+		if (edited.ids.length) putInBox(edited.text);
+		const fromPage = heldFromPage(outgoingRef.current, ready);
+		if (fromPage.length && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "hold", messages: fromPage }));
+		dispatchOutgoing({ type: "reconcile", ...ready });
+	}
+
+	/**
+	 * Edit or Remove on a message queued for the answer. What only this page
+	 * holds goes at once; one in the running answer's queue goes once the
+	 * server took it out (steer_withdrawn), and stays if the room is taking it
+	 * in already.
+	 */
+	function takeBackQueued(message: OutgoingMessage, edit: boolean): void {
+		if (message.state === "later" || message.state === "consult") {
+			dispatchOutgoing({ type: "gone", ids: [message.id] });
+			if (edit) putInBox(message.text);
+			return;
+		}
+		const ws = wsRef.current;
+		if (message.state !== "waiting" || !ws || ws.readyState !== WebSocket.OPEN) return;
+		ws.send(JSON.stringify({ type: "steer_withdraw", id: message.id, edit }));
+		if (edit) editsAskedRef.current.set(message.id, message.text);
+	}
+
+	/** The server took a message out of the running answer's queue: it goes, also when a Send now since moved it on. */
+	function steerWithdrawn(id: string, edit: boolean): void {
+		editsAskedRef.current.delete(id);
+		const message = outgoingRef.current.find((candidate) => candidate.id === id && candidate.state !== "held");
+		if (!message) return;
+		dispatchOutgoing({ type: "gone", ids: [id] });
+		if (edit) putInBox(message.text);
+	}
+
+	/** A queued bubble's buttons. A held message goes on its own; Edit puts it back in the box. */
+	const queuedActions = useMemo(() => ({
+		onSendNow: (id: string) => queuedActionRef.current("send", id),
+		onEdit: (id: string) => queuedActionRef.current("edit", id),
+		onRemove: (id: string) => queuedActionRef.current("remove", id),
+	}), []);
+	const queuedActionRef = useRef<(action: "send" | "edit" | "remove", id: string) => void>(() => {});
+	queuedActionRef.current = (action, id) => {
+		const message = outgoingRef.current.find((candidate) => candidate.id === id);
+		const ws = wsRef.current;
+		if (!message) return;
+		if (message.state !== "held") {
+			if (action === "send") sendQueuedNow(id);
+			else takeBackQueued(message, action === "edit");
+			textareaRef.current?.focus();
+			return;
+		}
+		// The server lets a held one go only over an open connection (dispatchOutgoing), and the page sends it once caught up.
+		if (!ws || ws.readyState !== WebSocket.OPEN || (action === "send" && catchingUpRef.current)) return;
+		dispatchOutgoing({ type: "gone", ids: [id] });
+		if (action === "send") {
+			// On its own, never the box's message: what is typed there, its files and its hand-offs stay.
+			const consult = leadingConsult(message.text);
+			const sent = !roomAnswering()
+				? consult ? handleConsultRequest(consult.roomId, consult.question) : sendMessage(message.text, { attachments: [] })
+				: queueMessage(message.text, true, consult);
+			// Not taken (the room cannot send now): it stays held.
+			if (!sent) dispatchOutgoing({ type: "held", messages: [{ id, text: message.text }] });
+		} else if (action === "edit") putInBox(message.text);
+		textareaRef.current?.focus();
+	};
+	// Whether the room takes a message now: no answer running or stopping, the conversation open, no model change waiting, the link live.
+	function roomTakesMessageNow(): boolean {
+		return !(busyRef.current || turnCancellingRef.current || closedByFullSaveRef.current || modelChangePendingFor(persistentChatRef.current)) && wsRef.current?.readyState === WebSocket.OPEN;
+	}
+
 	// `again`: a message a failure line sends again, with the files it carried, leaving the box, its files and any queued transfer as they are.
 	// Null for the box's message, which takes all three, after which the box empties.
-	function sendMessage(text: string, again: { attachments: ReadonlyArray<{ name: string; bytes: number; extension: string }> } | null): boolean {
-		if (busyRef.current || turnCancellingRef.current || closedByFullSaveRef.current) return false;
-		setMessageBackWithNotice(false);
+	function sendMessage(text: string, again: { attachments: ReadonlyArray<{ name: string; bytes: number; extension: string }> } | null, edit?: { replaces: string; text: string }): boolean {
+		if (!roomTakesMessageNow()) return false;
 		const fromBox = again === null;
 		const payload = text.trim();
 		// Ready staged attachments ride THIS message (files UI slice): their
@@ -6256,7 +4441,7 @@ export function App() {
 		if (!payload && carried.length === 0) return false;
 		if (fromBox && stagedAttachmentsRef.current.some((entry) => entry.status === "uploading")) return false;
 		const ws = wsRef.current;
-		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+		if (!ws) return false;
 		// Consult MR-5 (§2): any queued handoff blocks ride ahead of the user's text
 		// on the wire (entering the session JSONL, where a checkpoint can compress
 		// them), then the queue clears. The chat bubble shows only the user's text.
@@ -6274,18 +4459,21 @@ export function App() {
 		if (pending.length) {
 			applyPendingHandoffs([], new Set());
 			// The block is consumed exactly once: the SERVER clears the persisted
-			// queue atomically when it receives this prompt (index.ts prompt handler),
+			// queue atomically when it receives this prompt (room-socket.ts prompt handler),
 			// so a crash or reordered save can't re-queue it. Cancel any in-flight
 			// debounced persist here too, so a stale save can't re-write the old queue
 			// before the setItems below reschedules an empty-queue persist.
 			if (persistTimerRef.current) { window.clearTimeout(persistTimerRef.current); persistTimerRef.current = null; }
 		}
+		// The bubble's id keys the turn: the server names the turn's items from it, and lands the bubble as shown.
+		const promptId = nid();
+		const shownFiles = carried.map((entry) => ({ name: entry.name, bytes: entry.bytes, extension: entry.extension }));
 		setItems((s) => [...s, {
 			kind: "user",
-			id: nid(),
+			id: promptId,
 			text: payload,
 			ts: Date.now(),
-			...(carried.length > 0 ? { attachments: carried.map((entry) => ({ name: entry.name, bytes: entry.bytes, extension: entry.extension })) } : {}),
+			...(shownFiles.length > 0 ? { attachments: shownFiles } : {}),
 		}]);
 		if (readyAttachments.length > 0) {
 			// The bubble shows the shelf copy from here on; the local previews are done.
@@ -6302,7 +4490,14 @@ export function App() {
 		// is sticky on its own and applies the room's level at bind and before
 		// every turn; the composer's only job is to say when the user CHOOSES,
 		// which the effort frame does.
-		ws.send(JSON.stringify({ type: "prompt", text: wireText }));
+		ws.send(JSON.stringify({ type: "prompt", text: wireText, id: promptId, shown: { text: payload, files: shownFiles }, ...(edit ? { edit } : {}) }));
+		turnKeyRef.current = promptId;
+		if (edit) {
+			// Dimmed until the server takes the edit: the bubble and everything after it, up to this new one.
+			const at = itemsRef.current.findIndex((item) => item.id === edit.replaces);
+			const oldIds = at < 0 ? [] : itemsRef.current.slice(at).map((item) => item.id).filter((id) => id !== promptId);
+			setLastEdit({ phase: "sent", replaces: edit.replaces, oldIds, newId: promptId, text: payload });
+		}
 		if (fromBox) {
 			setComposerPrefill("");
 			setComposerResetNonce((value) => value + 1);
@@ -6312,12 +4507,31 @@ export function App() {
 	}
 
 	/** The page's side of a turn the server was just asked for. */
+	/**
+	 * A new answer has started in this conversation, so the server has let the
+	 * last one go: a read of the room taken while that one stopped still says
+	 * it is stopping, and would keep Stop and Esc dead until the next read.
+	 */
+	function forgetStoppedTurnRead(): void {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		const fresh = (status: PersistentAgentStatus): PersistentAgentStatus => (status.id === chat.agentId && status.activeThread?.threadId === chat.conversationId && status.activeThread.cancelling ? { ...status, activeThread: { ...status.activeThread, cancelling: false, working: true } } : status);
+		setPersistentAgentStatuses((statuses) => statuses.map(fresh));
+		setPersistentAgentStatus((status) => (status ? fresh(status) : status));
+	}
+
 	function startTurnOnPage(): void {
+		forgetStoppedTurnRead();
 		setTurnSignedOut(null);
+		// The previous answer may still be appearing: its rest goes on screen
+		// now, so the new message sits under the whole answer.
+		flushAssistantStream();
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		outputLimitNoticeShownRef.current = false;
 		retrievalActivityIdRef.current = null;
 		turnCutByStopRef.current = false;
+		stopByPersonRef.current = false;
+		cutQuietRef.current = false;
 		setTurnInterruptedNote(null);
 		turnInterruptedNoteRef.current = null;
 		setTurnCancelling(false);
@@ -6328,19 +4542,20 @@ export function App() {
 
 	/** Try again under a failure whose message stayed above: the model answers that message again, which is not sent a second time, and the box is left alone. */
 	function continueAfterFailure(line: { id: string }): boolean {
-		if (busyRef.current || turnCancellingRef.current || closedByFullSaveRef.current) return false;
 		const ws = wsRef.current;
-		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-		setMessageBackWithNotice(false);
+		if (!roomTakesMessageNow() || !ws) return false;
 		continuedLineRef.current = line.id;
-		ws.send(JSON.stringify({ type: "continue" }));
+		// A fresh id keys the continued turn's items; it makes no question.
+		const turnKey = nid();
+		ws.send(JSON.stringify({ type: "continue", id: turnKey }));
+		turnKeyRef.current = turnKey;
 		startTurnOnPage();
 		return true;
 	}
 
 	/**
 	 * The message above a line, sent again whole with its files: for a line saved before Try again continued, or a conversation that moved on from the failure.
-	 * One that cannot go whole (a file gone from the room's Files, a transfer that rode with it) goes back into an empty box, and its line says so;
+	 * One that cannot go whole (a file gone from the room's Files, a transfer that rode with it) goes back into an empty box, and its line no longer says it is above;
 	 * with a draft in the box, or no words to give back, its line says it cannot be sent again as it was. Either way the line changes.
 	 */
 	function sendAgainFromLine(lineId: string): void {
@@ -6359,7 +4574,14 @@ export function App() {
 
 	// Try again on the newest failure line sends what is in the box, as Send does;
 	// under a message that stayed above, the model answers it again, and the box is left alone.
-	function tryAgainAfterFailure(line: { id: string; messageAbove?: true }): void {
+	// Under a stop by an away limit, the message above goes again whole: the steps the turn finished stay in the conversation. Once it
+	// went back into the box, the box is sent; while the room cannot take a message, the line stays as it is.
+	function tryAgainAfterFailure(line: { id: string; messageAbove?: true; messageBack?: true; failure?: FailureCause }): void {
+		if (isAwayLimitStop(line.failure) && !line.messageBack) {
+			if (roomTakesMessageNow()) sendAgainFromLine(line.id);
+			else textareaRef.current?.focus();
+			return;
+		}
 		if (line.messageAbove) {
 			if (continueAfterFailure(line)) return;
 		} else if (send(textareaRef.current?.value ?? "")) return;
@@ -6489,6 +4711,7 @@ export function App() {
 		setItems((s) => [...s, item]);
 		const nextIds = new Set(pendingConsultItemIdsRef.current);
 		nextIds.add(itemId);
+		handoffCardByEntryRef.current.set(block, itemId);
 		applyPendingHandoffs([...pendingHandoffsRef.current, block], nextIds);
 		dispatchConsult({ type: "dismiss" });
 	}
@@ -6738,6 +4961,8 @@ export function App() {
 				if (item.kind === "user" || item.kind === "assistant" || item.kind === "system") return { kind: item.kind, id: item.id, text: item.text };
 				return { kind: "tool", id: item.id, name: item.name, status: item.status };
 			}) : undefined;
+		const kept = rememberContinueOnRef.current;
+		const continueOn = kept && kept.agentId === targetChat.agentId && kept.conversationId === targetChat.conversationId ? { provider: kept.lock.provider, model: kept.lock.model } : null;
 		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/propose`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -6748,6 +4973,7 @@ export function App() {
 				rememberText,
 				background: true,
 				...(transcriptItems ? { items: transcriptItems } : {}),
+				...(continueOn ? { continueOn } : {}),
 			}),
 		});
 		if (!res.ok) throw await rememberRequestError(res);
@@ -6773,12 +4999,14 @@ export function App() {
 			stopIfCancelled();
 			try {
 				const res = await apiFetch(`${base}/progress?${query}`, signal ? { signal } : {});
-				const progress = res.ok ? await res.json() as { state?: string; read?: number; of?: number; wait?: ModelWait } : null;
+				const progress = res.ok ? await res.json() as { state?: string; read?: number; of?: number; wait?: ModelWait; continueOn?: { provider: string; model: string } } : null;
 				if (progress?.state === "none") {
 					if (Date.now() - startedAt >= 3_000 && ++missing >= 2) throw new Error(rememberRestartSentence());
 				} else if (progress) {
 					missing = 0;
 					if (progress.state === "restarted") throw new Error(rememberRestartSentence());
+					// A job followed after a reload carries its switch from the start, so a failed read run again keeps it.
+					if (progress.continueOn) rememberContinueOnRef.current = { agentId: targetChat.agentId, conversationId: targetChat.conversationId, lock: { provider: progress.continueOn.provider, model: progress.continueOn.model } };
 					if (progress.state !== "reading") break;
 					if (typeof progress.read === "number" && typeof progress.of === "number") {
 						setCheckpointProgress({ read: progress.read, of: progress.of, ...(progress.wait ? { wait: progress.wait } : {}) });
@@ -6796,6 +5024,8 @@ export function App() {
 		const proposal = await res.json() as CheckpointProposalResponse;
 		const currentChat = persistentChatRef.current;
 		if (!currentChat || currentChat.agentId !== targetChat.agentId || currentChat.conversationId !== targetChat.conversationId || proposal.agentId !== targetChat.agentId || proposal.conversationId !== targetChat.conversationId || proposal.process?.parentConversationId !== targetChat.conversationId) throw new Error(REMEMBER_OTHER_CONVERSATION_OPEN);
+		// A job read back after a reload carries its switch: Generate again keeps asking for it.
+		if (proposal.continueOn) rememberContinueOnRef.current = { agentId: targetChat.agentId, conversationId: targetChat.conversationId, lock: { provider: proposal.continueOn.provider, model: proposal.continueOn.model } };
 		return proposal;
 	}
 
@@ -6859,6 +5089,8 @@ export function App() {
 	/** Cancel, from this tab or any other: the job on the server stops; the parts it read stay kept. */
 	function cancelCheckpointProposal() {
 		checkpointProposalAbortRef.current?.abort();
+		// The server drops the switch with the job: Remember run again is Remember alone.
+		rememberContinueOnRef.current = null;
 		const chat = persistentChatRef.current;
 		if (chat) void apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/checkpoint/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: chat.conversationId }) }).catch(() => {});
 	}
@@ -6879,10 +5111,15 @@ export function App() {
 		const targetChat = persistentChatRef.current;
 		if (!targetChat || checkpointProposalAbortRef.current || checkpointProposal) return;
 		let state: string | undefined;
+		let continueOnFailed = false;
 		try {
 			const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(targetChat.conversationId)}`);
 			if (!res.ok) return;
-			state = ((await res.json()) as { state?: string }).state;
+			const progress = (await res.json()) as { state?: string; continueOn?: { provider: string; model: string } };
+			state = progress.state;
+			// A job read after a reload carries its switch, whatever its state: Remember run again keeps asking for it.
+			if (progress.continueOn) rememberContinueOnRef.current = { agentId: targetChat.agentId, conversationId: targetChat.conversationId, lock: { provider: progress.continueOn.provider, model: progress.continueOn.model } };
+			continueOnFailed = state === "failed" && Boolean(progress.continueOn);
 		} catch {
 			return;
 		}
@@ -6892,7 +5129,8 @@ export function App() {
 			setCheckpointProposalError(rememberRestartSentence());
 			return;
 		}
-		if (state !== "reading" && state !== "done") return;
+		// A Remember and switch that failed meanwhile opens too, with its reason and Generate again, so the switch is not lost unseen.
+		if (state !== "reading" && state !== "done" && !continueOnFailed) return;
 		if (!openOnEntry && !checkpointPreviewOpen) return;
 		if (checkpointProposalAbortRef.current) return;
 		setCheckpointPreviewOpen(true);
@@ -6957,7 +5195,9 @@ export function App() {
 		clearTransientStreamNotes();
 		dispatchStream({ type: "reset" });
 		toolByIdRef.current.clear();
+		serverToolByIdRef.current.clear();
 		hiddenRoutineToolByIdRef.current.clear();
+		forgetLiveTurnProgress();
 		retrievalActivityIdRef.current = null;
 		setPersistentThread(null);
 		setPersistentChat(null);
@@ -7004,7 +5244,9 @@ export function App() {
 		setComposerPrefill("");
 		setComposerResetNonce((value) => value + 1);
 		toolByIdRef.current.clear();
+		serverToolByIdRef.current.clear();
 		hiddenRoutineToolByIdRef.current.clear();
+		forgetLiveTurnProgress();
 		retrievalActivityIdRef.current = null;
 		setPersistentThread(null);
 		setPersistentChat(null);
@@ -7298,26 +5540,35 @@ export function App() {
 		if (origin === "memory") setView("memory");
 	}
 
-	function resetLiveUiState(keepRememberTyped = false) {
+	/** `rebind`: the same room's conversation binds again after a dropped connection. */
+	function resetLiveUiState(keepRememberTyped = false, rebind = false) {
 		// This close is deliberate (a navigation/rebind path owns what happens
 		// next) — it must not trigger the auto-reconnect.
 		suppressReconnectRef.current = true;
 		try { wsRef.current?.close(); } catch {}
 		setUsage(ZERO_USAGE);
 		setContextHealth(null);
-		// The effort pill belongs to the room being left: the next room's ready
+		// The effort shown belongs to the room being left: the next room's ready
 		// frame brings its own sticky level and its own model's capability.
 		setRoomEffort(null);
 		setPreview(null);
-		setBusy(false);
 		setCurrentModelState(NO_CURRENT_MODEL);
 		setComposerPrefill("");
 		setComposerResetNonce((value) => value + 1);
-		flushAssistantStream();
-		clearTransientStreamNotes();
-		dispatchStream({ type: "reset" });
+		// A turn waited on through the drop keeps its open answer across the
+		// rebind: what arrived goes on appearing, and the replay continues from
+		// what is on screen (turn_reattach).
+		if (!(rebind && turnLinkRef.current === "reconnecting")) {
+			setTurnLink("live");
+			setBusy(false);
+			flushAssistantStream();
+			clearTransientStreamNotes();
+			dispatchStream({ type: "reset" });
+		}
 		toolByIdRef.current.clear();
+		serverToolByIdRef.current.clear();
 		hiddenRoutineToolByIdRef.current.clear();
+		forgetLiveTurnProgress();
 		retrievalActivityIdRef.current = null;
 		resetCheckpointInput(keepRememberTyped);
 		resetMaintainWorkflows();
@@ -8511,10 +6762,26 @@ export function App() {
 		}
 	}
 
-	/** Cancel asks first: a run costs minutes of model work to redo. A paused run with nothing to save has none to lose, so it goes without a question, as Review's Close does. */
+	/**
+	 * Cancel asks first: a run costs minutes of model work to redo. While it still reads, Cancel stops it; once it has
+	 * finished reading, what is left is a draft, so Cancel asks to discard it. A paused run with nothing to save has none
+	 * to lose, so it goes without a question, as Review's Close does.
+	 */
 	function confirmCancelAbsorbRun(): void {
 		const run = absorbWorkflow.run;
 		if (absorbWorkflow.step === "run_card" && run?.stop && absorbRunNothingToSave(run)) return void absorbRunBackToAssessment();
+		if (absorbWorkflow.step === "run_card" && run?.state === "ready") {
+			// A Discard already on its way is not asked twice.
+			if (absorbWorkflow.runBusy) return;
+			setMaintainConfirm({
+				title: "Discard this draft?",
+				body: "Nothing has been saved, and the conversations stay remembered for the next Memorize.",
+				confirmLabel: "Discard",
+				cancelLabel: "Keep draft",
+				onConfirm: () => { void discardAbsorbDraft(); },
+			});
+			return;
+		}
 		setMaintainConfirm({
 			title: "Stop this memory update?",
 			body: "Nothing has been saved, and the conversations stay remembered. Starting again reads them from the beginning.",
@@ -8522,6 +6789,34 @@ export function App() {
 			cancelLabel: "Keep going",
 			onConfirm: () => { void absorbRunBackToAssessment(); },
 		});
+	}
+
+	/**
+	 * Discard: cancelling a finished run drops its draft on the server; then the room's memory page opens again. A draft
+	 * the server no longer holds (a newer Memorize replaced it), or one a cancel whose answer was lost did drop, is
+	 * discarded already. Any other refusal keeps the card as it was, its unsent Keep choices included, with its reason.
+	 */
+	async function discardAbsorbDraft(): Promise<void> {
+		const target = absorbWorkflow.target;
+		const runId = absorbWorkflow.run?.runId ?? absorbWorkflow.runId;
+		if (!target || !runId) return;
+		const runToken = maintainRunRef.current;
+		const current = () => runToken === maintainRunRef.current;
+		setAbsorbWorkflow((state) => ({ ...state, runBusy: true, error: null }));
+		try {
+			await cancelAbsorbRun(target.agentId, runId);
+		} catch (e) {
+			const gone = apiErrorCode(e) === "absorb_run_unknown" || (await fetchAbsorbRun(target.agentId, runId).then((run) => run.state === "cancelled", () => false));
+			if (!current()) return;
+			if (!gone) {
+				setAbsorbWorkflow((state) => ({ ...state, runBusy: false, error: (e as Error).message }));
+				return;
+			}
+		}
+		if (!current()) return;
+		absorbRunSettledRef.current = runId;
+		clearAbsorbKeepDraft();
+		restartMaintain();
 	}
 
 	/**
@@ -8667,7 +6962,12 @@ export function App() {
 		if (!shownModel) {
 			// The room's model cannot run (the server's sentence names it and the
 			// way out), or nothing is signed in at all.
-			setPersistentResumeError(conversationRow?.refusal ?? "No AI provider is signed in. Sign in in Settings, AI setup, then open the room again.");
+			const role = sharedServerRole(clientContext);
+			setPersistentResumeError(conversationRow?.refusal ?? (role === "member"
+				? "No AI model is set up on this server yet. Ask your admin to add one in Settings, AI setup, then open the room again."
+				: role === "admin"
+					? "No AI model is set up yet. Add an API key or a gateway in Settings, AI setup, then open the room again."
+					: "No AI provider is signed in. Sign in in Settings, AI setup, then open the room again."));
 			return;
 		}
 		const model: WebChatModelOption = { provider: shownModel.provider, model: shownModel.model, label: shownModel.label };
@@ -8737,18 +7037,18 @@ export function App() {
 		setSessionVersion((v) => v + 1);
 	}
 
-	// A switch made in Room settings, Model. With a live socket the
+	// A switch made in the model panel. With a live socket the
 	// model_switched frame usually lands first and carries all of this; the
 	// answer to the request settles it either way: the room takes the new model,
 	// the conversation gets the server's own "Continued on" line unless the
 	// frame already brought it (the same id), and a socket that is down (its
 	// provider signed out) dials again on the new model.
-	function adoptSwitchedConversationModel(conversationId: string, model: RoomModelLockView, notice: ConversationSwitchNotice): void {
+	function adoptSwitchedConversationModel(conversationId: string, model: Pick<RoomModelLockView, "provider" | "model" | "label">, notice: ConversationSwitchNotice): void {
 		const next: WebChatModelOption = { provider: model.provider, model: model.model, label: model.label };
 		const differs = (current: WebChatModelOption) => current.provider !== next.provider || current.model !== next.model;
 		setPersistentThread((thread) => thread && thread.conversationId === conversationId && differs(thread.model) ? { ...thread, model: next } : thread);
 		setPersistentChat((chat) => chat && chat.conversationId === conversationId && differs(chat.model) ? { ...chat, model: next } : chat);
-		if (notice?.id) setItems((s) => s.some((item) => item.id === notice.id) ? s : [...s, { kind: "system", id: notice.id, text: notice.text, level: "info" }]);
+		if (notice?.id) setItems((s) => withSwitchLine(s, notice));
 		const ws = wsRef.current;
 		if (!ws || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) setSessionVersion((v) => v + 1);
 	}
@@ -8856,17 +7156,18 @@ export function App() {
 	// actually just chosen instead of a stale render's value.
 	function selectRoomEffort(level: string): void {
 		const current = roomEffortRef.current;
-		if (!current || level === current.level) return;
+		if (!current) return;
 		const next = { ...current, level };
 		roomEffortRef.current = next;
 		setRoomEffort(next);
 		const ws = wsRef.current;
 		if (ws && ws.readyState === WebSocket.OPEN) {
 			pendingEffortRef.current = null;
-			ws.send(JSON.stringify({ type: "effort", level }));
+			// The person picked it: stored even when it equals the level shown, and it becomes the room's default for new conversations.
+			ws.send(JSON.stringify({ type: "effort", level, explicit: true }));
 			return;
 		}
-		// The socket is between lives (a rebind, a reconnect). The pill has
+		// The socket is between lives (a rebind, a reconnect). The slider has
 		// already moved, so dropping the frame here would leave the screen
 		// claiming a level the room never heard about. Hold it against this
 		// room and send it the moment the room binds again.
@@ -8889,7 +7190,128 @@ export function App() {
 			roomEffortRef.current = next;
 			setRoomEffort(next);
 		}
-		ws.send(JSON.stringify({ type: "effort", level: pending.level }));
+		ws.send(JSON.stringify({ type: "effort", level: pending.level, explicit: true }));
+	}
+
+	/**
+	 * A model picked in the model panel. The control shows it at once; while
+	 * the room answers the switch waits for the answer to end, otherwise it
+	 * goes now through the switch route, which keeps its own fit check.
+	 */
+	function pickConversationModel(lock: RoomModelLock): void {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		const onCurrent = chat.model.provider === lock.provider && chat.model.model === lock.model;
+		// With a switch still on the wire, even a return to the current model
+		// waits for it: the earlier request may yet move the conversation.
+		const onWire = switchesInFlightFor(chat.agentId, chat.conversationId) > 0;
+		if (onCurrent && !onWire) {
+			heldModelPickRef.current = null;
+			setHeldModelPick(null);
+			// A conversation with nothing said yet follows the room's default until
+			// a model is picked for it: picking the one it shows keeps it there.
+			if (!roomInFlightRef.current && !itemsRef.current.some((item) => item.kind === "user")) void applyConversationPick(chat.agentId, chat.conversationId, lock);
+			return;
+		}
+		const waiting = roomInFlightRef.current || onWire;
+		const next = { agentId: chat.agentId, conversationId: chat.conversationId, lock, phase: waiting ? "waiting" as const : "sending" as const };
+		heldModelPickRef.current = next;
+		setHeldModelPick(next);
+		if (!waiting) void applyConversationPick(chat.agentId, chat.conversationId, lock);
+	}
+
+	// A held pick goes once the room confirms it (the conversation's model is
+	// then the pick) or refuses it; a newer pick made meanwhile stays.
+	function settleHeldModelPick(conversationId: string, lock: RoomModelLock): void {
+		const held = heldModelPickRef.current;
+		if (!held || held.conversationId !== conversationId || held.lock.provider !== lock.provider || held.lock.model !== lock.model) return;
+		heldModelPickRef.current = null;
+		setHeldModelPick(null);
+	}
+
+	async function applyConversationPick(agentId: string, conversationId: string, lock: RoomModelLock): Promise<void> {
+		const key = `${agentId}\n${conversationId}`;
+		const inFlight = switchesInFlightRef.current;
+		inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
+		switchingToRef.current.set(key, lock);
+		// Drawn at once, so Send shows it waits as soon as the request leaves.
+		setSwitchesTick((n) => n + 1);
+		try { await sendConversationPick(agentId, conversationId, lock); } finally {
+			const left = (inFlight.get(key) ?? 1) - 1;
+			if (left > 0) inFlight.set(key, left); else { inFlight.delete(key); switchingToRef.current.delete(key); }
+			setSwitchesTick((n) => n + 1);
+		}
+	}
+
+	// The end frame can land before the server clears its turn guard, so only
+	// the answering refusal is asked again, until the turn is idle. Any other
+	// coded refusal wrote nothing: the conversation's model shows again with
+	// the reason. A failure without a code may have moved the conversation (a
+	// failed rebind, a lost answer): the stored model is read first, and only
+	// then is Send released. The outcome belongs to the conversation the pick
+	// was made in: once the page has left it, nothing is written into the one now open.
+	async function sendConversationPick(agentId: string, conversationId: string, lock: RoomModelLock): Promise<void> {
+		const stillOpen = () => persistentChatRef.current?.agentId === agentId && persistentChatRef.current?.conversationId === conversationId;
+		const giveUpAt = Date.now() + SWITCH_ANSWERING_RETRY_MS;
+		for (;;) {
+			try {
+				const switched = await switchConversationModel(agentId, conversationId, lock);
+				if (stillOpen()) adoptSwitchedConversationModel(conversationId, switched.model, switched.notice ?? null);
+				settleHeldModelPick(conversationId, lock);
+				void refreshPersistentAgentStatus();
+				return;
+			} catch (e) {
+				const refusal = conversationSwitchRefusal(e);
+				if (refusal === "switch_answering" && stillOpen() && Date.now() < giveUpAt) { await new Promise((resolve) => setTimeout(resolve, 400)); continue; }
+				const key = `${agentId}\n${conversationId}`;
+				if (refusal === null) switchOutcomeUnknownRef.current.add(key);
+				if (stillOpen()) setItems((s) => [...s, { kind: "system", id: nid(), text: (e as Error).message, level: "error" }]);
+				// Until a read says where the conversation stands, the switch stays
+				// on the wire, Send waits and nothing is saved: the stored model and
+				// its lines are taken first, so the next save keeps what the switch wrote.
+				while (refusal === null && stillOpen()) {
+					try {
+						const record = await fetchPersistentAgentThread(agentId as PersistentAgentId, conversationId);
+						if (stillOpen()) {
+							adoptSwitchedConversationModel(conversationId, { ...record.model, label: record.model.label ?? record.model.model }, null);
+							setItems((s) => withStoredSwitchLines(s, record.items));
+						}
+						break;
+					} catch {
+						await new Promise((resolve) => setTimeout(resolve, SWITCH_READ_RETRY_MS));
+					}
+				}
+				switchOutcomeUnknownRef.current.delete(key);
+				settleHeldModelPick(conversationId, lock);
+				return;
+			}
+		}
+	}
+
+	// The chat's "Choose another model" rescues the open conversation, so it
+	// opens the conversation's model panel; the Memory model's stays in Room settings.
+	function openModelPanel(): void {
+		setModelPanelOpen(true);
+	}
+
+	function askModelSwitch(lock: RoomModelLock, name: string): void {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		setModelSwitchAsk({ agentId: chat.agentId, conversationId: chat.conversationId, lock, name });
+	}
+
+	// "Remember and switch", or Remember alone for a room this save fills:
+	// checked again on the click, since the answer may have started or ended
+	// since the window opened. Remember then runs exactly as its own button
+	// runs it, the switch riding its proposal.
+	function confirmModelSwitch(withSwitch: boolean): void {
+		const ask = modelSwitchAsk;
+		const chat = persistentChatRef.current;
+		if (!ask || !chat || chat.agentId !== ask.agentId || chat.conversationId !== ask.conversationId) { setModelSwitchAsk(null); return; }
+		if (roomInFlightRef.current || busyRef.current || turnCancellingRef.current) return;
+		setModelSwitchAsk(null);
+		rememberContinueOnRef.current = withSwitch ? { agentId: ask.agentId, conversationId: ask.conversationId, lock: ask.lock } : null;
+		void runQuickCheckpoint();
 	}
 
 	async function mementoPersistentThread() {
@@ -8931,11 +7353,17 @@ export function App() {
 	function continueAfterCheckpoint() {
 		const approval = checkpointApprovalResult;
 		const targetChat = persistentChat;
+		// The card's button goes with the card, so focus would fall to the page: it goes back to the message box, after the render that
+		// closes the card (never on a touch screen, where it would pop the keyboard over the room).
+		const keepChatting = () => {
+			resetCheckpointInput();
+			if (!isTouchScreen()) window.requestAnimationFrame(() => textareaRef.current?.focus());
+		};
 		if (approval && targetChat && targetChat.conversationId !== approval.postCheckpoint.activeThreadId) {
-			void bindToApprovedCheckpointRuntime(approval, targetChat).then(() => resetCheckpointInput()).catch((error) => setCheckpointApprovalError(formatRememberError((error as Error).message)));
+			void bindToApprovedCheckpointRuntime(approval, targetChat).then(keepChatting).catch((error) => setCheckpointApprovalError(formatRememberError((error as Error).message)));
 			return;
 		}
-		resetCheckpointInput();
+		keepChatting();
 	}
 
 	async function restAfterCheckpoint() {
@@ -9304,27 +7732,107 @@ export function App() {
 	// socket swap it says nothing has changed, because nothing meaningfully has;
 	// everything that GATES an action keeps reading `connected` itself.
 	const connectedForChrome = connected || socketSwapping;
-	const serverInFlightRelevant = Boolean(persistentChat && currentActiveThreadStatus?.inFlight && (busy || turnCancelling || !connected));
+	const serverInFlightRelevant = Boolean(persistentChat && currentActiveThreadStatus?.inFlight && (busy || turnCancelling || !connected || catchingUp));
 	const persistentRoomRunning = Boolean(persistentChat && (busy || (serverInFlightRelevant && currentActiveThreadStatus?.working)));
 	const persistentRoomCancelling = Boolean(persistentChat && (turnCancelling || (serverInFlightRelevant && currentActiveThreadStatus?.cancelling)));
 	const persistentRoomInFlight = Boolean(persistentChat && (persistentRoomRunning || persistentRoomCancelling || serverInFlightRelevant));
-	// What the turn's chrome shows: the server's turn plus the reveal of its
-	// tail. Only Stop, the header spinner, the composer placeholder and
-	// Remember read these; leaving, detaching and every server call keep
-	// reading the server-side flags above.
-	const roomWorkingForChrome = persistentRoomRunning || (Boolean(persistentChat) && revealing);
-	const roomInFlightForChrome = persistentRoomInFlight || (Boolean(persistentChat) && revealing);
+	// Stepping back into a running answer: until its replay is in, Send and Stop wait, as the replay sets the turn's own state.
+	const catchingUpOnAnswer = catchingUp && serverInFlightRelevant;
+	// The turn's chrome (Stop, the composer placeholder, Send, Remember)
+	// follows the server's turn: the moment the model is done they work,
+	// while the answer's last words may still be appearing. Sending shows
+	// that rest at once first (startTurnOnPage).
+	// A turn that went on in another window is stopped there: here the way
+	// back is Open here. Through a dropped connection Stop stays, unavailable.
+	const stopShown = (persistentRoomInFlight && turnLink !== "elsewhere") || turnLink === "reconnecting";
+	// A consult Send now chose, from the moment it is asked until it has answered: the messages behind it wait.
+	const consultAheadRef = useRef<"asked" | "answering" | null>(null);
+	// Messages queued for the answer go once it has ended: the ones it stopped for as the next message, then a consult once the room is idle.
+	useEffect(() => {
+		if (busy || turnCancelling || !connected || turnLink !== "live" || closedByFullSaveRef.current || roomMovedOn || modelChangePendingFor(persistentChatRef.current)) return;
+		// A consult Send now chose goes before the messages left waiting behind it, and they wait until it has answered.
+		const first = firstConsult(outgoing);
+		if (first?.consult) {
+			if (!roomInFlightRef.current && consultState.phase === "none" && handleConsultRequest(first.consult.roomId, first.consult.question)) {
+				consultAheadRef.current = "asked";
+				dispatchOutgoing({ type: "gone", ids: [first.id] });
+			}
+			return;
+		}
+		if (consultAheadRef.current === "asked" && consultState.phase === "streaming") consultAheadRef.current = "answering";
+		if (consultAheadRef.current === "answering" && consultState.phase !== "streaming") consultAheadRef.current = null;
+		if (consultAheadRef.current) return;
+		const batch = nextBatch(outgoing);
+		if (batch) {
+			if (sendMessage(batch.text, { attachments: [] })) dispatchOutgoing({ type: "gone", ids: batch.ids });
+			return;
+		}
+		// Queued behind a message the answer stopped for, and no new answer ran: they go next.
+		const later = laterIds(outgoing);
+		if (later.length) {
+			if (!roomInFlightRef.current) dispatchOutgoing({ type: "promote", ids: later });
+			return;
+		}
+		const consult = nextConsult(outgoing);
+		// One consult at a time: the next waits until the open one is dismissed or added.
+		if (!consult?.consult || roomInFlightRef.current || consultState.phase !== "none") return;
+		if (handleConsultRequest(consult.consult.roomId, consult.consult.question)) dispatchOutgoing({ type: "gone", ids: [consult.id] });
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [outgoing, busy, turnCancelling, connected, turnLink, roomMovedOn, persistentRoomInFlight, switchesTick, consultState.phase]);
+	// The new answer runs: what was queued behind the message it answers goes to it as queued messages do.
+	useEffect(() => {
+		const ws = wsRef.current;
+		if (!busy || turnCancelling || turnLink !== "live" || !ws || ws.readyState !== WebSocket.OPEN) return;
+		const later = outgoing.filter((message) => message.state === "later");
+		// Not before the message or the consult the answer stopped for has gone: the turn still running is the stopped one.
+		if (later.length === 0 || nextBatch(outgoing) || firstConsult(outgoing)) return;
+		dispatchOutgoing({ type: "steer", ids: later.map((message) => message.id) });
+		for (const message of later) ws.send(JSON.stringify({ type: "steer", id: message.id, text: message.text, shown: answerShownChars() }));
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [outgoing, busy, turnCancelling, turnLink]);
+	// Queued messages belong to the conversation they were sent in; a new one's ready lists its own.
+	useEffect(() => {
+		consultAheadRef.current = null;
+		dispatchOutgoing({ type: "clear" });
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [persistentChat?.agentId, persistentChat?.conversationId]);
 	// The save that filled the room closed this conversation on the server: no message box, only the ways on.
 	const closedByFullSave = Boolean(persistentChat && checkpointApprovalResult && roomFilledBy(checkpointApprovalResult) && checkpointApprovalResult.conversationId === persistentChat.conversationId);
 	closedByFullSaveRef.current = closedByFullSave;
-	// Stop while the answer is only still appearing: the turn is over and the
-	// answer is saved, so there is nothing to abort. Show the rest at once.
+	roomInFlightRef.current = persistentRoomInFlight;
+	// A pick the room has not settled holds the next message, so it never runs on the model being left.
+	const modelChangePending = modelChangePendingFor(persistentChat);
+	// A held pick belongs to the conversation it was made in, and goes out once the answer ends.
+	useEffect(() => {
+		if (!heldModelPick) return;
+		if (!persistentChat || persistentChat.agentId !== heldModelPick.agentId || persistentChat.conversationId !== heldModelPick.conversationId) { heldModelPickRef.current = null; setHeldModelPick(null); return; }
+		if (persistentRoomInFlight || switchesInFlightFor(heldModelPick.agentId, heldModelPick.conversationId) > 0 || heldModelPick.phase !== "waiting") return;
+		// A return to the model the conversation already runs on needs no request.
+		if (persistentChat.model.provider === heldModelPick.lock.provider && persistentChat.model.model === heldModelPick.lock.model) { heldModelPickRef.current = null; setHeldModelPick(null); return; }
+		const sending = { ...heldModelPick, phase: "sending" as const };
+		heldModelPickRef.current = sending;
+		setHeldModelPick(sending);
+		void applyConversationPick(heldModelPick.agentId, heldModelPick.conversationId, heldModelPick.lock);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [heldModelPick, persistentRoomInFlight, switchesTick, persistentChat?.agentId, persistentChat?.conversationId, persistentChat?.model.provider, persistentChat?.model.model]);
+	// A Remember that closes, saved or not, takes its switch with it.
+	useEffect(() => { if (!checkpointPreviewOpen) rememberContinueOnRef.current = null; }, [checkpointPreviewOpen]);
+	// The switch window and the panel belong to the conversation they opened in.
+	useEffect(() => {
+		setModelSwitchAsk(null);
+		setModelPanelOpen(false);
+	}, [persistentChat?.agentId, persistentChat?.conversationId]);
 	function stopTurn() {
-		if (!persistentRoomInFlight && revealingRef.current) {
-			flushAssistantStream();
-			return;
-		}
+		// One Stop ends the answer and every queued message comes back into the box: nothing goes on by itself.
+		stopByPersonRef.current = true;
+		handOutgoingBack();
 		void abortCurrentTurn();
+		if (!turnCancellingRef.current) return;
+		// Stop is felt on the click: what has arrived shows at once. An open
+		// card stays until the server says Stop answered it, so a click that
+		// crosses Stop on the way is told so.
+		cancelStreamTick();
+		if (isAssistantStreamActive(streamStateRef.current)) dispatchStream({ type: "tick", now: performance.now(), mode: "drain" });
 	}
 	// Resolves true when the leave actually happened (or nothing needed
 	// leaving), and false only when a leave could not happen, so a caller
@@ -9333,6 +7841,11 @@ export function App() {
 	async function goHome(): Promise<boolean> {
 		// A conversation the save that filled the room closed leaves the way Return Home does: nothing is saved into it.
 		if (closedByFullSaveRef.current) return restAfterCheckpoint();
+		// Another window has the room: leaving saves nothing over its conversation.
+		if (turnLinkRef.current === "elsewhere") {
+			await finishLeaveRoom({ detachInFlight: true });
+			return true;
+		}
 		// A fully-received answer may still be revealing its tail (busy
 		// already false); leaving must not persist a truncated tail.
 		flushAssistantStream();
@@ -9409,6 +7922,8 @@ export function App() {
 					setPersistentResumeError(isServiceUnreachableLine(message) ? message : `${persistentChat.displayName || "This room"}: ${message}`);
 				}
 			}
+			// The room is left: no turn of it is waited on here any more.
+			setTurnLink("live");
 			setPersistentChat(null);
 			setCheckpointPreviewOpen(false);
 			resetMaintainWorkflows();
@@ -9525,25 +8040,36 @@ export function App() {
 		if (lastUser?.kind === "user" && lastUser.text && !(textareaRef.current?.value ?? "").trim()) {
 			setComposerPrefill(lastUser.text);
 			setComposerResetNonce((n) => n + 1);
-			setMessageBackWithNotice(true);
 		}
 	}
 	const stoppedProvider = signedOutProvider ?? turnSignedOutProvider;
-	// The sign-in providers are always on the auth list; one missing from it
-	// (a key provider or a gateway whose key was removed) holds a key. The
-	// socket refuses a provider with no credential at all; a turn fails on a
-	// key the provider refused while it is still saved, its state named by the
-	// turn's failing frame.
-	const stoppedSignsIn = !stoppedProvider || !authStatus || authStatus.providers.find((provider) => provider.id === stoppedProvider)?.oauth === true;
-	const stoppedGone = stoppedSignsIn ? "signed-out" : signedOutProvider !== null ? "key-missing" : credentialGoneOf(turnSignedOut?.key ?? "refused");
+	// The stop's own frame names a key connection's state: the socket's
+	// refusal (no credential at all) and a turn's failure (a key refused while
+	// still saved). Without it (an older server), the auth list tells: the
+	// sign-in providers are always on it, and one missing from it (a key
+	// provider or a gateway whose key was removed) holds a key.
+	const stoppedKey = signedOut !== null ? signedOut.key : turnSignedOut?.key;
+	const stoppedSignsIn = !stoppedKey && (!stoppedProvider || !authStatus || authStatus.providers.find((provider) => provider.id === stoppedProvider)?.oauth === true);
+	const stoppedGone = stoppedKey ? credentialGoneOf(stoppedKey) : stoppedSignsIn ? "signed-out" : signedOutProvider !== null ? "key-missing" : "key-refused";
 	const stoppedWords = credentialGoneWords(stoppedGone);
 	// A provider whose key was removed can leave the model list; its name then
 	// comes from the names table, and only an unknown id reads as "This
 	// conversation's provider".
 	const stoppedProviderLabel = stoppedProvider ? modelStatus?.providers?.find((provider) => provider.id === stoppedProvider)?.label ?? (providerDisplayName(stoppedProvider) !== stoppedProvider ? providerDisplayName(stoppedProvider) : null) : null;
-	// A refused key is the service's word ("Anthropic did not accept the saved
-	// key"), never the row's ("Claude API key").
-	const stoppedSubject = (stoppedGone === "key-refused" && stoppedProvider ? providerAccountName(stoppedProvider) : undefined) ?? stoppedProviderLabel ?? "This conversation's provider";
+	// On a shared server the key's button is the admin's alone, and nobody signs in there: without it, the line names
+	// the way on that is left.
+	const stoppedRole = sharedServerRole(clientContext);
+	const stoppedKeyButton = offersCredentialButton(stoppedRole, stoppedGone === "signed-out");
+	// A refused key, and a provider a shared server has no button for, are
+	// the service's word ("Anthropic did not accept the saved key"), never
+	// the row's ("Claude API key").
+	const stoppedSubject = ((stoppedGone === "key-refused" || !stoppedKeyButton) && stoppedProvider ? providerAccountName(stoppedProvider) : undefined) ?? stoppedProviderLabel ?? "This conversation's provider";
+	const stoppedCause = stoppedGone === "key-no-workspace"
+		? `${modelDisplayName({ model: persistentChat?.model.model, modelLabel: persistentChat?.model.label, provider: persistentChat?.model.provider }) || "This conversation's model"} ${credentialGoneWhy(stoppedGone)}`
+		: stoppedRole && !stoppedKeyButton ? `${stoppedSubject} ${sharedCredentialState(stoppedGone)}` : providerCredentialClause(stoppedSubject, stoppedGone);
+	const stoppedWayOn = stoppedKeyButton
+		? stoppedGone === "key-no-workspace" ? "" : ` ${stoppedWords.again} to continue this conversation.`
+		: ` Choose another model to continue this conversation${stoppedRole === "member" ? ", or tell your admin" : ""}.`;
 	// Settings, AI setup, at the signed-out provider's row, to sign in again.
 	function openSignIn(providerId: string): void {
 		setAiSetupFocus(providerId ? { providerId } : null);
@@ -9858,9 +8384,10 @@ export function App() {
 	const homeStripLine = showConnectionLost ? withoutServiceLine(persistentResumeError) : persistentResumeError;
 	const withConnectionBanner = (content: ReactNode): ReactNode => (
 		<>
-			{showConnectionLost && <ConnectionLostBanner />}
+			{sessionEnded && clientContext.sharedServer ? <SignedOutBanner /> : showConnectionLost && <ConnectionLostBanner />}
 			{content}
 			{settingsOverlayNode}
+			{personChanged && <PersonChangedCover kind={personChanged} onReload={reloadForNewPerson} />}
 		</>
 	);
 	// Consult MR-3 candidate rooms for the composer @-mention popover. The list is
@@ -9872,6 +8399,24 @@ export function App() {
 		status: status.status,
 		lastCheckpointAt: status.memoryStatus?.lastCheckpointAt ?? null,
 	}));
+	mentionCandidatesRef.current = mentionCandidates;
+
+	// Kept the same between renders unless the edit changes, so the transcript is not drawn again for each streamed word.
+	const editableId = editableMessageId();
+	const editActionsRef = useRef({ startEdit, cancelEdit, sendEdit });
+	editActionsRef.current = { startEdit, cancelEdit, sendEdit };
+	const inRoom = persistentChat !== null;
+	const editingId = lastEdit?.phase === "editing" ? lastEdit.id : null;
+	const editingText = lastEdit?.phase === "editing" ? lastEdit.text : "";
+	const editSentId = lastEdit?.phase === "sent" ? lastEdit.replaces : null;
+	const lastMessageEdit = useMemo<LastMessageEdit | undefined>(() => inRoom ? {
+		editableId,
+		editing: editingId ? { id: editingId, text: editingText } : null,
+		sentId: editSentId,
+		onEdit: (id) => editActionsRef.current.startEdit(id),
+		onCancel: () => editActionsRef.current.cancelEdit(),
+		onSend: (text) => { editActionsRef.current.sendEdit(text); },
+	} : undefined, [inRoom, editableId, editingId, editingText, editSentId]);
 
 	if (view === "home") {
 		if (openingRoomFromAddress) {
@@ -9903,7 +8448,12 @@ export function App() {
 			);
 		}
 		if (maintainChooserOpen && maintainTarget) {
-			return withConnectionBanner(<MaintainChooserShell target={maintainTarget} roomStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId) ?? null} onAbsorb={() => void startAbsorbWorkflow()} onDiscussFirst={() => void startAbsorbWorkflow({ discuss: true })} onPrune={() => void startPruneMemoryWorkflow()} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />);
+			return withConnectionBanner(
+				<div className="landing-shell with-product-sidebar">
+					<ProductSidebar onHome={() => { closeMaintainChooser(); setView("home"); }} onSettings={openSettings} onDashboard={() => { closeMaintainChooser(); setView("dashboard"); }} onMemory={() => { closeMaintainChooser(); setView("memory"); }} theme={theme} appearance={appearance} onSetAppearance={setAppearance} active="memory" />
+					<MaintainChooserShell target={maintainTarget} roomStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId) ?? null} onAbsorb={() => void startAbsorbWorkflow()} onDiscussFirst={() => void startAbsorbWorkflow({ discuss: true })} onPrune={() => void startPruneMemoryWorkflow()} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />
+				</div>
+			);
 		}
 		return withConnectionBanner(
 			<>
@@ -10032,24 +8582,35 @@ export function App() {
 		</>
 	);
 
+	const shownQueued = queuedBubbles(outgoing);
+	const switchingLock = persistentChat ? (heldModelPick && heldModelPick.agentId === persistentChat.agentId && heldModelPick.conversationId === persistentChat.conversationId ? heldModelPick.lock : switchingToRef.current.get(`${persistentChat.agentId}\n${persistentChat.conversationId}`)) : undefined;
+	const switchingToName = modelChangePending && switchingLock ? modelDisplayName(switchingLock) : null;
+	// A step of this answer waits for the person's OK.
+	const stepAsksNow = persistentRoomRunning && items.some((item) => item.kind === "approval" && approvalAsking(item) && liveApprovalIds.has(item.requestId));
 	const connectionStopped: ConnectionStopped | undefined = closedByFullSave
 		? { line: recentSessionsHeadsUp(checkpointApprovalResult?.recentContextEntryCount, persistentChat?.displayName) ?? "", onReturnHome: () => void restAfterCheckpoint(), onMemorize: () => void memorizeAfterCheckpoint() }
+		: turnLink === "elsewhere"
+		? { line: ROOM_ELSEWHERE_SENTENCE, onOpenHere: () => void reloadMovedRoom() }
 		: roomMovedOn
 		? { line: ROOM_MOVED_ON_SENTENCE, onReload: () => void reloadMovedRoom() }
 		: stoppedProvider !== null
-		? { line: stoppedGone === "key-no-workspace" ? `${modelDisplayName({ model: persistentChat?.model.model, modelLabel: persistentChat?.model.label, provider: persistentChat?.model.provider }) || "This conversation's model"} ${credentialGoneWhy(stoppedGone)}.${messageBackWithNotice ? " Your message is back in the box." : ""}` : `${providerCredentialClause(stoppedSubject, stoppedGone)}. ${stoppedWords.again} to continue this conversation.${messageBackWithNotice ? " Your message is back in the box." : ""}`, onSignIn: () => openSignIn(stoppedProvider), signInLabel: stoppedWords.button, onChooseModel: () => openRoomSettings("model"), failed: true }
+		? { line: `${stoppedCause}.${stoppedWayOn}`, ...(stoppedKeyButton ? { onSignIn: () => openSignIn(stoppedProvider), signInLabel: stoppedWords.button } : {}), onChooseModel: openModelPanel, failed: true }
 		: roomModelNotOffered
-			? { line: `${currentPersistentStatus?.models?.conversation.chosen?.name ?? "This room's model"} is no longer offered. Choose another model to continue.`, onChooseModel: () => openRoomSettings("model") }
+			? { line: `${currentPersistentStatus?.models?.conversation.chosen?.name ?? "This room's model"} is no longer offered. Choose another model to continue.`, onChooseModel: openModelPanel }
 			: undefined;
 	const failureLineActions: FailureLineActions = {
 		shared: clientContext.sharedServer,
 		reviewsMemory: !!currentPersistentStatus && !nothingToMaintain(currentPersistentStatus.memoryStatus),
 		onTryAgain: tryAgainAfterFailure,
 		onReviewMemory: () => void reviewMemoryFromRoom(),
-		onChooseModel: () => openRoomSettings("model"),
+		onChooseModel: openModelPanel,
 		onReplaceKey: (provider) => openSignIn(provider),
 		onOpenAiSetup: (provider) => openSignIn(provider),
 	};
+
+	// The room's command mode: under the box beside the model, in the box on the phone.
+	// Commands are not run on a shared server, so there is no mode to show.
+	const commandModeChip = persistentChat && !clientContext.sharedServer ? <BashModeChip agentId={persistentChat.agentId} bashEnabled={roomBashEnabled} settingsOpen={roomSettingsOpen} /> : null;
 
 	return (
 		<InRoomChatShellView
@@ -10070,7 +8631,8 @@ export function App() {
 			workbenchStyle={workbenchStyle}
 			activeDisplay={activeDisplay || ""}
 			ownerSecondary=""
-			busy={busy || revealing}
+			// The header's spinner shows as long as Stop does.
+			busy={busy || stopShown}
 			usage={usage}
 			contextHealth={persistentChat ? contextHealth : null}
 			currentModelLabel={currentModel.name}
@@ -10079,8 +8641,6 @@ export function App() {
 				persistentChat
 					? (
 						<>
-							{/* Commands are not run on a shared server, so there is no mode to show. */}
-							{!clientContext.sharedServer && <BashModeChip agentId={persistentChat.agentId} bashEnabled={roomBashEnabled} settingsOpen={roomSettingsOpen} />}
 							{/* Gated on being IN a room, not on the polled status list:
 							    a stale or empty list is exactly the stuck-room case
 							    Forget exists to rescue, and the button vanishing then
@@ -10091,7 +8651,7 @@ export function App() {
 					)
 					: undefined
 			}
-			composerRightActions={
+			composerAttachSlot={
 				persistentChat ? (
 					<>
 						<button
@@ -10110,18 +8670,17 @@ export function App() {
 								e.target.value = "";
 							}}
 						/>
-						{/* No pill unless there is something to choose between: a
-						    model that cannot reason reports one rung, and so does a
-						    model whose levels all collapse onto one effort. It stays
-						    live across the blink of a socket swap, because a pick
-						    made in that window is queued and delivered when the room
-						    binds; only a genuine outage dims it. */}
-						{roomEffort && roomEffort.ladder.length >= 2 && (
-							<EffortControl level={roomEffort.level} ladder={roomEffort.ladder} disabled={!connectedForChrome} onSelect={selectRoomEffort} />
-						)}
+					</>
+				) : null
+			}
+			composerRememberSlot={
+				persistentChat ? (
+					<>
+						{/* The phone has no row under the box: the command mode sits in the box, before Remember. */}
+						{phoneWidth && commandModeChip}
 						<CheckpointSplitButton
 							hasUserInput={currentThreadHasUserInput}
-							inFlight={roomInFlightForChrome}
+							inFlight={persistentRoomInFlight}
 							skipsPreview={rememberSkipsPreview}
 							onQuickCheckpoint={() => void runQuickCheckpoint()}
 							onOpenFullCheckpoint={() => { setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(true); }}
@@ -10129,6 +8688,33 @@ export function App() {
 					</>
 				) : null
 			}
+			composerModelSlot={persistentChat ? (placement) => (
+				// Under the box the command mode follows the model; the phone's header line holds the model alone.
+				<div className="composer-under-controls">
+					{/* The model pick is an HTTP route, so the control stays usable while
+					    the socket is down; only the effort slider waits for it. An effort
+					    pick in the blink of a socket swap is queued and delivered when the room binds. */}
+					<ModelPickControl
+						placement={placement}
+						agentId={persistentChat.agentId}
+						conversationId={persistentChat.conversationId}
+						open={modelPanelOpen}
+						onOpenChange={setModelPanelOpen}
+						current={persistentChat.model}
+						currentName={runningModelName && runningModelName.provider === persistentChat.model.provider && runningModelName.model === persistentChat.model.model ? runningModelName.name : undefined}
+						held={heldModelPick && heldModelPick.agentId === persistentChat.agentId && heldModelPick.conversationId === persistentChat.conversationId ? heldModelPick.lock : null}
+						effort={roomEffort}
+						// The effort waits while a model change is pending: a level set
+						// for a model not yet bound would be judged against the one being left.
+						effortDisabled={!connectedForChrome || modelChangePending}
+						effortWaits={modelChangePending}
+						onPick={pickConversationModel}
+						onEffort={selectRoomEffort}
+						onTooLong={askModelSwitch}
+					/>
+					{placement === "row" && commandModeChip}
+				</div>
+			) : undefined}
 			connected={connectedForChrome}
 			reconnectState={roomReconnectState}
 			onReconnect={retryRoomReconnectNow}
@@ -10137,6 +8723,10 @@ export function App() {
 			pendingConsultIds={pendingConsultItemIds}
 			attachmentAccess={attachmentAccess}
 			failureLineActions={failureLineActions}
+			answerDrawnAtOnceId={answerDrawnAtOnceId}
+			stepsElsewhere={turnLink === "elsewhere"}
+			edit={lastMessageEdit}
+			statusLine={shortening ? SHORTENING_LINE : null}
 			composerOverlaySlot={<ToastStack toasts={roomToasts} />}
 			onOpenTaskArtifact={(taskId, relativePath) => {
 				const extension = relativePath.includes(".") ? relativePath.slice(relativePath.lastIndexOf(".")).toLowerCase() : "";
@@ -10146,12 +8736,34 @@ export function App() {
 			empty={empty}
 			onSend={send}
 			onStop={stopTurn}
-			stopVisible={roomInFlightForChrome}
-			stopDisabled={persistentRoomCancelling || (persistentRoomInFlight && !connected)}
+			onSendNow={sendNowFromBox}
+			onSendQueuedNow={() => sendQueuedNow()}
+			queueRefusal={busy || turnCancelling || persistentRoomInFlight ? queueRefusal : undefined}
+			onEscapeStop={() => {
+				if (!stopShown || persistentRoomCancelling || !connected || catchingUpOnAnswer || turnLink !== "live") return false;
+				stopTurn();
+				return true;
+			}}
+			queued={shownQueued}
+			queuedActions={queuedActions}
+			stopVisible={stopShown}
+			stopDisabled={persistentRoomCancelling || (persistentRoomInFlight && !connected) || catchingUpOnAnswer || turnLink === "reconnecting"}
 			stopLabel="Stop"
 			textareaRef={textareaRef}
-			composerPlaceholder={persistentRoomCancelling ? "Stopping current response…" : roomWorkingForChrome ? "Working… Stop before sending another message" : `Ask ${activeDisplay}…`}
-			sendUnavailable={!connected || roomInFlightForChrome || closedByFullSave || roomMovedOn}
+			composerPlaceholder={composerHint({
+				room: activeDisplay,
+				asToday: !!connectionStopped,
+				connected: connectedForChrome,
+				reconnect: roomReconnectState,
+				reconnectingTurn: turnLink === "reconnecting",
+				elsewhere: turnLink === "elsewhere",
+				switchingTo: switchingToName,
+				stopping: persistentRoomCancelling,
+				stepAsks: stepAsksNow,
+				answering: persistentRoomRunning,
+				keys: isTouchScreen() ? "touch" : isMacPlatform() ? "mac" : "windows",
+			})}
+			sendUnavailable={!connected || closedByFullSave || roomMovedOn || turnLink !== "live" || modelChangePending || catchingUpOnAnswer}
 			initialDraftValue={composerPrefill || undefined}
 			draftResetKey={composerResetNonce}
 			composerAllowEmptySend={stagedAttachments.some((entry) => entry.status === "ready")}
@@ -10210,9 +8822,10 @@ export function App() {
 			mention={persistentChat ? {
 				candidates: mentionCandidates,
 				currentRoomId: persistentChat.agentId,
-				busy: persistentRoomInFlight,
-				busyTitle: "You can consult another room once this room's current response finishes.",
-				onConsultRequest: handleConsultRequest,
+				// While the room answers, "@Room question" waits as a queued message and goes when the answer ends.
+				busy: false,
+				busyTitle: "",
+				onConsultRequest: requestConsult,
 				// §8.3: while a consult card is docked, a composer @-mention is rejected
 				// visibly (the card is the place to follow up) — name the docked room.
 				activeConsultDisplayName: consultState.phase !== "none" ? (consultState.targetDisplayName ?? consultState.targetRoomId) : null,
@@ -10221,16 +8834,27 @@ export function App() {
 			onApprovalPreview={openApprovalPreview}
 			aboveComposerSlot={persistentChat ? (
 				<>
-					{workspaceNudgeRoomId === persistentChat.agentId && !clientContext.sharedServer && !stoppedNoticeShows(connectionStopped, connectedForChrome, roomReconnectState) && (
+					{workspaceHint?.roomId === persistentChat.agentId && !clientContext.sharedServer && !stoppedNoticeShows(connectionStopped, connectedForChrome, roomReconnectState) && (
 						<div className="room-workspace-nudge" role="note">
-							<span className="room-workspace-nudge-text">Set a folder so this room can read and write files.</span>
-							<div className="room-workspace-nudge-actions">
-								{/* Hide only for the moment, never write the dismissed flag:
-								    the close-modal re-check re-shows the nudge if the user
-								    cancelled without setting a workspace. Only Dismiss burns it. */}
-								<button className="rs-btn" type="button" title="Choose the folder this room may read and write" onClick={() => { setWorkspaceNudgeRoomId(null); openRoomSettings(); }}>Set workspace</button>
-								<button className="rs-quiet" type="button" title="Hide this hint for good" onClick={dismissWorkspaceNudge}>Dismiss</button>
-							</div>
+							{workspaceHint.kind === "folder-gone" ? (
+								<>
+									<span className="room-workspace-nudge-text">{workspaceHint.folderName} was not found on this computer. Choose it again, or another folder.</span>
+									<div className="room-workspace-nudge-actions">
+										<button className="rs-btn" type="button" title="Choose the folder this room may read and write" onClick={() => openRoomSettings("workspace")}>Choose folder</button>
+									</div>
+								</>
+							) : (
+								<>
+									<span className="room-workspace-nudge-text">Set a folder so this room can read and write files.</span>
+									<div className="room-workspace-nudge-actions">
+										{/* Hide only for the moment, never write the dismissed flag:
+										    the close-modal re-check re-shows the nudge if the user
+										    cancelled without setting a workspace. Only Dismiss burns it. */}
+										<button className="rs-btn" type="button" title="Choose the folder this room may read and write" onClick={() => { setWorkspaceHint(null); openRoomSettings(); }}>Set workspace</button>
+										<button className="rs-quiet" type="button" title="Hide this hint for good" onClick={dismissWorkspaceNudge}>Dismiss</button>
+									</div>
+								</>
+							)}
 						</div>
 					)}
 					<ConsultDock
@@ -10249,13 +8873,25 @@ export function App() {
 			globalOverlaySlot={
 				<>
 					{roomSettingsOpen && currentPersistentStatus && (
-						<RoomSettingsModal status={currentPersistentStatus} answering={persistentRoomInFlight} initialPane={roomSettingsPane} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onConversationSwitched={adoptSwitchedConversationModel} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+						<RoomSettingsModal status={currentPersistentStatus} answering={persistentRoomInFlight} initialPane={roomSettingsPane} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+					)}
+					{modelSwitchAsk && persistentChat && modelSwitchAsk.agentId === persistentChat.agentId && modelSwitchAsk.conversationId === persistentChat.conversationId && (
+						<ModelSwitchWindow
+							modelName={modelSwitchAsk.name}
+							roomName={persistentChat.displayName}
+							answering={persistentRoomInFlight}
+							waitingConversations={currentPersistentStatus?.memoryStatus?.recentContextCount ?? null}
+							onCancel={() => setModelSwitchAsk(null)}
+							onSwitch={() => confirmModelSwitch(true)}
+							onRemember={() => confirmModelSwitch(false)}
+						/>
 					)}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
 					{fileDeleteConfirm && <FileDeleteDialog fileName={fileDeleteConfirm.fileName} reason={fileDeleteConfirm.reason} onDelete={() => { const confirm = fileDeleteConfirm; setFileDeleteConfirm(null); if (confirm) void performFileDelete(confirm.fileName); }} onCancel={() => setFileDeleteConfirm(null)} />}
 					{saveAsPrompt && <SaveAsDialog shelfName={saveAsPrompt.shelfName} onSave={(chosenName) => { const prompt = saveAsPrompt; setSaveAsPrompt(null); if (prompt) void saveViewerFileToFolder(prompt.shelfName, undefined, chosenName); }} onCancel={() => setSaveAsPrompt(null)} />}
 					{exportCollision && <ExportCollisionDialog collision={exportCollision} onClose={() => setExportCollision(null)} />}
 					{settingsOverlayNode}
+					{personChanged && <PersonChangedCover kind={personChanged} onReload={reloadForNewPerson} />}
 				</>
 			}
 		/>

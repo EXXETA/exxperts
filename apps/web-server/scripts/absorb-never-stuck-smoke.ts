@@ -380,21 +380,6 @@ await section("sort-outage", async () => {
 	assert(!resumed.stop && JSON.stringify(resumed.sorted) === JSON.stringify([{ id: "m-0101", text: "- Invoices go out on the first working day.", topic: "Billing" }]), `Try again sorts the notes waiting in Unsorted, got ${JSON.stringify({ stop: resumed.stop, sorted: resumed.sorted })}`);
 });
 
-// A draft list, prose taking it back, then an empty list as the last fence:
-// the fold still takes the draft (no change of behaviour), and the page record
-// counts the shape in a code, so a real run can say how often it happens.
-await section("earlier-fence", async () => {
-	const room = createRoom("Earlier Fence Room", [page("RC-0001", "Retracted", "RETRACTED-POINT", "", "cp-801"), page("RC-0002", "Healthy", "HEALTHY-POINT", "", "cp-802")]);
-	const retracted = (): AbsorbGenerateResult => ({ text: `${answer("RETRACTED-POINT").text}\nOn reflection nothing here is durable.\n\n${fence([])}\n` });
-	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": retracted, "RC-0002": () => answer("HEALTHY-POINT") }, []), probe: probeAnswers, now: RUN_CLOCK });
-	const done = await settle(room.agentId, started.runId);
-	assert(view(done, "RC-0001").outcome === "folded" && view(done, "RC-0002").outcome === "folded", `both pages fold, the first from its draft, got "${view(done, "RC-0001").outcome}"`);
-	const diagnosticsDir = path.join(root, room.agentId, "events", "maintenance-diagnostics");
-	const pages = fs.readdirSync(diagnosticsDir, { recursive: true }).map(String).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsDir, name), "utf-8"))).filter((record) => record.process === "memorize-page");
-	const byKey = new Map(pages.map((record) => [record.page.key, record.page]));
-	assert(JSON.stringify(byKey.get("cp-801")?.reader) === JSON.stringify(["earlier-fence"]) && byKey.get("cp-802")?.reader === undefined, `the page whose list came from before a final empty fence says so in a code, the other says nothing, got ${JSON.stringify([...byKey.values()])}`);
-});
-
 // A change aimed at a pinned note reaches the card as a new note beside it,
 // tagged; a new note that may disagree with memory is tagged too. The pinned
 // note is saved as it was.
@@ -532,7 +517,7 @@ await section("blip-wait", async () => {
 			// A slow machine only makes a pause longer, so a pause is told by its
 			// floor: a blip's retry comes after the long one, and a refusal's well
 			// before a long one it never takes.
-			const longPauseMs = refuses ? 30_000 : 600;
+			const longPauseMs = refuses ? 30_000 : 100;
 			run.setAbsorbFoldRateLimitPauseForTests?.(longPauseMs);
 			const room = createRoom(`Blip Room ${n}`, [page("RC-0001", "Blip", "BLIP-POINT")]);
 			// The blip fails the first call only; the refusal fails every call, and the probe gets no answer.

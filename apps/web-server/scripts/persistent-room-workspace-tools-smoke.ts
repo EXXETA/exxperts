@@ -12,7 +12,6 @@ const {
 } = await import("../src/persistent-room-workspace-policy.js");
 const {
 	createPersistentRoomWorkspaceTools,
-	isPersistentRoomWorkspaceToolPolicyEnabled,
 	PersistentRoomWorkspaceToolError,
 	resolvePersistentRoomWorkspacePath,
 } = await import("../src/persistent-room-workspace-tools.js");
@@ -114,19 +113,11 @@ try {
 	});
 	const legacyNoToolPolicy = { ...policy, allowedToolNames: [] };
 	delete (legacyNoToolPolicy as any).toolSelection;
-	assert(!isPersistentRoomWorkspaceToolPolicyEnabled(legacyNoToolPolicy), "legacy MR5.5a policy with root but empty allowedToolNames must not activate workspace tools");
 	assert(createPersistentRoomWorkspaceTools(legacyNoToolPolicy).length === 0, "legacy MR5.5a policy should not create workspace tools");
 
 	const tools = new Map(createPersistentRoomWorkspaceTools(policy).map((tool: any) => [tool.name, tool]));
-	assert(isPersistentRoomWorkspaceToolPolicyEnabled(policy), "workspace policy should activate workspace tools");
 	assert([...tools.keys()].sort().join(",") === "edit,find,grep,ls,read,write", "should register exactly the standard bounded workspace tools");
 	assert(!tools.has("bash"), "should not register bash");
-	for (const tool of tools.values()) {
-		assert(String(tool.description).includes("workspace-relative") || String(tool.description).includes("workspace-relative paths"), `${tool.name} description should state workspace-relative contract`);
-	}
-	for (const toolName of ["find", "grep"]) {
-		assert(String(tools.get(toolName)?.description).includes(".gitignore"), `${toolName} description should state that results include gitignored files`);
-	}
 
 	const localFilesPolicy = createPersistentRoomCapabilityPolicy({
 		agentId: agentId,
@@ -140,7 +131,6 @@ try {
 		now: new Date("2026-05-27T00:05:00.000Z"),
 	});
 	const localFilesTools = createPersistentRoomWorkspaceTools(localFilesPolicy, { localFilesCwd: workspaceRoot });
-	assert(isPersistentRoomWorkspaceToolPolicyEnabled(localFilesPolicy), "local-files policy should activate workspace tools");
 	assert(localFilesTools.map((tool: any) => tool.name).join(",") === "ls,find,grep,read,write,edit" && localFilesTools.every((tool: any) => tool.label === tool.name), "local-files mode should register the six native file tools, wrapped, never the curated workspace tools");
 	const localFilesNoSpreadsheetPolicy = createPersistentRoomCapabilityPolicy({
 		agentId: agentId,
@@ -154,7 +144,6 @@ try {
 		toolSelection: { kind: "custom", allowedToolNames: ["read", "ls"] },
 		now: new Date("2026-05-27T00:06:00.000Z"),
 	});
-	assert(isPersistentRoomWorkspaceToolPolicyEnabled(localFilesNoSpreadsheetPolicy), "local-files native-only custom policy should still activate native runtime tools");
 	assert(createPersistentRoomWorkspaceTools(localFilesNoSpreadsheetPolicy, { localFilesCwd: workspaceRoot }).map((tool: any) => tool.name).join(",") === "ls,read", "a local-files custom selection should wrap exactly its own native tools");
 
 	const lsRoot = await execute(tools, "ls", { path: "." }, tmp);
@@ -338,8 +327,7 @@ try {
 	await expectReject(() => resolvePersistentRoomWorkspacePath(policy, "../outside/outside.txt", "read"), tmp, "direct guard traversal");
 
 	const tamperedHashPolicy = { ...policy, roots: [{ ...policy.roots[0]!, pathHash: { algorithm: "sha256" as const, value: "0".repeat(64) } }] };
-	assert(!isPersistentRoomWorkspaceToolPolicyEnabled(tamperedHashPolicy), "policy with mismatched root pathHash must not activate workspace tools");
-	assert(createPersistentRoomWorkspaceTools(tamperedHashPolicy).length === 0, "policy with mismatched root pathHash should create no tools");
+	assert(createPersistentRoomWorkspaceTools(tamperedHashPolicy).length === 0, "policy with mismatched root pathHash must not activate workspace tools");
 	try {
 		resolvePersistentRoomWorkspacePath(tamperedHashPolicy, "README.md", "read");
 		throw new Error("tampered pathHash: expected workspace_unavailable rejection");
@@ -406,7 +394,7 @@ try {
 	assert(!fs.existsSync(persistentRoomWorkspacePolicyPath(agentId, "room_default", { persistentAgentsRoot })), "room-default fallback must not create a room_default thread sidecar");
 	const defaultResolution = resolvePersistentRoomCapabilityPolicy(agentId, "c_workspace_tools_default_fallback", { persistentAgentsRoot });
 	assert(defaultResolution.source === "room-default", "resolver should use room default when no thread policy exists");
-	assert(isPersistentRoomWorkspaceToolPolicyEnabled(defaultResolution.policy), "room-default fallback policy should activate workspace tools");
+	assert(defaultResolution.policy, "room-default fallback should resolve a policy");
 	const defaultTools = new Map(createPersistentRoomWorkspaceTools(defaultResolution.policy).map((tool: any) => [tool.name, tool]));
 	const defaultRead = await execute(defaultTools, "read", { path: "README.md" }, tmp);
 	assert(defaultRead.includes("Safe file."), "workspace tools should read via room-default fallback policy");

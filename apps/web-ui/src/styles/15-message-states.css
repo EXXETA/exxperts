@@ -1,0 +1,209 @@
+/* A failed message: a row on the answers' left edge, never centred. The
+   newest is drawn in full; an older one folds to its cause, in grey. */
+.system-line.failure-line {
+	display: grid;
+	grid-template-columns: 18px minmax(0, 672px);
+	column-gap: 10px;
+	align-items: start;
+	text-align: left;
+	color: var(--fg-soft);
+	font-size: 14px;
+	line-height: 1.5;
+}
+.failure-mark {
+	width: 18px;
+	height: 18px;
+	margin-top: 1px;
+	border-radius: 50%;
+	background: var(--error);
+	color: var(--bg);
+	font: 700 12px/18px system-ui, sans-serif;
+	text-align: center;
+	flex-shrink: 0;
+}
+.failure-mark::before { content: "!"; }
+.failure-body { min-width: 0; }
+.failure-cause {
+	margin: 0;
+	font-weight: 600;
+	color: var(--fg);
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+.failure-next {
+	margin: 1px 0 0;
+	color: var(--fg-soft);
+	overflow-wrap: anywhere;
+	text-wrap: pretty;
+}
+.failure-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+}
+.failure-actions .rs-btn {
+	min-height: 0;
+	padding: 5px 12px;
+	font-size: 13px;
+}
+.failure-actions .rs-btn + .failure-details-toggle { margin-left: 8px; }
+/* A finger needs a 44px target: on a touch screen a failure line's buttons
+   grow to it, a folded line's Details too; with a mouse they keep their small look. */
+@media (hover: none) {
+	.failure-actions .rs-btn,
+	.failure-details-toggle { min-height: 44px; }
+}
+.failure-details-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 0;
+	border: 0;
+	background: none;
+	font: inherit;
+	font-size: 13px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.failure-details-toggle::after {
+	content: "";
+	width: 6px;
+	height: 6px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+}
+.failure-details-toggle[aria-expanded="true"]::after {
+	transform: rotate(45deg);
+	margin-top: -3px;
+}
+.failure-details-toggle:hover,
+.failure-details-toggle:focus-visible { color: var(--fg); }
+.failure-said {
+	margin: 8px 0 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: var(--bg-2);
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--fg-soft);
+	overflow-wrap: anywhere;
+}
+.failure-said[hidden] { display: none; }
+.failure-said-from {
+	display: block;
+	margin-bottom: 3px;
+	font-size: 11px;
+	color: var(--muted);
+}
+.failure-said-words { display: block; }
+.failure-line.is-folded {
+	font-size: 13px;
+	color: var(--muted);
+}
+.failure-line.is-folded .failure-mark {
+	width: 15px;
+	height: 15px;
+	margin: 2px 0 0 1px;
+	border: 1.5px solid var(--muted);
+	background: transparent;
+	color: var(--muted);
+	font-size: 10px;
+	line-height: 12px;
+}
+.failure-line.is-folded .failure-body {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 10px;
+}
+.failure-line.is-folded .failure-cause {
+	font-weight: 400;
+	color: var(--muted);
+}
+.failure-line.is-folded .failure-details-toggle { font-size: 12.5px; }
+.failure-line.is-folded .failure-said { flex-basis: 100%; }
+
+.thinking-row {
+	width: min(var(--chat-rail-width), 100%);
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	padding: 2px 0 4px;
+}
+.thinking-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--muted);
+	opacity: 0.65;
+	animation: thinking-pulse 1.15s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+	0%, 100% { transform: scale(0.92); opacity: 0.42; }
+	50% { transform: scale(1.18); opacity: 0.85; }
+}
+
+.spinner {
+	display: inline-block;
+	width: 11px; height: 11px;
+	border-radius: 50%;
+	border: 2px solid var(--border);
+	border-top-color: var(--fg);
+	animation: spin 0.8s linear infinite;
+	vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.ui-spinner { animation: spin 0.8s linear infinite; flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) {
+	.ui-spinner { animation-duration: 2.4s; }
+}
+/* Connection lost: one line above the composer, sized to its content. */
+.connection-banner {
+	align-self: center;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 auto 8px;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--panel);
+	color: var(--fg);
+	font-size: 12px;
+	font-weight: 600;
+}
+.connection-banner-action {
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--fg);
+	border-radius: 999px;
+	padding: 2px 10px;
+	font: inherit;
+	cursor: pointer;
+}
+.connection-banner-action:hover,
+.connection-banner-action:focus-visible {
+	background: var(--fg);
+	border-color: var(--fg);
+	color: var(--bg);
+	outline: none;
+}
+
+/* A quiet line in the working dot's place, such as "Reconnecting…". */
+.turn-status-line {
+	gap: 8px;
+	color: var(--muted);
+	font-size: 13px;
+}
+/* The answer's own line after Stop: muted, on the answer's left edge. */
+.answer-stop-line {
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 13px;
+	text-align: left;
+}

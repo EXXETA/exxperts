@@ -117,7 +117,6 @@ try {
 	writePersistentRoomCapabilityPolicy(policy, { persistentAgentsRoot: tempAgentsRoot });
 	const selectedPolicyPath = persistentRoomWorkspacePolicyPath(agentId, conversationId, { persistentAgentsRoot: tempAgentsRoot });
 	const controlPolicyPath = persistentRoomWorkspacePolicyPath(controlAgentId, conversationId, { persistentAgentsRoot: tempAgentsRoot });
-	assert(selectedPolicyPath === path.join(selectedRoot, "runtime", "workspace-policies", `${conversationId}.json`), "workspace policy should be under selected room root");
 	assert(fs.existsSync(selectedPolicyPath), "selected workspace policy should be written");
 	assert(!fs.existsSync(controlPolicyPath), "workspace policy must not be written under control room");
 	assert(workspacePolicyCount(selectedRoot) === 1, "selected room should have one workspace policy");

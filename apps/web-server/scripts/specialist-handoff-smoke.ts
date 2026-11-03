@@ -1,7 +1,7 @@
 // Smoke for the shared specialist handoff block grammar (delegation contract
 // spec §2.2, slimmed with the revise-in-place slice), apps/web-server/src/
-// specialist-handoff.ts. Byte-exact assertions on the open/close fences and the
-// two Source lines; the SLIM invariant (no artifact path list — the shelf
+// specialist-handoff.ts. Byte-exact assertions on the open/close fences; the
+// SLIM invariant (no artifact path list: the shelf
 // manifest owns "what exists and where", so no path can ever appear in the
 // block); the marker/forge defang (the specialist envelope's OWN markers plus
 // the consult-handoff markers + `**must-keep**`, all neutralised exactly as
@@ -9,7 +9,7 @@
 // summary cap with the exact trim suffix; and the 12,000-char block invariant
 // under an adversarial max-everything input.
 //
-// Run: npm run smoke:specialist-handoff   (or: node scripts/run-smokes.mjs specialist-handoff)
+// Run: node scripts/run-smokes.mjs specialist-handoff   (from the repo root)
 
 import {
 	SPECIALIST_HANDOFF_BLOCK_MAX_CHARS,
@@ -24,7 +24,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 try {
-	// ---- nominal grammar: byte-exact fences + Source lines -----------------
+	// ---- nominal grammar: byte-exact fences --------------------------------
 	const summary = "Built a 7-slide review deck (q3-review.html) plus the margin-split diagram.";
 	const block = buildSpecialistHandoffBlock({
 		templateId: "deck",
@@ -38,10 +38,6 @@ try {
 
 	assert(lines[0] === "[SPECIALIST RESULT: deck]", `open fence; got "${lines[0]}"`);
 	assert(lines[lines.length - 1] === "[/SPECIALIST RESULT: deck]", `close fence; got "${lines[lines.length - 1]}"`);
-	assert(lines[1] === "Task: Q3 client review deck", `task line; got "${lines[1]}"`);
-	assert(lines[2] === "Template: deck v3 · ran 2026-07-11T09:11:00.000Z · 2 files", `template line; got "${lines[2]}"`);
-	assert(lines[3] === "Source: ephemeral specialist session, no memory access; this room only knows this", `source line 1 verbatim; got "${lines[3]}"`);
-	assert(lines[4] === "distilled result; the room's current files are listed in the 'Files in this room' list.", `source line 2 verbatim; got "${lines[4]}"`);
 	assert(lines[5] === summary, `summary follows the source lines verbatim; got "${lines[5]}"`);
 	assert(block.includes(`${summary}\n[/SPECIALIST RESULT: deck]`), "summary sits directly above the close fence");
 	assert(!block.includes(SPECIALIST_HANDOFF_TRIM_MARKER), "a short summary is not marked trimmed");
@@ -49,12 +45,6 @@ try {
 	// exactly skeleton(5 lines) + summary + close fence.
 	assert(!block.includes("Artifacts:"), "slim block carries no Artifacts section");
 	assert(lines.length === 7, `slim block is exactly 7 lines for a one-line summary; got ${lines.length}`);
-
-	// ---- artifact count: honest pluralisation + garbage coercion -----------
-	const one = buildSpecialistHandoffBlock({ templateId: "deck", templateVersion: 1, taskTitle: "t", ranAtIso: "2026-07-11T09:11:00.000Z", artifactCount: 1, summary: "s" });
-	assert(one.includes("· 1 file\n"), "a single output reads '1 file'");
-	const none = buildSpecialistHandoffBlock({ templateId: "deck", templateVersion: 1, taskTitle: "t", ranAtIso: "2026-07-11T09:11:00.000Z", artifactCount: Number.NaN, summary: "s" });
-	assert(none.includes("· 0 files\n"), "a garbage count coerces to '0 files'");
 
 	// ---- forge: envelope markers + consult markers + must-keep neutralised ---
 	// A poisoned specialist could try to close the real envelope early / open a

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ASSET_PANEL_DEFAULT_VISIBLE, rowShelfFileName, windowAssetRows, type AssetRowView } from "../assets-panel";
+import { CloseIcon, PencilIcon } from "./icons";
 
 interface Props {
 	rows: AssetRowView[];
@@ -18,7 +19,7 @@ interface Props {
 	 */
 	onRemove?: (row: AssetRowView) => void;
 	/**
-	 * Real delete (files-management slice): the hover-reveal ✕ on FILE rows —
+	 * Real delete (files-management slice): the hover-reveal close icon on FILE rows:
 	 * one shelf file, one row, and Delete really deletes (bytes + reading
 	 * cache) behind the caller's informed confirm + undo toast.
 	 */
@@ -67,7 +68,6 @@ export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning, onR
 	return (
 		<div className="sidebar-assets" aria-label="Files in this room">
 			<button className="assets-head" aria-expanded={!collapsed} title="Show or hide the files this room has made and received" onClick={() => setCollapsed((v) => !v)}>
-				<span className="assets-caret">{collapsed ? "▸" : "▾"}</span>
 				<span className="assets-head-label">Files</span>
 				<span className="assets-count">{rows.length}</span>
 			</button>
@@ -136,7 +136,7 @@ export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning, onR
 										title="Rename this file."
 										aria-label={`Rename ${fileName}`}
 									>
-										✎
+										<PencilIcon size={13} />
 									</button>
 								)}
 								{!row.running && fileName !== null && onDeleteFile && (
@@ -147,7 +147,7 @@ export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning, onR
 										title="Delete this file. Bytes are removed; Undo is offered briefly."
 										aria-label={`Delete ${fileName}`}
 									>
-										×
+										<CloseIcon size={13} />
 									</button>
 								)}
 								{!row.running && fileName === null && !row.userFileName && onRemove && (
@@ -158,7 +158,7 @@ export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning, onR
 										title="Remove from the list. Its files are kept."
 										aria-label={`Remove ${row.title} from the list`}
 									>
-										×
+										<CloseIcon size={13} />
 									</button>
 								)}
 							</span>

@@ -439,12 +439,14 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 	const readCount = absorbRunReadCount(run);
 	const nothingRead = !working && absorbRunNothingRead(run);
 	const nothingToSave = !working && absorbRunNothingToSave(run);
+	// A run with no conversation to read (one that only sorts notes, or reads notes again) has no conversation count to show.
+	const noConversation = total === 0;
 	// One notice with the ways out: a run the model stopped answering, or else
 	// a run whose every conversation was kept whole as its summary.
 	const outage = !working && run.stop ? run.stop : null;
 	// Stopped with nothing to save: the card is paused, as Review's is, its sentence and ways on standing alone.
 	const paused = outage !== null && nothingToSave;
-	const ways = useMemoryWaysOn(outage?.cause, outage?.quotaWay, { onTryAgain: onResume, onChooseModel, onSignIn, provider: outage?.model.provider ?? "", gatewayFind: outage?.gatewayFind });
+	const ways = useMemoryWaysOn(outage?.cause, outage?.quotaWay, { onTryAgain: onResume, onChooseModel, onSignIn, provider: outage?.model.provider ?? "", key: outage?.key, gatewayFind: outage?.gatewayFind });
 	const outageName = outage ? absorbRunOutageModelName(outage.model, memoryModel) : "";
 	const outageSentence = !outage ? null : paused
 		? absorbRunPausedSentence(outageName, outage.cause, outage.model.provider, outage.key, outage.unreached, outage.quotaWay, outage.gateway, outage.gatewayFind)
@@ -464,10 +466,12 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 					: paused ? <p role="status">{outageSentence}</p>
 					: !nothingRead && <p>{total === 0 ? "Read it, keep anything the room should not let go, then save." : `From ${total} ${total === 1 ? "conversation" : "conversations"}. Read it, keep anything the room should not let go, then save.`}</p>}
 			</div>
-			<div className="absorb-review-strip">
-				<div className="absorb-review-status"><span>Conversations</span><strong>{readCount} of {total} read</strong></div>
-				<div className="absorb-review-status"><span>Notes</span><strong>{notesChanged} added or updated</strong></div>
-			</div>
+			{!(noConversation && notesChanged === 0) && (
+				<div className="absorb-review-strip">
+					{!noConversation && <div className="absorb-review-status"><span>Conversations</span><strong>{readCount} of {total} read</strong></div>}
+					<div className="absorb-review-status"><span>Notes</span><strong>{notesChanged} added or updated</strong></div>
+				</div>
+			)}
 			{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
 			{run.wait && <p className="checkpoint-read-note" role="status">{modelWaitLine(run.wait)}</p>}
 			{outage && !paused && (
@@ -511,7 +515,7 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 								<ul>{guidance.drops.map((drop) => (
 									<li key={drop.text}>
 										{drop.text}
-										{drop.leftOut && <span className="absorb-run-guidance-tag">left out</span>}
+										{drop.leftOut && <span className="absorb-run-guidance-tag">Left out</span>}
 									</li>
 								))}</ul>
 							</div>
@@ -543,7 +547,7 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 						<ul>{guidance.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ul>
 					</section>
 				)}
-				{!(paused && rows.length === 0) && <section className="absorb-proposal-section">
+				{!((paused || noConversation) && rows.length === 0) && <section className="absorb-proposal-section">
 					{/* Rows that all kept nothing are not new in memory. */}
 					{(working || rows.length === 0 || rows.some(({ session }) => (session.changes?.length ?? 0) > 0)) && <h3>New in memory</h3>}
 					{rows.length === 0 ? <p>{nothingRead ? ABSORB_NOTHING_READ_SENTENCE : "Nothing in these conversations changed memory."}</p> : (

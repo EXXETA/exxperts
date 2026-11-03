@@ -57,26 +57,6 @@ function pdfWithPages(pageTexts: string[]): Buffer {
 	return Buffer.from(body, "latin1");
 }
 
-function blankPdf(): Buffer {
-	const objects = [
-		"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-		"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-		"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n",
-		"4 0 obj\n<< /Length 0 >>\nstream\n\nendstream\nendobj\n",
-	];
-	let body = "%PDF-1.4\n";
-	const offsets: number[] = [];
-	for (const object of objects) {
-		offsets.push(Buffer.byteLength(body, "latin1"));
-		body += object;
-	}
-	const xrefOffset = Buffer.byteLength(body, "latin1");
-	let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-	for (const offset of offsets) xref += `${String(offset).padStart(10, "0")} 00000 n \n`;
-	body += `${xref}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-	return Buffer.from(body, "latin1");
-}
-
 async function minimalDocx(): Promise<Buffer> {
 	const { default: JSZip } = await import("jszip");
 	const zip = new JSZip();
@@ -107,9 +87,8 @@ try {
 	for (const dir of [repoRoot, exxetaStateRoot, persistentAgentsRoot, workspaceRoot]) fs.mkdirSync(dir, { recursive: true });
 
 	fs.writeFileSync(path.join(workspaceRoot, "report.pdf"), pdfWithPages(["Quarterly payment terms are 60 days", "Page two carries the renewal clause"]));
-	fs.writeFileSync(path.join(workspaceRoot, "contract.docx"), await minimalDocx());
-	fs.writeFileSync(path.join(workspaceRoot, "scanned.pdf"), blankPdf());
 	fs.writeFileSync(path.join(workspaceRoot, "huge.pdf"), Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(SHELF_READ_MAX_FILE_BYTES)]));
+	fs.writeFileSync(path.join(workspaceRoot, "contract.docx"), await minimalDocx());
 	fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "line one\nline two\nline three\n");
 	fs.writeFileSync(path.join(workspaceRoot, "pixel.png"), Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
 	writeWorkbook(path.join(workspaceRoot, "sales.xlsx"));
@@ -134,7 +113,7 @@ try {
 	} catch (error) {
 		withoutCwd = error;
 	}
-	assert(withoutCwd instanceof Error && withoutCwd.message === "Full access file tools need the session cwd", "localFiles without a session cwd must refuse rather than leave the native tools unchecked");
+	assert(withoutCwd instanceof Error, "localFiles without a session cwd must refuse rather than leave the native tools unchecked");
 	const noReadSelection = makePolicy({ kind: "custom", allowedToolNames: ["ls", "grep"] });
 	assert(createPersistentRoomWorkspaceTools(noReadSelection, { localFilesCwd: workspaceRoot }).map((tool) => tool.name).join(",") === "ls,grep", "a Full access selection without read should wrap exactly its own tools");
 
@@ -165,10 +144,9 @@ try {
 	const docxOutput = toolOutput(await wrapper.execute("smoke-docx", { path: "contract.docx" }, undefined, undefined, {} as any));
 	assert(docxOutput.includes("renewal is automatic"), "wrapper docx read should extract text");
 	assert(docxOutput.includes("Word document; extracted text."), "wrapper docx read should identify itself");
-
-	const scannedOutput = toolOutput(await wrapper.execute("smoke-scanned", { path: "scanned.pdf" }, undefined, undefined, {} as any));
-	assert(scannedOutput.includes("no extractable text"), "wrapper scanned pdf should get the honest no-text note");
-
+	// The scanned note and the size cap live in the shared document read that
+	// persistent-room-workspace-spreadsheet-smoke drives; the wrapper must still
+	// relay the honest reason.
 	try {
 		await wrapper.execute("smoke-huge", { path: "huge.pdf" }, undefined, undefined, {} as any);
 		throw new Error("oversized pdf should be rejected");

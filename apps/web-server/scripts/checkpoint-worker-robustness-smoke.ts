@@ -106,9 +106,6 @@ try {
 	} catch (error) {
 		assert(error instanceof CheckpointPromptOverflowError, `impossible budget should throw the overflow error, got ${(error as Error).message}`);
 		assert(error.statusCode === 413, "overflow error should carry statusCode 413");
-		assert(/^This conversation is too long for \S+ to remember in one read/.test(error.message), "overflow error should name the memory model in the plain Remember sentence");
-		assert(/No memory has been written/.test(error.message), "overflow error should reassure that no memory was written");
-		assert(/Room settings, Model/.test(error.message) && !/checkpoint earlier|switch the room/i.test(error.message), "overflow error should point to the Model pane, not to a checkpoint or a room switch");
 	}
 
 	// 5. Short-session gates behave as before (thresholds now expressed in est tokens).

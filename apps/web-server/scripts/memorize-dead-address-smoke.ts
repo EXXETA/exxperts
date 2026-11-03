@@ -1,7 +1,9 @@
 // Memorize against a Memory model nothing listens for, through the real
 // server and its real calls: the fold and the one-time sort each say the wait
-// at once ("can't reach", not "busy"), ask the probe after about 15 s, and
-// stop on the notice then, never after the six minutes a busy model gets.
+// at once ("can't reach", not "busy"), ask the probe after the first wait, and
+// stop on the notice then, never after the six minutes a busy model gets. The
+// server's patience waits are shortened to PATIENCE_WAIT_MS here; that the first
+// one is about 15 s is model-call-causes-smoke's, on a fake clock.
 // The calls a screen waits on as one request (Memorize's and Review's first
 // reads) publish the same wait on the room's status route while they wait.
 // The address is on this computer, so every notice names the app running the
@@ -36,6 +38,8 @@ process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 
 const MODEL = { provider: "fake-claude", model: "claude-fake", label: "Claude Fake" };
+// Long enough that the page's status ask still lands inside it on a loaded machine.
+const PATIENCE_WAIT_MS = 5_000;
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -70,13 +74,13 @@ try {
 	};
 	const rooms = { fold: createRoom("Fold Room", false), sort: createRoom("Sort Room", true) };
 	const readRooms = { absorb: createRoom("Memorize Read Room", true), review: createRoom("Review Read Room", true) };
-	createRoom("Screen Room", true);
+	const screenRoom = createRoom("Screen Room", true);
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
 		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 		cwd: webServerDir,
-		env: smokeHomeEnv(tempHome, { PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot, EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot }) as NodeJS.ProcessEnv,
+		env: smokeHomeEnv(tempHome, { PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot, EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot, EXXPERTS_TEST_PATIENCE_WAIT_MS: String(PATIENCE_WAIT_MS) }) as NodeJS.ProcessEnv,
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
@@ -106,12 +110,12 @@ try {
 				// The address is on this computer, so the notice names the app running the model.
 				assert(run.stop.unreached === "local-connection", `${kind}: the stop says the model on this computer could not be reached, got ${JSON.stringify(run.stop)}`);
 				assert(sawUnreached && !sawBusy, `${kind}: the wait was said as can't reach, never as busy (unreached ${sawUnreached}, busy ${sawBusy})`);
-				assert(seconds >= 12 && seconds < 45, `${kind}: the notice comes after about 15 s, got ${seconds} s`);
+				assert(seconds >= PATIENCE_WAIT_MS / 1000 && seconds < 45, `${kind}: the notice comes after the first wait (${PATIENCE_WAIT_MS / 1000} s here), got ${seconds} s`);
 				console.log(`  ok  ${kind}: a dead address says the wait at once and reaches the notice in ${Math.round(seconds)} s`);
 				return;
 			}
 			assert(Date.now() - startedAt < 60_000, `${kind}: no notice within a minute (unreached ${sawUnreached}, busy ${sawBusy}, state ${run.state})`);
-			await new Promise((resolve) => setTimeout(resolve, 250));
+			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 	}));
 	// The first reads: the request stays open through the wait, and the room's status says the wait meanwhile.
@@ -124,13 +128,13 @@ try {
 		while (!answered && Date.now() - startedAt < 55_000) {
 			const status = await api(`/api/persistent-agents/${agentId}/${kind}/status`);
 			if (status.body?.wait) seen = status.body.wait;
-			await new Promise((resolve) => setTimeout(resolve, 500));
+			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 		const result = await read;
 		assert(seen?.cause === "unreached" && typeof seen.nextTryAt === "string", `${kind}: the first read's wait shows on the room's status, got ${JSON.stringify(seen)}`);
 		// Both reads end in the notice, so the screen offers its ways out instead of a missing first read.
 		const ended = result.status === 503 && result.body?.code === "model_unreachable";
-		assert(ended && Date.now() - startedAt >= 12_000, `${kind}: the first read ends after the wait, got ${result.status} ${JSON.stringify(result.body).slice(0, 300)}`);
+		assert(ended && Date.now() - startedAt >= PATIENCE_WAIT_MS, `${kind}: the first read ends after the wait, got ${result.status} ${JSON.stringify(result.body).slice(0, 300)}`);
 		assert(result.body?.error === "Claude Fake could not be reached on this computer. Nothing was lost. Check that the app running it is open, then try again.", `${kind}: the Memory model notice names the app running it, got ${JSON.stringify(result.body?.error)}`);
 		const after = await api(`/api/persistent-agents/${agentId}/${kind}/status`);
 		assert(!after.body?.wait, `${kind}: the wait is gone once the read ended, got ${JSON.stringify(after.body?.wait)}`);
@@ -144,12 +148,21 @@ try {
 		const browser = await chromium.launch();
 		try {
 			const ui = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+			await ui.clock.install();
 			await ui.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 			await ui.waitForLoadState("networkidle");
 			const dismiss = ui.locator(".whats-new-close");
 			if (await dismiss.count()) await dismiss.click();
 			await ui.locator(".persistent-agent-card").filter({ hasText: "Screen Room" }).getByRole("button", { name: "Maintain", exact: true }).click();
 			await ui.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();
+			// The page asks the room's status every 3 s on its own clock: once the
+			// server waits, the clock moves on to that ask, inside the shortened wait.
+			const waitsBy = Date.now() + 12_000;
+			while (!(await api(`/api/persistent-agents/${screenRoom}/absorb/status`)).body?.wait) {
+				assert(Date.now() < waitsBy, "Memorize's first read waits on the server within 12 s");
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+			await ui.clock.runFor(3_000);
 			await ui.getByText(/^Can't reach the Memory model right now\. Trying again at .+\.$/).waitFor({ timeout: 12_000 });
 			console.log("  ok  Memorize's first read says the wait on screen while it waits");
 		} finally {

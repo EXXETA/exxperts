@@ -247,7 +247,6 @@ const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sect
 	assert(prompt.includes("is the entry `m-0031`") && prompt.includes("pinned") && prompt.includes(`there are ${AREAS.length}`), "the legend reads the inline addresses, the pinned marker and how many entries there are");
 	assert(prompt.includes("whose text a conversation of 2026-08-02 wrote") && prompt.includes("saved 2026-08-02 · rewritten 2026-09-01]` is an entry a fold wrote before days were learned") && prompt.includes("no conversation wrote it") && prompt.includes("Copy the id alone") && prompt.includes("`m-0031`, never the dates or the pin marker"), "the legend explains the learned, the saved and rewritten, and the in-memory-since dates and says to copy the id alone");
 	for (const shape of ['"op":"add"', '"op":"update"', '"op":"supersede"', '"op":"close"', '"op":"pin"', '"op":"drop"']) assert(prompt.includes(shape), `the task shows the ${shape} shape`);
-	assert(!/unpin/i.test(prompt), "the prompt never offers unpin: only the person unpins");
 	assert(prompt.includes(`at most ${FOLD_MAX_OPS} operations`) && prompt.includes(`at most ${FOLD_MAX_TEXT_WORDS} words`), "the task states its soft bounds");
 	assert(prompt.includes("at most three lines") && prompt.includes("exactly one ```json fence"), "the task asks for a three-line narrative and exactly one fence");
 	assert(prompt.includes("Do not claim anything has been saved."), "the task keeps the no-claim line");

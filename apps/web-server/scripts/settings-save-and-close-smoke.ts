@@ -8,8 +8,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { chromium, type Locator, type Page } from "playwright";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-save-and-close-"));
 process.env.HOME = tempHome;
@@ -26,18 +26,6 @@ function assert(condition: unknown, message: string): asserts condition {
 
 let server: ChildProcessWithoutNullStreams | null = null;
 
-async function waitForServer(): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (server?.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const res = await fetch(`${baseUrl}/healthz`);
-			if (res.ok) return;
-		} catch { /* not up yet */ }
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error("server did not come up");
-}
-
 // A machine without Chromium cannot run a browser assertion at all; skip
 // whole, the same way remote-settings-readonly-smoke does.
 {
@@ -50,6 +38,94 @@ async function waitForServer(): Promise<void> {
 
 const BUSY = "The room is busy with a scheduled task. Save again when it has finished.";
 
+// Both Instructions panes, measured in the page: Clear (and its Undo) sits
+// above the box at its right edge without moving the box, the counter under
+// the box reads "N / 8,000" and turns the app's danger red only past the
+// limit, and the row under the box stays on one line with Save in place as
+// the text crosses the limit. Leaves `keep` in the box.
+async function checkInstructionsBox(page: Page, pane: Locator, label: string, keep: string): Promise<void> {
+	const box = pane.locator(".room-instructions-textarea");
+	const counter = pane.locator(".room-instructions-count [aria-hidden='true']");
+	const rect = async (locator: Locator) => {
+		const found = await locator.boundingBox();
+		assert(found, `${label}: ${locator} is on screen`);
+		return found;
+	};
+	const button = (name: string) => pane.getByRole("button", { name, exact: true });
+	const isDanger = async () => counter.evaluate((element) => {
+		const probe = document.createElement("span");
+		probe.style.color = "var(--error)";
+		element.parentElement!.appendChild(probe);
+		const danger = getComputedStyle(probe).color;
+		probe.remove();
+		return getComputedStyle(element).color === danger;
+	});
+	// Waits for the counter to read `text`; the assertion after it says what was there instead.
+	const counterReads = (text: string) => pane.locator(".room-instructions-count [aria-hidden='true']", { hasText: new RegExp(`^${text}$`) }).waitFor({ timeout: 5000 }).catch(() => {});
+	const sameLine = async () => {
+		const count = await rect(counter);
+		const save = await rect(button("Save"));
+		return Math.abs((count.y + count.height / 2) - (save.y + save.height / 2)) <= 4;
+	};
+
+	await box.fill("");
+	await counterReads("0 / 8,000");
+	assert((await button("Clear").count()) === 0, `${label}: an empty box offers no Clear`);
+	const emptyTop = (await rect(box)).y;
+	const cleanCounterTop = (await rect(counter)).y;
+	assert(await counter.innerText() === "0 / 8,000" && !(await isDanger()), `${label}: the counter shows "0 / 8,000" under an empty box, got ${JSON.stringify(await counter.innerText())}`);
+
+	await box.fill(keep);
+	await button("Clear").waitFor({ timeout: 5000 });
+	assert((await rect(box)).y === emptyTop, `${label}: the box stays put when Clear appears`);
+	const clear = await rect(button("Clear"));
+	const boxRect = await rect(box);
+	const toggle = pane.locator(".room-instructions-global-toggle");
+	if (await toggle.count()) {
+		const shared = await rect(toggle);
+		assert(Math.abs((shared.y + shared.height / 2) - (clear.y + clear.height / 2)) <= 4 && shared.x < clear.x, `${label}: Clear shares the row of "Show the global instructions", the link on the left`);
+		// With the global text shown, Clear leaves it and sits right above the room's own box.
+		await toggle.click();
+		const globalText = pane.locator(".room-instructions-global-text");
+		await globalText.waitFor({ timeout: 5000 });
+		const shown = await rect(globalText);
+		const clearOpen = await rect(button("Clear"));
+		const boxOpen = await rect(box);
+		assert(clearOpen.y >= shown.y + shown.height && clearOpen.y + clearOpen.height <= boxOpen.y, `${label}: with the global text shown, Clear sits between it and the box`);
+		await toggle.click();
+		await globalText.waitFor({ state: "detached", timeout: 5000 });
+		assert((await rect(box)).y === emptyTop, `${label}: hiding the global text puts the box back`);
+	}
+	assert((await rect(counter)).y === cleanCounterTop, `${label}: the counter stays put when Discard and Save appear`);
+	assert(clear.y + clear.height <= boxRect.y, `${label}: Clear sits above the box`);
+	assert(Math.abs((clear.x + clear.width) - (boxRect.x + boxRect.width)) <= 2, `${label}: Clear keeps to the box's right edge`);
+	assert(await counter.innerText() === `${keep.length} / 8,000` && !(await isDanger()), `${label}: under the limit the counter is plain, got ${JSON.stringify(await counter.innerText())}`);
+	assert(await sameLine(), `${label}: the counter and Save share one line`);
+
+	await box.fill("x".repeat(8000));
+	await counterReads("8,000 / 8,000");
+	const saveAtLimit = await rect(button("Save"));
+	assert(await counter.innerText() === "8,000 / 8,000" && !(await isDanger()) && await button("Save").isEnabled(), `${label}: at the limit the counter is plain and Save works`);
+	await box.fill("x".repeat(8100));
+	await counterReads("8,100 / 8,000");
+	assert(await counter.innerText() === "8,100 / 8,000" && await isDanger(), `${label}: past the limit the counter reads "8,100 / 8,000" in the danger red, got ${JSON.stringify(await counter.innerText())}`);
+	const spoken = await pane.locator(".room-instructions-count .sr-only").innerText();
+	assert(spoken === "8,100 of 8,000 characters, 100 over the limit", `${label}: a screen reader hears the count in words, got ${JSON.stringify(spoken)}`);
+	assert(!(await button("Save").isEnabled()), `${label}: past the limit Save waits`);
+	assert(await sameLine(), `${label}: past the limit the row under the box stays on one line`);
+	const saveOver = await rect(button("Save"));
+	assert(saveOver.x === saveAtLimit.x && saveOver.y === saveAtLimit.y, `${label}: Save stays in place as the text crosses the limit`);
+
+	// Clear turns into Undo in the same place, and the box does not move.
+	await button("Clear").click();
+	await button("Undo").waitFor({ timeout: 5000 });
+	const undo = await rect(button("Undo"));
+	assert((await rect(box)).y === emptyTop && undo.y + undo.height <= boxRect.y, `${label}: Undo takes Clear's place above the box`);
+	await button("Undo").click();
+	assert((await box.inputValue()).length === 8100, `${label}: Undo puts the text back`);
+	await box.fill(keep);
+}
+
 try {
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
@@ -58,15 +134,19 @@ try {
 		env: { ...process.env, PORT: String(port), ...SMOKE_SERVER_AUTH_ENV },
 		stdio: ["ignore", "pipe", "pipe"],
 	}) as unknown as ChildProcessWithoutNullStreams;
-	await waitForServer();
+	await waitForServer(server, baseUrl, { tries: 100 });
 	const created = await authedFetch(`${baseUrl}/api/persistent-agents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ displayName: "Draft Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
 	assert(created.ok, `room create failed: ${created.status}`);
 	const roomId = String(((await created.json()) as { agent?: { id?: string } }).agent?.id ?? "");
 	assert(roomId, "the new room has an id");
+	// A global text, so the room's pane shows its "Show the global instructions" row, the row Clear shares.
+	const seeded = await authedFetch(`${baseUrl}/api/settings/instructions`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Be terse." }) });
+	assert(seeded.ok, `global instructions seed failed: ${seeded.status}`);
 
 	const browser = await chromium.launch();
 	try {
-		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+		// English numbers in the page, so "8,100 / 8,000" reads the same on every machine.
+		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
 		const page = await ctx.newPage();
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await page.waitForLoadState("networkidle");
@@ -80,7 +160,7 @@ try {
 		await nav("Instructions").click();
 		const box = page.locator(".room-settings-section:not([hidden]) .room-instructions-textarea");
 		await box.waitFor({ timeout: 10000 });
-		await box.fill("Answer in short sentences.");
+		await checkInstructionsBox(page, page.locator(".room-settings-section:not([hidden])"), "room Instructions", "Answer in short sentences.");
 		await nav("Skills").click();
 		await page.locator(".settings-dialog-close").click();
 
@@ -88,7 +168,6 @@ try {
 		await question.waitFor({ timeout: 5000 });
 		const buttons = await question.locator("button").allInnerTexts();
 		assert(JSON.stringify(buttons) === JSON.stringify(["Keep editing", "Close without saving", "Save and close"]), `the question offers three answers in order, got ${JSON.stringify(buttons)}`);
-		assert((await question.getByText("The instructions have unsaved changes.", { exact: true }).count()) === 1, "the question names the pane that holds the draft");
 		assert((await question.locator(".rs-btn-primary").innerText()) === "Save and close", "Save and close is the primary answer");
 
 		// A save that fails keeps the dialog open on the pane, with its error.
@@ -128,7 +207,7 @@ try {
 		await page.locator(".settings-dialog-nav button").filter({ hasText: "Instructions" }).first().click();
 		const globalBox = page.locator(".settings-overlay .room-instructions-textarea");
 		await globalBox.waitFor({ timeout: 10000 });
-		await globalBox.fill("Write in British English.");
+		await checkInstructionsBox(page, page.locator(".settings-overlay .room-instructions-section"), "Settings Instructions", "Write in British English.");
 		await page.locator(".settings-dialog-nav button").filter({ hasText: "Web search" }).first().click();
 		await question.waitFor({ timeout: 5000 });
 		const leaveButtons = await question.locator("button").allInnerTexts();

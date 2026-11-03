@@ -8,8 +8,8 @@ backed by [pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter).
 - **stdio**: local servers spawned as subprocesses.
 - **HTTP**: remote servers over StreamableHTTP, with SSE fallback.
 - **OAuth**: servers requiring browser login (`bearer` tokens or full
-  OAuth flows). On the CLI, press `l` on a connector in the `/mcp`
-  panel to log in.
+  OAuth flows). Log in from the connector's row under Settings,
+  Connectors.
 
 ## Config
 
@@ -18,13 +18,10 @@ Servers are read from these files, merged in precedence order:
 1. `~/.config/mcp/mcp.json`: shared user-global config (same file other
    MCP-capable tools use)
 2. `~/.exxperts/agent/mcp.json`: exxperts user-global config
-3. `.mcp.json`: project-local
-4. `.pi/mcp.json`: project override
 
-A room, in the web app, in a scheduled run or in the terminal, reads only
-the first two: its connectors are the ones in your own settings. Only a
-plain terminal session without a room also reads `.mcp.json` and
-`.pi/mcp.json` in the folder it runs in.
+A room, in the app or in a scheduled run, reads only these two: its
+connectors are the ones in your own settings. Project files such as
+`.mcp.json` and `.pi/mcp.json` in a workspace folder are not read.
 
 ```json
 {
@@ -40,22 +37,10 @@ plain terminal session without a room also reads `.mcp.json` and
 }
 ```
 
-On the CLI, `/mcp` opens the exxperts connectors panel
-(`pi-package/extensions/mcp/connectors-panel.ts`), the same disk-backed
-view, catalog, and status language as the web Connectors page: per
-server it shows the cached tool list (expand with ⏎, open a tool for
-its full description), login state, and offers add from the verified
-catalog or custom (`a`), remove (`x`), log in/out (`l`/`o`), and a
-connection test (`t`). It warns when the config on disk has changed
-since the room was opened (rooms load connector config once, at entry).
-`s` (or `/mcp setup`) opens the guided setup, which can import existing
-MCP configs from Cursor, Claude Code, or Claude Desktop; `/mcp
-reconnect` and `/mcp tools` manage the running session's connections.
-
 The previous config location, `~/.exxperts/app/mcp.json`, is no longer
 read; move server entries into one of the files above.
 
-In the web app, the **Connectors** page (sidebar, under Tools) shows the
+In the app, the **Connectors** page (Settings, Connectors) shows the
 same merged server list (each server's transport, which config file it
 came from, its cached tools, and OAuth credential state) and manages it:
 add/remove servers (saved to the exxperts user config), test a
@@ -125,15 +110,15 @@ add it to a config file as:
   matter how many servers are configured.
 - Servers connect lazily on first use and disconnect after an idle
   timeout; reconnects are automatic.
-- Room tool policy and the permissions extension allow the `mcp` proxy tool on both
-  the web and CLI surfaces; which servers it can reach is governed
-  entirely by the config files above.
+- Room tool policy and the permissions extension allow the `mcp` proxy tool;
+  which servers it can reach is governed entirely by the config files
+  above.
 - The proxy tool's description lists every configured server (including
   never-connected ones as "not connected yet"), so the model always
   knows which connectors exist without any prompt changes.
 - The adapter's direct-tools/pinning feature (`directTools` in config)
   is not active in exxperts rooms: room permissions admit only the
-  `mcp` proxy, on the web and the CLI alike. Rooms always use the
+  `mcp` proxy. Rooms always use the
   proxy; pinned entries are ignored harmlessly.
 - Existing outbound content-policy scanning still runs before MCP tool
   calls.

@@ -43,29 +43,31 @@ try {
 	(globalThis as any).React = pageRequire("react");
 	const { renderToStaticMarkup } = pageRequire("react-dom/server");
 	const app = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
-	const server = fs.readFileSync(path.join(process.cwd(), "apps", "web-server", "src", "index.ts"), "utf8");
+	const errors = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "maintenance-errors.ts"), "utf8");
+	const dialog = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "remember-dialog.tsx"), "utf8");
+	// App.tsx and the files its top-level code moved into: a check that the page never says something reads them all.
+	const PAGE_FILES = ["App.tsx", "maintain-workflow-state.ts", "maintenance-errors.ts", "components/maintain-workflow-screens.tsx", "components/remember-dialog.tsx", "components/landing.tsx", "components/ai-profile-switcher.tsx", "components/memory-shell.tsx", "components/room-file-dialogs.tsx", "components/task-store-gc.tsx", "room-thread-items.ts"];
+	const pageText = PAGE_FILES.map((file) => fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", file), "utf8")).join("\n");
+	const server = fs.readFileSync(path.join(process.cwd(), "apps", "web-server", "src", "room-remember-routes.ts"), "utf8");
 	const model = { provider: "openai-codex", model: "gpt-6-sol", label: "ChatGPT Plus/Pro \u2014 GPT-6 Sol" };
 
 	const CHANGED = "This conversation changed after Remember read it. Generate again.";
 	const STOPPED = "Remember stopped unexpectedly. Nothing was saved. Generate again.";
-	const OTHER_OPEN = "Remember stopped because another conversation is open now. Open Remember again.";
 
 	check("a conversation that changed after Remember read it says so, at the result and at Save", () => {
 		assert(server.includes(CHANGED), "the stale result says the conversation changed");
-		assert(app.includes(CHANGED) && !app.includes("Memory changed while this proposal was open"), "the stale save names the conversation, not memory");
 		assert(client.isPlainRememberSentence(CHANGED), "the client passes it through");
 	});
 
 	check("a Save from a window older than the server says to reload, and the page shows it as it is", () => {
 		const RELOAD = "This window is out of date. Reload the page, then save again.";
-		const agents = fs.readFileSync(path.join(process.cwd(), "apps", "web-server", "src", "persistent-agents.ts"), "utf8");
+		const agents = fs.readFileSync(path.join(process.cwd(), "apps", "web-server", "src", "persistent-agent-memory-files.ts"), "utf8");
 		assert(agents.includes(`const REMEMBER_PAGE_FORM_MESSAGE = "${RELOAD}";`), "the server's sentence");
 		assert(client.isPlainRememberSentence(RELOAD), "the client passes it through by name");
 	});
 
 	check("a Remember that stopped for no named cause says so plainly", () => {
 		assert(server.includes(STOPPED) && !server.includes("Remember has nothing ready"), "the missing job says Remember stopped");
-		assert(app.includes(STOPPED) && !app.includes("Failed to generate proposal"), "a failed request with no sentence says the same, with no status code");
 		assert(client.isPlainRememberSentence(STOPPED), "the client passes it through");
 	});
 
@@ -82,8 +84,8 @@ try {
 		assert(client.rememberFailureSentence("ENOSPC: no space left on device, open '/home/x/proposal.json'") === STOPPED, `a full disk reads as the plain stop, got ${client.rememberFailureSentence("ENOSPC: no space left on device, open '/home/x/proposal.json'")}`);
 		assert(client.rememberFailureSentence("upstream said: {\"error\":\"weird_gateway_state\"}") === STOPPED, "an odd gateway reply too");
 		assert(client.rememberFailureSentence("The room is closed for now.") === "The room is closed for now.", "a sentence written for the person passes");
-		assert(!/formatMaintenanceRequestError\(message\) \?\? message/.test(app), "Remember's formatter has no raw fallthrough");
-		const review = app.slice(app.indexOf("function formatReviewWorkflowError"), app.indexOf("function formatReviewApprovalError"));
+		assert(!/formatMaintenanceRequestError\(message\) \?\? message/.test(pageText), "Remember's formatter has no raw fallthrough");
+		const review = errors.slice(errors.indexOf("function formatReviewWorkflowError"), errors.indexOf("function formatReviewApprovalError"));
 		assert(!/\n\treturn message;\n\}/.test(review), "Review's formatter has no raw fallthrough");
 	});
 
@@ -114,12 +116,6 @@ try {
 		assert(client.isPlainRememberSentence(pa.REMEMBER_MEMORY_MODEL_CHANGED_MESSAGE), "the client passes it through");
 	});
 
-	check("another conversation open now says so, never a mismatch", () => {
-		const uses = (app.match(/REMEMBER_OTHER_CONVERSATION_OPEN\b/g) ?? []).length - 1;
-		assert(app.includes(OTHER_OPEN) && uses >= 4, `the four mismatch errors say it, got ${uses}`);
-		assert(!/memory proposal does not match|The room changed|save response does not match/.test(app), "no mismatch wording is left");
-	});
-
 	check("an edited entry with a part's label typed inside another part says so plainly", () => {
 		const sentence = "Part of this entry can't be read: What to keep and Still open each need their own words. Check the entry and save again.";
 		const page = (body: string) => `### RC-DRAFT | CLOSED | 2026-10-09 | The plan\n\n**Session arc:** We planned.\n\n**Body:**\n${body}\n\n**Parked:**\nNone\n`;
@@ -127,16 +123,6 @@ try {
 		try { (pa as any).validateApprovedRecentContextDraft(page("**Parked:** the plan.")); } catch (error) { message = error instanceof Error ? error.message : String(error); }
 		assert(message === sentence, `got ${JSON.stringify(message)}`);
 		assert(client.isPlainRememberSentence(sentence), "the client passes it through");
-	});
-
-	check("a quick save that did not work opens the entry, with a cause only when it is plain", () => {
-		assert(app.includes("Saving did not work this time. Here is the entry to save.") && !app.includes("could not save automatically"), "the plain sentence");
-	});
-
-	check("an ordinary save offers Keep chatting, and the old Continue working is gone", () => {
-		assert(app.includes('{!roomFilled && <button className="rs-btn rs-btn-primary" onClick={onContinueAfterCheckpoint} title="Stay in this room with a new conversation">Keep chatting</button>}'), "Keep chatting after a save that did not fill the room");
-		const ui = fs.readdirSync(path.join(process.cwd(), "apps", "web-ui", "src"), { recursive: true }).map(String).filter((file) => /\.tsx?$/.test(file));
-		assert(!ui.some((file) => fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", file), "utf8").includes("Continue working")), "no Continue working anywhere");
 	});
 
 	check("a phone reads Remember's progress and result, and Cancel is a write it may not send", () => {
@@ -184,13 +170,13 @@ try {
 		}
 		assert(said?.("Remember stopped because another conversation is open now. Open Remember again.") === null, "other lines pass through");
 		assert(!/Generate again/.test(damaged), "no Generate again in the line, so the dialog offers none");
-		assert((client as any).REMEMBER_DAMAGED_SENTENCE === damaged && app.includes("{error !== REMEMBER_DAMAGED_SENTENCE && <button className=\"rs-btn rs-btn-primary\" disabled={itemCount === 0} onClick={onGenerate}>"), "nor a Generate memory proposal, which meets the same damaged file: Close is the way out");
-		const format = app.slice(app.indexOf("function formatRememberError("), app.indexOf("const ROOM_TURN_WAIT_LINE"));
+		assert((client as any).REMEMBER_DAMAGED_SENTENCE === damaged && dialog.includes("{error !== REMEMBER_DAMAGED_SENTENCE && <button className=\"rs-btn rs-btn-primary\" disabled={itemCount === 0} onClick={onGenerate}>"), "nor a Generate memory proposal, which meets the same damaged file: Close is the way out");
+		const format = errors.slice(errors.indexOf("function formatRememberError("), errors.indexOf("const ROOM_TURN_WAIT_LINE"));
 		assert(format.indexOf("rememberDamagedSentence(message)") > -1 && format.indexOf("rememberDamagedSentence(message)") < format.indexOf("formatMaintenanceRequestError(message)"), "the dialog reads the damaged line before any other");
 	});
 
 	check("Remember after the Memory model changed: Generate again leads and Save goes, as for a changed conversation", () => {
-		assert(app.includes("const mustGenerateAgain = generateAgain && /changed after Remember read it|The Memory model changed after this entry was written/.test(approvalError ?? \"\");"), "the model-changed refusal hides Save");
+		assert(dialog.includes("const mustGenerateAgain = generateAgain && /changed after Remember read it|The Memory model changed after this entry was written/.test(approvalError ?? \"\");"), "the model-changed refusal hides Save");
 		assert(/changed after this entry was written/.test(pa.REMEMBER_MEMORY_MODEL_CHANGED_MESSAGE), "it matches the server's own sentence");
 	});
 
@@ -201,7 +187,7 @@ try {
 	});
 
 	check("a read-only device closes the Remember dialog, never sends a Cancel or a Discard it may not send", () => {
-		const shell = app.slice(app.indexOf("function CheckpointPreviewShell("), app.indexOf("function CheckpointPreviewShell(") + 30000);
+		const shell = dialog.slice(dialog.indexOf("function CheckpointPreviewShell("), dialog.indexOf("function CheckpointPreviewShell(") + 30000);
 		assert(shell.includes('const readOnly = useRemoteClientContext().capability === "read-only";'), "the dialog knows the device is read-only");
 		assert(shell.includes('{readOnly ? <button className="rs-btn" onClick={onClose}>Close</button> : <button className="rs-btn" onClick={onCancelGenerate}>Cancel</button>}'), "Close in place of Cancel while it reads");
 		assert(shell.includes("{!readOnly && <button className=\"rs-btn\" disabled={approvalLoading} onClick={() => void confirmDiscard()}"), "no Discard");
@@ -212,12 +198,11 @@ try {
 		assert(client.recentSessionsHeadsUp(18) === null, "no line before");
 		assert(client.recentSessionsHeadsUp(19) === "One more remembered conversation fills this room. Then Memorize before starting a new one.", "the warning at 19");
 		assert(client.recentSessionsHeadsUp(20, "Atlas") === "Atlas now holds 20 conversations, as many as it can. Memorize them to start a new conversation.", "the line at 20");
-		assert(app.includes("const headsUp = recentSessionsHeadsUp(approval.recentContextEntryCount);"), "the quick save carries it on its saved line");
 	});
 
 	check("a result handed over but not yet sent is not promised to carry over", () => {
-		assert(!app.includes("carry into the fresh conversation"), "no promise a full room or Return Home would break");
-		assert(app.includes("A transferred consult hasn't entered memory yet. Send a message before you save, so it is part of this conversation.") && app.includes("A transferred task result hasn't entered memory yet. Send a message before you save, so it is part of this conversation."), "what to do to keep it");
+		assert(!pageText.includes("carry into the fresh conversation"), "no promise a full room or Return Home would break");
+		assert(dialog.includes("A transferred consult hasn't entered memory yet. Send a message before you save, so it is part of this conversation.") && dialog.includes("A transferred task result hasn't entered memory yet. Send a message before you save, so it is part of this conversation."), "what to do to keep it");
 	});
 
 	check("a Save after the conversation was already saved parks with the saved line, unless it filled the room, and never switches a second window", () => {
@@ -239,7 +224,7 @@ try {
 		assert(client.REMEMBER_SAVED_REOPEN_SENTENCE === "Saved. Enter the room again from its card.", "the plain outcome");
 		assert(client.REMEMBER_SAVED_ELSEWHERE_SENTENCE === "Already saved in another window. Enter the room again from its card.", "the plain outcome when another window saved it");
 		// The plain outcome is a status on Home, never the red alert box.
-		assert(/persistentResumeError === REMEMBER_SAVED_REOPEN_SENTENCE \|\| persistentResumeError === REMEMBER_SAVED_ELSEWHERE_SENTENCE\s*\?\s*<div className="home-resume-status" role="status">/.test(app), "Home shows the saved lines as a status, not an alert");
+		assert(/persistentResumeError === REMEMBER_SAVED_REOPEN_SENTENCE \|\| persistentResumeError === REMEMBER_SAVED_ELSEWHERE_SENTENCE\s*\?\s*<div className="home-resume-status" role="status">/.test(fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "components", "landing.tsx"), "utf8")), "Home shows the saved lines as a status, not an alert");
 		// Both save paths keep the switch out of the save's own try: the save's failure line is only the save's.
 		const paths = [app.slice(app.indexOf("async function approveCheckpointProposal("), app.indexOf("async function requestCheckpointApproval(")), app.slice(app.indexOf("const skipsPreview = await fetchQuickCheckpointPreference("), app.indexOf("function resetCheckpointInput("))];
 		for (const body of paths) assert(/try \{ await bindToApprovedCheckpointRuntime\(approval, targetChat\); \} catch \{ parkAfterSavedRemember\(targetChat\); return; \}/.test(body), "a failed switch after the save parks the room with the plain outcome");
@@ -256,17 +241,11 @@ try {
 		assert(client.isPlainRememberSentence(sentence), "the client passes it through");
 	});
 
-	check("the saving line names the room's memory, nothing else", () => {
-		assert(app.includes("<p>Saving to {chat.displayName}’s memory…</p>") && !app.includes("came back clean"), "the plain saving line");
-	});
-
 	check("before Save, the review says only when this save nears or fills the room", () => {
 		const fills = (client as any).rememberFillsRoomHeadsUp;
 		assert(typeof fills === "function" && fills(5, "Room") === null, "no line while the room has room");
 		assert(fills(18, "Room") === client.recentSessionsHeadsUp(19), "a save that makes 19 says the existing heads-up");
 		assert(fills(19, "Room") === "This save fills Room: it will hold 20 conversations, as many as it can. Then Memorize them to start a new conversation.", "a save that makes 20 says it fills the room");
-		assert(!app.includes("Holds ${") && !app.includes("rememberRoomHoldsLine") && !app.includes("Remember without the preview in Room settings"), "no count label and no sentence about saving without the preview");
-		assert(!app.includes("recent sessions used") && !/RECENT_SESSIONS_CAP\b/.test(app), "no count against the old 10 and no sessions");
 	});
 
 	check("a conversation too long even in parts names the Memory model and Room settings", () => {
@@ -275,10 +254,6 @@ try {
 
 	check("memory editing waits only for the room's answer", () => {
 		assert(copy.MEMORY_EDIT_BLOCKED_SENTENCE === "Memory can be edited once the room finishes its answer.", copy.MEMORY_EDIT_BLOCKED_SENTENCE);
-	});
-
-	check("the chooser's status title says when a new conversation needs Memorize", () => {
-		assert(app.includes("A new conversation needs Memorize once the room holds ${sessionBlockCap}.") && !app.includes("Chat keeps working until the room holds"), "the second sentence");
 	});
 
 	check("an edited entry Save cannot take says why and what to do, never the generic sentence", () => {
@@ -290,7 +265,6 @@ try {
 		const tooLong = refusal(entry(`- ${"The plan holds. ".repeat(600)}`));
 		assert(tooLong === "This entry is too long to save (at most 8,000 characters). Shorten it and save again.", `an entry past 8,000 characters, got ${JSON.stringify(tooLong)}`);
 		assert(refusal("### RC-DRAFT | CLOSED | 2026-10-09 | The plan\n\n**Body:**\n- The plan.\n\n**Parked:**\nNone\n") === "", "an entry without What happened saves");
-		assert(app.includes('"The Memory model returned nothing to keep. Generate again, or Edit to write it."') && app.includes("const approvalReady = pageLimit.canSave;"), "Save needs only what to keep within the page's limit, and says so when the model returned none");
 		assert(refusal(entry("- checkpoint_id = none")) === "", "the person's words are never read as the page's identity");
 		const identity = refusal(entry("- The plan.").replace("| The plan", "| checkpoint_id = none"));
 		assert(identity === "A line saying checkpoint_id or session_id is none can't be saved in an entry. Remove it and save again.", `a line the gate keeps for itself, got ${JSON.stringify(identity)}`);

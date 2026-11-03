@@ -54,9 +54,7 @@ try {
 	const shared = lines.failureLineText(lines.turnFailureLine("Acme Model", "gateway-refused", "acme-gw", undefined, true), "lost");
 	check(shared === `Acme Model ${CAUSE}. Nothing was lost. Tell your admin, or choose another model in Room settings, Model.`, `on a shared server the chat's line sends the person to the admin, got "${shared}"`);
 
-	// The log line and the memory probes read it with the provider too.
-	const logged = (causes.providerFailureLogFields as (error: unknown, provider?: string) => { cause?: string } | undefined)(new Error("HTTP 403 Forbidden"), "acme-gw");
-	check(logged?.cause === "unreachable:gateway-refused", `the log line reads a gateway's bare 403 as the gateway refusing, got ${JSON.stringify(logged)}`);
+	// The memory probes read it with the provider too.
 	let probed: unknown;
 	try {
 		await causes.callWithPatience(async () => { throw new Error('500 {"error":{"message":"Internal server error"}}'); }, { model: { provider: "acme-gw", model: "acme-model", label: "Acme Model" }, sleep: async () => {}, probe: async () => { throw new Error("HTTP 403 Forbidden"); } });

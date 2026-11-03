@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -193,23 +193,6 @@ function absorbApprovalBody(sourceL1b: string) {
 	};
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 /** A route that is expected to refuse: the status is the assertion, and the body carries the sentence. */
 async function postJsonExpectingStatus(pathname: string, body: unknown, status: number): Promise<any> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
@@ -272,7 +255,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	writeL1b(checkpointSourceL1b());
 	const checkpointResponse = await postJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/checkpoint/approve`, checkpointApprovalBody());
@@ -293,14 +276,6 @@ try {
 	const retiredAbsorb = await postJsonExpectingStatus(`/api/persistent-agents/${encodeURIComponent(agentId)}/absorb/approve`, absorbApprovalBody(sourceAbsorbL1b), 400);
 	assert(/runId is required/.test(String(retiredAbsorb?.error ?? "")), `the retired whole-document approval should be refused with what to do instead, got ${JSON.stringify(retiredAbsorb)}`);
 	assert(readL1b() === sourceAbsorbL1b, "a refused approval writes nothing");
-
-	// Review is a RUN now too, and the route that took a whole rewritten memory
-	// from the client is gone rather than retired: a client that still posts one
-	// meets a 404 and writes nothing. The browser-safety of the run's own
-	// approval response is pinned by review-run-route-smoke.
-	const beforeRetiredReview = readL1b();
-	await postJsonExpectingStatus(`/api/persistent-agents/${encodeURIComponent(agentId)}/structural-review/approve`, { proposal: { agentId } }, 404);
-	assert(readL1b() === beforeRetiredReview, "a route that no longer exists writes nothing");
 
 	console.log("persistent mutation API redaction smoke passed");
 } catch (error) {

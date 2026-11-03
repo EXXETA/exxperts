@@ -4,6 +4,7 @@ import type {
 	ResponseCreateParamsStreaming,
 	ResponseFunctionCallOutputItemList,
 	ResponseFunctionToolCall,
+	ResponseFunctionWebSearch,
 	ResponseInput,
 	ResponseInputContent,
 	ResponseInputImage,
@@ -19,6 +20,7 @@ import type {
 	Context,
 	ImageContent,
 	Model,
+	SourceLink,
 	StopReason,
 	TextContent,
 	TextSignatureV1,
@@ -28,6 +30,7 @@ import type {
 	Usage,
 } from "../types.js";
 import { CitationMarkerStreamFilter, stripCitationMarkers } from "../utils/citation-markers.js";
+import { placeCitations, type SentCitation, webLink } from "../utils/citation-offsets.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -281,6 +284,40 @@ export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesT
 // Stream processing
 // =============================================================================
 
+function webSearchInput(item: ResponseFunctionWebSearch): { input?: { query: string } } {
+	const action = item.action as { type?: string; query?: unknown } | undefined;
+	return action?.type === "search" && typeof action.query === "string" && action.query ? { input: { query: action.query } } : {};
+}
+
+/** A message's raw parts as they arrived, markers included, and its citations as sent. */
+type SentCitations = { rawParts: string[]; sent: SentCitation[] };
+
+/** A `url_citation` in part `part` of a message, as sent. */
+function sentUrlCitation(annotation: unknown, part: number): SentCitation | undefined {
+	const cited = annotation as { type?: unknown; url?: unknown; title?: unknown; start_index?: unknown; end_index?: unknown } | null;
+	if (cited?.type !== "url_citation") return undefined;
+	const link = webLink(cited.url, cited.title);
+	return link ? { link, part, start: cited.start_index, end: cited.end_index } : undefined;
+}
+
+/**
+ * Puts every message's citations on its text block and the loose ones on the
+ * message. The indexes count in a part's raw text; OpenAI does not say what
+ * they count, and code points are our reading, since xAI documents the same
+ * shape with Python's slicing.
+ */
+function placeResponsesCitations(output: AssistantMessage, cited: Map<TextContent, SentCitations>): void {
+	const sources: SourceLink[] = [];
+	for (const [block, { rawParts, sent }] of cited) {
+		const placed = placeCitations(sent, rawParts, block.text, "codepoint");
+		if (placed.citations.length > 0) block.citations = placed.citations;
+		else delete block.citations;
+		for (const source of placed.sources) if (!sources.some((known) => known.url === source.url)) sources.push(source);
+	}
+	if (sources.length > 0) output.sources = sources;
+	else delete output.sources;
+}
+
 export async function processResponsesStream<TApi extends Api>(
 	openaiStream: AsyncIterable<ResponseStreamEvent>,
 	output: AssistantMessage,
@@ -288,9 +325,27 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
+	const cited = new Map<TextContent, SentCitations>();
+	try {
+		await readResponsesStream(openaiStream, output, stream, model, options, cited);
+	} finally {
+		// A stream cut short keeps the citations of the text it kept.
+		placeResponsesCitations(output, cited);
+	}
+}
+
+async function readResponsesStream<TApi extends Api>(
+	openaiStream: AsyncIterable<ResponseStreamEvent>,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<TApi>,
+	options: OpenAIResponsesStreamOptions | undefined,
+	cited: Map<TextContent, SentCitations>,
+): Promise<void> {
 	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
 	let textFilter = new CitationMarkerStreamFilter();
+	let openMessage: SentCitations = { rawParts: [], sent: [] };
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 
@@ -308,6 +363,8 @@ export async function processResponsesStream<TApi extends Api>(
 				currentItem = item;
 				currentBlock = { type: "text", text: "" };
 				textFilter = new CitationMarkerStreamFilter();
+				openMessage = { rawParts: [], sent: [] };
+				cited.set(currentBlock, openMessage);
 				output.content.push(currentBlock);
 				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 			} else if (item.type === "function_call") {
@@ -321,6 +378,9 @@ export async function processResponsesStream<TApi extends Api>(
 				};
 				output.content.push(currentBlock);
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+			} else if (item.type === "web_search_call") {
+				// The provider's own search: no content of the answer, but said, so a long search is not silence.
+				stream.push({ type: "server_tool_start", id: item.id, name: "web_search", ...webSearchInput(item), partial: output });
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
 			if (currentItem && currentItem.type === "reasoning") {
@@ -373,6 +433,7 @@ export async function processResponsesStream<TApi extends Api>(
 				// Filter out ReasoningText, only accept output_text and refusal
 				if (event.part.type === "output_text" || event.part.type === "refusal") {
 					currentItem.content.push(event.part);
+					openMessage.rawParts.push("");
 				}
 			}
 		} else if (event.type === "response.output_text.delta") {
@@ -382,6 +443,7 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 				const lastPart = currentItem.content[currentItem.content.length - 1];
 				if (lastPart?.type === "output_text") {
+					openMessage.rawParts[openMessage.rawParts.length - 1] += event.delta;
 					const delta = textFilter.push(event.delta);
 					if (delta.length > 0) {
 						currentBlock.text += delta;
@@ -395,6 +457,11 @@ export async function processResponsesStream<TApi extends Api>(
 					}
 				}
 			}
+		} else if (event.type === "response.output_text.annotation.added") {
+			// Kept as it arrives, so a stream stopped before its item finishes
+			// still carries the citations on its error message.
+			const sent = currentItem?.type === "message" ? sentUrlCitation(event.annotation, event.content_index) : undefined;
+			if (sent) openMessage.sent.push(sent);
 		} else if (event.type === "response.refusal.delta") {
 			if (currentItem?.type === "message" && currentBlock?.type === "text") {
 				if (!currentItem.content || currentItem.content.length === 0) {
@@ -402,6 +469,7 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 				const lastPart = currentItem.content[currentItem.content.length - 1];
 				if (lastPart?.type === "refusal") {
+					openMessage.rawParts[openMessage.rawParts.length - 1] += event.delta;
 					currentBlock.text += event.delta;
 					lastPart.refusal += event.delta;
 					stream.push({
@@ -443,6 +511,12 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		} else if (event.type === "response.output_item.done") {
 			const item = event.item;
+			if (item.type === "web_search_call") {
+				// The query is often known only once the search is done.
+				const input = webSearchInput(item);
+				if (input.input) stream.push({ type: "server_tool_start", id: item.id, name: "web_search", ...input, partial: output });
+				stream.push({ type: "server_tool_end", id: item.id, ok: item.status !== "failed", partial: output });
+			}
 
 			if (item.type === "reasoning" && currentBlock?.type === "thinking") {
 				const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
@@ -471,6 +545,16 @@ export async function processResponsesStream<TApi extends Api>(
 					item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join(""),
 				);
 				currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+				// The finished item holds every annotation, so its list replaces the
+				// streamed one, an empty list too; an item that leaves the list out
+				// keeps what streamed.
+				openMessage.rawParts = item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal));
+				if (item.content.some((part) => part.type === "output_text" && Array.isArray(part.annotations))) {
+					openMessage.sent = item.content.flatMap((part, partIndex) =>
+						part.type === "output_text" ? (part.annotations ?? []).flatMap((annotation) => sentUrlCitation(annotation, partIndex) ?? []) : [],
+					);
+				}
+				placeResponsesCitations(output, cited);
 				stream.push({
 					type: "text_end",
 					contentIndex: blockIndex(),

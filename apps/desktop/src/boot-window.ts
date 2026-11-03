@@ -28,7 +28,8 @@ const BOOT_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>exxpe
 // onDismissed fires only when the USER closes the window while startup is
 // still in flight (closing the only visible surface of a not-yet-started app
 // means "abort the launch"), never when the shell retires it itself.
-export function showBootWindow(onDismissed: () => void): void {
+// inactive shows it without taking the front from the app in use.
+export function showBootWindow(onDismissed: () => void, options: { inactive?: boolean } = {}): void {
   const win = new BrowserWindow({
     width: 460,
     height: 220,
@@ -37,8 +38,10 @@ export function showBootWindow(onDismissed: () => void): void {
     maximizable: false,
     fullscreenable: false,
     backgroundColor: "#0d0d0f",
+    show: !options.inactive,
     webPreferences: { sandbox: true },
   });
+  if (options.inactive) win.showInactive();
   win.setMenuBarVisibility(false);
   void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BOOT_HTML)}`);
   win.on("closed", () => {

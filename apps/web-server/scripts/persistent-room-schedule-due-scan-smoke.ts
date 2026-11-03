@@ -76,8 +76,11 @@ try {
 	const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
 	const {
 		addPersistentRoomScheduleJob,
+		computePersistentRoomScheduleDueOccurrence,
+		persistentRoomScheduleCanRun,
 		persistentRoomScheduleStorePath,
 		readPersistentRoomScheduleStore,
+		updatePersistentRoomScheduleJob,
 	} = await import("../../../pi-package/extensions/schedule-prompt/index.js");
 	const {
 		beginPersistentAgentTurn,
@@ -246,6 +249,114 @@ try {
 	assert(dailyFutureResult.summary.notDue === 1, "daily scan before today's first occurrence should be not_due");
 	assert(countBackgroundRunFiles(tempHome) === dailyFutureCount, "daily future-today case must not create a run");
 
+	// Weekly: the latest chosen day at its time, in the server's own zone (local dates here), never another day,
+	// and, as a daily schedule, never more than a day late. `2026-01-01` is a Thursday, so `2026-01-05` is a Monday.
+	const weeklyCreatedAt = localDate(2026, 0, 1, 6);
+	const weeklyRows: Array<{ label: string; schedule: string; now: Date; dueAt: Date | null }> = [
+		{ label: "a list", schedule: "0 30 8 * * 1,3,5", now: localDate(2026, 0, 8, 7), dueAt: localDate(2026, 0, 7, 8, 30) },
+		{ label: "a range", schedule: "0 30 8 * * 1-5", now: localDate(2026, 0, 10, 7), dueAt: localDate(2026, 0, 9, 8, 30) },
+		{ label: "a range and a day", schedule: "0 30 8 * * 1-3,5", now: localDate(2026, 0, 8, 7), dueAt: localDate(2026, 0, 7, 8, 30) },
+		{ label: "one day", schedule: "0 30 8 * * 3", now: localDate(2026, 0, 7, 12), dueAt: localDate(2026, 0, 7, 8, 30) },
+		{ label: "Sunday as 0", schedule: "0 30 8 * * 0", now: localDate(2026, 0, 5, 7), dueAt: localDate(2026, 0, 4, 8, 30) },
+		{ label: "Sunday as 7", schedule: "0 30 8 * * 7", now: localDate(2026, 0, 5, 7), dueAt: localDate(2026, 0, 4, 8, 30) },
+		{ label: "all seven days as *", schedule: "0 30 8 * * *", now: localDate(2026, 0, 2, 7), dueAt: localDate(2026, 0, 1, 8, 30) },
+		{ label: "a time just past on the day", schedule: "0 30 8 * * 1,3,5", now: localDate(2026, 0, 5, 8, 31), dueAt: localDate(2026, 0, 5, 8, 30) },
+		{ label: "a time just ahead on the day", schedule: "0 30 8 * * 1,3,5", now: localDate(2026, 0, 5, 8, 29), dueAt: null },
+		{ label: "no chosen day since it was made", schedule: "0 30 8 * * 1", now: localDate(2026, 0, 2, 12), dueAt: null },
+		// A task whose day was changed to one that passed days ago (an edit keeps createdAt), or one that missed its day by more than a day.
+		{ label: "its day more than a day ago", schedule: "0 30 8 * * 2", now: localDate(2026, 0, 8, 12), dueAt: null },
+	];
+	for (const row of weeklyRows) {
+		const room = createRoom(`Due Scan Weekly ${row.label} Room`);
+		const job = addSchedule(room, `weekly ${row.label}`, { type: "cron", schedule: row.schedule, now: weeklyCreatedAt });
+		rememberThreads(room);
+		const result = scanWithStoreUnchanged(room, { now: row.now }, `weekly ${row.label}`);
+		if (row.dueAt === null) {
+			assert(result.summary.notDue === 1 && result.summary.created === 0, `weekly, ${row.label}: not due, got ${JSON.stringify(result.summary)}`);
+			continue;
+		}
+		assert(result.summary.created === 1 && result.items[0]?.dueAt === row.dueAt.toISOString(), `weekly, ${row.label}: a run due ${row.dueAt.toISOString()}, got ${result.items[0]?.dueAt} ${JSON.stringify(result.summary)}`);
+		rememberRun(result.items[0]?.runId, `weekly ${row.label}`);
+		assert(findBackgroundRunByScheduledOccurrence({ roomId: room, schedulerJobId: job.id, dueAt: row.dueAt.toISOString() }), `weekly, ${row.label}: the run is findable by its occurrence`);
+	}
+	// A Monday task changed to Wednesday: a Wednesday that had passed when it was changed is not run late on
+	// Thursday; a Wednesday still ahead when it was changed is run.
+	for (const edit of [{ label: "after", at: localDate(2026, 0, 8, 7), dueAt: null }, { label: "before", at: localDate(2026, 0, 7, 7), dueAt: localDate(2026, 0, 7, 8, 30) }]) {
+		const room = createRoom(`Due Scan Weekly Edited ${edit.label} Room`);
+		const job = addSchedule(room, `weekly edited ${edit.label}`, { type: "cron", schedule: "0 30 8 * * 1", now: weeklyCreatedAt });
+		updatePersistentRoomScheduleJob(room, { jobId: job.id }, { schedule: "0 30 8 * * 3", now: edit.at });
+		const occurrence = computePersistentRoomScheduleDueOccurrence(readPersistentRoomScheduleStore(room).jobs[0], { now: localDate(2026, 0, 8, 7, 30) });
+		const dueAt = occurrence.due ? occurrence.dueAt : null;
+		assert(dueAt === (edit.dueAt?.toISOString() ?? null), `weekly, changed to Wednesday ${edit.label} its time: due ${edit.dueAt?.toISOString() ?? "never"}, got ${JSON.stringify(occurrence)}`);
+	}
+	// Renamed through its edit form, which sends the same pattern back, just after its time and before a scan: the day still runs.
+	{
+		const room = createRoom("Due Scan Weekly Renamed Room");
+		const job = addSchedule(room, "weekly renamed", { type: "cron", schedule: "0 30 8 * * 3", now: weeklyCreatedAt });
+		updatePersistentRoomScheduleJob(room, { jobId: job.id }, { name: "weekly renamed again", type: "cron", schedule: "0 30 8 * * 3", now: new Date(localDate(2026, 0, 7, 8, 30).getTime() + 1_000) });
+		const occurrence = computePersistentRoomScheduleDueOccurrence(readPersistentRoomScheduleStore(room).jobs[0], { now: localDate(2026, 0, 7, 8, 31) });
+		assert(occurrence.due && occurrence.dueAt === localDate(2026, 0, 7, 8, 30).toISOString(), `weekly, renamed just after its time: still due, got ${JSON.stringify(occurrence)}`);
+	}
+	// Hour by hour over two weeks, Monday, Wednesday and Friday at 08:30 are the only occurrences.
+	const weeklyJob = { ...addSchedule(createRoom("Due Scan Weekly Hours Room"), "weekly hours", { type: "cron", schedule: "0 30 8 * * 1,3,5", now: weeklyCreatedAt }) };
+	const weeklyOccurrences = new Set<string>();
+	for (let hour = 0; hour < 14 * 24; hour += 1) {
+		const occurrence = computePersistentRoomScheduleDueOccurrence(weeklyJob, { now: localDate(2026, 0, 4, hour) });
+		if (occurrence.due) weeklyOccurrences.add(occurrence.dueAt);
+	}
+	const expectedOccurrences = [5, 7, 9, 12, 14, 16].map((day) => localDate(2026, 0, day, 8, 30).toISOString());
+	assert(JSON.stringify([...weeklyOccurrences].sort()) === JSON.stringify(expectedOccurrences), `weekly runs on its days only, got ${JSON.stringify([...weeklyOccurrences].sort())}`);
+	// A clock change that skips 02:30 moves that day's time only: the days before keep 02:30.
+	const savedTimeZone = process.env.TZ;
+	process.env.TZ = "America/New_York";
+	try {
+		const clockChangeCreatedAt = new Date("2026-01-01T12:00:00Z");
+		const saturdayJob = { ...weeklyJob, schedule: "0 30 2 * * 6", createdAt: clockChangeCreatedAt.toISOString() };
+		const saturday = computePersistentRoomScheduleDueOccurrence(saturdayJob, { now: new Date("2026-03-08T07:15:00Z") });
+		assert(saturday.due && saturday.dueAt === "2026-03-07T07:30:00.000Z", `weekly over a clock change keeps Saturday's 02:30, got ${JSON.stringify(saturday)}`);
+		const dailyJob = { ...weeklyJob, schedule: "0 30 2 * * *", createdAt: clockChangeCreatedAt.toISOString() };
+		const daily = computePersistentRoomScheduleDueOccurrence(dailyJob, { now: new Date("2026-03-08T07:00:00Z") });
+		assert(daily.due && daily.dueAt === "2026-03-07T07:30:00.000Z", `daily over a clock change keeps the day before's 02:30, got ${JSON.stringify(daily)}`);
+	} finally {
+		if (savedTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = savedTimeZone;
+	}
+
+	// The page's "can't run" line and its Daily and Weekly reading agree with the due calculation, pattern by pattern.
+	const presets = await import("../../web-ui/src/persistent-room-schedule-presets.js");
+	const patterns = ["0 30 8 * * *", "0 30 8 * * 1,3,5", "0 30 8 * * 1-5", "0 30 8 * * 1-3,5", "0 30 8 * * 0", "0 30 8 * * 7", "0 30 8 * * 0-6", "0 30 8 * * 1-7",
+		"0 */15 * * * *", "0 0 7 1 * *", "0 0 7 * 1 *", "0 0 7 * * 1/2", "0 0 7 * * 5-1", "30 0 7 * * *", "0 0-30 7 * * *", "0 0 7,19 * * *", "0 0 7 * * MON"];
+	for (const pattern of patterns) {
+		const server = persistentRoomScheduleCanRun("cron", pattern);
+		assert(presets.scheduleCanRun({ type: "cron", schedule: pattern }) === server, `the page and the server agree whether ${pattern} runs (server: ${server})`);
+		if (server) assert(["daily", "weekly"].includes(presets.inferScheduleRecurrenceDraftFromJob({ type: "cron", schedule: pattern } as any).mode), `${pattern} opens in Daily or Weekly`);
+	}
+	assert(persistentRoomScheduleCanRun("cron", "0 30 8 * * 1-5") && !persistentRoomScheduleCanRun("cron", "0 */15 * * * *"), "the list holds patterns of both kinds");
+	assert(JSON.stringify(presets.inferScheduleRecurrenceDraftFromJob({ type: "cron", schedule: "0 30 8 * * 1-5" } as any).weekly.days) === "[1,2,3,4,5]", "a weekly range opens in Weekly with its days");
+	// A range renamed just after its time, sent as the same days written another way, and sent through the Weekly
+	// form's own helpers: the day still runs. A real change of days in the same edit moves the fence.
+	{
+		const justAfter = new Date(localDate(2026, 0, 7, 8, 30).getTime() + 1_000);
+		const scanAt = localDate(2026, 0, 7, 8, 31);
+		const wednesday = localDate(2026, 0, 7, 8, 30).toISOString();
+		const renamed = (label: string, request: (job: any) => Record<string, unknown>) => {
+			const room = createRoom(`Due Scan Weekly Range ${label} Room`);
+			const job = addSchedule(room, `weekdays ${label}`, { type: "cron", schedule: "0 30 8 * * 1-5", now: weeklyCreatedAt });
+			updatePersistentRoomScheduleJob(room, { jobId: job.id }, { ...request(job), now: justAfter });
+			return computePersistentRoomScheduleDueOccurrence(readPersistentRoomScheduleStore(room).jobs[0], { now: scanAt });
+		};
+		const asList = renamed("as a list", () => ({ name: "weekdays, renamed", type: "cron", schedule: "0 30 8 * * 1,2,3,4,5" }));
+		assert(asList.due && asList.dueAt === wednesday, `weekly, a range sent back as a list: still due, got ${JSON.stringify(asList)}`);
+		const throughForm = renamed("through the form", (job) => {
+			const sent = presets.applyRecurrenceToUpdateRequest({ name: "weekdays, renamed", prompt: job.prompt, enabled: true }, presets.inferScheduleRecurrenceDraftFromJob(job));
+			assert(!("error" in sent), `the Weekly form sends the range back, got ${JSON.stringify(sent)}`);
+			return sent as Record<string, unknown>;
+		});
+		assert(throughForm.due && throughForm.dueAt === wednesday, `weekly, a range renamed through the Weekly form: still due, got ${JSON.stringify(throughForm)}`);
+		const otherDays = renamed("other days", () => ({ type: "cron", schedule: "0 30 8 * * 1-3" }));
+		assert(!otherDays.due, `weekly, a range changed to other days just after its time: not run late, got ${JSON.stringify(otherDays)}`);
+	}
+
 	const intervalDueRoom = createRoom("Due Scan Interval Due Room");
 	const intervalDueJob = addSchedule(intervalDueRoom, "interval due", { type: "interval", schedule: "1h", now: baseNow });
 	rememberThreads(intervalDueRoom);
@@ -263,6 +374,15 @@ try {
 	assert(countBackgroundRunFiles(tempHome) === intervalFutureCount, "future interval must not create a run");
 
 	const unsupportedCronRoom = createRoom("Due Scan Unsupported Cron Room");
+	// Refused when saved; one already on disk (saved before the refusal) is still skipped.
+	let refusal: { message?: string; code?: unknown } | null = null;
+	try {
+		addPersistentRoomScheduleJob(unsupportedCronRoom, { name: "refused cron", type: "cron", schedule: "0 */15 * * * *", prompt: promptText, now: baseNow, refuseUnrunnable: true });
+	} catch (error) {
+		refusal = error as { message?: string; code?: unknown };
+	}
+	assert(refusal?.code === "schedule_pattern_cannot_run" && refusal.message === "This pattern can't run yet. Use Daily or Weekly, or the Interval type to repeat every few minutes or hours.", `a pattern the server can't run is refused at save, got ${refusal?.message}`);
+	assert(readPersistentRoomScheduleStore(unsupportedCronRoom).jobs.length === 0, "a refused pattern is not saved");
 	addSchedule(unsupportedCronRoom, "unsupported cron", { type: "cron", schedule: "0 */15 * * * *", now: baseNow });
 	rememberThreads(unsupportedCronRoom);
 	const unsupportedCount = countBackgroundRunFiles(tempHome);

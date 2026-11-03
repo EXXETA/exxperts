@@ -96,6 +96,29 @@ export function authedFetch(url: string | URL, init: AuthedFetchInit = {}): Prom
 	return fetch(url, { ...init, headers: { ...SMOKE_AUTH_HEADERS, ...init.headers } });
 }
 
+// Wait until the smoke's server answers /healthz, asking every 150 ms. A
+// server that exits first fails at once; one still not ready fails with the
+// last error seen. The wait ends at a deadline in milliseconds, or after a
+// number of tries for the smokes that always counted tries: a try that is
+// slow to fail then still leaves every try its turn, as those smokes had.
+export async function waitForServer(server: Pick<ChildProcess, "exitCode">, baseUrl: string, limit: number | { tries: number }): Promise<void> {
+	const deadline = typeof limit === "number" ? Date.now() + limit : Infinity;
+	const tries = typeof limit === "number" ? Infinity : limit.tries;
+	let lastError = "server did not respond";
+	for (let tried = 0; tried < tries && Date.now() < deadline; tried += 1) {
+		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
+		try {
+			const response = await fetch(`${baseUrl}/healthz`);
+			if (response.ok) return;
+			lastError = `healthz returned ${response.status}`;
+		} catch (error) {
+			lastError = (error as Error).message;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 150));
+	}
+	throw new Error(`server did not become ready: ${lastError}`);
+}
+
 // Smokes spawn the web server as npx → tsx → node, so a plain SIGTERM to the
 // npx process leaves the actual server running on Linux and Windows (macOS
 // happens to tear the tree down). On POSIX the server must therefore run in

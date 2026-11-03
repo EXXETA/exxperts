@@ -2,6 +2,50 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.15.0 (2026-11-03)
+
+- Look: A new look across the app, calmer and sharper. Messages and the message box sit in a narrower
+  reading column, small text and badges are easier to read, and in the Mac app the room name sits on
+  the window buttons' row. On a touch screen, the chat's buttons are finger-sized and Wallet, Skills
+  and Memorize fit a phone.
+- Chat: Answers now stream smoothly, and you can follow the model's thinking and steps as they happen.
+  Words arrive at an even pace, and tables and formatting look finished even mid-answer. A "Thinking"
+  line with a timer opens to the thought as it is written, then reads "Thought for 7 s", and steps
+  gather in one card per stretch of work, with the room's questions inside it.
+- Models: Choose the model and its effort right under the message box. The picker has a dial for the
+  effort and shows how much each model can read, and the Ask first / Auto chip for commands sits there
+  too. GPT-6.1 Terra joins the list on OpenAI, ChatGPT, Azure and GitHub Copilot.
+- Chat: While a room answers, Enter queues your next message and the room takes it in after its
+  current step, or once the answer ends. A queued message waits under the answer, marked Queued, and
+  you can edit, copy or remove it until the room takes it in. Send now, or Cmd+Enter (Ctrl+Enter on
+  Windows), stops the answer at the words on screen and sends it. Queued messages are kept through a
+  reload or a restart, and Stop puts them back in the box.
+- Chat: Edit your newest message with the pencil once the room has answered, or a queued one before
+  the room takes it in. Editing a sent message replaces it and its answer, for you and for the model,
+  and a line names any steps that already ran and are not undone (suggested in issue #79).
+- Chat: Answers can now show typeset maths and draw bar, line and pie charts. Code is coloured as it
+  is written, and a diagram is drawn in the app's colours once it is complete, with Copy image, Code
+  and a larger view.
+- Costs: Conversations now read more from the provider's cache, so they cost less. A room's
+  instructions, files and skills no longer change the start of every request, consults and memory
+  questions stop paying for a cache they never reuse, and Bedrock caches every Claude model from
+  Claude 4 on.
+- Desktop app: Quitting mid-answer keeps the words written so far, on Mac and Windows. A line says the
+  app stopped before the answer finished; typing "continue" picks it up, and a new question gets its
+  own answer. On Windows, the room opens at once after a restart.
+- Rooms: A room working while you're away now keeps going for up to an hour. Before, it stopped after
+  12 minutes; now it stops sooner only after 10 minutes without progress, and its line says why, with
+  Try again (reported in issue #82). Come back to a room mid-answer and it asks you its waiting
+  questions again.
+- Help: Press Cmd+/ (Ctrl+/ on Windows) to see the keyboard shortcuts. Help now opens either How it
+  works or this Shortcuts list.
+- Terminal install: The exxperts command now opens the app in your browser; the terminal app is gone.
+  That removes `exxperts cli`, `exxperts remote` and the search and gateway setup commands; web
+  search, gateways and remote access are set up in the app's Settings.
+- Fixed: Many small fixes across the app, plus security updates. A reload no longer doubles a message,
+  and a reconnect keeps the answer and its steps on screen. The desktop app's engine and two libraries
+  are updated for published security fixes.
+
 ## 0.14.5 (2026-10-26)
 
 - Failures: When a model can't answer, the room says why in one plain line, with a button for what

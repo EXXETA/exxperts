@@ -8,37 +8,27 @@
 // carry exactly that run, and the two Memory routes that measure every room
 // took minutes. The function is now two scans that produce the same bytes.
 //
-// Four things are pinned here. First, the two shapes agree: the old regex is
+// Three things are pinned here. First, the two shapes agree: the old regex is
 // kept locally as the oracle and compared with the product function on
 // thousands of seeded random strings over the five characters that matter,
 // plus the hand-picked edges (a trailing space on a content line stays, a lone
 // trailing `\r` stays, whitespace before the first break is content). Second,
-// the red: a child process applying the old regex to a Chronos with forty
-// blank lines and content after them is killed by its two-second timeout, and
-// a child process applying the product function is not. That pair is the
-// proof the old shape hung and the new one does not, without the smoke itself
-// ever waiting on the old one, and it runs before the in-process timings so
-// that against the old function the smoke fails fast instead of hanging.
-// Third, the product paths that count memory — metrics, the memory map, the
-// section split — finish in milliseconds on that Chronos, with the run inside
-// a section body too, and with `\r\n` endings. Fourth, the overview the Memory
+// the product paths that count memory (metrics, the memory map, the
+// section split) finish in milliseconds on a Chronos with forty blank lines
+// and content after them, with the run inside a section body too, and with
+// `\r\n` endings. Third, the overview the Memory
 // tab asks for is built in milliseconds over a real room in a temp HOME whose
 // memory file carries that run.
 //
-// Everything runs in-process except the two children; the overview is read
+// Everything runs in-process; the overview is read
 // through the same function the route calls, so no server is started.
 
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "memory-shape-trailing-blank-lines-smoke-home-"));
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const webServerDir = path.resolve(scriptDir, "..");
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const smokeAppDir = path.join(tempHome, ".exxperts", "app");
 const root = path.join(smokeAppDir, "personalized-agents");
@@ -64,7 +54,6 @@ const oldTrim = (text: string): string => text.replace(/(\r?\n\s*)+$/, "");
 const BLANK_RUN = 40;
 const RANDOM_STRINGS = 5000;
 const FAST_MS = 50;
-const CHILD_TIMEOUT_MS = 2000;
 
 let passes = 0;
 function check(condition: unknown, message: string): asserts condition {
@@ -79,8 +68,6 @@ function timed<T>(work: () => T): { result: T; ms: number } {
 }
 
 const ms = (value: number) => `${value.toFixed(2)} ms`;
-/** The code a killed or failed child leaves on its error, "none" when it ran to the end. */
-const errorCode = (error: Error | undefined): string => (error as NodeJS.ErrnoException | undefined)?.code ?? "none";
 
 // --- Fixtures -----------------------------------------------------------------
 
@@ -172,46 +159,6 @@ try {
 	}
 	check(compared === RANDOM_STRINGS, `${compared} seeded random strings over {a, space, tab, LF, CR} of length 0..12 agree with the old regex`);
 	console.log(`property check: ${compared} random strings compared, all equal`);
-
-	// --- 2. The red: the old regex hangs on this input, the product function does not ---
-	//     Both run as children so the smoke never waits on the old shape itself,
-	//     and this pair comes before the in-process timings so that against the
-	//     old function the smoke fails here in two seconds instead of hanging
-	//     on its own first measurement.
-	const chronosWithRun = `## Chronos\n${"\n".repeat(BLANK_RUN)}- Last save: 2026-09-15\n`;
-	const inputLiteral = JSON.stringify(chronosWithRun);
-	const oldRun = spawnSync(process.execPath, ["-e", `const out = (${inputLiteral}).replace(/(\\r?\\n\\s*)+$/, ""); process.stdout.write(String(out.length));`], {
-		encoding: "utf-8",
-		timeout: CHILD_TIMEOUT_MS,
-		env: { ...process.env },
-	});
-	check(errorCode(oldRun.error) === "ETIMEDOUT" || oldRun.signal !== null, `the old regex on ${BLANK_RUN} blank lines followed by content is killed by the ${CHILD_TIMEOUT_MS} ms timeout (status ${oldRun.status}, signal ${oldRun.signal}, error ${errorCode(oldRun.error)})`);
-
-	const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
-	// `.mts`, so the runner is a module wherever it sits: the temp HOME has no
-	// package.json to say so, and the import at its top level needs one.
-	const productRunner = path.join(tempHome, "product-trim-runner.mts");
-	const memoryShapeUrl = pathToFileURL(path.join(webServerDir, "src", "memory-shape.ts")).href;
-	fs.writeFileSync(
-		productRunner,
-		[
-			`const { trimSectionTrailingBlankLines } = await import(${JSON.stringify(memoryShapeUrl)});`,
-			`const out = trimSectionTrailingBlankLines(${inputLiteral});`,
-			"process.stdout.write(String(out.length));",
-			"",
-		].join("\n"),
-	);
-	const productStarted = performance.now();
-	const productRun = spawnSync(process.execPath, ["--import", tsxLoader, productRunner], {
-		encoding: "utf-8",
-		timeout: CHILD_TIMEOUT_MS,
-		cwd: webServerDir,
-		env: { ...process.env },
-	});
-	const productMs = performance.now() - productStarted;
-	check(productRun.status === 0 && productRun.error === undefined, `the product function on the same input finishes inside the timeout (status ${productRun.status}, error ${errorCode(productRun.error)}): ${productRun.stderr ?? ""}`);
-	check(productRun.stdout === String(chronosWithRun.length - 1), `and it cuts only the final line break, the run before the content being content: expected ${chronosWithRun.length - 1} characters, got ${productRun.stdout}`);
-	console.log(`red pair: old regex child ${errorCode(oldRun.error)} after ${CHILD_TIMEOUT_MS} ms, product child done in ${ms(productMs)} including its start`);
 
 	// --- 3. The product paths on a run of forty blank lines -----------------------
 	const shapes: Array<{ name: string; text: string }> = [

@@ -1,12 +1,10 @@
 // Advisory lock so a persistent room can't be actively driven from two places
-// at once (e.g. the web UI and the CLI), which would clobber the shared thread
-// file. It is intentionally best-effort: if the owning side is gone, the lock
-// is treated as free so a user can never get permanently locked out of a room.
+// at once (e.g. a browser window and a scheduled run), which would clobber the
+// shared thread file. It is intentionally best-effort: if the owning side is
+// gone, the lock is treated as free so a user can never get permanently locked
+// out of a room.
 //
 // Staleness differs by surface, on purpose:
-//   - "cli": the owner is a real process; the lock is valid while that pid is
-//            alive on this host (the CLI launcher blocks on the room session,
-//            so it cannot heartbeat).
 //   - "web": the owner is the long-lived web-server process, so pid-liveness is
 //            meaningless. The live connection heartbeats `lastSeen`; the lock
 //            is valid only while that stays fresh (WEB_TTL_MS).
@@ -14,15 +12,16 @@
 //            It must heartbeat like web, but owner identity is a scheduler lockId
 //            instead of pid so same-process scheduler jobs cannot overwrite each
 //            other's room locks.
+// Any other surface (the removed terminal app wrote "cli") is free.
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { productAppStatePath } = require("./product-state-paths.cjs");
 
-// Resolved per call, not at require time: the CLI launcher points HOME at
-// the active data profile AFTER requiring this module, and web and CLI must
-// agree on where a room's lock lives.
+// Resolved per call, not at require time: a process can point its state home
+// at the active data profile AFTER requiring this module, and every holder
+// must agree on where a room's lock lives.
 function lockDir() {
 	return productAppStatePath(".room-locks");
 }
@@ -62,7 +61,7 @@ function isActive(lock) {
 		if (lock.host && lock.host !== os.hostname()) return true;
 		return !lock.pid || pidAlive(lock.pid, lock.host);
 	}
-	return pidAlive(lock.pid, lock.host);
+	return false;
 }
 
 function sameOwner(a, b) {
@@ -73,21 +72,21 @@ function sameOwner(a, b) {
 		const bLockId = typeof b.lockId === "string" ? b.lockId : "";
 		return !!aLockId && aLockId === bLockId;
 	}
-	return a.pid === b.pid;
+	return false;
 }
 
 // Whether `owner` may take over an existing lock. Same owner = refresh. Two web
 // connections share one local server process, and a reconnect (memento restart,
 // navigation, network blip) gets a new connectionId while the old lock lingers —
 // treating web-over-web as a takeover avoids a false "open in another browser
-// session" block. Cross-surface (CLI vs web) and CLI-vs-CLI still block, since
-// those are separate processes that can actually clobber the thread file.
+// session" block. A scheduled run against web, or another scheduled run, still
+// blocks, since those can actually clobber the thread file.
 function canTakeOver(existing, owner) {
 	if (sameOwner(existing, owner)) return true;
 	return existing.surface === "web" && owner.surface === "web";
 }
 
-// owner: { surface: "cli" | "web" | "scheduler", pid?, connectionId?, lockId?, runId?, label? }
+// owner: { surface: "web" | "scheduler", pid?, connectionId?, lockId?, runId?, label? }
 // Acquisition is atomic: the lock file is created with the exclusive "wx" flag,
 // so if two sessions race only one create succeeds. The loser reads the winner's
 // record and either refuses (held by another active owner) or, if the existing

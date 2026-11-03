@@ -1,0 +1,280 @@
+/* Specialist tasks: everything here is namespaced `.task-` and reuses the
+   existing --exx-* custom properties. */
+
+/* -- dock + pill wrappers (mirror .consult-dock / .consult-fold / .fold-pill) - */
+.task-dock {
+	margin: 0 26px 10px;
+	max-width: 780px;
+	align-self: center;
+	width: calc(100% - 52px);
+}
+/* Every folded state is the full-width strip; the ready dot pulses inside it. */
+.task-strip .ready-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 999px;
+	background: var(--exx-plan);
+	animation: task-pulse 1.6s ease-in-out infinite;
+	flex: 0 0 auto;
+}
+/* -- running strip (dock redesign 2026-07) ----------------------------------
+   While a task runs, the folded dock is a one-line strip: family chip, the
+   latest status line ellipsized, a spinner, and Stop. Clicking the strip
+   expands to the running card. */
+.task-strip {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	border: 1px solid var(--exx-border-soft);
+	border-left: 3px solid var(--exx-plan);
+	background: var(--exx-surface);
+	border-radius: 12px;
+	padding: 6px 10px 6px 12px;
+	box-shadow: var(--exx-shadow-popover);
+}
+.task-strip-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	background: none;
+	border: none;
+	padding: 2px 0;
+	font: inherit;
+	color: var(--exx-text-soft);
+	cursor: pointer;
+	text-align: left;
+}
+.task-strip-main .task-who { flex: 0 0 auto; }
+.task-strip-status {
+	flex: 1;
+	min-width: 0;
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	font-size: 11px;
+	color: var(--exx-text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.task-strip-main:hover .task-strip-status { color: var(--exx-text-soft); }
+.task-strip-main .spin {
+	width: 10px;
+	height: 10px;
+	border-radius: 999px;
+	border: 2px solid var(--exx-plan);
+	border-top-color: transparent;
+	animation: task-spin 1s linear infinite;
+	flex: 0 0 auto;
+}
+/* The small Stop that lives outside a footer (strip + running-card header). */
+.task-run-stop {
+	font: inherit;
+	font-size: 12px;
+	border-radius: 8px;
+	padding: 3px 12px;
+	cursor: pointer;
+	border: 1px solid var(--exx-border-soft);
+	background: transparent;
+	color: var(--exx-text-soft);
+	flex: 0 0 auto;
+}
+.task-run-stop:hover { background: var(--exx-surface-hover); }
+.task-run-stop:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 1px; }
+/* Header-row primary action on the done card (Add to conversation). */
+.task-run-stop.task-head-primary {
+	background: var(--fg);
+	color: var(--bg);
+	border-color: var(--fg);
+	font-weight: 700;
+}
+.task-run-stop.task-head-primary:hover { background: var(--fg); opacity: 0.88; }
+/* In-place Close confirmation on the done card. */
+.task-run-stop.task-head-danger {
+	border-color: color-mix(in srgb, var(--exx-danger) 55%, transparent);
+	color: var(--exx-danger);
+}
+
+/* -- compact running card (dock redesign 2026-07) ----------------------------
+   Expanded while running, the card is one header row (chip, dim status,
+   spinner, Stop, minimize) with the latest status line below in the normal
+   text face; no footer, no divider. */
+.task-dock.task-run-compact .consult-card { padding: 10px 14px; }
+.task-dock.task-run-compact .head-tools { align-items: center; }
+.task-run-spin {
+	width: 10px;
+	height: 10px;
+	border-radius: 999px;
+	border: 2px solid var(--exx-plan);
+	border-top-color: transparent;
+	animation: task-spin 1s linear infinite;
+	align-self: center;
+	flex: 0 0 auto;
+	margin-right: 4px;
+}
+.task-status-ticker.plain {
+	font-family: inherit;
+	font-size: 12.5px;
+	color: var(--exx-text-soft);
+	margin-top: 6px;
+}
+
+/* Error accent: the card / folded strip switches its left edge and the speaker
+   label to the warning tone — targeting the base chrome from the task dock
+   wrapper, so the base needs no change. */
+.task-dock-error .consult-card { border-left-color: var(--warning); }
+.task-dock-error .task-strip { border-left-color: var(--warning); }
+.task-dock-error .task-who { color: var(--warning); }
+
+/* -- running status stream (the statusStreamSlot occupant) ------------------- */
+.task-status-ticker {
+	display: block;
+	width: 100%;
+	background: none;
+	border: none;
+	padding: 2px 0;
+	margin-top: 10px;
+	text-align: left;
+	font-family: var(--exx-font-mono);
+	font-size: 11px;
+	color: var(--exx-text-muted);
+	opacity: 0.85;
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.task-status-ticker:hover { color: var(--exx-text-soft); }
+.task-status-stream { cursor: pointer; }
+.task-status-stream {
+	margin-top: 10px;
+	max-height: 150px;
+	overflow-y: auto;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--exx-border-soft) 25%, transparent);
+	padding: 8px 12px;
+	font-family: var(--exx-font-mono);
+	font-size: 11.5px;
+	color: var(--exx-text-muted);
+	display: flex;
+	flex-direction: column;
+}
+.task-status-stream .task-line {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+/* Short tails hug the bottom edge like a terminal; margin (not justify-content:
+   flex-end) so the start of a long tail stays reachable by scroll. */
+.task-status-stream .task-line:first-child { margin-top: auto; }
+.task-status-stream .task-line.is-tool { color: var(--exx-plan); }
+
+/* -- footer status / meta (running spinner + done/error hint) ---------------- */
+.task-status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--exx-text-muted);
+}
+.task-status .spin {
+	width: 10px;
+	height: 10px;
+	border-radius: 999px;
+	border: 2px solid var(--exx-plan);
+	border-top-color: transparent;
+	animation: task-spin 1s linear infinite;
+	flex: 0 0 auto;
+}
+.task-meta { font-size: 11.5px; color: var(--exx-text-muted); font-family: var(--exx-font-sans); font-variant-numeric: tabular-nums; }
+
+/* -- artifact strip (the artifactStripSlot occupant) ------------------------- */
+.task-artifact-strip {
+	display: flex;
+	gap: 10px;
+	margin-top: 12px;
+	flex-wrap: wrap;
+}
+.task-thumb {
+	width: 148px;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	overflow: hidden;
+	cursor: pointer;
+	background: var(--exx-surface);
+	padding: 0;
+	text-align: left;
+	display: block;
+}
+.task-thumb:hover { border-color: var(--exx-plan); }
+.task-thumb img {
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	object-fit: cover;
+	display: block;
+	background: #fff;
+}
+.task-thumb .task-name {
+	font-size: 11px;
+	color: var(--exx-text-muted);
+	padding: 4px 8px 5px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: block;
+}
+.task-thumb-badge { position: relative; }
+.task-thumb-badge .task-count {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	background: rgba(0, 0, 0, .55);
+	color: #fff;
+	font-size: 10.5px;
+	border-radius: 999px;
+	padding: 1px 7px;
+}
+
+/* typed-chip fallback (no thumbnail, non-SVG) */
+.task-file-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	padding: 8px 12px;
+	font-size: 12.5px;
+	color: var(--exx-text-soft);
+	cursor: pointer;
+	background: transparent;
+}
+.task-file-chip:hover { border-color: var(--exx-plan); }
+/* The staged composer card wears the same badge, so a file looks the same
+   before and after it rides with a message. */
+.task-file-chip .task-kind,
+.composer-staged-card .task-kind {
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: .06em;
+	color: var(--exx-plan);
+	border: 1px solid color-mix(in srgb, var(--exx-plan) 45%, transparent);
+	border-radius: 4px;
+	padding: 1px 5px;
+}
+
+/* -- summary + error copy ---------------------------------------------------- */
+.task-summary { font-size: 13px; color: var(--exx-text-soft); margin-top: 10px; }
+.task-error-msg { font-size: 13px; color: var(--exx-text-soft); margin-top: 8px; }
+
+/* -- motion (namespaced so they never collide with global/consult keyframes) - */
+@keyframes task-spin { to { transform: rotate(360deg); } }
+@keyframes task-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+	.task-strip-main .spin,
+	.task-run-spin,
+	.task-status .spin { animation: none; opacity: .6; }
+	.task-strip .ready-dot { animation: none; }
+}
+

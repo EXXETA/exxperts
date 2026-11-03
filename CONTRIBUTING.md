@@ -18,7 +18,6 @@ cd exxperts
 npm install
 npm run build
 ./scripts/exxperts-web     # dev web app (server + UI)
-./scripts/exxperts-cli     # dev CLI/TUI
 ```
 
 The repository layout and day-to-day developer commands are documented in [`docs/developer.md`](docs/developer.md). For an orientation on the product itself (rooms, memory lifecycle, tool policy), read [`docs/how-exxperts-works.md`](docs/how-exxperts-works.md).

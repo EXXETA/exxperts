@@ -347,7 +347,12 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<"openai-codex-resp
 
 	const base = buildBaseOptions(model, options, apiKey);
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+	// No level means off, the way the agent sends it. Without a reasoning field
+	// the backend thinks at its default, so off goes out as the model's own off
+	// effort where the catalogue names one; a model that names none keeps the
+	// default rather than risk a value it refuses.
+	const offEffort = typeof model.thinkingLevelMap?.off === "string" ? "none" : undefined;
+	const reasoningEffort = clampedReasoning === undefined || clampedReasoning === "off" ? offEffort : clampedReasoning;
 
 	return streamOpenAICodexResponses(model, context, {
 		...base,

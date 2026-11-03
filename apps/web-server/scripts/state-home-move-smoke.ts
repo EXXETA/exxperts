@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, symlinkOrSkip, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, symlinkOrSkip, type AuthedFetchInit, waitForServer } from "./smoke-server-process.js";
 
 // Pins the in-app move of the exxperts home (Settings → Profiles → Move):
 //
@@ -279,23 +279,6 @@ function spawnServer(): ChildProcessWithoutNullStreams {
 	});
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 30000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function api(route: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${route}`, {
 		...init,
@@ -321,7 +304,7 @@ let server: ChildProcessWithoutNullStreams | null = null;
 try {
 	// Leg 1: default home. The payload names it and offers the move.
 	server = spawnServer();
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30000);
 	let listing = await api("/api/settings/state-profile");
 	assert(listing.status === 200 && listing.body.home, "the listing must carry the home payload");
 	assert(listing.body.home.dir === loginHome && listing.body.home.source === "default" && listing.body.home.canMove === true, `leg 1 home payload: ${JSON.stringify(listing.body.home)}`);
@@ -344,7 +327,7 @@ try {
 
 	// Leg 2: runs against the new home; profiles work there unchanged.
 	server = spawnServer();
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30000);
 	listing = await api("/api/settings/state-profile");
 	assert(listing.body.home.dir === newHome && listing.body.home.source === "setting", `leg 2 home payload: ${JSON.stringify(listing.body.home)}`);
 	assert(listing.body.profiles.some((p: any) => p.name === "Demo A"), "profiles must be listed from the new home");
@@ -363,7 +346,7 @@ try {
 	fs.mkdirSync(path.join(synced, ".exxperts", "app"), { recursive: true });
 	fs.writeFileSync(path.join(synced, ".exxperts", "app", "theirs.txt"), "from the other computer");
 	server = spawnServer();
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30000);
 	const adoptPlan = await api("/api/settings/state-home/plan", { method: "POST", body: JSON.stringify({ dir: synced }) });
 	assert(adoptPlan.status === 200 && adoptPlan.body.mode === "adopt" && adoptPlan.body.moving.length === 0, `adopt plan: ${JSON.stringify(adoptPlan.body)}`);
 	await applyAndAwaitExit(server, synced);

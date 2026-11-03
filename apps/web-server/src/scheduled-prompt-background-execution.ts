@@ -20,7 +20,8 @@ import {
 import { executePersistentRoomBackgroundPrompt } from "./persistent-room-background-execution.js";
 import { recordPersistentAgentUnseenLandedAnswer } from "./persistent-agents.js";
 import { appendUsageOnce, resolveUsageAuthType } from "./usage-log.js";
-import { SERVER_STOPPED_REASON, serverStopping } from "./server-stop.js";
+import { INTERRUPTED_SCHEDULED_RUN_SENTENCE, SERVER_STOPPED_REASON, serverStopping } from "./server-stop.js";
+import { serverHooks } from "./server-hooks.js";
 import {
 	inspectScheduledPromptBackgroundRunIdempotency,
 	mergeScheduledPromptBackgroundRunArtifacts,
@@ -84,6 +85,18 @@ export interface ProcessScheduledPromptBackgroundRunExecutionOnceInput {
 	leaseMs?: number;
 	heartbeatMs?: number;
 	executePrompt?: typeof executePersistentRoomBackgroundPrompt;
+	/** How long a run's turn may take; without it, the edition's limit, none on the desktop. */
+	runLimitMs?: number;
+	/** Whether a run whose lease ran out runs again; without it, the edition's rule, yes on the desktop. */
+	retriesInterrupted?: boolean;
+}
+
+export const SCHEDULED_RUN_TIME_LIMIT_REASON = "time_limit";
+export const INTERRUPTED_BY_RESTART_REASON = "interrupted_by_restart";
+
+export function scheduledRunTimeLimitSentence(limitMs: number): string {
+	const minutes = Math.max(1, Math.round(limitMs / 60_000));
+	return `exxperts stopped this scheduled task after ${minutes} minute${minutes === 1 ? "" : "s"}, this server's limit. Split it into smaller tasks, or ask your admin to raise the limit.`;
 }
 
 const DEFAULT_EXECUTION_LIMIT = 1;
@@ -231,6 +244,7 @@ async function executeClaimedRun(input: {
 	leaseMs: number;
 	heartbeatMs: number;
 	executePrompt: typeof executePersistentRoomBackgroundPrompt;
+	runLimitMs: number | undefined;
 }): Promise<ScheduledPromptBackgroundExecutionTransitionSummary> {
 	let run = updateRunningReason({ run: input.claimed, token: input.token, now: input.now });
 	const previousStatus = input.claimed.status;
@@ -268,6 +282,7 @@ async function executeClaimedRun(input: {
 	}
 
 	let stopHeartbeat: (() => void) | null = null;
+	let limitTimer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		const postReadiness = checkScheduledPromptBackgroundRunExecutionReadiness({ run, now: new Date(), workerId: input.workerId, expectedSchedulerLockId: lockId });
 		if (postReadiness.status !== "queued" || postReadiness.readiness.result !== "ready" || !postReadiness.target || postReadiness.target.kind === "none") {
@@ -319,6 +334,11 @@ async function executeClaimedRun(input: {
 		run = updateRunningReason({ run, token: input.token, now: new Date(), target: finalTarget, artifacts: inputArtifacts });
 		stopHeartbeat = startHeartbeat({ roomId, lockOwner: owner, runId: run.runId, token: input.token, leaseMs: input.leaseMs, heartbeatMs: input.heartbeatMs });
 		const turnId = `scheduled_${run.runId}`;
+		const limit = new AbortController();
+		const runLimitMs = input.runLimitMs;
+		if (runLimitMs !== undefined) {
+			limitTimer = setTimeout(() => limit.abort(Object.assign(new Error(scheduledRunTimeLimitSentence(runLimitMs)), { code: SCHEDULED_RUN_TIME_LIMIT_REASON })), runLimitMs);
+		}
 		const result = await input.executePrompt({
 			roomId,
 			target: finalTarget,
@@ -326,6 +346,7 @@ async function executeClaimedRun(input: {
 			executionId: run.runId,
 			turnId,
 			connectionId: `scheduler:${run.runId}`,
+			signal: limit.signal,
 		});
 		// The output artifact is the idempotency evidence: it must land before the usage row so a
 		// crash in between makes lease recovery short-circuit to already_completed instead of
@@ -391,7 +412,8 @@ async function executeClaimedRun(input: {
 		});
 		return { runId: updated.runId, previousStatus, finalStatus: updated.status, reason: updated.reason ?? "completed", threadId: result.threadId };
 	} catch (error) {
-		const message = `Scheduled prompt background execution failed: ${safeErrorMessage(error)}`;
+		// The time limit's message is the sentence the person reads in the room.
+		const message = safeErrorCode(error) === SCHEDULED_RUN_TIME_LIMIT_REASON ? safeErrorMessage(error) : `Scheduled prompt background execution failed: ${safeErrorMessage(error)}`;
 		let updated: BackgroundRunRecord;
 		// A run a server stop ended is cancelled, its lease cleared, so it is not run again.
 		const stoppedByServer = (error as { code?: unknown } | null)?.code === SERVER_STOPPED_REASON;
@@ -421,9 +443,17 @@ async function executeClaimedRun(input: {
 		}
 		return { runId: updated.runId, previousStatus, finalStatus: updated.status, reason: updated.reason ?? "execution_failed", ...(updated.target?.threadId ? { threadId: updated.target.threadId } : {}) };
 	} finally {
+		clearTimeout(limitTimer);
 		if (stopHeartbeat) stopHeartbeat();
 		try { roomLock.release(roomId, owner); } catch {}
 	}
+}
+
+// A run cut by an abnormal end is not run again, unless its answer had already landed: that one
+// still ends already_completed when it is claimed.
+function endInterruptedRun(run: BackgroundRunRecord): { reason: string; message: string } | null {
+	if (inspectScheduledPromptBackgroundRunIdempotency({ run }).alreadyCompleted) return null;
+	return { reason: INTERRUPTED_BY_RESTART_REASON, message: INTERRUPTED_SCHEDULED_RUN_SENTENCE };
 }
 
 export async function processScheduledPromptBackgroundRunExecutionOnce(
@@ -436,8 +466,10 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 	const leaseMs = normalizeLeaseMs(input.leaseMs);
 	const heartbeatMs = normalizeHeartbeatMs(input.heartbeatMs, leaseMs);
 	const executePrompt = input.executePrompt ?? executePersistentRoomBackgroundPrompt;
+	const runLimitMs = input.runLimitMs ?? serverHooks().scheduledRunLimitMs?.();
+	const retriesInterrupted = input.retriesInterrupted ?? serverHooks().retriesInterruptedScheduledRuns?.() ?? true;
 
-	const recoveredRecords = recoverExpiredBackgroundRunLeases({ kind: "scheduled-prompt", now, limit });
+	const recoveredRecords = recoverExpiredBackgroundRunLeases({ kind: "scheduled-prompt", now, limit, ...(retriesInterrupted ? {} : { endInsteadOfRetry: endInterruptedRun }) });
 	reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now, limit, metCurrentConversation: scheduledRunMetCurrentConversation });
 	const recovered = recoveredRecords.map((record) => ({
 		runId: record.runId,
@@ -479,7 +511,7 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 		counts.claimed = claimedCount;
 		if (roomId) processedRooms.add(roomId);
 		try {
-			const transition = await executeClaimedRun({ claimed, token, workerId, now, leaseMs, heartbeatMs, executePrompt });
+			const transition = await executeClaimedRun({ claimed, token, workerId, now, leaseMs, heartbeatMs, executePrompt, runLimitMs });
 			processed.push(transition);
 			const countKey = statusCountKey(transition.finalStatus);
 			if (countKey) counts[countKey] += 1;

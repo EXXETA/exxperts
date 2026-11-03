@@ -50,8 +50,14 @@ describe("clampThinkingLevel", () => {
 		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
 	});
 
-	it("settles a stored off on the Sonnet 5.5 row the same way, since disabled is a 400 there too", () => {
+	it("keeps a stored off on the Sonnet 5.5 row, which stops thinking through between_tools", () => {
 		const model = getModel("anthropic", "claude-sonnet-5-5");
+		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+		expect(clampThinkingLevel(model!, "off")).toBe("off");
+	});
+
+	it("settles a stored off on a Sonnet 5.5 row outside Anthropic's API, where off is not offered", () => {
+		const model = getModel("amazon-bedrock", "global.anthropic.claude-sonnet-5-5");
 		expect(getSupportedThinkingLevels(model!)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
 		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
 	});

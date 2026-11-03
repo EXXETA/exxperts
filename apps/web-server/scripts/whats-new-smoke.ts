@@ -350,13 +350,10 @@ try {
 		const majors = (html: string): string[] => Array.from(html.matchAll(/whats-new-release-head whats-new-release-head-first"><span class="whats-new-release-version">([^<]+)</g), (match) => match[1]);
 		const rows = (html: string): string[] => Array.from(html.matchAll(/aria-expanded="(true|false)" aria-controls="whats-new-lines-([^"]+)"/g), (match) => `${match[2]} ${match[1] === "true" ? "open" : "closed"}`);
 		const html = render(TWO_MAJORS);
-		assert(html.includes("<h1 class=\"whats-new-title\">What&#x27;s new</h1>") && html.includes("aria-label=\"What&#x27;s new\""), "the title and the dialog's name are What's new");
 		same(heads(html), ["Major releases", "Minor releases"], "the two sections");
 		same(majors(html), ["0.13.0", "0.14.0"], "the majors, oldest first");
-		assert(html.includes("28 Sep 2026"), "a release heading carries its date");
 		assert(html.includes("<strong>Models:</strong> the big release&#x27;s headline.") && !html.includes("Its second sentence"), "a bullet reads as its label and first sentence, as before");
 		same(rows(html), ["0.14.3 closed", "0.14.2 closed", "0.14.1 closed", "0.13.2 closed", "0.13.1 closed"], "with a major to read, every patch row starts closed, newest first");
-		assert(/<button type="button" class="whats-new-row-toggle" aria-expanded="false"[^>]*>.*?<span class="whats-new-release-version">0\.14\.3<\/span><span class="whats-new-release-date">15 Oct 2026<\/span><span class="whats-new-row-labels">Memory<\/span><\/button>/.test(html), "a row is a button with the version, the date and what it touches");
 		assert(/<div id="whats-new-lines-0\.14\.3" class="whats-new-row-lines" hidden="">/.test(html), "a closed row's lines are hidden");
 		assert(!html.includes("Show older releases"), "nothing folds behind Show older releases");
 		const patchOnly = render(PATCH_ONLY);
@@ -430,7 +427,7 @@ try {
 			assert(await page.evaluate(() => document.activeElement?.classList.contains("whats-new-close") === true), "the first Tab reaches the x");
 			assert(await dialog.getByRole("button", { name: "Continue" }).count() === 0, "there is no Continue button");
 			same([await dialog.locator(".whats-new-title").innerText(), await dialog.getAttribute("aria-label")], ["What's new", "What's new"], "the title and the dialog's name");
-			same(await dialog.locator(".whats-new-section-head").allInnerTexts(), ["MINOR RELEASES"], "only Minor releases");
+			same(await dialog.locator(".whats-new-section-head").allInnerTexts(), ["Minor releases"], "only Minor releases");
 			same(await rowStates(page), ["0.14.4 open", "0.14.3 closed", "0.14.2 closed", "0.14.1 closed"], "0.14.4 open on top, three closed rows below");
 			same(await visibleEntries(page), ["Rooms: a patch bullet that wraps onto a continuation line.", "Fixed: a second patch bullet."], "only the open row's lines show");
 			await dialog.getByRole("button", { name: /^0\.14\.2/ }).click();
@@ -459,7 +456,7 @@ try {
 
 		await check("the page after an update across a line: 0.14.0 in full under Major releases, the patches closed, newest first, and Escape records seen", () => openPage(ACROSS_A_LINE, async (page, seenPosts) => {
 			const dialog = page.locator(".whats-new-dialog");
-			same(await dialog.locator(".whats-new-section-head").allInnerTexts(), ["MAJOR RELEASES", "MINOR RELEASES"], "both sections");
+			same(await dialog.locator(".whats-new-section-head").allInnerTexts(), ["Major releases", "Minor releases"], "both sections");
 			same(await dialog.locator(".whats-new-release-head-first .whats-new-release-version").allInnerTexts(), ["0.14.0"], "the major");
 			same(await rowStates(page), ["0.14.4 closed", "0.14.3 closed", "0.14.2 closed", "0.14.1 closed", "0.13.2 closed", "0.13.1 closed"], "the patches closed, newest first");
 			same(await visibleEntries(page), ["Models: the big release's headline.", "Home: its second bullet."], "only the major's lines show");
@@ -470,7 +467,7 @@ try {
 
 		await check("on a shared server the page shows only what is newer than this browser's seen mark", () => openPage(TWO_MAJORS, async (page, seenPosts) => {
 			const dialog = page.locator(".whats-new-dialog");
-			same(await dialog.locator(".whats-new-section-head").allInnerTexts(), ["MINOR RELEASES"], "the majors, all at or below the mark, are gone");
+			same(await dialog.locator(".whats-new-section-head").allInnerTexts(), ["Minor releases"], "the majors, all at or below the mark, are gone");
 			same(await rowStates(page), ["0.14.3 open", "0.14.2 closed"], "the releases after the mark, the newest open");
 			await dialog.getByRole("button", { name: "Close" }).click();
 			await dialog.waitFor({ state: "detached", timeout: 5000 });

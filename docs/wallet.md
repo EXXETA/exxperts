@@ -49,7 +49,7 @@ it. Two marks cover the turns that could not be priced that way:
   [`provider-setup.md`](provider-setup.md).
 
 Subscription usage is estimated at public API list prices and stays under
-**Covered by plans**. Memory upkeep, HiveMind answers and scheduled runs
+**Covered by plans**. Memory upkeep, Ask your rooms answers and scheduled runs
 are recorded from July 2026; earlier upkeep was never persisted and is not
 included.
 

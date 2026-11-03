@@ -1,0 +1,197 @@
+:root[data-theme="light"] .sidebar .sidebar-title,
+:root[data-theme="light"] .sidebar .list-btn,
+:root[data-theme="light"] .sidebar .list-btn .desc,
+:root[data-theme="light"] .sidebar .list-btn .meta,
+:root[data-theme="light"] .sidebar .row-action,
+:root[data-theme="light"] .sidebar-footer,
+:root[data-theme="light"] .standalone-header,
+:root[data-theme="light"] .standalone-title,
+:root[data-theme="light"] .standalone-subtitle {
+	color: #fff;
+}
+
+:root[data-theme="light"] .landing-card,
+:root[data-theme="light"] .landing-card h2 {
+	color: var(--fg);
+}
+
+:root[data-theme="light"] .landing-card p {
+	color: var(--fg-soft);
+}
+
+:root[data-theme="light"] .sidebar .icon-btn,
+:root[data-theme="light"] .sidebar .row-action,
+:root[data-theme="light"] .sidebar .section-toggle,
+:root[data-theme="light"] .standalone-header .icon-btn,
+:root[data-theme="light"] .standalone-header .theme-toggle {
+	border-color: #fff;
+	color: #fff;
+	background: transparent;
+}
+
+:root[data-theme="light"] .landing-card .inline-action {
+	background: transparent;
+	border-color: var(--border-soft);
+	color: var(--fg-soft);
+}
+
+:root[data-theme="light"] .landing-card .landing-action {
+	background: var(--exx-action-primary-bg);
+	border-color: var(--exx-action-primary-bg);
+	color: var(--exx-action-primary-fg);
+}
+
+:root[data-theme="light"] .standalone-header .landing-action {
+	background: #fff;
+	color: #000;
+	border-color: #fff;
+}
+
+:root[data-theme="light"] .landing-card .landing-action.secondary {
+	background: transparent;
+	border-color: var(--border-soft);
+	color: var(--fg-soft);
+}
+
+:root[data-theme="light"] .sidebar .icon-btn:hover,
+:root[data-theme="light"] .sidebar .row-action:hover,
+:root[data-theme="light"] .standalone-header .icon-btn:hover,
+:root[data-theme="light"] .standalone-header .theme-toggle:hover {
+	background: #fff;
+	color: #000;
+}
+
+:root[data-theme="light"] .landing-card .inline-action:hover,
+:root[data-theme="light"] .landing-card .inline-action:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border);
+	color: var(--fg);
+}
+
+:root[data-theme="light"] .sidebar .list-btn:hover,
+:root[data-theme="light"] .sidebar .list-btn:focus-visible {
+	border-color: color-mix(in srgb, #fff 38%, transparent);
+	background: color-mix(in srgb, #fff 12%, transparent);
+}
+
+:root[data-theme="light"] .sidebar .list-btn.active {
+	background: #fff;
+	color: #000;
+	border-color: #fff;
+}
+:root[data-theme="light"] .sidebar .list-btn.active .name,
+:root[data-theme="light"] .sidebar .list-btn.active .desc,
+:root[data-theme="light"] .sidebar .list-btn.active .meta,
+:root[data-theme="light"] .sidebar .list-btn.active .row-badge,
+:root[data-theme="light"] .sidebar .list-btn.active .row-action {
+	color: #000;
+	border-color: #000;
+}
+:root[data-theme="light"] .sidebar .list-btn.active .row-action:hover,
+:root[data-theme="light"] .sidebar .list-btn.active .row-action:focus-visible {
+	background: #000;
+	color: #fff;
+}
+
+:root[data-theme="light"] .sidebar .conversation-inline-action,
+:root[data-theme="light"] .sidebar .conversation-action-sep {
+	color: #fff;
+}
+
+:root[data-theme="light"] .landing-card .cli-note,
+:root[data-theme="light"] .landing-card code {
+	color: var(--fg-soft);
+}
+
+:root[data-theme="light"] .sidebar .sidebar-title,
+:root[data-theme="light"] .sidebar .list-btn,
+:root[data-theme="light"] .sidebar .list-btn .desc,
+:root[data-theme="light"] .sidebar .list-btn .meta,
+:root[data-theme="light"] .sidebar .row-action,
+:root[data-theme="light"] .sidebar .section-toggle,
+:root[data-theme="light"] .sidebar-footer,
+:root[data-theme="light"] .sidebar .conversation-inline-action,
+:root[data-theme="light"] .sidebar .conversation-action-sep {
+	color: var(--muted);
+}
+
+:root[data-theme="light"] .sidebar .list-btn {
+	color: var(--fg);
+}
+
+:root[data-theme="light"] .sidebar .sidebar-primary-nav .list-btn {
+	color: var(--fg-soft);
+}
+
+:root[data-theme="light"] .sidebar .icon-btn,
+:root[data-theme="light"] .sidebar .row-action {
+	background: transparent;
+	border-color: var(--border-soft);
+	color: var(--fg-soft);
+}
+
+:root[data-theme="light"] .sidebar .list-btn:hover,
+:root[data-theme="light"] .sidebar .list-btn:focus-visible,
+:root[data-theme="light"] .sidebar .sidebar-primary-nav .list-btn:hover,
+:root[data-theme="light"] .sidebar .sidebar-primary-nav .list-btn:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border-soft);
+	color: var(--fg);
+}
+
+:root[data-theme="light"] .sidebar .icon-btn:hover,
+:root[data-theme="light"] .sidebar .icon-btn:focus-visible,
+:root[data-theme="light"] .sidebar .row-action:hover,
+:root[data-theme="light"] .sidebar .row-action:focus-visible {
+	background: var(--fg);
+	border-color: var(--fg);
+	color: var(--bg);
+}
+
+:root[data-theme="light"] .sidebar .list-btn.active,
+:root[data-theme="light"] .sidebar .list-btn.active:hover,
+:root[data-theme="light"] .sidebar .list-btn.active:focus-visible {
+	background: var(--exx-active-muted-bg);
+	border-color: var(--exx-divider);
+	color: var(--fg);
+}
+
+:root[data-theme="light"] .sidebar .list-btn.active .name,
+:root[data-theme="light"] .sidebar .list-btn.active .desc,
+:root[data-theme="light"] .sidebar .list-btn.active .meta,
+:root[data-theme="light"] .sidebar .list-btn.active .row-badge,
+:root[data-theme="light"] .sidebar .list-btn.active .row-action {
+	color: var(--fg);
+	border-color: var(--border-soft);
+}
+
+:root[data-theme="light"] .landing-card code {
+	border-color: var(--border-soft);
+}
+
+:root[data-theme="light"] .create-room-section.create-room-panel,
+:root[data-theme="light"] .create-room-card.create-room-panel {
+	background: color-mix(in srgb, var(--panel) 86%, var(--bg) 14%);
+	border-color: var(--border-soft);
+	box-shadow: 0 1px 0 color-mix(in srgb, var(--fg) 5%, transparent);
+	color: var(--fg);
+}
+:root[data-theme="light"] .create-room-card.create-room-panel,
+:root[data-theme="light"] .create-room-card.create-room-panel h2,
+:root[data-theme="light"] .create-room-card.create-room-panel p {
+	color: var(--fg);
+}
+:root[data-theme="light"] .create-room-copy,
+:root[data-theme="light"] .create-room-section .create-room-actions .inline-action,
+:root[data-theme="light"] .create-room-card .create-room-actions .inline-action {
+	color: var(--muted);
+}
+:root[data-theme="light"] .create-room-input {
+	background: var(--bg-2);
+	border-color: var(--border-soft);
+	color: var(--fg);
+}
+:root[data-theme="light"] .create-room-input:hover:not(:disabled) {
+	background: var(--panel);
+	border-color: var(--border);
+}

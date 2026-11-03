@@ -4,7 +4,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit, waitForServer } from "./smoke-server-process.js";
+import { pairDevice, remoteRequest } from "./smoke-pairing.js";
 
 // Pins the capability + per-room-exposure unit:
 //
@@ -89,69 +90,6 @@ async function adminJson(pathname: string, init: AuthedFetchInit = {}): Promise<
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-function tunnelRequest(pathname: string, options: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<{ status: number; body: string }> {
-	return new Promise((resolve, reject) => {
-		// Its own connection each time: a capability flip destroys the device's
-		// sockets, and a kept-alive one reused right after would reset.
-		const req = http.request(
-			{ host: "::1", port, path: pathname, method: options.method ?? "GET", agent: false, headers: { Host: tunnelHostHeader, ...options.headers } },
-			(res) => {
-				const chunks: Buffer[] = [];
-				res.on("data", (chunk) => chunks.push(chunk as Buffer));
-				res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
-			},
-		);
-		req.on("error", reject);
-		if (options.body != null) req.write(options.body);
-		req.end();
-	});
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
-// Enroll a device through the real flow and return its cookie header value.
-async function enrollDevice(name: string): Promise<{ deviceId: string; cookie: string }> {
-	const minted = await adminJson("/api/remote/enroll-code", { method: "POST" });
-	assert(minted.status === 200, `enroll-code: expected 200, got ${minted.status}`);
-	const code = new URL(String(minted.body.url)).searchParams.get("code") ?? "";
-	const exchange = await tunnelRequest("/remote/enroll/exchange", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name }) });
-	assert(exchange.status === 200, `exchange: expected 200, got ${exchange.status}`);
-	const requestId = String((JSON.parse(exchange.body) as any).requestId);
-	const approve = await adminJson("/api/remote/enroll-approve", { method: "POST", body: JSON.stringify({ requestId }) });
-	assert(approve.status === 200, `approve: expected 200, got ${approve.status}`);
-	const pollReq = await new Promise<{ headers: http.IncomingHttpHeaders }>((resolve, reject) => {
-		const req = http.request({ host: "::1", port, path: `/remote/enroll/status?requestId=${requestId}`, headers: { Host: tunnelHostHeader } }, (res) => {
-			res.resume();
-			res.on("end", () => resolve({ headers: res.headers }));
-			res.on("error", reject);
-		});
-		req.on("error", reject);
-		req.end();
-	});
-	const setCookie = ([] as string[]).concat((pollReq.headers["set-cookie"] as string[] | undefined) ?? []).join("; ");
-	const key = setCookie.match(/exxperts_remote_device=([0-9a-f]+)/)?.[1] ?? "";
-	assert(key, "approved poll must set the device cookie");
-	const devices = await adminJson("/api/remote/devices");
-	const record = devices.body.devices.find((d: any) => d.name === name);
-	assert(record, "device must appear in the admin list");
-	return { deviceId: String(record.id), cookie: `exxperts_remote_device=${key}` };
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 try {
@@ -174,7 +112,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20000);
 
 	// 1. Policy coverage: every registered route must be classified.
 	const inventory = await adminJson("/api/remote/test/routes");
@@ -192,14 +130,14 @@ try {
 	const idA = String(roomA.body.agent.agentId);
 	const idB = String(roomB.body.agent.agentId);
 
-	const device = await enrollDevice("Capability phone");
+	const device = await pairDevice(port, "Capability phone");
 	const asDevice = { Cookie: device.cookie };
 
 	// 2. Full-capability device: reads and writes pass, "local" refuses.
-	const listing = await tunnelRequest("/api/persistent-agents", { headers: asDevice });
+	const listing = await remoteRequest(port, "/api/persistent-agents", { headers: asDevice });
 	assert(listing.status === 200, `tunnel listing: expected 200, got ${listing.status}`);
 	assert((JSON.parse(listing.body) as any[]).length === 2, "full device must see both rooms before hiding");
-	const rename = await tunnelRequest(`/api/persistent-agents/${encodeURIComponent(idA)}/rename`, { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Visible Room Renamed", dryRun: true }) });
+	const rename = await remoteRequest(port, `/api/persistent-agents/${encodeURIComponent(idA)}/rename`, { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Visible Room Renamed", dryRun: true }) });
 	assert(rename.status === 200, `tunnel write (rename dry-run): expected 200, got ${rename.status}`);
 	for (const [label, pathAndMethod] of [
 		["capability-widening room setting", { path: `/api/persistent-agents/${encodeURIComponent(idA)}/maintenance-settings`, method: "PUT" }],
@@ -208,7 +146,7 @@ try {
 		["keep-awake setter", { path: "/api/remote/keep-awake", method: "POST" }],
 		["skills install", { path: "/api/skills/upload", method: "POST" }],
 	] as const) {
-		const res = await tunnelRequest(pathAndMethod.path, {
+		const res = await remoteRequest(port, pathAndMethod.path, {
 			method: pathAndMethod.method,
 			headers: { ...asDevice, ...(pathAndMethod.method === "GET" ? {} : { "content-type": "application/json" }) },
 			...(pathAndMethod.method === "GET" ? {} : { body: "{}" }),
@@ -218,25 +156,25 @@ try {
 	}
 
 	// 3. Exposure writes are loopback-only; hiding roomB makes it vanish.
-	const exposureFromPhone = await tunnelRequest("/api/remote/rooms/exposure", { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ id: idB, exposed: true }) });
+	const exposureFromPhone = await remoteRequest(port, "/api/remote/rooms/exposure", { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ id: idB, exposed: true }) });
 	assert(exposureFromPhone.status === 403, `exposure write from the tunnel: expected 403, got ${exposureFromPhone.status}`);
 	const hide = await adminJson("/api/remote/rooms/exposure", { method: "POST", body: JSON.stringify({ id: idB, exposed: false }) });
 	assert(hide.status === 200, `hide: expected 200, got ${hide.status}`);
 
-	const afterHide = await tunnelRequest("/api/persistent-agents", { headers: asDevice });
+	const afterHide = await remoteRequest(port, "/api/persistent-agents", { headers: asDevice });
 	const visibleRooms = JSON.parse(afterHide.body) as any[];
 	assert(visibleRooms.length === 1 && visibleRooms[0].id === idA, "hidden room must vanish from the tunnel listing");
 	const loopbackListing = await adminJson("/api/persistent-agents");
 	assert(loopbackListing.body.length === 2, "loopback must keep seeing both rooms");
 
 	// Hidden must equal nonexistent, byte for byte modulo the id.
-	const hiddenDirect = await tunnelRequest(`/api/persistent-agents/${encodeURIComponent(idB)}/status`, { headers: asDevice });
-	const missingDirect = await tunnelRequest(`/api/persistent-agents/definitely-not-a-room/status`, { headers: asDevice });
+	const hiddenDirect = await remoteRequest(port, `/api/persistent-agents/${encodeURIComponent(idB)}/status`, { headers: asDevice });
+	const missingDirect = await remoteRequest(port, `/api/persistent-agents/definitely-not-a-room/status`, { headers: asDevice });
 	assert(hiddenDirect.status === 404 && missingDirect.status === 404, `hidden and nonexistent must both 404, got ${hiddenDirect.status}/${missingDirect.status}`);
 	assert(hiddenDirect.body.replace(idB, "X") === missingDirect.body.replace("definitely-not-a-room", "X"), `hidden and nonexistent bodies must match: ${hiddenDirect.body} vs ${missingDirect.body}`);
 
 	// Memory aggregations: the hidden room is out and totals follow.
-	const overview = JSON.parse((await tunnelRequest("/api/memory/overview", { headers: asDevice })).body) as any;
+	const overview = JSON.parse((await remoteRequest(port, "/api/memory/overview", { headers: asDevice })).body) as any;
 	assert(overview.rooms.every((room: any) => room.id !== idB), "overview must not list the hidden room");
 	assert(overview.totals.rooms === overview.rooms.length, "overview totals must be recomputed from the filtered rooms");
 	const loopbackOverview = (await adminJson("/api/memory/overview")).body;
@@ -251,10 +189,10 @@ try {
 	const artifactDir = path.join(tempHome, ".exxperts", "app", "artifacts", "tasks", taskId);
 	fs.mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
 	fs.writeFileSync(path.join(artifactDir, "out.html"), "<!doctype html><p>artifact</p>", { mode: 0o600 });
-	const hiddenArtifact = await tunnelRequest(`/api/artifacts/${taskId}/out.html`, { headers: asDevice });
+	const hiddenArtifact = await remoteRequest(port, `/api/artifacts/${taskId}/out.html`, { headers: asDevice });
 	assert(hiddenArtifact.status === 404, `hidden room's artifact: expected 404, got ${hiddenArtifact.status}`);
 	await adminJson("/api/remote/rooms/exposure", { method: "POST", body: JSON.stringify({ id: idB, exposed: true }) });
-	const exposedArtifact = await tunnelRequest(`/api/artifacts/${taskId}/out.html`, { headers: asDevice });
+	const exposedArtifact = await remoteRequest(port, `/api/artifacts/${taskId}/out.html`, { headers: asDevice });
 	assert(exposedArtifact.status === 200, `exposed room's artifact: expected 200, got ${exposedArtifact.status}`);
 	await adminJson("/api/remote/rooms/exposure", { method: "POST", body: JSON.stringify({ id: idB, exposed: false }) });
 
@@ -263,9 +201,9 @@ try {
 	//    refuses every inbound frame.
 	const flip = await adminJson("/api/remote/devices/capability", { method: "POST", body: JSON.stringify({ id: device.deviceId, capability: "read-only" }) });
 	assert(flip.status === 200, `capability flip: expected 200, got ${flip.status}`);
-	const readAfterFlip = await tunnelRequest("/api/persistent-agents", { headers: asDevice });
+	const readAfterFlip = await remoteRequest(port, "/api/persistent-agents", { headers: asDevice });
 	assert(readAfterFlip.status === 200, "read-only device must keep reading");
-	const writeAfterFlip = await tunnelRequest(`/api/persistent-agents/${encodeURIComponent(idA)}/rename`, { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Nope", dryRun: true }) });
+	const writeAfterFlip = await remoteRequest(port, `/api/persistent-agents/${encodeURIComponent(idA)}/rename`, { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Nope", dryRun: true }) });
 	assert(writeAfterFlip.status === 403, `read-only write: expected 403, got ${writeAfterFlip.status}`);
 	assert((JSON.parse(writeAfterFlip.body) as any).code === "remote_read_only", "read-only write must carry remote_read_only");
 
@@ -320,7 +258,7 @@ try {
 	//    write is throttled and not what this stage pins).
 	const expiryBefore = Date.parse((await adminJson("/api/remote/devices")).body.devices.find((d: any) => d.id === device.deviceId).expiresAt);
 	await new Promise((resolve) => setTimeout(resolve, 1100));
-	const slideAuth = await tunnelRequest("/api/persistent-agents", { headers: asDevice });
+	const slideAuth = await remoteRequest(port, "/api/persistent-agents", { headers: asDevice });
 	assert(slideAuth.status === 200, `sliding-expiry auth: expected 200, got ${slideAuth.status}`);
 	const expiryAfter = Date.parse((await adminJson("/api/remote/devices")).body.devices.find((d: any) => d.id === device.deviceId).expiresAt);
 	assert(expiryAfter >= expiryBefore + 1000, `expiresAt must slide forward on successful auth: before ${new Date(expiryBefore).toISOString()}, after ${new Date(expiryAfter).toISOString()}`);

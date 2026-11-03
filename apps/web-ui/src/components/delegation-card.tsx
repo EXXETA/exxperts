@@ -14,14 +14,14 @@ import { canFollowUp, canTransferConsult, consultHasDrift, type ConsultExchange,
  * consult-stream reducer — this file is purely presentational.
  *
  * Class names are the mockup's verbatim `.consult-*` names (see
- * consult-ui-mockups.html and the matching block in styles.css).
+ * consult-ui-mockups.html and the matching block in styles/28-consult.css).
  */
 
 export interface DelegationCardProps {
 	/** Speaker element. Consult passes its lila @room chip (the visitor accent,
 	 * never the assistant's voice); tasks pass a plain grey label. */
 	speaker: ReactNode;
-	/** Status subline (e.g. "answering from euler's memory …"). */
+	/** Status subline (e.g. "From euler's memory · 1 Nov"). */
 	subline?: ReactNode;
 	/** Header tools, right-aligned (e.g. the minimize control). */
 	headerTools?: ReactNode;
@@ -88,7 +88,7 @@ export interface ConsultDockProps {
 	onFollowUp: (question: string) => boolean;
 }
 
-/** "8 Jul 2026" — the consulted room's memory-write date for the "as of" line. */
+/** "8 Jul 2026": the consulted room's memory-write date for the history's "as of" line. */
 function formatAsOfDate(iso: string | null): string | null {
 	if (!iso) return null;
 	const ms = Date.parse(iso);
@@ -96,11 +96,26 @@ function formatAsOfDate(iso: string | null): string | null {
 	return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
+/**
+ * The card's source line: "From Client Contracts' memory · 1 Nov". A name
+ * ending in s takes only the apostrophe; the year shows only when it is not
+ * this year. The @ list already says the memory is only read, so the card does
+ * not say it again.
+ */
+export function consultSourceLine(owner: string, asOfIso: string | null, now: number = Date.now()): string {
+	const possessive = /s$/i.test(owner) ? `${owner}'` : `${owner}'s`;
+	const ms = asOfIso ? Date.parse(asOfIso) : Number.NaN;
+	if (Number.isNaN(ms)) return `From ${possessive} memory`;
+	const sameYear = new Date(ms).getFullYear() === new Date(now).getFullYear();
+	const day = new Date(ms).toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+	return `From ${possessive} memory · ${day}`;
+}
+
 function consultSpeaker(state: ConsultState): string {
 	return `@${state.targetDisplayName ?? state.targetRoomId ?? "room"}`;
 }
 
-/** Possessive display name for the sublines ("euler's memory …"). */
+/** The consulted room's name for the source line ("euler's memory …"). */
 function consultOwner(state: ConsultState): string {
 	return state.targetDisplayName ?? state.targetRoomId ?? "the room";
 }
@@ -120,7 +135,7 @@ function ConsultAnswer({ state }: { state: ConsultState }) {
 	return (
 		<div className={`consult-answer${halted ? " is-halted" : ""}`}>
 			<div className="md">
-				<MarkdownRenderer answer renderMermaid={!streaming}>{state.text}</MarkdownRenderer>
+				<MarkdownRenderer answer streaming={streaming}>{state.text}</MarkdownRenderer>
 			</div>
 			{streaming && <span className="caret" />}
 		</div>
@@ -189,7 +204,7 @@ function ConsultFollowUp({ speaker, onFollowUp }: { speaker: string; onFollowUp:
 				className="consult-followup-input"
 				type="text"
 				value={draft}
-				placeholder={`Follow up with ${speaker}…`}
+				placeholder="Your question…"
 				aria-label={`Follow up with ${speaker}`}
 				onChange={(e) => setDraft(e.target.value)}
 				onKeyDown={(e) => {
@@ -200,7 +215,7 @@ function ConsultFollowUp({ speaker, onFollowUp }: { speaker: string; onFollowUp:
 				}}
 			/>
 			<button className="btn" type="button" onClick={submit} disabled={!draft.trim()}>
-				Ask
+				Ask a follow-up
 			</button>
 		</div>
 	);
@@ -271,8 +286,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 	const notices: ReactNode[] = [];
 
 	if (state.phase === "streaming") {
-		const asOf = formatAsOfDate(state.asOfCheckpointAt);
-		subline = `answering from ${owner}'s memory${asOf ? ` as of ${asOf}` : ""}. ${owner}'s memory is not modified`;
+		subline = consultSourceLine(owner, state.asOfCheckpointAt);
 		footerMeta = (
 			<span className="consult-status">
 				<span className="spin" /> consulting…
@@ -285,12 +299,11 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 		);
 	} else if (state.phase === "done") {
 		// The as-of date lives in the subline ONLY: the
-		// header already carries the full provenance sentence, so the footer
+		// header already carries the source line, so the footer
 		// repeats nothing. The raw L1b fingerprint is machine provenance — it
 		// stays in state for the MR-5 handoff block but is not rendered. §8.5: the
 		// subline always shows the LATEST as-of (the current exchange's).
-		const asOf = formatAsOfDate(state.asOfCheckpointAt);
-		subline = `answered from ${owner}'s memory${asOf ? ` as of ${asOf}` : ""}. ${owner}'s memory is not modified`;
+		subline = consultSourceLine(owner, state.asOfCheckpointAt);
 		footerMeta = undefined;
 		footerActions = (
 			<>
@@ -298,7 +311,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 					Dismiss
 				</button>
 				<button className="btn btn-primary" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
-					Transfer to thread
+					Add to this conversation
 				</button>
 			</>
 		);
@@ -328,7 +341,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 					Dismiss
 				</button>
 				<button className="btn btn-primary" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
-					Transfer to thread
+					Add to this conversation
 				</button>
 			</>
 		) : (
@@ -359,7 +372,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 		followUpSlot = (
 			<div className="consult-overflow" role="status">
 				{state.exchanges.length > 0
-					? <>this conversation no longer fits in {speaker}'s context: transfer what you have and start fresh</>
+					? <>these questions no longer fit in {speaker}'s context: add what you have to this conversation and start fresh</>
 					: <>this consult doesn't fit in {speaker}'s context: {speaker}'s memory is too large to consult right now</>}
 			</div>
 		);

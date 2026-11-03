@@ -16,7 +16,7 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
 const {
 	buildPersistentRoomCurrentInstructionsSection,
-	buildPersistentRoomInstructionsLayer,
+	readPersistentRoomInstructionsNow,
 	composePersistentRoomInstructions,
 	fingerprintPersistentRoomInstructions,
 	GLOBAL_INSTRUCTIONS_SECTION_HEADING,
@@ -264,7 +264,9 @@ try {
 	assert(unchangedRun.rawSystemPrompt === frozenSnapshot, "unchanged: the scheduled run gets the frozen snapshot as it is");
 	writeGlobalInstructions("Be verbose.", {}, stamp);
 	const changedRun = preparePersistentRoomBackgroundExecution({ roomId: roomA, target: { kind: "resume-thread", threadId: resumeThreadId }, prompt: "hello", executionId: "smoke-exec-2", cwd: tempAgentsRoot }, threadModel);
-	assert(changedRun.rawSystemPrompt!.startsWith(frozenSnapshot) && changedRun.rawSystemPrompt!.includes("## Current instructions") && changedRun.rawSystemPrompt!.includes("Be verbose.") && changedRun.rawSystemPrompt!.trimEnd().endsWith(roomText), "the global text changed: the scheduled run is told the new composition");
+	assert(changedRun.rawSystemPrompt === frozenSnapshot, "the global text changed: the scheduled run's system prompt is still the frozen snapshot");
+	const changedNow = readPersistentRoomInstructionsNow(roomA, frozenSnapshot, { bootedFingerprint: resumeWrite.thread.runtime.instructionsFingerprint });
+	assert(changedNow.kind === "changed" && changedNow.section.includes("## Current instructions") && changedNow.section.includes("Be verbose.") && changedNow.section.trimEnd().endsWith(roomText), "the global text changed: its copy tells the scheduled run the new composition");
 	writeGlobalInstructions(globalText, {}, stamp);
 
 	// --- Consult: the consulted room answers with its composition; refusals name each text ---
@@ -308,23 +310,26 @@ try {
 	assert((missing as any).statusCode === 404, "unknown room is 404");
 	const notBoolean = assertThrows(() => savePersistentRoomGlobalInstructionsEnabled(roomA, "off"), "enabled must be true or false", "the switch refuses a non-boolean");
 	assert((notBoolean as any).statusCode === 400 && readPersistentRoomGlobalInstructionsEnabled(roomA) === true, "as the client's fault, leaving the state");
-	const cliOwner = { surface: "cli", pid: process.pid };
-	assert(roomLock.tryAcquire(roomA, cliOwner).ok, "smoke acquires room A as a CLI session");
-	try {
-		const held = assertThrows(() => savePersistentRoomGlobalInstructionsEnabled(roomA, false), "open in a CLI session; switch the global instructions off for it when that session ends", "a CLI session blocks the switch, naming the remedy in the words of the flip");
-		assert((held as any).statusCode === 409 && readPersistentRoomGlobalInstructionsEnabled(roomA) === true, "a held room is a conflict and the state is unchanged");
-		assert(writeGlobalInstructions("Written while room A is held.", {}, stamp).text === "Written while room A is held.", "the global text has no hold: it is in no room's folder");
-		assert(buildPersistentRoomCurrentInstructionsSection(roomA, both.systemPrompt, { bootedFingerprint: composedBoth.fingerprint }).includes("Written while room A is held."), "and the held room follows it on its next message like any other");
-	} finally {
-		roomLock.release(roomA, cliOwner);
-	}
-	writeGlobalInstructions(globalText, {}, stamp);
 	const schedulerOwner = { surface: "scheduler", pid: process.pid, lockId: "smoke-run" };
 	assert(roomLock.tryAcquire(roomA, schedulerOwner).ok, "smoke acquires room A as a scheduler run");
 	try {
-		assertThrows(() => savePersistentRoomGlobalInstructionsEnabled(roomA, true), "working on a scheduled background task; switch the global instructions on for it when that finishes", "a scheduled run blocks the switch too");
+		const held = assertThrows(() => savePersistentRoomGlobalInstructionsEnabled(roomA, false), "", "a scheduled run blocks the switch");
+		assert((held as any).statusCode === 409 && readPersistentRoomGlobalInstructionsEnabled(roomA) === true, "a held room is a conflict and the state is unchanged");
+		assertThrows(() => savePersistentRoomGlobalInstructionsEnabled(roomA, true), "", "in both directions");
+		assert(writeGlobalInstructions("Written while room A is held.", {}, stamp).text === "Written while room A is held.", "the global text has no hold: it is in no room's folder");
+		assert(buildPersistentRoomCurrentInstructionsSection(roomA, both.systemPrompt, { bootedFingerprint: composedBoth.fingerprint }).includes("Written while room A is held."), "and the held room follows it on its next message like any other");
 	} finally {
 		roomLock.release(roomA, schedulerOwner);
+	}
+	writeGlobalInstructions(globalText, {}, stamp);
+	// A lock the removed terminal app left behind holds nothing.
+	const terminalOwner = { surface: "cli", pid: process.pid };
+	assert(roomLock.tryAcquire(roomA, terminalOwner).ok, "smoke leaves a terminal app's lock on room A");
+	try {
+		assert(savePersistentRoomGlobalInstructionsEnabled(roomA, false).global.enabled === false, "a terminal app's leftover lock does not block the flip");
+		assert(savePersistentRoomGlobalInstructionsEnabled(roomA, true).global.enabled === true, "in both directions");
+	} finally {
+		roomLock.release(roomA, terminalOwner);
 	}
 	const webOwner = { surface: "web", pid: process.pid };
 	assert(roomLock.tryAcquire(roomA, webOwner).ok, "smoke opens room A in the web app");
@@ -352,9 +357,6 @@ try {
 	assert(classifyRemoteRoute("GET", "/api/settings/instructions") === "read", "reading the global text is a read");
 	assert(classifyRemoteRoute("PUT", "/api/settings/instructions") === "write", "writing it is a write");
 	assert(classifyRemoteRoute("PUT", "/api/persistent-agents/:id/instructions/global") === "write", "the switch is a write");
-
-	// --- No layer text for nothing, whatever the switch says ---
-	assert(buildPersistentRoomInstructionsLayer({ displayName: "X", composed: { ...composedNeither, globalEnabled: false } }) === null, "nothing composed → no layer");
 
 	console.log("global-instructions smoke: ok");
 } finally {

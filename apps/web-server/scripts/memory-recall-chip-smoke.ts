@@ -1,5 +1,5 @@
-// The memory search step in the chat, as a person reads it: it says
-// "Searching memory" while it runs and "Searched memory" when done; opened, it
+// The memory search step in the chat, as a person reads it in its work card:
+// it says "Searching memory" while it runs and "Searched memory" when done; opened, it
 // shows only what was found, its source line in plain words with a readable
 // date ("From a conversation on 30 September 2026 (remembered, not yet memorized)"),
 // and none of the lines written for the model. The model still receives the
@@ -12,7 +12,9 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -103,20 +105,15 @@ const providers = http.createServer((req, res) => {
 			for (const part of results) toolResults.push(typeof part.content === "string" ? part.content : (part.content ?? []).map((c: any) => c?.text ?? "").join(""));
 			return answer(res, String(body.model), "Answer from claude-fake.");
 		}
-		const lastText = Array.isArray(last?.content) ? last.content.map((part: any) => part?.text ?? "").join("") : String(last?.content ?? "");
+		// The person's newest message: a room-state copy after it is the app's.
+		const textOf = (message: any) => Array.isArray(message?.content) ? message.content.map((part: any) => part?.text ?? "").join("") : String(message?.content ?? "");
+		const lastText = textOf([...messages].reverse().find((message) => message?.role === "user" && !textOf(message).startsWith(ROOM_STATE_HEADING)));
 		if (lastText === QUESTION) return searchMemory(res, String(body.model));
 		return answer(res, String(body.model), "Answer from claude-fake.");
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(150);
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -167,7 +164,7 @@ try {
 		if (await dismiss.count()) await dismiss.click();
 
 		// A conversation remembered and not yet memorized: what the search finds.
-		await page.locator(".persistent-agent-card").filter({ hasText: "Remember Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Remember Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
@@ -188,19 +185,22 @@ try {
 		// The question: the room searches its memory.
 		await composer.fill(QUESTION);
 		await composer.press("Enter");
-		const chip = page.locator(".tool-chip").filter({ hasText: /memory/ });
 		// The search itself takes a moment only, so the running label is read where the step takes it.
 		const { MEMORY_RECALL_STEP } = await import("../../web-ui/src/memory-recall-display.js");
 		assert(MEMORY_RECALL_STEP.running === "Searching memory", `the running step says Searching memory, got ${JSON.stringify(MEMORY_RECALL_STEP.running)}`);
-		await waitUntil(async () => toolResults.length === 1 && (await chip.count()) === 1 && (await chip.locator(".name").innerText()).includes("Searched"), "the search is done", 30000);
+		// The card folds once the answer is written: a card of one search, its head says what it did.
+		const card = page.locator(".wk-card").filter({ hasText: /memory/ }).last();
+		const words = async () => (await card.locator(".wk-head .wk-lbl").textContent() ?? "").replace(/\s+/g, " ").trim();
+		await waitUntil(async () => toolResults.length === 1 && (await card.getAttribute("data-live")) === "0" && (await words()).startsWith("Searched memory for “"), "the search is done", 30000);
 		await page.waitForTimeout(1500);
-		assert(await chip.locator(".name").innerText() === "🗄️ Searched memory", `the done step says Searched memory, got ${JSON.stringify(await chip.locator(".name").innerText())}`);
 		assert(await page.getByText(/archived notes/).count() === 0, "no step says archived notes");
-		assert(await chip.count() === 1, `one search step, got ${await chip.count()}`);
+		assert((await page.locator(".wk-card").filter({ hasText: /memory/ }).count()) === 1, "one search card");
 
-		// Opened: only what was found.
-		await chip.locator("summary").click();
-		const shown = await chip.locator(".chip-result").innerText();
+		// Opened with one click: only what was found, and no row saying the head's sentence again.
+		await card.locator("button.wk-head").click();
+		await card.locator(".wk-solo .wk-out").waitFor({ timeout: 5000 });
+		assert((await card.locator(".wk-row").count()) === 0, `the opened card has no row repeating its head, got ${await card.locator(".wk-row").count()}`);
+		const shown = await card.locator(".wk-solo .wk-out").innerText();
 		const today = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date());
 		assert(shown.includes(`From a conversation on ${today} (remembered, not yet memorized)`), `the source line reads in plain words with a readable date, got ${JSON.stringify(shown)}`);
 		assert(shown.includes("We moved the launch to May."), `the found text shows, got ${JSON.stringify(shown)}`);

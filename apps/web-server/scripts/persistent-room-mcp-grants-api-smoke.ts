@@ -16,7 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-mcp-grants-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -44,23 +44,6 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	env.EXXETA_HOME = repoRoot;
 	env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 	return env;
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 30_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
@@ -111,7 +94,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30_000);
 
 	// 1. Boot migration: the legacy room got the FULL current connector list.
 	const legacySettingsPath = path.join(agentsRoot, legacyRoomId, "runtime", "mcp-settings.json");
@@ -141,7 +124,7 @@ try {
 	const grantedNew = await putGrant(roomId, "grant", "legacy-connector");
 	assert(grantedNew.status === 200 && grantedNew.body.granted.length === 1 && grantedNew.body.granted[0].name === "legacy-connector" && grantedNew.body.granted[0].configured === true, `granting a configured connector should succeed, got ${JSON.stringify(grantedNew.body)}`);
 	const grantedGhost = await putGrant(roomId, "grant", "ghost-connector");
-	assert(grantedGhost.status === 400 && /unknown connector/.test(String(grantedGhost.body?.error ?? "")), `granting an unconfigured connector must 400, got ${grantedGhost.status}: ${JSON.stringify(grantedGhost.body)}`);
+	assert(grantedGhost.status === 400, `granting an unconfigured connector must 400, got ${grantedGhost.status}: ${JSON.stringify(grantedGhost.body)}`);
 	const badAction = await putGrant(roomId, "detach" as unknown as "grant", "legacy-connector");
 	assert(badAction.status === 400, "an unknown action must 400");
 

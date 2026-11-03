@@ -4,11 +4,17 @@
 // band that shows, in both themes, on the side that hides columns. Also the
 // numbered checklist keeps its numbers while a bulleted one shows only its
 // boxes, and a "#" link finds the heading it names in its own answer.
+// While an answer with a table streams, frame by frame, with outer pipes and
+// without them: no paragraph of pipes before the table, each row drawn as it is written, columns that never move,
+// and one settle to the table's own widths when the answer ends; a path in a
+// cell breaks only after its separators.
 //
-// Offline: no server; the rendered markup and styles.css are loaded into a page.
+// Offline: no server; the rendered markup and the page's stylesheet (every
+// area file styles.css lists) are loaded into a page.
 import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
+import { readPageStyles } from "./page-styles.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -27,8 +33,8 @@ const { createElement } = pageRequire("react");
 (globalThis as any).React = pageRequire("react");
 const { renderToStaticMarkup } = pageRequire("react-dom/server");
 const markdown: any = await import(new URL("../../web-ui/src/components/Markdown.tsx", import.meta.url).href);
-const css = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "styles.css"), "utf8");
-const render = (text: string): string => renderToStaticMarkup(createElement(markdown.MarkdownRenderer, { answer: true }, text));
+const css = readPageStyles();
+const render = (text: string, streaming?: boolean): string => renderToStaticMarkup(createElement(markdown.MarkdownRenderer, { answer: true, streaming }, text));
 
 const small = render(["| Step | Time |", "| --- | --- |", "| Export | ~5 min |", "| Import | 5~10 min |"].join("\n"));
 const columns = Array.from({ length: 10 }, (_, n) => `Column ${n + 1} heading`);
@@ -121,5 +127,105 @@ try {
 	}
 } finally {
 	await browser.close();
+}
+const FOLDERS = [
+	"Apps keep their settings in these folders:",
+	"",
+	"| Location | Full path | Variable | Typical use |",
+	"| --- | --- | --- | --- |",
+	"| Roaming AppData | `C:\\Users\\<username>\\AppData\\Roaming` | `%APPDATA%` | Settings that follow the person across machines |",
+	"| Local AppData | `C:\\Users\\<username>\\AppData\\Local` | `%LOCALAPPDATA%` | Caches and data for this machine only |",
+	"| LocalLow | `C:\\Users\\<username>\\AppData\\LocalLow` | none | Apps that run with low rights, such as browser sandboxes |",
+	"| ProgramData | `C:\\ProgramData` | `%PROGRAMDATA%` | Settings shared by every user |",
+	"",
+	"Pick Roaming for anything that should follow the person.",
+].join("\n");
+// The same answer with its table written without outer pipes, as GFM allows.
+const BARE = FOLDERS.split("\n").map((line) => line.replace(/^\| (.*) \|$/, "$1")).join("\n");
+
+const streamed = await chromium.launch();
+try {
+	for (const [width, text] of [[1280, FOLDERS], [390, FOLDERS], [1280, BARE], [390, BARE]] as const) {
+		const form = text === BARE ? "without outer pipes" : "with outer pipes";
+		const tableStart = text.indexOf("Location");
+		const separatorEnd = text.indexOf("\n", text.indexOf("--- |")) + 1;
+		const rowsEnd = text.indexOf("\n\n", separatorEnd);
+		// The answer as it arrives, a few characters at a time, each frame drawn as the page draws it.
+		const frames: Array<{ end: number; html: string }> = [];
+		for (let end = tableStart - 4; end <= text.length; end += 3) frames.push({ end, html: render(text.slice(0, end), true) });
+		frames.push({ end: text.length, html: render(text, true) });
+		const ended = render(text, false);
+		const page = await streamed.newPage({ viewport: { width, height: 900 } });
+		await page.setContent(`<!doctype html><html data-theme="light"><head><style>${css}</style><style>body { margin: 0; padding: 16px; } .answer { max-width: 760px; }</style></head><body><div class="answer md assistant-markdown"></div></body></html>`);
+		const seen = await page.evaluate((list) => list.map(({ end, html }) => {
+			const answer = document.querySelector(".answer")!;
+			answer.innerHTML = html;
+			const table = answer.querySelector("table");
+			return {
+				end,
+				pipes: [...answer.querySelectorAll("p")].some((p) => p.textContent!.includes("|")),
+				table: !!table,
+				widths: table ? [...table.querySelectorAll("thead th")].map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10) : [],
+				rows: table ? [...table.querySelectorAll("tbody tr")].map((row) => row.textContent ?? "") : [],
+			};
+		}), frames);
+		const pipes = seen.filter((frame) => frame.pipes);
+		assert(!pipes.length, `at ${width} ${form}, no frame shows a paragraph of pipes, got one at ${pipes.map((frame) => frame.end).join(", ")} characters`);
+		const early = seen.filter((frame) => frame.end < separatorEnd && frame.table);
+		assert(!early.length, `at ${width} ${form}, no table shows before its separator line is complete, got one at ${early.map((frame) => frame.end).join(", ")}`);
+		const tables = seen.filter((frame) => frame.table);
+		assert(tables.length && tables[0].end <= separatorEnd + 3, `at ${width} ${form}, the table shows as soon as its separator line is complete, first at ${tables[0]?.end}`);
+		// A row whose line has not ended yet, already drawn with its first cells.
+		const halfRows = tables.filter((frame) => {
+			const rows = text.slice(separatorEnd, frame.end).split("\n");
+			return frame.end < rowsEnd && rows.at(-1)!.length > 4 && frame.rows.at(-1)?.trim() && rows.length === frame.rows.length;
+		});
+		assert(halfRows.length >= 20, `at ${width} ${form}, a row shows while it is being written, got ${halfRows.length} such frames`);
+		const sizes = new Set(tables.map((frame) => frame.widths.join("/")));
+		assert(sizes.size === 1, `at ${width} ${form}, the columns keep their widths while rows stream, got ${sizes.size} sets: ${[...sizes].slice(0, 6).join("  ")}`);
+		const settled = await page.evaluate((html) => {
+			const answer = document.querySelector(".answer")!;
+			answer.innerHTML = html;
+			return [...answer.querySelectorAll("thead th")].map((cell) => Math.round(cell.getBoundingClientRect().width * 10) / 10);
+		}, ended);
+		const moved = settled.some((size, i) => Math.abs(size - tables[0].widths[i]) > 2);
+		assert(moved, `at ${width} ${form}, the table takes its own widths once the answer ends: ${tables[0].widths.join("/")} while streaming, ${settled.join("/")} after`);
+		console.log(`  ${width} ${form}: ${frames.length} frames, the table from ${tables[0].end} characters, ${halfRows.length} with a row being written; columns ${tables[0].widths.join("/")} while streaming, ${settled.join("/")} once ended`);
+		if (width === 390) {
+			// The finished table at phone width: a path breaks only after a separator, and a variable stays whole.
+			const lines = await page.evaluate(() => [...document.querySelectorAll("td code")].map((code) => {
+				const text = code.textContent ?? "";
+				const range = document.createRange();
+				const tops: number[] = [];
+				let at = 0;
+				const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+				const breaks: string[] = [];
+				let line = "";
+				for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+					for (let i = 0; i < node.textContent!.length; i++, at++) {
+						range.setStart(node, i);
+						range.setEnd(node, i + 1);
+						const top = Math.round(range.getBoundingClientRect().top);
+						if (tops.length && top > tops[tops.length - 1] + 2) {
+							breaks.push(line);
+							line = "";
+						}
+						tops.push(top);
+						line += node.textContent![i];
+					}
+				}
+				breaks.push(line);
+				return { text, lines: breaks };
+			}));
+			for (const { text, lines: parts } of lines) {
+				assert(parts.slice(0, -1).every((part) => /[\\/]$/.test(part)), `at 390 the path ${text} breaks only after its separators, got ${JSON.stringify(parts)}`);
+				if (!/[\\/]/.test(text)) assert(parts.length === 1, `at 390 ${text} stays whole, got ${JSON.stringify(parts)}`);
+			}
+			console.log(`  390: the cells' code reads ${lines.map(({ lines: parts }) => parts.join(" | ")).join(", ")}`);
+		}
+		await page.close();
+	}
+} finally {
+	await streamed.close();
 }
 console.log("answer table frame smoke passed");

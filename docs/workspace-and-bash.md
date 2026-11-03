@@ -7,8 +7,8 @@ asks before it runs.
 
 ## Two access modes
 
-- **Full access**: the room works with files like you do, in the chosen
-  folder and beyond it, and can create, edit and overwrite. Bash is
+- **Full access**: the room works with files in the chosen folder and
+  beyond it, like you do, and can create, edit and overwrite. Bash is
   available in this mode only.
 - **Bounded workspace**: the same toolset, fenced to one folder. Nothing
   outside the folder is reachable, and Bash is not available.
@@ -55,20 +55,19 @@ for the terminal that launched the app; see the note in
 None of this is an OS sandbox. The security boundary is still the
 localhost-only server and your approval gates; see `SECURITY.md`.
 
-## Bash: asks and auto
+## Bash: Ask first and Auto
 
 Bash is off by default and Full access only. When it is on, the room has two
-modes, shown as a chip in the chat header:
+modes, shown as a chip under the message box (inside the box on a phone):
 
-- **Bash: asks** (the default): every command shows an approval card with
+- **Ask first** (the default): every command shows an approval card with
   the exact command before it runs.
-- **Bash: auto**: the room runs commands without asking. For rooms you
+- **Auto**: the room runs commands without asking. For rooms you
   trust.
 
 Click the chip and pick the mode from its two-option menu; the choice
 applies immediately, without a confirmation step, from the next command on.
-The room's workspace settings point at the chip rather than carrying a
-second switch.
+The room's workspace settings carry no second switch for it.
 
 ### The approval card
 
@@ -83,8 +82,8 @@ Either way, focus returns to the composer when the card folds.
 ## Remote devices
 
 A paired phone sees the chip and the approval cards, and can approve or
-decline a command like the computer does. Switching a room to **Bash:
-auto** is possible at the computer only, never from a remote device; the
+decline a command like the computer does. Switching a room to
+**Auto** is possible at the computer only, never from a remote device; the
 chip on a phone says so. Workspace folder access is likewise set at the
 computer.
 
@@ -92,9 +91,9 @@ computer.
 
 Rooms that had Bash enabled before the approval card existed used to run
 commands without asking. At the first start after the upgrade those rooms
-were switched to **Bash: auto** once, by an explicit settings write, so
+were switched to **Auto** once, by an explicit settings write, so
 their behavior did not change under you (the marker file
 `.bash-auto-approve-defaults-v1` under the rooms folder records it). Every
-room that enables Bash after that starts at **Bash: asks**, a room that had
+room that enables Bash after that starts at **Ask first**, a room that had
 already made a choice is never touched, and any failure during the
 migration leaves rooms asking.

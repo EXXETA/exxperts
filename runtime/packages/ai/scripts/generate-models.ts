@@ -14,6 +14,7 @@ import {
 	type AnthropicMessagesCompat,
 	KnownProvider,
 	Model,
+	type ModelThinkingLevel,
 	type OpenAICompletionsCompat,
 } from "../src/types.js";
 
@@ -147,13 +148,50 @@ const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.4-mini",
 	"gpt-5.4-nano",
 	"gpt-5.5",
+	// The 5.6 family answers effort "none" with a 200 on the API.
+	"gpt-5.6",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
 	// GPT-6 Sol and Luna take reasoning.effort "none" (developers.openai.com,
 	// 2026-09-22); gpt-6-astra does not. Neither does gpt-6.1-sol: its model
 	// page lists low to max and names none and minimal as unsupported
 	// (developers.openai.com/api/docs/models/gpt-6.1-sol, 2026-10-01).
+	// gpt-6.1-terra takes none again: its model page lists none to max
+	// (developers.openai.com/api/docs/models/gpt-6.1-terra).
 	"gpt-6-sol",
 	"gpt-6-luna",
+	"gpt-6.1-terra",
 ]);
+
+/**
+ * The efforts a model on OpenAI's API refuses, though its generation's rules
+ * would offer them: each 400 names the values the model does take. gpt-5-pro
+ * takes only high; the later pro models take medium, high and xhigh; o3 takes
+ * low, medium and high, and the rest of the o-series is held to the same.
+ */
+const OPENAI_RESPONSES_REFUSED_LEVELS: Record<string, ModelThinkingLevel[]> = {
+	"gpt-5-pro": ["off", "minimal", "low", "medium"],
+	"gpt-5.2-pro": ["off", "minimal", "low"],
+	"gpt-5.4-pro": ["off", "minimal", "low"],
+	"gpt-5.5-pro": ["off", "minimal", "low"],
+	o1: ["off", "minimal"],
+	"o1-pro": ["off", "minimal"],
+	o3: ["off", "minimal"],
+	"o3-mini": ["off", "minimal"],
+	"o3-pro": ["off", "minimal"],
+	"o4-mini": ["off", "minimal"],
+};
+
+// The routes that send OpenAI's own effort values to OpenAI's own models: the
+// API key, Azure and the ChatGPT sign-in.
+function isFirstPartyOpenAiRoute(model: Model<any>): boolean {
+	return (
+		(model.api === "openai-responses" && model.provider === "openai") ||
+		model.api === "azure-openai-responses" ||
+		model.api === "openai-codex-responses"
+	);
+}
 
 function mergeThinkingLevelMap(model: Model<any>, map: NonNullable<Model<any>["thinkingLevelMap"]>): void {
 	model.thinkingLevelMap = { ...model.thinkingLevelMap, ...map };
@@ -217,12 +255,12 @@ function recordUpstreamEffortLadders(data: any): void {
  * above keeps that decision.
  *
  * Two reasons. Those rules encode judgements the upstream ladder does not
- * carry, such as Opus 4.6 exposing its top tier as "max" with no xhigh, Opus
- * 4.7 as "xhigh", and DeepSeek V4 reaching "max" through the xhigh rung. And
- * adding a tier beside one of those would produce two rungs that send the very
- * same effort value, which is exactly the duplicate the dial is meant not to
- * have. Where upstream and a pinned map disagree (upstream now also lists
- * "max" for Opus 4.7), the pinned map wins until somebody decides otherwise.
+ * carry, such as Opus 4.6 exposing its top tier as "max" with no xhigh, and
+ * DeepSeek V4 reaching "max" through the xhigh rung. And adding a tier beside
+ * one of those would produce two rungs that send the very same effort value,
+ * which is exactly the duplicate the dial is meant not to have. Where upstream
+ * and a pinned map disagree, the pinned map wins until somebody decides
+ * otherwise.
  */
 function hasPinnedTopTier(model: Model<any>): boolean {
 	return model.thinkingLevelMap?.xhigh !== undefined || model.thinkingLevelMap?.max !== undefined;
@@ -291,6 +329,13 @@ function isOpenAiGenerationSixOrLater(modelId: string): boolean {
 	return generation !== undefined && generation.major >= 6;
 }
 
+// GPT-5.1 and everything after it: the API refuses effort "minimal" from here on.
+function isOpenAiGenerationFiveOneOrLater(modelId: string): boolean {
+	const generation = parseOpenAiGeneration(modelId);
+	if (!generation) return false;
+	return generation.major >= 6 || (generation.major === 5 && generation.minor >= 1);
+}
+
 function isGoogleThinkingApi(model: Model<any>): boolean {
 	return model.api === "google-generative-ai" || model.api === "google-vertex";
 }
@@ -318,11 +363,7 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	) {
 		mergeThinkingLevelMap(model, { off: null });
 	}
-	if (
-		model.api === "openai-responses" &&
-		model.provider === "openai" &&
-		OPENAI_RESPONSES_NONE_REASONING_MODELS.has(model.id)
-	) {
+	if (isFirstPartyOpenAiRoute(model) && OPENAI_RESPONSES_NONE_REASONING_MODELS.has(model.id)) {
 		mergeThinkingLevelMap(model, { off: "none" });
 	}
 	if (supportsOpenAiXhigh(model.id)) {
@@ -336,6 +377,11 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	}
 	if (model.id.includes("opus-4-7") || model.id.includes("opus-4.7")) {
 		mergeThinkingLevelMap(model, { xhigh: "xhigh" });
+		// Anthropic's API answers effort "max" with a 200 here, and Bedrock sends
+		// Anthropic's own thinking fields; the gateways were not checked.
+		if (model.provider === "anthropic" || model.provider === "amazon-bedrock") {
+			mergeThinkingLevelMap(model, { max: "max" });
+		}
 	}
 	// Tiers above "high" are opt-in per model, so the Claude family takes them
 	// from the upstream effort ladder rather than from a list kept here. Only
@@ -362,9 +408,10 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	// the same remedy; see its what's-new page,
 	// platform.claude.com/docs/en/models/opus-5-5/whats-new. Sonnet 5.5
 	// (released 2026-09-28) returns the same 400 for disabled; its lowest
-	// setting is thinking.type "between_tools", which this app does not send,
-	// so it gets no "off" either and its cheapest rung is adaptive at effort
-	// "low" (platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5).
+	// setting is thinking.type "between_tools", and Anthropic's own API takes
+	// it, so that row's off is mapped to it below. Elsewhere Sonnet 5.5 keeps no
+	// "off", since no other route was checked for between_tools
+	// (platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5).
 	// Haiku 5.5 (released 2026-10-07) accepts disabled at effort high or below
 	// and returns a 400 only at xhigh or max; this app sends off as disabled
 	// with no effort (the API default, medium), so it keeps "off"
@@ -373,7 +420,7 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	// models.dev publishes the same effort ladder for Opus 5 and Fable 5,
 	// so the ladder cannot be the rule; the family is, on every provider that
 	// carries it (Bedrock and Vertex prefixes and the gateways' dotted spellings
-	// included), the way the GPT-5.6 rows pin off to null above. The Opus 5.5
+	// included), the way the GPT-5 rows pin off to null above. The Opus 5.5
 	// and Sonnet 5.5 patterns require the minor version to end there, so
 	// claude-opus-5 and claude-sonnet-5 stay untouched.
 	// A room that already stores "off" for one of these models is settled by
@@ -382,6 +429,10 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	// provider sends that as effort "low", the same rung the dial shows as low.
 	if (/claude-(fable|mythos)-|claude-(opus|sonnet)-5[-.]5(?:$|[^0-9])/.test(model.id.toLowerCase())) {
 		mergeThinkingLevelMap(model, { off: null });
+	}
+	// The thinking type, not an effort: anthropic.ts sends it in place of "disabled".
+	if (model.provider === "anthropic" && /^claude-sonnet-5-5(?:$|[^0-9])/.test(model.id)) {
+		mergeThinkingLevelMap(model, { off: "between_tools" });
 	}
 	if (model.api === "openai-completions" && model.id.includes("deepseek-v4")) {
 		mergeThinkingLevelMap(model, DEEPSEEK_V4_THINKING_LEVEL_MAP);
@@ -398,18 +449,24 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	if (model.provider === "groq" && model.id === "qwen/qwen3-32b") {
 		mergeThinkingLevelMap(model, { minimal: null, low: null, medium: null, high: "default" });
 	}
-	if (model.provider === "openai-codex" && supportsOpenAiXhigh(model.id)) {
-		mergeThinkingLevelMap(model, { minimal: "low" });
-	}
-	// From GPT-6 on, models.dev states the effort ladder as low to max, so
-	// "minimal" is not an effort the model takes. Folding it onto low, on
-	// every provider, is what the Codex rows above already do and keeps the
-	// picker's ladder equal to the maker's.
-	if (isOpenAiGenerationSixOrLater(model.id)) {
+	// From GPT-5.1 on, the API answers effort "minimal" with a 400 for every
+	// model checked. Folding it onto low keeps the picker's ladder equal to the
+	// maker's, and a room that stored minimal still sends an effort the model
+	// takes. From GPT-6 on, models.dev states the ladder as low to max, so the
+	// fold holds on every provider; for 5.1 to 5.6 it holds on OpenAI's own
+	// routes and Copilot, which serve the same models.
+	if (
+		isOpenAiGenerationSixOrLater(model.id) ||
+		(isOpenAiGenerationFiveOneOrLater(model.id) && (isFirstPartyOpenAiRoute(model) || model.provider === "github-copilot"))
+	) {
 		mergeThinkingLevelMap(model, { minimal: "low" });
 	}
 	if (model.provider === "openai-codex" && model.id === "gpt-5.1-codex-mini") {
 		mergeThinkingLevelMap(model, { minimal: "medium", low: "medium", medium: "medium", high: "high" });
+	}
+	const refused = OPENAI_RESPONSES_REFUSED_LEVELS[model.id];
+	if (refused && isFirstPartyOpenAiRoute(model)) {
+		mergeThinkingLevelMap(model, Object.fromEntries(refused.map((level) => [level, null])));
 	}
 }
 
@@ -1886,6 +1943,22 @@ async function generateModels() {
 			thinkingLevelMap: { off: null },
 			input: ["text", "image"],
 			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+			contextWindow: 272000,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		// GPT-6.1 Terra on the ChatGPT subscription endpoint, listed on
+		// OpenAI's Codex models page: shaped like the GPT-6
+		// Sol row, with the cost of the openai API row. It takes effort none, so
+		// off stays and the family rule adds minimal, xhigh and max.
+		{
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 0 },
 			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},

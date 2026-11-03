@@ -1,0 +1,96 @@
+/* Arrange mode (home screen, room sorting slice 3) ----------------- */
+/* The arrange line replaces the sort control: what to do, then Cancel and
+   Save as at the end of a form, on the hint's baseline. */
+.room-arrange-line { align-items: flex-end; }
+.room-arrange-line-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.room-arrange-hint {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+/* The pair wraps as one, never Cancel on one row and Save on the next. */
+.room-arrange-buttons {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 8px;
+}
+/* A card fills its grid cell as on Home, so the grid's columns and gaps are
+   the same as when not arranging: nothing reflows on entry. The slot is
+   what is pressed, focused and moved: a transform written by the motion
+   hook slides it aside or carries it, and the grid (positioned, so it is the
+   slots' offset parent) keeps every rest box readable through those
+   transforms. No text is selectable while arranging: a press-and-move on a
+   card is a drag, never a selection (and never the browser's drag of
+   selected text or a long press's menu). */
+.landing-grid.is-arranging { position: relative; }
+.room-arrange-slot {
+	display: flex;
+	min-width: 0;
+	min-height: 0;
+	position: relative;
+	cursor: grab;
+	border-radius: var(--exx-radius-card);
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-touch-callout: none;
+}
+.room-arrange-slot:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 3px;
+}
+/* Opaque while arranging (the same colour, mixed over the page's): cards
+   pass over one another as they slide and while one is carried. */
+.room-arrange-slot > .landing-card {
+	flex: 1 1 auto;
+	min-width: 0; /* shrinks as on Home, so a long model label is cut short, never wider than the screen */
+	background: color-mix(in srgb, var(--panel) 72%, var(--bg));
+	transition: box-shadow 200ms ease-out;
+}
+/* Lifted: above the others with one clear shadow, until it has settled. */
+.room-arrange-slot.is-dragging,
+.room-arrange-slot[data-settling] { z-index: 3; }
+.room-arrange-slot.is-dragging { cursor: grabbing; }
+.room-arrange-slot.is-dragging > .landing-card { box-shadow: var(--exx-shadow-popover); }
+/* The card's own controls stay drawn, so the card keeps its Home look, but
+   dimmed and out of reach (they are inert too). */
+.persistent-agent-card.arranging { cursor: inherit; }
+.persistent-agent-card.arranging .persistent-agent-actions,
+.persistent-agent-card.arranging .card-gear-btn {
+	opacity: 0.45;
+	pointer-events: none;
+}
+.add-room-card:disabled {
+	cursor: default;
+	opacity: 0.5;
+}
+/* The live region: read by assistive technology, never seen. */
+.room-arrange-live {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+}
+
+/* Phone room header on one row (ui polish): home and drawer controls float at
+   the left, then the room name truncating with an ellipsis, then the
+   actions right-aligned. Scoped to the room shell so the other topbars keep
+   theirs. */
+@media (max-width: 760px) {
+	.app .topbar { flex-wrap: nowrap; }
+	.app .topbar .left { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; gap: 8px; }
+	.app .topbar .title-stack { min-width: 0; }
+	.app .topbar .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	/* The model's line under the name makes the bar two lines tall: the
+	   actions and the working spinner keep to the name's line, level with the
+	   floating home and drawer buttons (fixed at the bar's top in 38-phone.css). */
+	.app .topbar-actions { margin-left: auto; gap: 2px; align-self: flex-start; }
+	.app .topbar .left > .spinner { align-self: flex-start; margin-top: 1px; }
+}
+

@@ -23,7 +23,8 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "absorb-run-route-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -104,6 +105,8 @@ const gatewayCalls: GatewayCall[] = [];
  * nothing at all, the probe included, the way a provider that went away does.
  */
 let roomModelFoldsBeforeDown = Number.POSITIVE_INFINITY;
+// While set, fold calls wait for it before they answer.
+let foldsHeld: Promise<void> | null = null;
 
 /** The prompt as the worker sent it, whatever shape the request wraps it in. */
 function promptTextOf(rawBody: string): string {
@@ -229,16 +232,16 @@ const gateway = http.createServer((req, res) => {
 		}
 		const text = isFold ? foldReply(prompt) : isAssessment ? ASSESSMENT_REPLY : "Nothing to do here.";
 		const base = { id: `cmpl_${gatewayCalls.length}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "room-model" };
-		// A fold call takes a beat, the way a real one does: the run must still be
+		// A fold call answers once the smoke lets folds go: the run must still be
 		// open when the smoke asks for a second one.
-		setTimeout(() => {
+		void (isFold && foldsHeld ? foldsHeld : Promise.resolve()).then(() => {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }));
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { content: text }, finish_reason: null }] }));
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1200, completion_tokens: 180, total_tokens: 1380 } }));
 			res.write("data: [DONE]\n\n");
 			res.end();
-		}, isFold ? 300 : 0);
+		});
 	});
 });
 
@@ -272,23 +275,6 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	return env;
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 30_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, init);
 	// A room's words never sit in an HTTP cache, a Forget must leave no copy behind.
@@ -299,6 +285,20 @@ async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ 
 
 function jsonBody(method: string, body: unknown): AuthedFetchInit {
 	return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+}
+
+const waitUntil = waitEvery(50, 120_000);
+
+/** Polls the run's route the way the client does, until it leaves the states that are still working. */
+async function settle(runUrl: string, label: string): Promise<any> {
+	let run: any = null;
+	await waitUntil(async () => {
+		const polled = await requestJson(runUrl);
+		assert(polled.status === 200, `GET absorb/runs/:runId should return 200 while the run is open, got ${polled.status}: ${JSON.stringify(polled.body)}`);
+		run = polled.body;
+		return !["prepass", "folding", "budget"].includes(String(run.state));
+	}, `${label} leaves prepass, folding and budget`);
+	return run;
 }
 
 let server: ChildProcessWithoutNullStreams | null = null;
@@ -345,7 +345,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30_000);
 
 	const created = await requestJson("/api/persistent-agents", jsonBody("POST", { displayName: "Memorize Run Smoke Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }));
 	assert(created.status === 201, `room creation should return 201, got ${created.status}: ${JSON.stringify(created.body)}`);
@@ -383,6 +383,8 @@ try {
 	assert(assessed.body.writesMemory === false, `an assessment must not write memory, got ${JSON.stringify(assessed.body.writesMemory)}`);
 
 	// --- 3. Starting the run, and the refusal of a second one -----------------
+	let releaseFolds = () => {};
+	foldsHeld = new Promise<void>((resolve) => { releaseFolds = resolve; });
 	const proposed = await requestJson(`${room}/absorb/propose`, jsonBody("POST", { assessmentMarkdown }));
 	assert(proposed.status === 202, `POST absorb/propose should return 202 the moment the run starts, got ${proposed.status}: ${JSON.stringify(proposed.body)}`);
 	const runId = String(proposed.body?.runId ?? "");
@@ -397,19 +399,12 @@ try {
 	assert(second.status === 409, `a second Memorize while one is running should be refused with 409, got ${second.status}: ${JSON.stringify(second.body)}`);
 	assert(second.body?.code === "absorb_run_active", `the refusal should carry the code the client branches on, got ${JSON.stringify(second.body)}`);
 	assert(second.body?.details?.runId === runId, `the refusal should name the run in the way, so the client can offer to cancel it, got ${JSON.stringify(second.body?.details)}`);
+	foldsHeld = null;
+	releaseFolds();
 
 	// --- 4. Watching the run until it is ready --------------------------------
 	const runUrl = `${room}/absorb/runs/${runId}`;
-	const pollDeadline = Date.now() + 120_000;
-	let run: any = null;
-	while (Date.now() < pollDeadline) {
-		const polled = await requestJson(runUrl);
-		assert(polled.status === 200, `GET absorb/runs/:runId should return 200 while the run is open, got ${polled.status}: ${JSON.stringify(polled.body)}`);
-		run = polled.body;
-		if (!["prepass", "folding", "budget"].includes(String(run.state))) break;
-		await new Promise((resolve) => setTimeout(resolve, 400));
-	}
-	assert(run, "the run should have been readable at least once");
+	const run = await settle(runUrl, "the first room's run");
 	assert(run.state === "ready", `the run should end ready to approve, got state ${JSON.stringify(run.state)}${run.error ? ` with error ${JSON.stringify(run.error)}` : ""}`);
 	assert(run.runId === runId && run.agentId === roomId, `the run should identify itself and its room, got ${JSON.stringify({ runId: run.runId, agentId: run.agentId })}`);
 	const runSessions: any[] = run.sessions;
@@ -543,21 +538,11 @@ try {
 	const resumeRoom = `/api/persistent-agents/${resumeRoomId}`;
 	const resumeRoomDir = path.join(agentsRoot, resumeRoomId);
 	fs.writeFileSync(path.join(resumeRoomDir, "L1b", "current.md"), fixtureL1b(resumeRoomId), { mode: 0o600 });
-	const settle = async (url: string): Promise<any> => {
-		const deadline = Date.now() + 120_000;
-		for (;;) {
-			const polled = await requestJson(url);
-			assert(polled.status === 200, `the run should stay readable, got ${polled.status}: ${JSON.stringify(polled.body)}`);
-			if (!["prepass", "folding", "budget"].includes(String(polled.body.state))) return polled.body;
-			assert(Date.now() < deadline, `the run was still ${JSON.stringify(polled.body.state)} after two minutes`);
-			await new Promise((resolve) => setTimeout(resolve, 300));
-		}
-	};
 	roomModelFoldsBeforeDown = 2;
 	const resumeProposed = await requestJson(`${resumeRoom}/absorb/propose`, jsonBody("POST", {}));
 	assert(resumeProposed.status === 202, `Memorize should start in the second room, got ${resumeProposed.status}: ${JSON.stringify(resumeProposed.body)}`);
 	const resumeRunUrl = `${resumeRoom}/absorb/runs/${resumeProposed.body.runId}`;
-	const stopped = await settle(resumeRunUrl);
+	const stopped = await settle(resumeRunUrl, "the second room's run");
 	const outcomes = (r: any) => r.sessions.map((session: any) => session.outcome);
 	assert(stopped.state === "ready" && stopped.stop?.kind === "outage" && stopped.stop.model?.model === "room-model", `the room model's outage stops the run, got ${JSON.stringify({ state: stopped.state, stop: stopped.stop })}`);
 	assert(JSON.stringify(outcomes(stopped)) === JSON.stringify(["folded", "folded", "pending", "pending", "pending"]), `two conversations were read before the stop and three wait, got ${JSON.stringify(outcomes(stopped))}`);
@@ -580,7 +565,7 @@ try {
 	const callsBeforeResume = gatewayCalls.length;
 	const resumed = await requestJson(`${resumeRunUrl}/resume`, jsonBody("POST", {}));
 	assert(resumed.status === 200 && resumed.body.state === "folding" && !resumed.body.stop, `Try again resumes the run, got ${resumed.status}: ${JSON.stringify({ state: resumed.body?.state, stop: resumed.body?.stop, error: resumed.body?.error })}`);
-	const resumedRun = await settle(resumeRunUrl);
+	const resumedRun = await settle(resumeRunUrl, "the second room's resumed run");
 	const resumedCalls = gatewayCalls.slice(callsBeforeResume);
 	assert(resumedRun.state === "ready" && !resumedRun.stop && outcomes(resumedRun).every((outcome: string) => outcome === "folded"), `the rest is read, got ${JSON.stringify({ state: resumedRun.state, stop: resumedRun.stop, outcomes: outcomes(resumedRun) })}`);
 	assert(resumedCalls.filter((call) => call.kind === "fold").length === 3 && resumedCalls.every((call) => call.model === "narrow-model"), `the rest is read with the model the person chose, got ${JSON.stringify(resumedCalls)}`);

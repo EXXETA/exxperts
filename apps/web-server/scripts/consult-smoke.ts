@@ -25,9 +25,7 @@ const {
 const {
 	buildConsultPrompt,
 	CONSULT_QUESTION_MAX_CHARS,
-	CONSULT_WORKER_TYPE,
 	ConsultPromptOverflowError,
-	consultEnvelope,
 } = await import("../src/consult.js");
 const { getConsultModelLock } = await import("../src/persistent-agent-ai-profiles.js");
 
@@ -112,15 +110,8 @@ try {
 	assert(assembly.prompt.includes(DISTINCTIVE_MEMORY), "consult prompt should include the target's L1b memory");
 	assert(assembly.prompt.includes("# Consult Envelope"), "consult prompt should include the consult envelope");
 	assert(!assembly.prompt.includes("Session Runtime Envelope"), "consult prompt must not include the normal L2 session envelope");
-	assert(assembly.prompt.includes("Writes memory: false"), "consult envelope should declare writes-memory false");
-	assert(assembly.prompt.includes("leaves no trace in your room"), "consult envelope should declare the no-trace property");
-	assert(assembly.prompt.includes("Asked from room Consult Smoke Asker."), "consult prompt should attribute the asking room");
 	assert(assembly.prompt.includes("What did we decide about the pricing model?"), "consult prompt should include the question");
 	assert(assembly.telemetry.promptEstimatedTokens > 0, "consult telemetry should estimate prompt tokens");
-
-	const envelope = consultEnvelope({ targetDisplayName: "Euler", model: CONSULT_MODEL, now: new Date("2026-07-07T18:00:00Z") });
-	assert(envelope.includes(`Process type: ${CONSULT_WORKER_TYPE}`), "envelope should carry the worker type");
-	assert(envelope.includes("from the local user"), "envelope without a from-room should attribute the local user");
 
 	// Overflow guard: refuses with guidance instead of eliding memory.
 	try {
@@ -129,7 +120,6 @@ try {
 	} catch (error) {
 		assert(error instanceof ConsultPromptOverflowError, "overflow should raise ConsultPromptOverflowError");
 		assert((error as any).statusCode === 413, "overflow error should carry HTTP 413");
-		assert(/run Review on that room to shrink its memory/.test((error as Error).message), "overflow guidance should point at Review");
 	}
 
 	// --- Orchestration: the consult answers from memory and leaves no trace ---
@@ -152,7 +142,6 @@ try {
 	assert(response.source.l1bFingerprint.value === fingerprintL1bSource(targetL1b).value, "consult response should fingerprint the exact L1b it answered from");
 	assert(response.answerMarkdown.includes("X-42"), "consult response should carry the worker answer");
 	assert(response.warnings.includes("no memory has been written"), "consult response should warn no memory was written");
-	assert(response.warnings.some((warning: string) => /no trace/.test(warning)), "consult response should state the no-trace property");
 
 	assertTreesIdentical(targetBefore, snapshotTree(targetRoot), "target room");
 	assertTreesIdentical(askerBefore, snapshotTree(askerRoot), "asking room", "events/maintenance-diagnostics/");

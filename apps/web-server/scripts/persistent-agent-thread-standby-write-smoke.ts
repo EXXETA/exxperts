@@ -1,9 +1,9 @@
 // A standby write to a conversation that is no longer the room's current one
-// leaves the runtime pointer alone (keepRuntimeIfMoved): the thread file takes
-// the items, the room stays on the newer conversation. Without the option the
-// write moves the pointer as it always has (the scheduled-run landing and the
-// boundary fresh threads rely on that), and a landing into an idle room still
-// makes it resumable. A write that does not know the thread's origin
+// leaves the runtime pointer alone (keepRuntimeIfMoved); the pointer staying
+// put is proved through the route by persistent-agent-thread-standby-route-smoke,
+// the runtime staying active here. Without the option the write moves the pointer as it always has (the
+// scheduled-run landing and the boundary fresh threads rely on that), and a
+// landing into an idle room still makes it resumable. A write that does not know the thread's origin
 // ("unknown", as the client's debounced and pagehide saves send) keeps the
 // origin the thread has, so an empty prepared thread stays prepared.
 import fs from "node:fs";
@@ -48,15 +48,9 @@ try {
 	write(agentId, "c_thread_a", "standby", [{ kind: "user", id: "u1", text: "a question" }]);
 	write(agentId, "c_thread_b", "active", []);
 	assert(agents.getPersistentAgentRuntimeState(agentId).activeThreadId === "c_thread_b", "the room is on B");
-
-	// A landing into A with the option: A's file has the items, the room stays on B.
+	// A landing into A with the option leaves B's runtime as it was, active.
 	const kept = write(agentId, "c_thread_a", "standby", turn, { keepRuntimeIfMoved: true });
 	assert(kept.runtime.activeThreadId === "c_thread_b" && kept.runtime.state === "active", `the returned runtime is the unchanged B runtime, got ${JSON.stringify(kept.runtime)}`);
-	assert(agents.getPersistentAgentRuntimeState(agentId).activeThreadId === "c_thread_b", "the pointer stays on B");
-	const landedA = agents.getPersistentAgentThread(agentId, "c_thread_a");
-	assert(landedA?.state === "standby" && landedA.items.some((item: any) => item.id === "a1"), "A's file carries the landed answer");
-	assert(agents.beginPersistentAgentTurn(agentId, "c_thread_b", { turnId: "turn_b_1" }).turnId === "turn_b_1", "a prompt on B is accepted after the landing");
-	agents.finishPersistentAgentTurn(agentId, "c_thread_b", { turnId: "turn_b_1", terminalReason: "completed" });
 
 	// The same write to the CURRENT conversation moves nothing either way.
 	const current = write(agentId, "c_thread_b", "standby", [{ kind: "user", id: "u2", text: "parked" }], { keepRuntimeIfMoved: true });

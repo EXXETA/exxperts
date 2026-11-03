@@ -1,0 +1,186 @@
+/* Approval preview pane ---------------------------------------- */
+.preview-pane {
+	min-width: 0;
+	min-height: 0;
+	background: var(--bg);
+	border-left: 1px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	color: var(--fg);
+}
+.preview-head {
+	min-height: 72px;
+	border-bottom: 1px solid var(--border);
+	padding: 14px 16px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+}
+.preview-kicker {
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+}
+.preview-title {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	word-break: break-word;
+}
+.preview-close {
+	background: var(--fg);
+	color: var(--bg);
+	border: 1px solid var(--fg);
+	border-radius: 999px;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	display: grid;
+	place-items: center;
+	flex: none;
+}
+.preview-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 22px;
+}
+.preview-body-html {
+	overflow: hidden;
+	padding: 0;
+	display: flex;
+	align-items: stretch;
+}
+.preview-markdown {
+	max-width: 880px;
+	margin: 0 auto;
+}
+.preview-iframe {
+	display: block;
+	flex: 1 1 auto;
+	width: 100%;
+	height: 100%;
+	min-height: 100%;
+	border: 0;
+	/* A page with no styles of its own draws the browser's black ink on a
+	   see-through canvas, so the frame gives it paper, as a browser tab
+	   would; a page that sets its own background paints over it. */
+	background: var(--contrast-fg);
+	color: var(--contrast-bg);
+}
+
+@media (max-width: 900px) {
+	.absorb-workspace-header {
+		padding: 16px 18px;
+		flex-direction: column;
+		gap: 14px;
+	}
+	/* Stacked, the Maintain header starts on the page's left edge like everything under it. */
+	.maintain-workspace .absorb-workspace-header {
+		align-items: flex-start;
+	}
+	.absorb-workspace-header .rs-btn {
+		margin-top: 0;
+	}
+	.absorb-workspace-main {
+		padding: 18px 18px 32px;
+	}
+			.absorb-discussion-message {
+		max-width: 92%;
+	}
+	.landing-shell.with-product-sidebar {
+		grid-template-columns: 1fr;
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+	.product-sidebar {
+		border-right: none;
+		border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+	}
+	.product-nav {
+		padding: 8px 12px;
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+	.product-sidebar-footer { padding: 8px 12px; }
+	.landing { padding: 24px 16px; gap: 16px; }
+	/* minmax(0, ...): the column is the phone's width, never a card's widest
+	   line (a long model label truncates instead). */
+	.landing-grid { grid-template-columns: minmax(0, 1fr); }
+	.landing-card,
+	.landing-card-primary,
+	.home-page .persistent-agent-card { min-height: 0; }
+	.auth-onboarding-toggle { align-items: flex-start; flex-direction: column; }
+	.auth-toggle-meta { align-items: flex-start; flex-direction: column; gap: 10px; }
+	.auth-onboarding-body { grid-template-columns: 1fr; }
+	.auth-actions { grid-template-columns: 1fr; }
+	.workbench.with-preview,
+	.workbench.with-right-pane {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(360px, 1fr) minmax(240px, 42vh);
+	}
+	/* Maximized artifact viewer wins over the stacked mobile layout too. */
+	.workbench.artifact-pane-maximized {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr);
+	}
+	.pane-resizer { display: none; }
+	.preview-pane {
+		border-left: none;
+		border-top: 1px solid var(--border);
+	}
+	.preview-iframe { min-height: 0; }
+}
+
+@media (max-height: 860px) {
+	.landing { padding: 22px 24px; gap: 12px; }
+	.landing h1 { font-size: 28px; margin-bottom: 6px; }
+	.landing h2 { font-size: 21px; margin-bottom: 8px; }
+	.landing-card { padding: 14px; gap: 10px; }
+	.home-page .persistent-agent-card { min-height: 0; padding: 14px; }
+	.landing-card-primary { min-height: 180px; }
+	.landing .cli-note { font-size: 11px; line-height: 1.4; }
+}
+
+@media (max-height: 760px) {
+	.landing { padding: 16px 18px; gap: 10px; }
+	.landing-grid,
+	.home-page .landing-grid { gap: 10px; }
+	.landing h1 { font-size: 26px; }
+	.landing h2 { font-size: 18px; }
+	.landing-card { padding: 12px; gap: 8px; }
+	.home-page .persistent-agent-card { min-height: 0; padding: 12px; }
+	.landing-card-primary { min-height: 0; }
+}
+
+@media (max-width: 760px) {
+	.absorb-workspace-header h1 {
+		font-size: clamp(26px, 8vw, 36px);
+	}
+	.absorb-result-grid {
+		grid-template-columns: 1fr;
+	}
+	.absorb-review-strip,
+	.absorb-workspace .checkpoint-preview-actions {
+		justify-content: flex-start;
+	}
+	.absorb-discussion-message {
+		max-width: 100%;
+	}
+	.topbar { padding: 8px 12px; gap: 8px; }
+	.topbar .left { min-width: 0; }
+	.topbar-actions { margin-left: 0; }
+	.messages { padding: 14px 12px 16px; gap: 14px; }
+	.composer { padding: 4px 12px 12px; }
+	.composer-box { padding: 10px 10px 8px; }
+	.composer-box-bottom { flex-wrap: wrap; }
+	/* Wrapped onto a row of their own, the buttons keep to the right. */
+	.composer-box-controls { margin-left: auto; }
+	.composer-actions { gap: 5px; }
+	.composer-box-controls { --composer-control-size: 30px; }
+	.composer-actions .icon-btn { padding: 0 9px; font-size: 11.5px; }
+	.composer-actions .checkpoint-split .checkpoint-split-toggle { width: 21px; padding: 0; }
+	.landing-brand { padding: 16px 16px 12px; }
+	.standalone-header { padding: 12px 16px; align-items: flex-start; }
+	.standalone-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+}
+

@@ -228,7 +228,7 @@ try {
 
 	const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 	const roomLock = (await import("node:module")).createRequire(import.meta.url)(path.join(repoRoot, "bin", "lib", "room-lock.cjs"));
-	const lockOwner = { surface: "cli", pid: process.pid, host: os.hostname() };
+	const lockOwner = { surface: "scheduler", pid: process.pid, lockId: "smoke-run", host: os.hostname() };
 	const acquired = roomLock.tryAcquire(agentId, lockOwner);
 	assert(acquired && acquired.ok !== false, "smoke should be able to acquire the room lock");
 	let refusedForLock = false;

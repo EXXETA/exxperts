@@ -24,7 +24,8 @@ export type RoomInstructionsAction = "save" | "saveEmpty" | "on" | "off";
 const APPLIES = "Applies from the next message.";
 const NO_OWN = "This room has no instructions of its own.";
 
-export function outcomeAfter(view: RoomInstructionsOutcomeView | null, action: RoomInstructionsAction): string {
+/** The row and whether it says nothing beyond its lead and "Applies from the next message.". */
+function outcomeRow(view: RoomInstructionsOutcomeView | null, action: RoomInstructionsAction): { sentence: string; timingOnly: boolean } {
 	const lead = action === "on" ? "Switched on." : action === "off" ? "Switched off." : action === "saveEmpty" ? `Saved. ${NO_OWN}` : "Saved.";
 	const roomStuck = !!view?.instructions.unreadable && (action === "on" || action === "off");
 	const globalOn = action === "off" ? false : action === "on" ? true : (view?.global?.enabled ?? false);
@@ -32,27 +33,42 @@ export function outcomeAfter(view: RoomInstructionsOutcomeView | null, action: R
 	const globalStuck = !!view?.global?.instructions.unreadable && globalOn;
 	const followsGlobal = globalOn && globalText && !globalStuck;
 	if (roomStuck) {
-		return `${lead} New conversations ${followsGlobal ? "follow the global instructions" : "start without instructions"}; an open conversation keeps its text until this room's instructions can be read again.`;
+		return { sentence: `${lead} New conversations ${followsGlobal ? "follow the global instructions" : "start without instructions"}; an open conversation keeps its text until this room's instructions can be read again.`, timingOnly: false };
 	}
 	if (globalStuck) {
 		const fresh = action === "save" ? "follow these instructions" : action !== "saveEmpty" && view?.instructions.text ? "follow this room's own instructions" : "start without instructions";
-		return `${lead} New conversations ${fresh}; an open conversation catches up when the global instructions can be read again.`;
+		return { sentence: `${lead} New conversations ${fresh}; an open conversation catches up when the global instructions can be read again.`, timingOnly: false };
 	}
 	switch (action) {
-		case "save": return `${lead} ${APPLIES}`;
-		case "saveEmpty": return followsGlobal ? `${lead} It follows the global instructions.` : lead;
-		case "on": return followsGlobal ? `${lead} ${APPLIES}` : `${lead} No global instructions are written yet; once they are, this room follows them.`;
-		case "off": return `${lead} ${APPLIES}`;
+		case "save": return { sentence: `${lead} ${APPLIES}`, timingOnly: true };
+		case "saveEmpty": return { sentence: followsGlobal ? `${lead} It follows the global instructions.` : lead, timingOnly: false };
+		case "on": return followsGlobal ? { sentence: `${lead} ${APPLIES}`, timingOnly: true } : { sentence: `${lead} No global instructions are written yet; once they are, this room follows them.`, timingOnly: false };
+		case "off": return { sentence: `${lead} ${APPLIES}`, timingOnly: true };
 	}
+}
+
+export function outcomeAfter(view: RoomInstructionsOutcomeView | null, action: RoomInstructionsAction): string {
+	return outcomeRow(view, action).sentence;
+}
+
+/**
+ * The green line under the room pane after a Save, or null when the row says
+ * only that it applies from the next message: the pane's "Saved · just now"
+ * and its description already say that, and one notice is enough.
+ */
+export function savedLineAfter(view: RoomInstructionsOutcomeView | null, action: "save" | "saveEmpty"): string | null {
+	const row = outcomeRow(view, action);
+	return row.timingOnly ? null : row.sentence;
 }
 
 /**
  * The green line of Settings → Instructions after its Save, from the text
- * the server returned: the same words as the room pane's, and an empty Save
- * says there are none. A save the server refuses keeps the server's sentence.
+ * the server returned: none after a saved text, which has its "Saved · just
+ * now", and an empty Save says there are none. A save the server refuses
+ * keeps the server's sentence.
  */
-export function globalOutcomeAfter(savedText: string): string {
-	return savedText ? `Saved. ${APPLIES}` : "Saved. There are no global instructions.";
+export function globalSavedLineAfter(savedText: string): string | null {
+	return savedText ? null : "Saved. There are no global instructions.";
 }
 
 /**

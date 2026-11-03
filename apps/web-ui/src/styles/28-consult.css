@@ -1,0 +1,297 @@
+/* Consult MR-4 — the DelegationCard family: the docked consult card and the
+   folded pill (variant A). Ported from the mockup (consult-ui-mockups.html)
+   with the real --exx-shadow-popover token. The button / spinner / caret
+   classes are scoped to the consult containers so they never collide with the
+   global .btn-primary / .spin definitions; the spin keyframe is reused, blink
+   and pulse are namespaced. */
+.consult-dock {
+	margin: 0 26px 10px;
+	max-width: 780px;
+	align-self: center;
+	width: calc(100% - 52px);
+}
+.consult-card {
+	border: 1px solid var(--exx-border-soft);
+	border-left: 3px solid var(--exx-plan);
+	background: var(--exx-surface);
+	border-radius: 12px;
+	padding: 14px 18px;
+	box-shadow: var(--exx-shadow-popover);
+}
+/* The minimize control is pinned to the top right, so it never drops to a
+   line of its own; the source line sits beside the chip while there is room
+   and wraps to a full row of its own when the card is narrow or the name long. */
+.consult-card .head-row { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; position: relative; padding-right: 34px; }
+/* The chip stays one line: the source line beside or under it names the room in full. */
+.consult-card .head-row .consult-chip { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.consult-card .head-row .consult-sub { flex: 1 1 14em; min-width: 0; overflow-wrap: anywhere; }
+.consult-card .head-row .head-tools { position: absolute; top: 0; right: 0; }
+.consult-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--exx-plan);
+	border: 1px solid color-mix(in srgb, var(--exx-plan) 45%, transparent);
+	border-radius: 999px;
+	padding: 1px 10px;
+	background: color-mix(in srgb, var(--exx-plan) 9%, transparent);
+}
+.consult-sub { font-size: 12px; color: var(--exx-text-muted); }
+.consult-card .head-tools { margin-left: auto; display: flex; gap: 6px; }
+.consult-card .mini-btn {
+	border: 0;
+	background: transparent;
+	color: var(--exx-text-muted);
+	font-size: 13px;
+	cursor: pointer;
+	padding: 2px 8px;
+	border-radius: 6px;
+}
+.consult-card .mini-btn:hover { background: var(--exx-surface-hover); color: var(--exx-text); }
+.consult-q { font-size: 13.5px; color: var(--exx-text-soft); margin: 8px 0 2px; }
+.consult-q .q-label {
+	color: var(--exx-text-muted);
+	font-size: 11px;
+	margin-right: 8px;
+}
+.consult-answer { font-size: 14.5px; color: var(--exx-text); margin-top: 6px; }
+.consult-answer.is-halted { color: var(--exx-text-muted); }
+.consult-answer .caret {
+	display: inline-block;
+	width: 8px;
+	height: 15px;
+	vertical-align: -2px;
+	margin-left: 2px;
+	background: var(--exx-plan);
+	animation: consult-blink 1s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) { .consult-answer .caret { animation: none; } }
+@keyframes consult-blink { 50% { opacity: 0; } }
+.consult-warning {
+	margin-top: 10px;
+	font-size: 12px;
+	color: var(--exx-text-muted);
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.consult-foot {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 12px;
+	padding-top: 10px;
+	border-top: 1px solid var(--exx-border-soft);
+}
+.consult-foot .meta { font-size: 11.5px; color: var(--exx-text-muted); font-family: var(--exx-font-sans); font-variant-numeric: tabular-nums; }
+.consult-actions { margin-left: auto; display: flex; gap: 8px; }
+.consult-foot .btn {
+	font: inherit;
+	font-size: 13px;
+	border-radius: 8px;
+	padding: 6px 14px;
+	cursor: pointer;
+	border: 1px solid var(--exx-border-soft);
+	background: transparent;
+	color: var(--exx-text-soft);
+	text-transform: none;
+	letter-spacing: 0;
+}
+.consult-foot .btn:not(.btn-primary):hover { background: var(--exx-surface-hover); }
+.consult-foot .btn-primary {
+	background: var(--exx-paper);
+	color: var(--exx-ink);
+	border-color: transparent;
+	font-weight: 700;
+}
+:root[data-theme="light"] .consult-foot .btn-primary { background: var(--exx-ink); color: var(--exx-paper-soft); }
+.consult-foot .btn:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 1px; }
+.consult-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--exx-text-muted); }
+.consult-status .spin,
+.fold-pill .spin {
+	width: 10px;
+	height: 10px;
+	border-radius: 999px;
+	border: 2px solid var(--exx-plan);
+	border-top-color: transparent;
+	animation: spin 1s linear infinite;
+	flex: 0 0 auto;
+}
+@media (prefers-reduced-motion: reduce) {
+	.consult-status .spin,
+	.fold-pill .spin { animation: none; opacity: .6; }
+}
+.consult-fold { display: flex; justify-content: flex-end; }
+/* Folded, the pill aligns to the COMPOSER's right edge, not the narrower
+   780px card zone — same rail constraint as .composer-layout plus the
+   .composer 18px side padding. */
+.consult-dock.consult-fold {
+	margin: 0 18px 10px;
+	width: calc(100% - 36px);
+	max-width: min(calc(var(--chat-rail-width) + 48px), 100%);
+}
+.fold-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	border: 1px solid var(--exx-border-soft);
+	border-left: 3px solid var(--exx-plan);
+	background: var(--exx-surface);
+	border-radius: 999px;
+	padding: 6px 8px 6px 14px;
+	box-shadow: var(--exx-shadow-popover);
+	font: inherit;
+	font-size: 12.5px;
+	color: var(--exx-text-soft);
+	cursor: pointer;
+}
+.fold-pill:hover { background: var(--exx-surface-hover); }
+.fold-pill .who { color: var(--exx-plan); font-weight: 700; }
+.fold-pill .ready-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 999px;
+	background: var(--exx-plan);
+	animation: consult-pulse 1.6s ease-in-out infinite;
+	flex: 0 0 auto;
+}
+@media (prefers-reduced-motion: reduce) { .fold-pill .ready-dot { animation: none; } }
+@keyframes consult-pulse { 50% { opacity: .35; } }
+.fold-pill .open-hint {
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--exx-text);
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 999px;
+	padding: 2px 12px;
+	background: var(--exx-surface-raised);
+}
+
+/* Consult MR-5: the permanent transferred item in the thread transcript. Shares
+   the docked card's consult-* atoms (chip, question, answer, footer) with the
+   visitor (lila) accent; here it lives inline in the flow, no card chrome. */
+.consult-item {
+	/* Same rail as normal chat rows (.bubble-row) so the lila edge sits at the
+	   transcript's left margin, and the same 780px reading width as .bubble for
+	   the content — the distinction is the accent, not the
+	   layout. */
+	width: min(var(--chat-rail-width), 100%);
+	box-sizing: border-box;
+	border-left: 3px solid var(--exx-plan);
+	padding: 2px 0 2px 14px;
+	margin: 6px 0;
+}
+.consult-item > * { max-width: 780px; }
+.consult-item .head-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pending-hint {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11.5px;
+	color: var(--exx-text-muted);
+	border: 1px dashed var(--exx-border);
+	border-radius: 999px;
+	padding: 1px 10px;
+}
+/* Collapsed by default: the full markdown lives in the docked card; here the
+   transferred item shows a distilled preview that expands on demand. */
+.consult-item-answer.is-folded {
+	max-height: 6.4em;
+	overflow: hidden;
+	position: relative;
+	-webkit-mask-image: linear-gradient(to bottom, #000 68%, transparent);
+	mask-image: linear-gradient(to bottom, #000 68%, transparent);
+}
+.consult-item-toggle {
+	margin-top: 4px;
+	border: 0;
+	background: transparent;
+	color: var(--exx-plan);
+	font: inherit;
+	font-size: 12.5px;
+	font-weight: 700;
+	padding: 2px 0;
+	cursor: pointer;
+}
+.consult-item-toggle:hover { text-decoration: underline; }
+/* Stacked consult (§8): the docked card's exchange history (prior Q/As above the
+   current one), the follow-up input, the drift + overflow notices, and the
+   thread item's numbered exchanges. All reuse the consult-* atoms + lila accent. */
+.consult-history { margin: 8px 0 2px; display: flex; flex-direction: column; gap: 6px; }
+.consult-history-item {
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	padding: 6px 10px;
+	background: color-mix(in srgb, var(--exx-plan) 4%, transparent);
+}
+.consult-history-item > summary {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	cursor: pointer;
+	list-style: none;
+	font-size: 12.5px;
+	color: var(--exx-text-soft);
+}
+.consult-history-item > summary::-webkit-details-marker { display: none; }
+.consult-history-item .hx-num {
+	font-size: 11px;
+	color: var(--exx-plan);
+	font-weight: 700;
+	flex: 0 0 auto;
+}
+.consult-history-item .hx-q { color: var(--exx-text-soft); }
+.hx-asof { margin-left: auto; font-size: 11px; color: var(--exx-text-muted); font-style: italic; }
+.consult-history-item .consult-answer { font-size: 13.5px; margin-top: 6px; }
+.consult-drift { color: var(--exx-plan); }
+.consult-overflow {
+	margin-top: 12px;
+	font-size: 12.5px;
+	color: var(--exx-text-muted);
+	border: 1px dashed var(--exx-border);
+	border-radius: 8px;
+	padding: 8px 12px;
+}
+.consult-followup { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+.consult-followup-input {
+	flex: 1 1 auto;
+	min-width: 0;
+	font: inherit;
+	font-size: 13.5px;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	padding: 7px 12px;
+	background: var(--exx-surface-raised);
+	color: var(--exx-text);
+}
+.consult-followup-input:disabled { opacity: 0.55; }
+.consult-followup-input:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 1px; }
+.consult-followup .btn {
+	/* "Ask a follow-up" stays one line; the box beside it gives up the room. */
+	flex: none;
+	white-space: nowrap;
+	font: inherit;
+	font-size: 13px;
+	border-radius: 8px;
+	padding: 7px 14px;
+	cursor: pointer;
+	border: 1px solid var(--exx-border-soft);
+	background: transparent;
+	color: var(--exx-text-soft);
+}
+.consult-followup .btn:hover:not(:disabled) { background: var(--exx-surface-hover); }
+.consult-followup .btn:disabled { opacity: .5; cursor: default; }
+/* Thread item: numbered exchanges stack with a little separation. */
+.consult-exchange + .consult-exchange { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--exx-border-soft); }
+/* §8.3: the visible composer rejection when a card is docked. */
+.composer-consult-gate {
+	margin: 0 0 8px;
+	font-size: 12.5px;
+	color: var(--exx-text-muted);
+	border-left: 3px solid var(--exx-plan);
+	padding: 4px 10px;
+	background: color-mix(in srgb, var(--exx-plan) 6%, transparent);
+	border-radius: 0 6px 6px 0;
+}

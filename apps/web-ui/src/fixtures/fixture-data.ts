@@ -4,6 +4,7 @@ import { GaugeIcon, GearIcon, PaperclipIcon, TrashIcon } from "../components/ico
 import type { InRoomChatUsage } from "../components/in-room-chat";
 import type { LauncherRoomThread } from "../components/launcher-room-card";
 import type { ProductSidebarActive } from "../components/product-shell";
+import { modelDisplayName } from "../model-names";
 import type { ChatItem, ContextHealthStatus, PersistentAgentAiProfileSelectionStatus, PersistentAgentStatus, WebChatModelOption, WebChatModelStatus } from "../types";
 
 export const FIXTURE_DEFAULT_AGENT_ID = "personal-coordinator";
@@ -594,7 +595,8 @@ function chatFixture(overrides: Omit<InRoomChatFixtureState, "kind" | "connected
 	return {
 		kind: "in-room-chat",
 		connected: true,
-		currentModelLabel: fixtureModelOptions[0].label,
+		// The page passes the canonical name, as App does.
+		currentModelLabel: modelDisplayName({ modelLabel: fixtureModelOptions[0].label }),
 		topbarActions: roomTopbarActions,
 		...overrides,
 	};

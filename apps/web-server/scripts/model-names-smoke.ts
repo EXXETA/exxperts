@@ -7,7 +7,7 @@
 //
 // Run: npm run smokes -- model-names   (or tsx this file)
 
-import { canonicalModelKey, canonicalModelName, distinctModelNames, modelDisplayName, modelIdDate, modelOnProvider, providerDisplayName } from "../../web-ui/src/model-names.js";
+import { canonicalModelKey, canonicalModelName, distinctModelNames, modelDisplayName, modelIdDate, modelOnProvider, providerDisplayName, realModelName } from "../../web-ui/src/model-names.js";
 
 let failures = 0;
 function check(desc: string, actual: unknown, expected: unknown) {
@@ -59,6 +59,7 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	{ model: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", providerName: "Claude" },
 	{ model: "gpt-6-sol", name: "GPT-6 Sol" },
 	{ model: "gpt-6.1-sol", name: "GPT-6.1 Sol" },
+	{ model: "gpt-6.1-terra", name: "GPT-6.1 Terra" },
 	{ model: "gpt-6-luna", name: "GPT-6 Luna" },
 	{ model: "grok-4.7", name: "Grok 4.7" },
 	{ model: "all-team-models", name: "All Team Models" },
@@ -71,6 +72,14 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	{ model: "", modelLabel: "Locked model", name: "Locked model" },
 	// Bare curated catalog name beats generic tidying of an unknown id.
 	{ model: "sonar-pro-x1", modelLabel: "Sonar Pro X1", name: "Sonar Pro X1" },
+	// A gateway model saved with its own label reads that label exactly; the
+	// same id with no label is only tidied, which is why Home's card looks
+	// the saved label up for a lock that carries the id alone.
+	{ model: "quill-70b-instruct", modelLabel: "Northwind AI gateway \u2014 Quill 70B", name: "Quill 70B", providerName: "Northwind AI gateway" },
+	{ model: "quill-70b-instruct", name: "Quill 70b Instruct" },
+	// On a gateway the saved name wins over the family rule too; with no saved name the id is tidied as before.
+	{ model: "llama-3-70b", modelLabel: "Northwind AI gateway \u2014 Finance Assistant", provider: "gateway-northwind-ai-gateway", name: "Finance Assistant", providerName: "Northwind AI gateway" },
+	{ model: "llama-3-70b", modelLabel: "Northwind AI gateway \u2014 llama-3-70b", provider: "gateway-northwind-ai-gateway", name: "Llama 3 70b", providerName: "Northwind AI gateway" },
 ];
 
 for (const c of NAME_CASES) {
@@ -132,6 +141,23 @@ check("a dashed date is dropped too", modelDisplayName({ model: "gpt-4o-2024-08-
 check("the date in plain form", modelIdDate("claude-sonnet-4-5-20250929"), "29 Sep 2025");
 check("no date, no date", modelIdDate("claude-opus-5-5"), null);
 check("a list dates only its look-alikes", distinctModelNames([{ model: "claude-sonnet-4-5" }, { model: "claude-sonnet-4-5-20250929" }, { model: "claude-haiku-4-5-20251001" }]), ["Claude Sonnet 4.5", "Claude Sonnet 4.5 (29 Sep 2025)", "Claude Haiku 4.5"]);
+
+// The model behind a Bedrock id, for counting real models: region and version
+// shapes are not part of the name, and the date reads as for any dated id.
+check("a Bedrock id reads as its model, dated", realModelName("anthropic.claude-sonnet-4-5-20250929-v1:0"), { name: "Claude Sonnet 4.5", date: "29 Sep 2025" });
+check("a Bedrock region id reads as the same model", realModelName("eu.anthropic.claude-3-7-sonnet-20250219-v1:0"), { name: "Claude 3.7 Sonnet", date: "19 Feb 2025" });
+check("a Bedrock version suffix without a v is dropped too", realModelName("openai.gpt-oss-120b-1:0"), { name: "GPT Oss 120b", date: null });
+check("a Bedrock Llama id reads its version apart from the family", realModelName("meta.llama3-3-70b-instruct-v1:0"), { name: "Llama 3.3 70b Instruct", date: null });
+check("a bare Bedrock version on a Claude id is dropped", realModelName("anthropic.claude-opus-4-6-v1"), { name: "Claude Opus 4.6", date: null });
+for (const region of ["au", "jp", "in", "us-gov", "apac", "global", "us"]) check(`a Bedrock ${region}. region id reads as the same model`, realModelName(`${region}.anthropic.claude-opus-4-6-v1`).name, "Claude Opus 4.6");
+check("a version that names the model stays", realModelName("nvidia.nemotron-nano-12b-v2").name, modelDisplayName({ model: "nvidia.nemotron-nano-12b-v2" }));
+check("an id with no Bedrock shape reads as everywhere", realModelName("llama3-70b-8192"), { name: modelDisplayName({ model: "llama3-70b-8192" }), date: null });
+// A list to choose from still tells a gateway's region copies of one model apart.
+check(
+	"a picker's names for Bedrock region ids are untouched",
+	distinctModelNames(["anthropic", "eu.anthropic", "us.anthropic"].map((prefix) => ({ model: `${prefix}.claude-sonnet-4-5-20250929-v1:0` }))),
+	["Claude Sonnet 4.5.20250929 V1:0", "Eu Anthropic Claude Sonnet 4.5.20250929 V1:0", "Us Anthropic Claude Sonnet 4.5.20250929 V1:0"],
+);
 
 if (failures > 0) {
 	console.error(`\nmodel-names smoke: ${failures} failure(s)`);

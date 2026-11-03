@@ -5,7 +5,7 @@
 // a real room and a real websocket turn. The model is a synthetic gateway that
 // runs one bash command per turn and reads the tool's result back. Pinned:
 //
-// - the Workspace pane shows the one plain line, in the summary and under the
+// - the Folder pane shows the one plain line, in the summary and under the
 //   Bash switch, and only while no shell is found;
 // - a command that finds no shell answers the chat and the model with that
 //   line; the runtime's settings.json advice reaches the server log only;
@@ -27,6 +27,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { waitForTurnSettled } from "./smoke-turn-settle.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -183,7 +184,7 @@ async function createBashRoom(server: SmokeServer, name: string): Promise<string
 
 const WebSocketImpl: any = (await import("ws")).default;
 
-/** One turn over the room websocket; returns the bash result as the chat received it. */
+/** One turn over the room websocket, settled on the server; returns the bash result as the chat received it. */
 async function runTurn(server: SmokeServer, agentId: string, conversationId: string): Promise<{ text: string; isError: boolean; modelSaw: string }> {
 	const seeded = await requestJson(server, `/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(conversationId)}`, {
 		method: "PUT",
@@ -204,6 +205,7 @@ async function runTurn(server: SmokeServer, agentId: string, conversationId: str
 	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
 		if (capturedToolResults.length > before && frames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
+			await waitForTurnSettled((pathname) => requestJson(server, pathname), agentId, `${conversationId}: the turn has settled before the next seed`);
 			try { socket.close(); } catch {}
 			const toolResult = frames.find((frame) => frame?.type === "event" && frame?.event?.type === "message_end" && frame?.event?.message?.role === "toolResult")?.event?.message;
 			assert(toolResult, "the chat must receive the command's result");
@@ -219,7 +221,7 @@ async function runTurn(server: SmokeServer, agentId: string, conversationId: str
 
 type PaneLines = { summary: number; editor: number; text: string };
 
-/** Opens Room settings on Workspace, reads the line in the summary and in the editor; the editor stays open. */
+/** Opens Room settings on Folder, reads the line in the summary and in the editor; the editor stays open. */
 async function readPane(page: any, server: SmokeServer, roomName: string): Promise<PaneLines> {
 	await page.goto(`${server.baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 	await page.waitForLoadState("networkidle");
@@ -227,14 +229,14 @@ async function readPane(page: any, server: SmokeServer, roomName: string): Promi
 	if (await dismiss.count()) await dismiss.click();
 	await page.locator(".persistent-agent-card").filter({ hasText: roomName }).locator(".card-gear-btn").click();
 	await page.waitForSelector(".settings-dialog", { timeout: 10000 });
-	await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Workspace$/ }).first().click();
+	await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 	const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
-	await pane.getByRole("button", { name: "Edit workspace" }).waitFor({ timeout: 10000 });
+	await pane.getByRole("button", { name: "Edit", exact: true }).waitFor({ timeout: 10000 });
 	await page.waitForTimeout(300);
 	const line = pane.locator(".workspace-shell-missing");
 	const summary = await line.count();
 	const text = summary ? await line.first().innerText() : "";
-	await pane.getByRole("button", { name: "Edit workspace" }).click();
+	await pane.getByRole("button", { name: "Edit", exact: true }).click();
 	await pane.getByLabel("Bash shell access").waitFor({ timeout: 10000 });
 	await page.waitForTimeout(500);
 	const editor = await line.count();
@@ -245,7 +247,7 @@ async function readPane(page: any, server: SmokeServer, roomName: string): Promi
 async function reopenEditor(page: any): Promise<number> {
 	const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
 	await pane.getByRole("button", { name: "Cancel" }).click();
-	await pane.getByRole("button", { name: "Edit workspace" }).click();
+	await pane.getByRole("button", { name: "Edit", exact: true }).click();
 	await pane.getByLabel("Bash shell access").waitFor({ timeout: 10000 });
 	await page.waitForTimeout(500);
 	return pane.locator(".workspace-shell-missing").count();

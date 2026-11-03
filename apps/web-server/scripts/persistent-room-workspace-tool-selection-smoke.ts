@@ -22,7 +22,6 @@ const {
 } = await import("../src/persistent-room-tool-policy.js");
 const {
 	createPersistentRoomWorkspaceTools,
-	isPersistentRoomWorkspaceToolPolicyEnabled,
 } = await import("../src/persistent-room-workspace-tools.js");
 
 const agentId = "workspace-tool-selection-smoke-room";
@@ -96,7 +95,7 @@ try {
 	const legacyEmpty = { ...standard, toolSelection: undefined, allowedToolNames: [] };
 	delete legacyEmpty.toolSelection;
 	assert(toolNames(legacyEmpty) === "", "legacy empty policy should remain disabled");
-	assert(!isPersistentRoomWorkspaceToolPolicyEnabled(legacyEmpty), "legacy empty policy should not activate workspace tools");
+	assert(registeredToolNames(legacyEmpty) === "", "legacy empty policy should not activate workspace tools");
 
 	const customNoSpreadsheet = createPersistentRoomCapabilityPolicy({
 		...baseInput,
@@ -132,7 +131,6 @@ try {
 	});
 	assert(customAllOff.allowedToolNames.length === 0, "all-off custom policy should persist empty selected tools");
 	assert(persistentRoomCapabilityPolicyView(customAllOff).allowedToolNames.length === 0, "all-off custom view should show no tools");
-	assert(!isPersistentRoomWorkspaceToolPolicyEnabled(customAllOff), "all-off custom policy should not activate workspace tools");
 	assert(registeredToolNames(customAllOff) === "", "all-off custom policy should register no workspace tools");
 
 	for (const invalidTool of ["bash", "unknown_tool"]) {
@@ -255,7 +253,6 @@ try {
 		toolSelection: { kind: "custom", allowedToolNames: [] },
 	});
 	assert(toolNames(localFilesAllOff) === "", "Local files all-off custom selection should resolve to no tools");
-	assert(!isPersistentRoomWorkspaceToolPolicyEnabled(localFilesAllOff), "Local files all-off custom policy should not activate ordinary workspace tools");
 	assert(registeredToolNames(localFilesAllOff) === "", "Local files all-off custom policy should register no custom tools");
 	const localFilesBashOnlyToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesAllOff), workspaceAccessMode: "localFiles", bashEnabled: true, bashRuntimeAllowed: true });
 	assert(localFilesBashOnlyToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,memory_recall,mcp,bash", "manual Local files room can expose bash independently of ordinary file tools");

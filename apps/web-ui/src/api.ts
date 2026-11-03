@@ -1,4 +1,4 @@
-import { knownRemoteClientContext } from "./remote-client-context";
+import { endPageForAnotherPerson, knownRemoteClientContext, pagePersonId, personHasChanged } from "./remote-client-context";
 
 // A 401 means the session cookie is missing or stale (for example cleared
 // while the app was open): the server is fine but every further call fails
@@ -20,17 +20,36 @@ export function redirectToSignInOn401(res: Response): void {
 // when no answer came. Every direct API call in the UI goes through this or
 // fetchJson; plain fetch stays reserved for non-API resources.
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+	// This page belongs to a person who is no longer signed in: nothing it still has in flight may read or save as the new one.
+	if (personHasChanged()) throw new Error(PERSON_CHANGED_SENTENCE);
 	let res: Response;
 	try {
-		res = await fetch(input, init);
+		res = await fetch(input, withPagePerson(input, init));
 	} catch (error) {
 		// fetch rejects with a TypeError only when no answer came, in each browser's own words; a cancel is not one.
 		if (error instanceof TypeError) throw new ServiceUnreachableError();
 		throw error;
 	}
 	if (GATEWAY_NO_ANSWER_STATUSES.has(res.status) && !(await isOurErrorAnswer(res))) throw new ServiceUnreachableError();
+	// The shared server refused the person this page names: it ends here, as when a read finds another person. Other 409s are the server's own conflicts.
+	if (res.status === 409 && (await errorAnswerBody(res))?.code === "person_changed") {
+		endPageForAnotherPerson();
+		throw new Error(PERSON_CHANGED_SENTENCE);
+	}
 	redirectToSignInOn401(res);
 	return res;
+}
+
+const PERSON_CHANGED_SENTENCE = "Another person is now signed in on this server.";
+
+// On a shared server every request names the person the page was opened for, so the server refuses it once another
+// person is signed in. Init's headers replace a Request's own in fetch, so the person joins whichever set fetch would send.
+function withPagePerson(input: RequestInfo | URL, init: RequestInit | undefined): RequestInit | undefined {
+	const person = pagePersonId();
+	if (person === null) return init;
+	const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+	headers.set("X-Exxperts-Page-Person", person);
+	return { ...init, headers };
 }
 
 // What stands in front of a shared server (its entrance, its gate) answers
@@ -39,12 +58,18 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 const GATEWAY_NO_ANSWER_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
 async function isOurErrorAnswer(res: Response): Promise<boolean> {
-	if (!/\bapplication\/json\b/i.test(res.headers.get("content-type") ?? "")) return false;
+	const body = await errorAnswerBody(res);
+	return typeof body?.error === "string" || typeof body?.message === "string";
+}
+
+// A JSON answer's body, read from a copy so the caller still reads the answer; null when it is not JSON.
+async function errorAnswerBody(res: Response): Promise<Record<string, unknown> | null> {
+	if (!/\bapplication\/json\b/i.test(res.headers.get("content-type") ?? "")) return null;
 	try {
-		const body = await res.clone().json();
-		return typeof body?.error === "string" || typeof body?.message === "string";
+		const body: unknown = await res.clone().json();
+		return typeof body === "object" && body !== null ? body as Record<string, unknown> : null;
 	} catch {
-		return false;
+		return null;
 	}
 }
 

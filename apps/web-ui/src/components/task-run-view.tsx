@@ -35,14 +35,14 @@ export function TaskRunView({ state, onStop, onClose, maximized, onToggleMaximiz
 		<aside className={`artifact-viewer${maximized ? " artifact-viewer-maximized" : ""}`} aria-label="Task run view">
 			<header className="artifact-viewer-head">
 				<div className="artifact-viewer-provenance">
-					<div className="artifact-viewer-kicker">{state.templateLabel ?? "specialist"}</div>
+					<div className="artifact-viewer-kicker">{state.templateLabel ?? "Specialist"}</div>
 					<div className="artifact-viewer-template" title={state.title ?? "Specialist task"}>
 						{running && <span className="assets-pulse task-run-view-pulse" aria-hidden="true" />}
 						{state.title ?? "Specialist task"}
 					</div>
 				</div>
 				<div className="artifact-viewer-head-right">
-					<span className="artifact-viewer-badge" title={running ? "This specialist is working right now" : "This run has ended"}>{running ? "running" : "ended"}</span>
+					<span className="artifact-viewer-badge" title={running ? "This specialist is working right now" : "This run has ended"}>{running ? "Running" : "Ended"}</span>
 					<div className="artifact-viewer-actions">
 						<button
 							type="button"

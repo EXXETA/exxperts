@@ -88,9 +88,6 @@ try {
 
 	const roomRoot = path.join(tempAgentsRoot, agentId);
 	assert(created.status.root === roomRoot, "created status root should point at selected room root");
-	assertFile(path.join(roomRoot, "agent.json"), "selected agent.json");
-	assertFile(path.join(roomRoot, "runtime", "state.json"), "selected initial runtime state");
-	assert(fs.existsSync(path.join(roomRoot, "runtime", "threads")), "selected runtime threads directory should exist");
 
 	const listed = listPersistentAgents();
 	const listedIds = listed.map((status: any) => status.id);

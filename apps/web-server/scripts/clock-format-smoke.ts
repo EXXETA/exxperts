@@ -116,7 +116,7 @@ try {
 			const room = rooms[locale]!;
 
 			// The plan's reset, in the saved chat line.
-			await page.locator(".persistent-agent-card").filter({ hasText: room.name }).getByRole("button", { name: "Resume →" }).click();
+			await page.locator(".persistent-agent-card").filter({ hasText: room.name }).getByRole("button", { name: "Resume" }).click();
 			await page.getByText("Earlier question.").first().waitFor({ timeout: 15_000 });
 			const line = page.locator(".failure-line", { hasText: "It resets" });
 			await line.waitFor({ timeout: 10_000 });

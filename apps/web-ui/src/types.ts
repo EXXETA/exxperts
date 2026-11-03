@@ -1083,6 +1083,8 @@ export interface CheckpointProposalResponse {
 	};
 	proposedRecentContext: string;
 	estimatedTokens: number;
+	/** The model the next conversation continues on once this is saved, kept with the job that made it; Save sends it back untouched. */
+	continueOn?: RoomModelLock & { jobId: string };
 	compressionTelemetry: {
 		l1bChars: number;
 		l1bWithoutRecentContextChars: number;
@@ -1236,6 +1238,8 @@ export interface PersistentRoomSchedulesResponse {
 	executionEnabled: false;
 	jobs: PersistentRoomScheduleJob[];
 	summary: PersistentRoomScheduleSummary;
+	/** The zone the server reads daily and weekly times in. */
+	timeZone: string;
 }
 
 export type PersistentRoomBackgroundRunStatus = "queued" | "running" | "deferred" | "blocked" | "succeeded" | "failed" | "cancelled";
@@ -1356,8 +1360,8 @@ export interface PersistentAgentStatus {
 	activeThread: PersistentAgentActiveThreadSummary | null;
 	/** A detached turn landed its answer while no session was connected; the server clears it when a session next binds to the room. */
 	unseenLandedAnswer?: { threadId: string; turnId: string; terminalReason: "completed" | "failed"; landedAt: number; origin?: "detached-turn" | "scheduled-run" };
-	/** Set when this room is currently open or busy in another surface (CLI, browser, or scheduled background work). */
-	activeLock?: { surface: "cli" | "web" | "scheduler" | string; acquiredAt: number } | null;
+	/** Set when this room is currently open or busy in another surface (browser, or scheduled background work). */
+	activeLock?: { surface: "web" | "scheduler" | string; acquiredAt: number } | null;
 	/** The web lock is held by a detached turn still cooking with NO client attached, so stepping back in is offered; a room genuinely open in another window stays locked out. */
 	answeringDetached?: boolean;
 	/** When a turn last started in this room, through any door, or the estimate below; null when the room has neither (never used, or archived before it was given an estimate). Read by the "Recently used" order only. */
@@ -1467,10 +1471,11 @@ export interface PersistentAgentArchiveResponse {
 	status: "archived";
 }
 
-/** Real numbers for the danger zone and the archived-rooms list: conversations = threads, memories = Recent Context entries, files = the shelf, documents = shelf files the room itself produced. */
+/** Real numbers for the danger zone and the archived-rooms list: conversations = threads, memories = the notes the Memory view lists, scheduledTasks = the room's schedules, files = the shelf, documents = shelf files the room itself produced. */
 export interface PersistentAgentLifecycleCounts {
 	conversations: number;
 	memories: number;
+	scheduledTasks: number;
 	files: number;
 	documents: number;
 }
@@ -1508,23 +1513,32 @@ export interface PersistentAgentPurgeResponse {
 	failed: { target: string; reason: string }[];
 }
 
-export type ChatItem =
+/** `landed`: the server wrote or confirmed this item under an id both sides share (thread-items-by-id.ts); only the server sets it. */
+export type ChatItem = ChatItemOfKind & { landed?: true };
+
+type ChatItemOfKind =
 	// `ts` (epoch ms) is when the item was born; absent on items written before
 	// the field existed, which then show no date/time on hover.
-	| { kind: "user"; id: string; text: string; ts?: number; attachments?: { name: string; bytes: number; extension: string }[] }
-	| { kind: "assistant"; id: string; text: string; ts?: number; streaming?: boolean }
+	// `steered`: the room took it while it answered (its id is the queued message's, steer-route.ts bubbleIdOf), so it is part of that answer's turn.
+	| { kind: "user"; id: string; text: string; ts?: number; attachments?: { name: string; bytes: number; extension: string }[]; steered?: true }
+	// `stoppedAt`: a Stop kept this many characters of the answer's words; the rest of its text is the Stop note.
+	| { kind: "assistant"; id: string; text: string; ts?: number; streaming?: boolean; stoppedAt?: number }
+	// The model thinking before it answers: drawn only, never saved. `ms` once it has ended; its words live in thinking-text-store.ts.
+	| { kind: "thinking"; id: string; ts: number; ms?: number; redacted?: true }
 	| {
 			kind: "tool";
 			id: string;
 			name: string;
 			args: any;
-			/** "stopped" is a tool call that never finished because the turn was stopped: not a failure, and not a result. */
-			status: "running" | "done" | "error" | "stopped";
+			/** "writing": the model is still writing the call, and `args` holds the label's fields so far (`sizeSoFar` for a file); never saved so. "stopped" is a tool call that never finished because the turn was stopped: not a failure, and not a result. */
+			status: "writing" | "running" | "done" | "error" | "stopped";
 			result?: string;
 			/** Tool result `details` object, when the server sends one (e.g. fetch_url title/finalUrl). */
 			details?: any;
 			/** When the step began (epoch ms), as the server stamped its start. */
 			startedAt?: number;
+			/** When it ended, by the same clock, so the row shows its own time: drawn only, never saved. */
+			endedAt?: number;
 	  }
 	| {
 			kind: "approval";
@@ -1539,6 +1553,10 @@ export type ChatItem =
 			done?: string;         // set after user answers; we keep card visible
 			/** The question ended with nobody there to answer it: shown resolved, never sent. */
 			unanswered?: boolean;
+			/** Stop answered the question for the person: shown resolved, and its step says it was not done. */
+			stopped?: true;
+			/** When it was asked, by this page's clock: a message the person started typing after this declines it (question-keys.ts). Drawn only. */
+			openedAt?: number;
 	  }
 	// `details`: a failed turn's line keeps the provider's own sentence, keys masked, behind Details.
 	// `returnedId`: the line of a message handed back to the box, by the step back's id.

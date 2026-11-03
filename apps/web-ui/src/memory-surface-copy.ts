@@ -254,7 +254,7 @@ export function noteOriginTitle(note: { from?: string; saved: string }): string 
 export const HISTORY_SUB = "Every change to this room's memory, newest first.";
 export const HISTORY_EMPTY_SENTENCE = "This room's memory has not changed yet.";
 export const HISTORY_UNDO_LABEL = "Undo";
-export const HISTORY_UNDONE_MARK = "undone";
+export const HISTORY_UNDONE_MARK = "Undone";
 export const MEMORY_TAB_HISTORY_SUB = "Every change to this room's memory, newest first. Undo lives in Room settings.";
 export const OPEN_IN_ROOM_SETTINGS_LABEL = "Open in Room settings";
 

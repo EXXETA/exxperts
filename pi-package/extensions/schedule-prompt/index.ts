@@ -1,8 +1,6 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Type } from "typebox";
-import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
 import { productAppStatePath } from "../../product-state-paths.js";
 
 export type PersistentRoomScheduleType = "once" | "interval" | "cron";
@@ -46,7 +44,7 @@ export interface ParsedPersistentRoomSchedule {
 	intervalMs?: number;
 }
 
-export type PersistentRoomScheduleDueOccurrenceStrategy = "once_nextRunAt" | "interval_anchor" | "simple_daily_cron";
+export type PersistentRoomScheduleDueOccurrenceStrategy = "once_nextRunAt" | "interval_anchor" | "simple_daily_cron" | "simple_weekly_cron";
 export type PersistentRoomScheduleDueOccurrenceSkipReason =
 	| "disabled"
 	| "not_due"
@@ -67,6 +65,8 @@ export interface AddPersistentRoomScheduleJobInput {
 	prompt: unknown;
 	enabled?: unknown;
 	now?: Date;
+	/** Refuse a cron pattern the due calculation cannot run, instead of saving one that never runs. */
+	refuseUnrunnable?: boolean;
 }
 
 export interface PersistentRoomScheduleJobSelector {
@@ -81,12 +81,13 @@ export interface UpdatePersistentRoomScheduleJobInput {
 	prompt?: unknown;
 	enabled?: unknown;
 	now?: Date;
+	/** Refuse a cron pattern the due calculation cannot run, instead of saving one that never runs. */
+	refuseUnrunnable?: boolean;
 }
 
-export interface SchedulePromptExtensionOptions {
-	/** Persistent room/agent id. Prefer this over model-supplied room ids when the extension is wired into a scoped runtime. */
-	roomId?: string;
-}
+/** The refusal of a cron pattern the due calculation cannot run; its message is the sentence the person reads. */
+export const SCHEDULE_PATTERN_CANNOT_RUN_CODE = "schedule_pattern_cannot_run";
+export const SCHEDULE_PATTERN_CANNOT_RUN_SENTENCE = "This pattern can't run yet. Use Daily or Weekly, or the Interval type to repeat every few minutes or hours.";
 
 const STORE_VERSION = 1 as const;
 const SCHEDULE_ROOT_DIRNAME = "persistent-room-schedules";
@@ -96,6 +97,7 @@ const MAX_NAME_LENGTH = 160;
 const MAX_SCHEDULE_LENGTH = 240;
 const MIN_INTERVAL_MS = 1_000;
 const MAX_INTERVAL_MS = 366 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function defaultStore(roomId: string): PersistentRoomScheduleStore {
 	return { version: STORE_VERSION, roomId, jobs: [] };
@@ -272,18 +274,43 @@ function parseIsoDate(value: unknown): Date | null {
 	return date;
 }
 
-function parseSimpleDailyCron(expression: string): { hour: number; minute: number } | null {
+// The cron shapes the due calculation runs: second 0, a fixed minute and hour,
+// any day of the month and month, and every day of the week or some of them
+// (a list of days and ranges, 0 and 7 both Sunday). days is null for every day.
+function parseSimpleWeeklyCron(expression: string): { hour: number; minute: number; days: ReadonlySet<number> | null } | null {
 	const fields = expression.trim().replace(/\s+/g, " ").split(" ");
 	if (fields.length !== 6) return null;
 	const [second, minuteRaw, hourRaw, dayOfMonth, month, dayOfWeek] = fields;
-	if (second !== "0" || dayOfMonth !== "*" || month !== "*" || dayOfWeek !== "*") return null;
+	if (second !== "0" || dayOfMonth !== "*" || month !== "*") return null;
 	if (!validateCronNumber(minuteRaw, 0, 59) || !validateCronNumber(hourRaw, 0, 23)) return null;
-	return { hour: Number(hourRaw), minute: Number(minuteRaw) };
+	const days = dayOfWeek === "*" ? null : parseCronDaysOfWeek(dayOfWeek);
+	if (days === undefined) return null;
+	return { hour: Number(hourRaw), minute: Number(minuteRaw), days: days && days.size === 7 ? null : days };
 }
 
-function computeSimpleDailyCronDueAt(job: PersistentRoomScheduleJob, now: Date): PersistentRoomScheduleDueOccurrenceResult {
-	const daily = parseSimpleDailyCron(job.schedule);
-	if (!daily) {
+// A day-of-week field of days and ranges, no steps; undefined for anything else.
+function parseCronDaysOfWeek(field: string): Set<number> | undefined {
+	const days = new Set<number>();
+	for (const part of field.split(",")) {
+		const [startRaw, endRaw, extra] = part.split("-");
+		if (extra !== undefined || !validateCronNumber(startRaw, 0, 7)) return undefined;
+		if (endRaw !== undefined && !validateCronNumber(endRaw, 0, 7)) return undefined;
+		const start = Number(startRaw);
+		const end = endRaw === undefined ? start : Number(endRaw);
+		if (start > end) return undefined;
+		for (let day = start; day <= end; day += 1) days.add(day % 7);
+	}
+	return days;
+}
+
+/** True when the due calculation can run this schedule; only cron patterns outside the daily and weekly shapes cannot. */
+export function persistentRoomScheduleCanRun(type: PersistentRoomScheduleType, schedule: string): boolean {
+	return type !== "cron" || parseSimpleWeeklyCron(schedule) !== null;
+}
+
+function computeSimpleWeeklyCronDueAt(job: PersistentRoomScheduleJob, now: Date): PersistentRoomScheduleDueOccurrenceResult {
+	const weekly = parseSimpleWeeklyCron(job.schedule);
+	if (!weekly) {
 		try {
 			validateCronExpression(job.schedule);
 			return { due: false, reason: "unsupported_cron_due_calculation" };
@@ -293,11 +320,18 @@ function computeSimpleDailyCronDueAt(job: PersistentRoomScheduleJob, now: Date):
 	}
 	const createdAt = parseIsoDate(job.createdAt);
 	if (!createdAt) return { due: false, reason: "invalid_daily_cron" };
+	// The latest occurrence at or before now, in the server's own time zone.
 	const candidate = new Date(now);
-	candidate.setHours(daily.hour, daily.minute, 0, 0);
+	candidate.setHours(weekly.hour, weekly.minute, 0, 0);
 	if (candidate.getTime() > now.getTime()) candidate.setDate(candidate.getDate() - 1);
+	while (weekly.days && !weekly.days.has(candidate.getDay())) candidate.setDate(candidate.getDate() - 1);
+	// Set again on the chosen day: a time a clock change skipped today moves forward today only.
+	candidate.setHours(weekly.hour, weekly.minute, 0, 0);
 	if (candidate.getTime() < createdAt.getTime()) return { due: false, reason: "not_due" };
-	return { due: true, dueAt: candidate.toISOString(), strategy: "simple_daily_cron" };
+	// A chosen day that passed more than a day ago is skipped, as a daily schedule never runs more than
+	// a day late: a server that was off runs only the latest day, and only within a day.
+	if (weekly.days && now.getTime() - candidate.getTime() >= DAY_MS) return { due: false, reason: "not_due" };
+	return { due: true, dueAt: candidate.toISOString(), strategy: weekly.days ? "simple_weekly_cron" : "simple_daily_cron" };
 }
 
 export function computePersistentRoomScheduleDueOccurrence(
@@ -324,7 +358,7 @@ export function computePersistentRoomScheduleDueOccurrence(
 		const dueAt = new Date(anchor.getTime() + occurrenceIndex * intervalMs);
 		return { due: true, dueAt: dueAt.toISOString(), strategy: "interval_anchor" };
 	}
-	if (job.type === "cron") return computeSimpleDailyCronDueAt(job, now);
+	if (job.type === "cron") return computeSimpleWeeklyCronDueAt(job, now);
 	return { due: false, reason: "unsupported_cron_due_calculation" };
 }
 
@@ -448,6 +482,10 @@ export function parsePersistentRoomSchedule(scheduleRaw: unknown, typeRaw?: Pers
 	return { type: "once", schedule, nextRunAt: schedule };
 }
 
+function refuseUnrunnableSchedule(parsed: ParsedPersistentRoomSchedule): void {
+	if (!persistentRoomScheduleCanRun(parsed.type, parsed.schedule)) throw Object.assign(new Error(SCHEDULE_PATTERN_CANNOT_RUN_SENTENCE), { code: SCHEDULE_PATTERN_CANNOT_RUN_CODE });
+}
+
 function generateScheduleJobId(existingIds: Set<string>): string {
 	for (let attempt = 0; attempt < 20; attempt += 1) {
 		const id = `sched_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -476,6 +514,7 @@ export function addPersistentRoomScheduleJob(roomIdRaw: unknown, input: AddPersi
 	const store = readPersistentRoomScheduleStore(roomId);
 	const now = normalizeNow(input.now);
 	const parsed = parsePersistentRoomSchedule(input.schedule, input.type, { now });
+	if (input.refuseUnrunnable) refuseUnrunnableSchedule(parsed);
 	const createdAt = now.toISOString();
 	const job: PersistentRoomScheduleJob = {
 		id: generateScheduleJobId(new Set(store.jobs.map((existing) => existing.id))),
@@ -508,6 +547,17 @@ export function updatePersistentRoomScheduleJob(roomIdRaw: unknown, selector: Pe
 	if (input.enabled !== undefined) patch.enabled = input.enabled === true;
 	if (input.schedule !== undefined || input.type !== undefined) {
 		const parsed = parsePersistentRoomSchedule(input.schedule ?? current.schedule, input.type ?? current.type, { now });
+		const timingChanged = parsed.type !== current.type || parsed.schedule !== current.schedule;
+		// A pattern saved before the refusal stays editable as long as it is sent back unchanged.
+		if (input.refuseUnrunnable && timingChanged) refuseUnrunnableSchedule(parsed);
+		// createdAt fences cron occurrences, as restoring an archived room moves it: a task changed to new
+		// days never runs late on a day that had passed before the change. The same days written another
+		// way (the Weekly form sends 1-5 back as 1,2,3,4,5) are no change.
+		const next = timingChanged && parsed.type === "cron" ? parseSimpleWeeklyCron(parsed.schedule) : null;
+		const previous = current.type === "cron" ? parseSimpleWeeklyCron(current.schedule) : null;
+		const sameTiming = previous !== null && next !== null && previous.hour === next.hour && previous.minute === next.minute
+			&& previous.days !== null && next.days !== null && previous.days.size === next.days.size && [...next.days].every((day) => previous.days!.has(day));
+		if (next?.days && !sameTiming) patch.createdAt = now.toISOString();
 		patch.type = parsed.type;
 		patch.schedule = parsed.schedule;
 		patch.nextRunAt = parsed.nextRunAt;
@@ -529,118 +579,4 @@ export function removePersistentRoomScheduleJob(roomIdRaw: unknown, selector: Pe
 	const [removed] = store.jobs.splice(index, 1);
 	writePersistentRoomScheduleStore(store);
 	return removed;
-}
-
-function scheduleTypeFromInput(value: unknown): PersistentRoomScheduleType | undefined {
-	if (value === undefined || value === null || value === "") return undefined;
-	if (value === "once" || value === "interval" || value === "cron") return value;
-	throw new Error(`invalid schedule type: ${String(value)}`);
-}
-
-function resolveToolRoomId(options: SchedulePromptExtensionOptions, params: { roomId?: unknown }): string {
-	const configured = options.roomId ? validatePersistentRoomScheduleRoomId(options.roomId) : "";
-	const requested = String(params.roomId ?? "").trim();
-	if (configured && requested && requested !== configured) throw new Error("schedule_prompt is scoped to a different persistent room");
-	if (configured) return configured;
-	if (requested) return validatePersistentRoomScheduleRoomId(requested);
-	const fromEnv = String(process.env.EXXETA_PERSISTENT_ROOM_AGENT ?? "").trim();
-	if (fromEnv) return validatePersistentRoomScheduleRoomId(fromEnv);
-	throw new Error("schedule_prompt requires a persistent room id");
-}
-
-function scheduleJobSummary(job: PersistentRoomScheduleJob): string {
-	const state = job.enabled ? "enabled" : "disabled";
-	const next = job.nextRunAt ? ` next=${job.nextRunAt}` : "";
-	return `${state} ${job.name} (${job.id}) ${job.type} ${job.schedule}${next}`;
-}
-
-function managementOnlyNotice(): string {
-	return "This is a registry-only schedule record; autonomous scheduled execution is not enabled in this build.";
-}
-
-function detailsFor(roomId: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-	return { roomId, executionEnabled: false, managementOnly: true, ...extra };
-}
-
-export default function schedulePromptExtension(pi: ExtensionAPI, options: SchedulePromptExtensionOptions = {}): void {
-	pi.registerTool({
-		name: "schedule_prompt",
-		label: "Schedule prompt",
-		description: "Manage persistent-room schedule records. Registry-only in this build: records do not run autonomously yet.",
-		parameters: Type.Object({
-			action: Type.Union([
-				Type.Literal("add"),
-				Type.Literal("list"),
-				Type.Literal("remove"),
-				Type.Literal("enable"),
-				Type.Literal("disable"),
-				Type.Literal("update"),
-			]),
-			roomId: Type.Optional(Type.String({ description: "Persistent room id. Normally supplied by extension options when scoped to a room." })),
-			jobId: Type.Optional(Type.String({ description: "Schedule job id from list output." })),
-			name: Type.Optional(Type.String({ description: "Job name to create, or to match for remove/enable/disable/update when jobId is not supplied." })),
-			type: Type.Optional(Type.Union([Type.Literal("once"), Type.Literal("interval"), Type.Literal("cron")])),
-			schedule: Type.Optional(Type.String({ description: "Examples: +30m, tomorrow at 7, 1h, every hour, every day at 7am, 0 0 7 * * *." })),
-			prompt: Type.Optional(Type.String({ description: "Prompt text to store for the schedule record." })),
-			enabled: Type.Optional(Type.Boolean({ description: "Enabled state for add/update." })),
-		}),
-		async execute(_toolCallId, params): Promise<any> {
-			const roomId = resolveToolRoomId(options, params);
-			const action = String(params.action);
-
-			if (action === "list") {
-				const jobs = listPersistentRoomScheduleJobs(roomId);
-				const text = jobs.length === 0
-					? `No schedule records for persistent room ${roomId}. ${managementOnlyNotice()}`
-					: [`Schedule records for persistent room ${roomId}:`, ...jobs.map(scheduleJobSummary), managementOnlyNotice()].join("\n");
-				return { content: [{ type: "text", text }], details: detailsFor(roomId, { jobs }) };
-			}
-
-			if (action === "add") {
-				const job = addPersistentRoomScheduleJob(roomId, {
-					name: params.name,
-					type: scheduleTypeFromInput(params.type),
-					schedule: params.schedule,
-					prompt: params.prompt,
-					enabled: params.enabled,
-				});
-				return {
-					content: [{ type: "text", text: `Saved schedule record "${job.name}" (${job.id}) for persistent room ${roomId}. ${managementOnlyNotice()}` }],
-					details: detailsFor(roomId, { job }),
-				};
-			}
-
-			const selector = { jobId: params.jobId, name: params.name };
-			if (action === "remove") {
-				const job = removePersistentRoomScheduleJob(roomId, selector);
-				return {
-					content: [{ type: "text", text: `Removed schedule record "${job.name}" (${job.id}) from persistent room ${roomId}.` }],
-					details: detailsFor(roomId, { removed: job }),
-				};
-			}
-			if (action === "enable" || action === "disable") {
-				const enabled = action === "enable";
-				const job = setPersistentRoomScheduleJobEnabled(roomId, selector, enabled);
-				return {
-					content: [{ type: "text", text: `${enabled ? "Enabled" : "Disabled"} schedule record "${job.name}" (${job.id}) for persistent room ${roomId}. ${managementOnlyNotice()}` }],
-					details: detailsFor(roomId, { job }),
-				};
-			}
-			if (action === "update") {
-				const job = updatePersistentRoomScheduleJob(roomId, selector, {
-					name: params.name,
-					type: scheduleTypeFromInput(params.type),
-					schedule: params.schedule,
-					prompt: params.prompt,
-					enabled: params.enabled,
-				});
-				return {
-					content: [{ type: "text", text: `Updated schedule record "${job.name}" (${job.id}) for persistent room ${roomId}. ${managementOnlyNotice()}` }],
-					details: detailsFor(roomId, { job }),
-				};
-			}
-
-			throw new Error(`Unknown schedule_prompt action: ${action}`);
-		},
-	});
 }

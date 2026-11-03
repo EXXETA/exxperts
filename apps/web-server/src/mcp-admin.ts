@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stateHome } from "../../../pi-package/product-state-paths.js";
 import { isCredentialHeaderName } from "./mcp-status.js";
+import { serverHooks } from "./server-hooks.js";
 
 // Non-literal specifiers so tsc never resolves into the adapter's raw .ts
 // sources (same pattern as mcp-status.ts).
@@ -169,6 +170,8 @@ export async function addMcpServer(input: AddMcpServerInput): Promise<{ name: st
 	ensureAgentDirEnv();
 	const configMod = await import(ADAPTER_CONFIG);
 	const { name, entry } = validateAddInput(input);
+	const refusal = serverHooks().connectorEntryRefusal?.(entry);
+	if (refusal) throw new McpAdminError(refusal);
 	const merged = configMod.loadMcpConfig();
 	if (merged.mcpServers?.[name]) {
 		throw new McpAdminError(`A connector named "${name}" already exists. Remove it first or pick another name.`, 409);
@@ -396,7 +399,7 @@ async function explainSseFallback(entry: {
 	auth?: "bearer" | "oauth" | false;
 	bearerToken?: string;
 	bearerTokenEnv?: string;
-}): Promise<{ message: string; needsAuth: boolean } | null> {
+}): Promise<{ message: string; needsAuth: boolean; httpStatus: number } | null> {
 	const headers: Record<string, string> = { ...(entry.headers ?? {}) };
 	const token = entry.auth === "bearer" ? (entry.bearerToken ?? (entry.bearerTokenEnv ? process.env[entry.bearerTokenEnv] : undefined)) : undefined;
 	if (token) headers.Authorization = `Bearer ${token}`;
@@ -404,6 +407,7 @@ async function explainSseFallback(entry: {
 	try {
 		const response = await fetch(String(entry.url), {
 			method: "POST",
+			redirect: "manual",
 			headers: {
 				"Content-Type": "application/json",
 				Accept: "application/json, text/event-stream",
@@ -420,11 +424,11 @@ async function explainSseFallback(entry: {
 		const body = (await response.text()).trim();
 		if (response.status === 401 || response.status === 403) {
 			return hasStaticCredentials
-				? { message: `The server rejected the configured token (HTTP ${response.status}${body ? `: ${body}` : ""}). Check that the token is valid.`, needsAuth: false }
-				: { message: `This server requires authentication (HTTP ${response.status}${body ? `: ${body}` : ""}).`, needsAuth: true };
+				? { message: `The server rejected the configured token (HTTP ${response.status}${body ? `: ${body}` : ""}). Check that the token is valid.`, needsAuth: false, httpStatus: response.status }
+				: { message: `This server requires authentication (HTTP ${response.status}${body ? `: ${body}` : ""}).`, needsAuth: true, httpStatus: response.status };
 		}
 		if (!response.ok) {
-			return { message: `The server rejected the connection: HTTP ${response.status}${body ? `: ${body}` : ""}`, needsAuth: false };
+			return { message: `The server rejected the connection: HTTP ${response.status}${body ? `: ${body}` : ""}`, needsAuth: false, httpStatus: response.status };
 		}
 		return null;
 	} catch {
@@ -438,6 +442,8 @@ export interface McpServerTestResult {
 	toolNames?: string[];
 	needsAuth?: boolean;
 	error?: string;
+	/** The status the address answered with, when the test learned it; the page words its next step from it. */
+	httpStatus?: number;
 }
 
 export async function testMcpServer(name: string): Promise<McpServerTestResult> {
@@ -475,6 +481,7 @@ export async function testMcpServer(name: string): Promise<McpServerTestResult> 
 	} catch (e) {
 		let message = (e as Error).message ?? String(e);
 		let needsAuth = /unauthorized|401|needs-auth|oauth|authentication required/i.test(message);
+		let httpStatus: number | undefined;
 		// The adapter probes streamable HTTP first and, when that probe dies
 		// mid-OAuth (Figma refusing client registration, for example), silently
 		// falls back to legacy SSE — whose GET then fails with a status code
@@ -483,14 +490,14 @@ export async function testMcpServer(name: string): Promise<McpServerTestResult> 
 		// plain streamable POST and report that answer instead.
 		if (/SSE error: Non-200 status code/i.test(message) && typeof entry.url === "string") {
 			const explained = await explainSseFallback(entry);
-			if (explained) ({ message, needsAuth } = explained);
+			if (explained) ({ message, needsAuth, httpStatus } = explained);
 		}
 		if (needsAuth) {
 			// A stale tool cache would keep the UI claiming "no login needed";
 			// this connection attempt just proved otherwise.
 			await dropMetadataCacheEntry(name);
 		}
-		return { ok: false, error: trimTransportError(message), needsAuth };
+		return { ok: false, error: trimTransportError(message), needsAuth, ...(httpStatus === undefined ? {} : { httpStatus }) };
 	} finally {
 		try {
 			await manager.closeAll();

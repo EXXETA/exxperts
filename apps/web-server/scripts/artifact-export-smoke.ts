@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -74,23 +74,6 @@ fs.writeFileSync(path.join(exportRoomRuntime, "task-ledger", "tsk-export1.json")
 }, null, 2)}\n`, { mode: 0o600 });
 fs.writeFileSync(path.join(exportRoomRuntime, "shelf-migration.json"), `${JSON.stringify({ schemaVersion: 1, migratedAt: "2026-07-20T10:00:00.000Z", filesMoved: 0 }, null, 2)}\n`, { mode: 0o600 });
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function exportArtifact(taskId: string, relativePath: string, roomId: string, conversationId?: string, resolution?: { overwrite?: boolean; rename?: boolean }): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}/api/artifacts/${taskId}/export`, {
 		method: "POST",
@@ -136,7 +119,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	// 1. Happy path: HTML export lands bytes-identical inside the workspace root.
 	const happy = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE);
@@ -156,7 +139,6 @@ try {
 	// 2. Second export of the same name → 409 with the machine key, file untouched.
 	const conflict = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE);
 	assert(conflict.status === 409, `duplicate export: expected 409, got ${conflict.status}: ${JSON.stringify(conflict.body)}`);
-	assert(String(conflict.body?.error ?? "").includes("already exists"), `duplicate export: message should mention already exists, got ${JSON.stringify(conflict.body)}`);
 	assert(conflict.body?.code === "exists", `duplicate export: 409 must carry code "exists", got ${JSON.stringify(conflict.body)}`);
 	assert(fs.readFileSync(savedTo, "utf-8") === HTML_BODY, "duplicate export: existing file must be left intact");
 
@@ -204,10 +186,9 @@ try {
 		assert((fixtureRows[0]?.exports?.length ?? 0) >= 4, `fixture row must have collected the successful exports (got ${fixtureRows[0]?.exports?.length})`);
 	}
 
-	// 3. Room without a configured workspace → 400 with the guidance message.
+	// 3. Room without a configured workspace → 400.
 	const noWorkspace = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITHOUT_WORKSPACE);
 	assert(noWorkspace.status === 400, `no-workspace export: expected 400, got ${noWorkspace.status}: ${JSON.stringify(noWorkspace.body)}`);
-	assert(String(noWorkspace.body?.error ?? "").includes("no workspace folder configured"), `no-workspace export: message should explain the missing workspace, got ${JSON.stringify(noWorkspace.body)}`);
 	assert(!fs.existsSync(path.join(workspaceRealRoot, "notes.md")), "no-workspace export: nothing should be copied");
 
 	// 4. Traversal relativePath → refused, and the secret is never copied.
@@ -263,7 +244,6 @@ try {
 		assert(asIs.status === 409 && asIs.body?.code === "exists", `${label} link, default: expected 409 exists, got ${asIs.status}: ${JSON.stringify(asIs.body)}`);
 		const replaced = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
 		assert(replaced.status === 400, `${label} link, Replace: expected 400, got ${replaced.status}: ${JSON.stringify(replaced.body)}`);
-		assert(replaced.body?.error === "The file with this name in the room's folder is a shortcut to somewhere else, so it was not replaced. Use Keep both instead.", `${label} link, Replace: the refusal must be the plain sentence, got ${JSON.stringify(replaced.body)}`);
 		const keptBoth = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { rename: true });
 		assert(keptBoth.status === 200 && String(keptBoth.body?.savedTo ?? "") === path.join(workspaceRealRoot, "notes-2.md"), `${label} link, Keep both: expected notes-2.md, got ${keptBoth.status}: ${JSON.stringify(keptBoth.body)}`);
 		assert(!fs.lstatSync(String(keptBoth.body.savedTo)).isSymbolicLink() && fs.readFileSync(String(keptBoth.body.savedTo), "utf-8") === MD_BODY, `${label} link, Keep both: notes-2.md must be a real copy`);

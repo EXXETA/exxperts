@@ -14,6 +14,10 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+import { closeBrowser, closeContext } from "./smoke-close-context.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -87,15 +91,6 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -157,7 +152,7 @@ try {
 
 		// Enters the room from Home, has one exchange, and opens Remember's review on the entry.
 		async function reviewEntry(p: typeof page, room: string): Promise<ReturnType<typeof page.getByRole>> {
-			await p.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await p.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			const composer = p.locator("textarea").first();
 			await p.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 			await p.waitForTimeout(800);
@@ -228,9 +223,9 @@ try {
 		await page.waitForTimeout(1000);
 		assert(refusedEstimates.length === 0, `the dialog asks no estimate of the conversation a save leaves behind, got ${JSON.stringify(refusedEstimates)}`);
 		console.log("  ok  no estimate is asked once a save is under way or done");
-		await ctx.close();
+		await closeContext(ctx);
 	} finally {
-		await browser.close();
+		await closeBrowser(browser);
 	}
 	console.log("remember saved elsewhere smoke: ok");
 } catch (error) {

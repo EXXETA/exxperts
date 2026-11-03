@@ -6,13 +6,10 @@ export {};
 //   - a document in storage format survives parse and render byte for byte,
 //     CRLF, trailing spaces and blank-line structure included;
 //   - a pinned entry is never demoted, and neither is one the user kept.
-// Offline, no network, no writes anywhere: the real rooms under ~/.exxperts are
-// read and never touched, and the synthetic 66k memory comes from the bench
-// generator's stdout.
+// Offline, no network, no writes anywhere: the synthetic 66k memory comes from
+// the bench generator's stdout.
 
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -61,12 +58,6 @@ function firstDifference(a: string, b: string): string {
 		if (a[i] !== b[i]) return `at ${i}: ${JSON.stringify(a.slice(Math.max(0, i - 60), i + 60))} vs ${JSON.stringify(b.slice(Math.max(0, i - 60), i + 60))}`;
 	}
 	return "identical";
-}
-
-function differenceOffset(a: string, b: string): number {
-	let i = 0;
-	while (i < a.length && a[i] === b[i]) i++;
-	return i;
 }
 
 function entryCount(doc: Doc): number {
@@ -354,44 +345,6 @@ Durable understanding consolidated across sessions. Newer saved-on stamps win on
 	const again = migrateMemoryDocument(parseMemoryDocument(migratedBefore), { fallbackSaved: FALLBACK_SAVED });
 	assert(again.assigned === 0 && renderMemoryDocument(again.doc, "storage") === migratedBefore, "an already-migrated file is untouched, template words and all");
 	console.log("  migration drops the scaffold's opening paragraph and nothing else");
-}
-
-// --- 2. Real rooms on this machine, read-only --------------------------------
-
-{
-	// The runner gives the smoke a temp home and names the real one apart.
-	const roomsDir = path.join(process.env.SMOKE_LOGIN_HOME || os.homedir(), ".exxperts", "app", "personalized-agents");
-	let read = 0;
-	if (fs.existsSync(roomsDir)) {
-		for (const room of fs.readdirSync(roomsDir)) {
-			const file = path.join(roomsDir, room, "L1b", "current.md");
-			if (!fs.existsSync(file)) continue;
-			// Read only. Nothing under HOME is ever written by this smoke.
-			const raw = fs.readFileSync(file, "utf8");
-			// A failure names the room and an offset, never the memory's own text,
-			// so a log or a report never carries someone's notes.
-			try {
-				// A room the app has already saved on 0.12 carries its ids: migration
-				// assigns one to each entry that has none, less the scaffold's template
-				// paragraph it drops, so the count is bounded by the unmarked entries.
-				const parsed = parseMemoryDocument(raw);
-				const unmarked = parsed.topics.reduce((sum, topic) => sum + topic.entries.filter((entry) => !entry.id).length, 0);
-				const { doc: migrated, assigned } = migrateMemoryDocument(parsed, { fallbackSaved: FALLBACK_SAVED });
-				const storage = renderMemoryDocument(migrated, "storage");
-				const again = renderMemoryDocument(parseMemoryDocument(storage), "storage");
-				assert(again === storage, `${room}: the migrated file round-trips byte for byte (first difference at ${differenceOffset(storage, again)})`);
-				assert(migrateMemoryDocument(parseMemoryDocument(storage), { fallbackSaved: FALLBACK_SAVED }).assigned === 0, `${room}: migration is idempotent`);
-				assert(assigned <= unmarked, `${room}: migration assigned no more ids than there were entries without one (${assigned} of ${unmarked})`);
-				assert(migrated.topics.every((topic) => topic.entries.every((entry) => entry.id)), `${room}: every entry came out of migration with an id`);
-				assert(migrated.recentContext === parseMemoryDocument(raw).recentContext, `${room}: Recent Context is byte-identical after migration`);
-			} catch (error) {
-				if (error instanceof Error && error.message.startsWith(`${room}: `)) throw error;
-				throw new Error(`${room}: migrating the real room threw ${error instanceof Error ? error.name : typeof error}; its message is withheld, as it may quote the room's memory`);
-			}
-			read++;
-		}
-	}
-	console.log(`  real rooms migrated read-only: ${read}`);
 }
 
 // --- 3. The synthetic 66k memory ---------------------------------------------
@@ -915,6 +868,23 @@ const COUNTERLESS_DOC = `<!-- exxeta:l1b schema_version=1 -->
 	assert(JSON.stringify(pairOf(foldAll([{ id: "m-0001", text: "- The deposit is 6000 euros." }, { id: "m-0002", text: "- The deposit is 6000 euros." }]))) === JSON.stringify([null, null, 0]), "two notes rewritten to one value both lose the mark");
 	assert(JSON.stringify(pairOf(foldAll([{ id: "m-0001", text: "- The deposit is 7000 euros." }, { id: "m-0002", text: "- The deposit is 8000 euros." }]))) === JSON.stringify(["m-0002", "m-0001", 2]), "a note that agreed with the other's old text, rewritten away from in the same reply, keeps the mark on both");
 	console.log("  pairs: disagrees round-trips, the room's read alone shows a kept pair's days while both name each other, and a fold keeps the mark while the two still disagree");
+}
+
+// --- 15. A typed topic name the file cannot take -----------------------------
+// A heading would split the file, and "Active Items" would file a fact among the open items; every surface says why in the same words.
+
+{
+	const { memoryTopicNameProblem, topicNameSentence } = await import("../src/memory-typed-text.js");
+	const sentences = {
+		empty: "Write a name for the topic.",
+		heading: "A topic name can't start with #. Write it without the #.",
+		reserved: "Active Items is the name of a list memory keeps for itself. Choose another name.",
+		"too-long": "A topic name is at most 80 characters.",
+	} as const;
+	for (const [problem, sentence] of Object.entries(sentences)) assert(topicNameSentence(problem as keyof typeof sentences, "Active Items", 80) === sentence, `${problem}: got ${JSON.stringify(topicNameSentence(problem as keyof typeof sentences, "Active Items", 80))}`);
+	assert(memoryTopicNameProblem("") === "empty" && memoryTopicNameProblem("## Booking") === "heading" && memoryTopicNameProblem("Active Items") === "reserved" && memoryTopicNameProblem("C# tips") === null && memoryTopicNameProblem("x".repeat(81), { maxChars: 80 }) === "too-long", "each problem is found");
+	for (const sentence of Object.values(sentences)) assert(!/[<>]|\u2014/.test(sentence) && !/topic_|\bL1b\b|Deep Memory/.test(sentence), `no engine words: ${sentence}`);
+	console.log("  topic names: an empty name, a heading, the open items' own list and an overlong name are refused, each with its sentence");
 }
 
 console.log("memory-entries smoke passed");

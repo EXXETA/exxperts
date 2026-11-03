@@ -43,7 +43,8 @@ export interface McpConnectorStatus {
 	name: string;
 	transport: "http" | "stdio";
 	target: string;
-	source: { path: string; kind: string; importKind?: string } | null;
+	/** importFile: the other tool's own file an imported entry is read from (Cursor's ~/.cursor/mcp.json); Remove cannot remove such an entry, so a change is made there. */
+	source: { path: string; kind: string; importKind?: string; importFile?: string } | null;
 	auth: McpConnectorAuthStatus;
 	tools: McpConnectorToolsStatus | null;
 }
@@ -130,6 +131,8 @@ export async function getMcpConnectorsStatus(): Promise<McpConnectorsStatusRespo
 	const config = configMod.loadMcpConfig();
 	const provenance: Map<string, { path: string; kind: string; importKind?: string }> = configMod.getServerProvenance();
 	const cache = cacheMod.loadMetadataCache();
+	// The shared global file is no import kind, so its entries get no importFile: Remove works there.
+	const importFiles = new Map<string, string>((configMod.findAvailableImportConfigs() as Array<{ kind: string; path: string }>).map((found) => [found.kind, found.path]));
 
 	const servers: McpConnectorStatus[] = Object.entries(config.mcpServers ?? {}).map(([name, rawEntry]) => {
 		const entry = rawEntry as {
@@ -150,7 +153,7 @@ export async function getMcpConnectorsStatus(): Promise<McpConnectorsStatusRespo
 			name,
 			transport: entry.url ? "http" : "stdio",
 			target: entry.url ?? [entry.command ?? "", ...(entry.args ?? [])].join(" ").trim(),
-			source: source ? { path: tildePath(source.path), kind: source.kind, importKind: source.importKind } : null,
+			source: source ? { path: tildePath(source.path), kind: source.kind, importKind: source.importKind, ...(source.importKind && importFiles.has(source.importKind) ? { importFile: tildePath(importFiles.get(source.importKind)!) } : {}) } : null,
 			auth: {
 				mode,
 				explicit: mode === "oauth" && (entry.auth === "oauth" || (typeof entry.oauth === "object" && entry.oauth !== null)),

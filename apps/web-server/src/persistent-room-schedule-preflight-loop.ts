@@ -1,5 +1,6 @@
-import { isPersistentAgentArchived, listPersistentAgents } from "./persistent-agents.js";
-import type { PersistentAgentStatus } from "./persistent-agents.js";
+import fs from "node:fs";
+import { createPersistentAgentInstance, isPersistentAgentArchived } from "./persistent-agent-store.js";
+import { listPersistentAgentIds } from "./persistent-agent-status.js";
 import { scanPersistentRoomScheduleDueRuns } from "./persistent-room-schedule-due-scan.js";
 import type {
 	PersistentRoomScheduleDueScanResult,
@@ -39,11 +40,12 @@ export interface PersistentRoomSchedulePreflightLoopRunOnceOptions {
 	limitPerRoom?: number;
 	now?: () => Date;
 	logger?: PersistentRoomSchedulePreflightLoopLogger;
+	/** Asked between rooms: true ends the scan there, so a server stop makes no more runs. */
+	shouldStop?: () => boolean;
 }
 
 export interface PersistentRoomSchedulePreflightLoopRoomResult {
 	roomId: string;
-	status?: string;
 	result?: PersistentRoomScheduleDueScanResult;
 	error?: string;
 }
@@ -232,9 +234,12 @@ function logScanResult(logger: PersistentRoomSchedulePreflightLoopLogger | undef
 	);
 }
 
-function shouldSkipRoom(status: PersistentAgentStatus): boolean {
-	if (!status.exists) return true;
-	return isPersistentAgentArchived(status);
+// Only what the scan needs: a full room status settles saves and budgets for
+// every room, which held the server for seconds once rooms ran to thousands.
+function roomScanState(roomId: string): "missing" | "archived" | "live" {
+	const instance = createPersistentAgentInstance(roomId);
+	if (!fs.existsSync(instance.rootDir)) return "missing";
+	return isPersistentAgentArchived(instance.readAgentJson()) ? "archived" : "live";
 }
 
 export async function runPersistentRoomSchedulePreflightScanOnce(
@@ -246,32 +251,35 @@ export async function runPersistentRoomSchedulePreflightScanOnce(
 	const startedAt = now.toISOString();
 	const totals = emptyDueScanSummary();
 	const rooms: PersistentRoomSchedulePreflightLoopRoomResult[] = [];
-	const statuses = listPersistentAgents();
 	let scannedRoomCount = 0;
 	let skippedRoomCount = 0;
 
-	for (const status of statuses) {
-		const roomEntry: PersistentRoomSchedulePreflightLoopRoomResult = {
-			roomId: status.id,
-			status: status.status,
-		};
+	for (const roomId of listPersistentAgentIds()) {
+		// One room per turn of the event loop, so pages, answers and sockets
+		// are served while the scan runs.
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		if (options.shouldStop?.()) break;
+		const state = roomScanState(roomId);
+		// Archived rooms are left out of the result altogether, as the room list leaves them out.
+		if (state === "archived") continue;
+		const roomEntry: PersistentRoomSchedulePreflightLoopRoomResult = { roomId };
 		rooms.push(roomEntry);
 
-		if (shouldSkipRoom(status)) {
+		if (state === "missing") {
 			skippedRoomCount += 1;
 			continue;
 		}
 
 		scannedRoomCount += 1;
 		try {
-			const result = scanPersistentRoomScheduleDueRuns({ roomId: status.id, now, limit: resolved.limitPerRoom });
+			const result = scanPersistentRoomScheduleDueRuns({ roomId, now, limit: resolved.limitPerRoom });
 			roomEntry.result = result;
 			addDueScanSummary(totals, result.summary);
 		} catch (error) {
 			const message = safeErrorMessage(error);
 			roomEntry.error = message;
 			totals.errors += 1;
-			warn(resolved.logger, "Persistent room schedule preflight scan failed for room", { roomId: status.id, error: message });
+			warn(resolved.logger, "Persistent room schedule preflight scan failed for room", { roomId, error: message });
 		}
 	}
 
@@ -280,7 +288,7 @@ export async function runPersistentRoomSchedulePreflightScanOnce(
 		startedAt,
 		finishedAt,
 		durationMs: Math.max(0, Date.now() - started),
-		roomCount: statuses.length,
+		roomCount: rooms.length,
 		scannedRoomCount,
 		skippedRoomCount,
 		totals,
@@ -321,6 +329,8 @@ export function startPersistentRoomSchedulePreflightLoop(
 				limitPerRoom: resolved.limitPerRoom,
 				now: resolved.now,
 				logger: resolved.logger,
+				// A disabled loop starts out stopped but has no timer to stop: its manual runs scan every room.
+				shouldStop: () => resolved.enabled && stopped,
 			});
 			logScanResult(resolved.logger, result);
 			return result;

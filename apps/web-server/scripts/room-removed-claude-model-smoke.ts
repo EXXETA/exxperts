@@ -11,10 +11,10 @@
 //   enters once another model is picked;
 // - Remember, Memorize and Review with it as the Memory model end in the
 //   shared notice, which names the model and says nothing was lost;
-// - a scheduled run in that room is refused with the room's sentence;
+// - a scheduled run in that room is refused with the room's code;
 // - a specialist asked for with it as the Memory model refuses with the
 //   room's sentence, the same to the chat and to the room's model;
-// - AI setup's default set to it says so and points to Settings, AI setup.
+// - AI setup's default set to it says it is no longer offered.
 // The rest of the removed models are checked to be off the list and still in
 // the catalogue.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -26,6 +26,10 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -85,9 +89,12 @@ const provider = http.createServer((req, res) => {
 		requests.push(String(body.model));
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		sse(res, "message_start", { type: "message_start", message: { id: `msg_${requests.length}`, type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 1 } } });
+		const partsOf = (message: any): any[] => Array.isArray(message?.content) ? message.content : [{ type: "text", text: String(message?.content ?? "") }];
 		const last = Array.isArray(body.messages) ? body.messages[body.messages.length - 1] : undefined;
-		const parts: any[] = Array.isArray(last?.content) ? last.content : [{ type: "text", text: String(last?.content ?? "") }];
-		const toolResult = parts.find((part) => part?.type === "tool_result");
+		const toolResult = partsOf(last).find((part) => part?.type === "tool_result");
+		// The person's newest message: a room-state copy after it is the app's.
+		const isCopy = (message: any) => partsOf(message).some((part) => part?.type === "text" && String(part.text).startsWith(ROOM_STATE_HEADING));
+		const parts = partsOf(Array.isArray(body.messages) ? [...body.messages].reverse().find((message: any) => message?.role === "user" && !isCopy(message)) : undefined);
 		if (toolResult) delegateResults.push((Array.isArray(toolResult.content) ? toolResult.content : [{ text: toolResult.content }]).map((part: any) => String(part?.text ?? "")).join("\n"));
 		else if (parts.some((part) => part?.type === "text" && String(part.text).includes(DECK_REQUEST))) {
 			sse(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_deck", name: "delegate_task", input: {} } });
@@ -106,15 +113,6 @@ const provider = http.createServer((req, res) => {
 		res.end();
 	});
 });
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 async function api(pathname: string, init: { method?: string; body?: unknown } = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, { method: init.method ?? "GET", headers: init.body === undefined ? {} : { "content-type": "application/json" }, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) });
@@ -183,8 +181,8 @@ try {
 	// --- A scheduled run in a room set on it ------------------------------------------------
 	let scheduled: unknown = null;
 	try { roomModels.resolveScheduledRoomModel(startedRoom); } catch (error) { scheduled = error; }
-	assert(scheduled instanceof roomModels.RoomModelUnavailableError && scheduled.code === "room_model_unavailable" && /^This room's model, Claude Opus 4\.8, is no longer offered\. Choose another model in Room settings, Model\.$/.test(scheduled.message), `a scheduled run is refused with the room's sentence, got ${String(scheduled)}`);
-	pass("a scheduled run in a room set on Opus 4.8 is refused with the sentence that names it");
+	assert(scheduled instanceof roomModels.RoomModelUnavailableError && scheduled.code === "room_model_unavailable", `a scheduled run is refused with the room's code, got ${String(scheduled)}`);
+	pass("a scheduled run in a room set on Opus 4.8 is refused");
 
 	// --- The list and the catalogue ------------------------------------------------------------
 	const { getModel } = await import("@exxeta/exxperts-ai");
@@ -228,7 +226,7 @@ try {
 	await waitUntil(() => fetch(`${baseUrl}/healthz`).then((r) => r.ok).catch(() => false), "server ready");
 
 	const afterRememberBind = await firstSessionFrame(rememberRoom, afterRemember);
-	assert(afterRememberBind.type === "error" && afterRememberBind.code === "room_model_unavailable" && /^This room's model, Claude Opus 4\.8, is no longer offered\./.test(String(afterRememberBind.message)), `the empty conversation after Remember waits with the room instead of binding on the old lock, got ${JSON.stringify(afterRememberBind)}`);
+	assert(afterRememberBind.type === "error" && afterRememberBind.code === "room_model_unavailable", `the empty conversation after Remember waits with the room instead of binding on the old lock, got ${JSON.stringify(afterRememberBind)}`);
 	const memoryFiles = (fs.readdirSync(path.join(agentsRoot, rememberRoom), { recursive: true }) as string[]).filter((name) => name.endsWith(".md"));
 	assert(memoryFiles.some((name) => fs.readFileSync(path.join(agentsRoot, rememberRoom, name), "utf-8").includes("The question was asked on Opus 4.8.")), "the remembered conversation landed in the room's memory");
 	pass("after Remember the empty conversation waits with the room, and what was remembered is kept");
@@ -239,7 +237,7 @@ try {
 	const memorizeWork = await api(`/api/persistent-agents/${startedRoom}/absorb/assess`, { method: "POST", body: {} });
 	const reviewWork = await api(`/api/persistent-agents/${startedRoom}/review/assess`, { method: "POST", body: {} });
 	for (const [label, work] of [["Remember", rememberWork], ["Memorize", memorizeWork], ["Review", reviewWork]] as const) {
-		assert(work.body?.code === "model_unreachable" && work.body.details?.detail === "not-offered" && work.body.error === notice, `${label} ends in the shared notice, got ${work.status} ${JSON.stringify(work.body)}`);
+		assert(work.body?.code === "model_unreachable" && work.body.details?.detail === "not-offered", `${label} ends in the shared notice, got ${work.status} ${JSON.stringify(work.body)}`);
 	}
 	const { modelNoticeFromError } = await import(new URL("../../web-ui/src/components/model-notice.tsx", import.meta.url).href) as { modelNoticeFromError(error: unknown): { detail: string; sentence: string } | null };
 	const { ApiRequestError } = await import("../../web-ui/src/api.js");
@@ -290,7 +288,7 @@ try {
 		if (await dismiss.count()) await dismiss.click();
 
 		// --- A conversation started on it keeps answering ------------------------------------
-		await page.locator(".persistent-agent-card").filter({ hasText: "Started On Opus 4.8" }).getByRole("button", { name: "Resume →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Started On Opus 4.8" }).getByRole("button", { name: "Resume" }).click();
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
@@ -313,17 +311,21 @@ try {
 		await page.goto(`${baseUrl}/`);
 		await page.waitForLoadState("networkidle");
 		let requestsBefore = requests.length;
-		await page.locator(".persistent-agent-card").filter({ hasText: "Remembered On Opus 4.8" }).getByRole("button", { name: "Enter →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Remembered On Opus 4.8" }).getByRole("button", { name: "Enter" }).click();
 		await banner.waitFor({ timeout: 15000 });
 		assert((await banner.innerText()).startsWith("Claude Opus 4.8 is no longer offered. Choose another model to continue."), `the notice names the model, got ${JSON.stringify(await banner.innerText())}`);
 		assert((await banner.getByRole("button").allInnerTexts()).join("|") === "Choose another model", `the one way out is Choose another model, got ${JSON.stringify(await banner.getByRole("button").allInnerTexts())}`);
 		assert((await page.getByRole("button", { name: "Reconnect" }).count()) === 0 && (await page.locator('button[title="Waiting for the connection"]').count()) === 1, "no Reconnect, and Send waits");
 		await composer.fill("A draft written while the room waits.");
+		// Choose another model opens the conversation's own panel: a pick there moves this conversation, not the room's default.
 		await banner.getByRole("button", { name: "Choose another model" }).click();
-		await pickCurrentModel();
-		await waitUntil(async () => (await api(`/api/persistent-agents/${rememberRoom}/models`)).body?.models?.conversation?.effective?.model === CURRENT.model, "the room runs on the new pick");
-		await page.keyboard.press("Escape");
-		await page.locator(".room-model-section").waitFor({ state: "detached", timeout: 10000 });
+		const modelPanel = page.getByRole("dialog", { name: "Model and effort" });
+		await modelPanel.waitFor({ timeout: 10000 });
+		await modelPanel.getByRole("option", { name: /Opus 5\.5/ }).first().click();
+		const openConversation = async () => (await api(`/api/persistent-agents/${rememberRoom}/status`)).body?.runtime?.activeThreadId as string;
+		await waitUntil(async () => (await api(`/api/persistent-agents/${rememberRoom}/threads/${await openConversation()}`)).body?.thread?.model?.model === CURRENT.model, "the open conversation runs on the new pick");
+		if (await modelPanel.count()) await page.keyboard.press("Escape");
+		await modelPanel.waitFor({ state: "detached", timeout: 10000 });
 		await banner.waitFor({ state: "detached", timeout: 15000 });
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		assert(requests.length === requestsBefore, "nothing ran while the room waited");
@@ -341,7 +343,7 @@ try {
 		await page.waitForLoadState("networkidle");
 		requestsBefore = requests.length;
 		const card = page.locator(".persistent-agent-card").filter({ hasText: "Empty On Opus 4.8" });
-		const enter = card.getByRole("button", { name: "Enter →" });
+		const enter = card.getByRole("button", { name: "Enter" });
 		await enter.waitFor({ timeout: 15000 });
 		assert(await enter.isDisabled(), "Enter waits while the room's model cannot run");
 		assert(/^This room's model, Claude Opus 4\.8, is no longer offered\. Choose another model in Room settings, Model\.$/.test(String(await enter.getAttribute("title"))), `Enter's title carries the sentence, got ${JSON.stringify(await enter.getAttribute("title"))}`);
@@ -373,7 +375,7 @@ try {
 	const defaults = await api("/api/ai/defaults");
 	for (const task of ["conversation", "memory"] as const) {
 		const row = defaults.body?.defaults?.[task];
-		assert(row?.reason === "not-offered" && row.effective === null && new RegExp(`^The default ${task === "memory" ? "memory model" : "model"}, Claude Opus 4\\.8, is no longer offered\\. Choose another default in Settings, AI setup\\.$`).test(row.refusal), `the ${task} default names the model and points to AI setup, got ${JSON.stringify(row)}`);
+		assert(row?.reason === "not-offered" && row.effective === null, `the ${task} default says it is no longer offered, got ${JSON.stringify(row)}`);
 	}
 	const onDefault = agents.createPersistentAgentFromScaffoldInput({ displayName: "On The Default", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 	const refused = await api(`/api/persistent-agents/${onDefault}/threads/c_on_default`, { method: "PUT", body: { state: "active", origin: "launcher", items: [] } });

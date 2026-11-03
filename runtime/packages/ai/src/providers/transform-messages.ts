@@ -144,8 +144,10 @@ export function transformMessages<TApi extends Api>(
 				return block;
 			});
 
+			// The sources are shown to people and never sent: another model's copy leaves them out.
+			const { sources: _sources, ...forOtherModel } = assistantMsg;
 			return {
-				...assistantMsg,
+				...(isSameModel ? assistantMsg : forOtherModel),
 				content: transformedContent,
 			};
 		}

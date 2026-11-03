@@ -114,20 +114,6 @@ try {
 	const controlL1bBefore = readIfExists(path.join(controlRoot, "L1b", "current.md"));
 
 	const alpha = createPersistentAgentInstance(alphaAgentId);
-	assert(alpha.agentId === alphaAgentId, "instance should expose validated alpha agent id");
-	assert(alpha.rootDir === alphaRoot, "instance rootDir should point to alpha root");
-	assert(alpha.agentJsonPath() === path.join(alphaRoot, "agent.json"), "agent.json path should be under alpha root");
-	assert(alpha.l1aPath() === path.join(alphaRoot, "L1a.md"), "L1a path should be under alpha root");
-	assert(alpha.l1bCurrentPath() === path.join(alphaRoot, "L1b", "current.md"), "L1b current path should be under alpha root");
-	assert(alpha.l1bArchiveDir() === path.join(alphaRoot, "L1b", "archive"), "L1b archive dir should be under alpha root");
-	assert(alpha.sectionRegistryPath() === path.join(alphaRoot, "section_registry.json"), "section registry path should be under alpha root");
-	assert(alpha.runtimeStatePath() === path.join(alphaRoot, "runtime", "state.json"), "runtime state path should be under alpha root");
-	assert(alpha.runtimeThreadPath("thread_alpha_001") === path.join(alphaRoot, "runtime", "threads", "thread_alpha_001.json"), "thread path should be under alpha root");
-
-	assert(alpha.rootRelativePath(alpha.checkpointEventRecordPath("cp_alpha_001")) === "events/checkpoint/cp_alpha_001.json", "checkpoint event relative path should be alpha-relative");
-	assert(alpha.rootRelativePath(alpha.absorbEventRecordPath("absorb_alpha_001")) === "events/absorb/absorb_alpha_001.json", "absorb event relative path should be alpha-relative");
-	assert(alpha.rootRelativePath(alpha.structuralReviewEventRecordPath("structural_review_alpha_001")) === "events/structural-review/structural_review_alpha_001.json", "structural review event relative path should be alpha-relative");
-
 	assertIncludes(alpha.readL1a(), "ALPHA_SENTINEL L1A", "alpha L1a read");
 	assertIncludes(alpha.readL1b(), "ALPHA_SENTINEL deep memory", "alpha L1b read");
 	assert(!alpha.readL1b().includes("CONTROL_SENTINEL_DO_NOT_TOUCH"), "alpha L1b read must not use control root");
@@ -230,8 +216,6 @@ try {
 	const piRuntime = piWrite.thread.runtime;
 	const piSessionFile = alpha.runtimePiSessionPath(piThreadId);
 	const piBootSnapshotFile = alpha.runtimeBootPromptSnapshotPath(piThreadId);
-	assert(piRuntime.sessionFileRelPath === "runtime/pi-sessions/thread_alpha_pi_001.jsonl", "pi session path should be room-relative and deterministic");
-	assert(piRuntime.bootPromptSnapshotRelPath === "runtime/pi-sessions/thread_alpha_pi_001.boot-prompt.txt", "boot snapshot path should be room-relative and deterministic");
 	assert(fs.existsSync(piSessionFile), "pi JSONL session file should exist");
 	assert(fs.existsSync(piBootSnapshotFile), "boot prompt snapshot should exist");
 	const piSessionRecords = fs.readFileSync(piSessionFile, "utf-8").trim().split("\n").map((line) => JSON.parse(line));

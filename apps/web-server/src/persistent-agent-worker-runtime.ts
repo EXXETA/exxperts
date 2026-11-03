@@ -5,6 +5,9 @@ import {
 	SessionManager,
 	type CreateAgentSessionOptions,
 } from "@exxeta/exxperts-runtime";
+import { type CallKind, callCacheRetention } from "./memory-call-cache.js";
+import { roomLoaderSettings } from "./room-loader-settings.js";
+import { serverHooks } from "./server-hooks.js";
 
 type RuntimeModel = NonNullable<CreateAgentSessionOptions["model"]>;
 
@@ -54,8 +57,8 @@ export interface IsolatedPersistentAgentWorkerInput<TModelLock extends { provide
 	 * modelMaxOutputTokens, so a truncation names the limit that applied.
 	 */
 	maxTokens?: number;
-	/** The prompt cache this call asks for (memory-call-cache.ts); omitted, the provider default. */
-	cacheRetention?: CreateAgentSessionOptions["cacheRetention"];
+	/** Which kind of call it is: its prompt cache follows the policy for it (memory-call-cache.ts); omitted, the provider default. */
+	callKind?: CallKind;
 }
 
 export interface IsolatedPersistentAgentWorkerResult {
@@ -176,6 +179,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,
 		agentDir: input.agentDir,
+		settingsManager: roomLoaderSettings(input.cwd, input.agentDir),
 		noExtensions: true,
 		extensionFactories: [],
 		noSkills: true,
@@ -216,7 +220,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		model,
 		...(workerMaxTokens ? { maxTokens: workerMaxTokens } : {}),
 		...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-		...(input.cacheRetention ? { cacheRetention: input.cacheRetention } : {}),
+		...(input.callKind ? { cacheRetention: callCacheRetention(input.callKind, model) } : {}),
 		maxRetries: 0,
 		autoCompaction: false,
 		autoRetry: false,
@@ -322,7 +326,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		};
 		armIdle((idleTimeoutMs ?? 0) * 2);
 		try {
-			await created.session.prompt(input.triggerPrompt);
+			await created.session.prompt(input.triggerPrompt, serverHooks().promptOptions?.());
 		} finally {
 			if (timer) clearTimeout(timer);
 			if (idleTimer) clearTimeout(idleTimer);

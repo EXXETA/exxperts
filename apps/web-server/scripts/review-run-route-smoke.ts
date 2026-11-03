@@ -21,7 +21,8 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "review-run-route-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -248,23 +249,6 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	return env;
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 30_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, init);
 	const text = await response.text();
@@ -274,6 +258,8 @@ async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ 
 function jsonBody(method: string, body: unknown): AuthedFetchInit {
 	return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
+
+const waitUntil = waitEvery(300, 120_000);
 
 let server: ChildProcessWithoutNullStreams | null = null;
 const serverOutput: string[] = [];
@@ -306,7 +292,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30_000);
 
 	const created = await requestJson("/api/persistent-agents", jsonBody("POST", { displayName: "Review Run Route Smoke Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }));
 	assert(created.status === 201, `room creation should return 201, got ${created.status}: ${JSON.stringify(created.body)}`);
@@ -324,11 +310,7 @@ try {
 	const status = await requestJson(`${room}/review/status`);
 	assert(status.status === 200, `GET review/status should return 200, got ${status.status}: ${JSON.stringify(status.body)}`);
 	assert(status.body.available === true && !status.body.reason, `a room with notes should be able to review, got ${JSON.stringify(status.body)}`);
-	assert(status.body.topics === FIXTURE_TOPICS.length, `the status should count the titled topics that hold a note, got ${JSON.stringify(status.body.topics)}`);
-	assert(status.body.notes === FIXTURE_TOPICS.length * NOTES_PER_TOPIC + 2, `the status should count every note, got ${JSON.stringify(status.body.notes)}`);
 	assert(status.body.budget?.overBudget === true && status.body.budget.budgetTokens === MIN_BUDGET_TOKENS, `the status should measure this memory against the room's own budget, got ${JSON.stringify(status.body.budget)}`);
-	assert(status.body.recommendedDepth === "tidy", `a memory over its limit should be offered the deeper tidy first, got ${JSON.stringify(status.body.recommendedDepth)}`);
-	assert(status.body.writesMemory === false, "looking at a room's review never writes memory");
 
 	const badDepth = await requestJson(`${room}/review/runs`, jsonBody("POST", {}));
 	assert(badDepth.status === 400 && badDepth.body?.code === "review_run_bad_depth", `a review needs the depth the person chose, got ${badDepth.status}: ${JSON.stringify(badDepth.body)}`);
@@ -340,7 +322,6 @@ try {
 	assert(memorize.status === 202, `POST absorb/propose should return 202, got ${memorize.status}: ${JSON.stringify(memorize.body)}`);
 	const blocked = await requestJson(`${room}/review/runs`, jsonBody("POST", { depth: "tidy" }));
 	assert(blocked.status === 409 && blocked.body?.code === "review_absorb_active", `a review while the room is memorizing should be refused with its own code, got ${blocked.status}: ${JSON.stringify(blocked.body)}`);
-	assert(/updating its memory/.test(String(blocked.body?.error ?? "")), `the refusal should say what is in the way, got ${JSON.stringify(blocked.body?.error)}`);
 	const cancelledMemorize = await requestJson(`${room}/absorb/runs/${memorize.body.runId}/cancel`, jsonBody("POST", {}));
 	assert(cancelledMemorize.status === 200 && cancelledMemorize.body?.state === "cancelled", `the memory update should cancel, got ${cancelledMemorize.status}: ${JSON.stringify(cancelledMemorize.body?.state)}`);
 
@@ -356,16 +337,13 @@ try {
 
 	// --- 4. Watching the run until it is ready --------------------------------
 	const runUrl = `${room}/review/runs/${runId}`;
-	const pollDeadline = Date.now() + 120_000;
 	let run: any = null;
-	while (Date.now() < pollDeadline) {
+	await waitUntil(async () => {
 		const polled = await requestJson(runUrl);
 		assert(polled.status === 200, `GET review/runs/:runId should return 200 while the run is open, got ${polled.status}: ${JSON.stringify(polled.body)}`);
 		run = polled.body;
-		if (!["prepass", "tidying", "budget"].includes(String(run.state))) break;
-		await new Promise((resolve) => setTimeout(resolve, 300));
-	}
-	assert(run, "the run should have been readable at least once");
+		return !["prepass", "tidying", "budget"].includes(String(run.state));
+	}, "the run leaves prepass, tidying and budget");
 	assert(run.state === "ready", `the run should end ready to approve, got state ${JSON.stringify(run.state)}${run.error ? ` with error ${JSON.stringify(run.error)}` : ""}`);
 	assert(run.runId === runId && run.agentId === roomId, `the run should identify itself and its room, got ${JSON.stringify({ runId: run.runId, agentId: run.agentId })}`);
 	assert(run.depth === "tidy", `the run should carry the depth it was started with, got ${JSON.stringify(run.depth)}`);
@@ -385,16 +363,13 @@ try {
 	const kept = await requestJson(`${runUrl}/keep`, jsonBody("POST", { entryIds: [archivedRow.id] }));
 	assert(kept.status === 200, `POST review/runs/:runId/keep should return 200, got ${kept.status}: ${JSON.stringify(kept.body)}`);
 	assert(kept.body.demotion.keepIds.includes(archivedRow.id), `the kept note should be listed as kept, got ${JSON.stringify(kept.body.demotion.keepIds)}`);
-	// A budget row kept over the route stays on the list; a protected topic is
-	// accepted in the same body and leaves the kept ids alone.
+	// Both lists cross the route in one body; what a keep does to the rows is
+	// review-run-smoke.ts's.
 	const budgetRow = kept.body.demotion.entries.find((entry: any) => entry.leaving);
 	assert(budgetRow, `this memory is over its limit, so the run should list what would leave, got ${JSON.stringify(kept.body.demotion.counts)}`);
 	const keptBoth = await requestJson(`${runUrl}/keep`, jsonBody("POST", { keepIds: [archivedRow.id, budgetRow.id], keepTopics: [`${budgetRow.section}/${budgetRow.topic}`] }));
 	assert(keptBoth.status === 200, `POST review/runs/:runId/keep with both lists should return 200, got ${keptBoth.status}: ${JSON.stringify(keptBoth.body)}`);
-	const keptBudgetRow = keptBoth.body.demotion.entries.find((entry: any) => entry.id === budgetRow.id);
-	assert(keptBudgetRow?.kept === true && keptBudgetRow.leaving === false, `a kept row stays on the list, kept and no longer leaving, got ${JSON.stringify(keptBudgetRow)}`);
 	assert(JSON.stringify(keptBoth.body.demotion.keepTopics) === JSON.stringify([`${budgetRow.section}/${budgetRow.topic}`]) && keptBoth.body.demotion.keepIds.length === 2, `the run echoes both lists, got ${JSON.stringify(keptBoth.body.demotion)}`);
-	assert(keptBoth.body.demotion.counts.kept === keptBoth.body.demotion.entries.filter((entry: any) => entry.kept).length, `the counts are the server's, got ${JSON.stringify(keptBoth.body.demotion.counts)}`);
 	const backToOne = await requestJson(`${runUrl}/keep`, jsonBody("POST", { entryIds: [archivedRow.id], keepTopics: [] }));
 	assert(backToOne.status === 200 && backToOne.body.demotion.keepIds.length === 1 && backToOne.body.demotion.keepTopics.length === 0, `the older entryIds name still works, got ${JSON.stringify(backToOne.body?.demotion)}`);
 
@@ -424,9 +399,6 @@ try {
 	assert(pastTheModel.status === 400 && pastTheModel.body?.error === "A memory budget of 60k needs a larger Memory model than Room Model. Choose one in Room settings, Model first.", `a limit the Memory model cannot hold is refused on the card, got ${pastTheModel.status}: ${JSON.stringify(pastTheModel.body)}`);
 	const raised = await requestJson(`${runUrl}/budget`, jsonBody("POST", { budgetTokens: RAISED_BUDGET_TOKENS }));
 	assert(raised.status === 200 && raised.body.budget.budgetTokens === RAISED_BUDGET_TOKENS, `POST review/runs/:runId/budget should return the run measured against the new budget, got ${raised.status}: ${JSON.stringify(raised.body?.budget)}`);
-	assert(raised.body.demotion.counts.leaving === 0 && raised.body.demotion.entries.length >= kept.body.demotion.entries.length, `at ${RAISED_BUDGET_TOKENS} tokens nothing has to leave this memory and the rows stay listed, got ${JSON.stringify(raised.body.demotion.counts)}`);
-	const settingsAfterRaise = await requestJson(`${room}/maintenance-settings`);
-	assert(settingsAfterRaise.body?.settings?.memoryBudgetTokens === MIN_BUDGET_TOKENS && raised.body.budget.savedBudgetTokens === MIN_BUDGET_TOKENS, `raising the limit on the card must not store it on the room before Save, got ${JSON.stringify({ settings: settingsAfterRaise.body?.settings, budget: raised.body.budget })}`);
 
 	// --- 8. Approving: the one write ------------------------------------------
 	// A conversation open in the room that has started keeps the memory it started with, and the save says so.
@@ -434,11 +406,6 @@ try {
 	const approved = await requestJson(`${runUrl}/approve`, jsonBody("POST", {}));
 	assert(approved.status === 200, `POST review/runs/:runId/approve should return 200, got ${approved.status}: ${JSON.stringify(approved.body)}`);
 	assert(approved.body.openConversationKeepsMemory === true, `the save says the started open conversation keeps the memory it started with, got ${JSON.stringify(approved.body.openConversationKeepsMemory)}`);
-	assert(approved.body.budgetRaisedTo === RAISED_BUDGET_TOKENS && approved.body.memoryBudget?.budgetTokens === RAISED_BUDGET_TOKENS, `the limit the card raised is written by the save and named to the saved screen, got ${JSON.stringify({ budgetRaisedTo: approved.body.budgetRaisedTo, memoryBudget: approved.body.memoryBudget })}`);
-	const settingsAfterApproval = await requestJson(`${room}/maintenance-settings`);
-	assert(settingsAfterApproval.body?.settings?.memoryBudgetTokens === RAISED_BUDGET_TOKENS, `the limit the card raised is the room's from the save on, got ${JSON.stringify(settingsAfterApproval.body?.settings)}`);
-	assert(typeof approved.body.reviewId === "string" && approved.body.saveId === approved.body.reviewId, `an approval should name the write it made under both names, got ${JSON.stringify({ reviewId: approved.body.reviewId, saveId: approved.body.saveId })}`);
-	assert(approved.body.writesMemory === true && approved.body.notesChanged > 0, `an approval is the one write of the run, got ${JSON.stringify({ writesMemory: approved.body.writesMemory, notesChanged: approved.body.notesChanged })}`);
 	assert(approved.body.eventRelPath.startsWith("events/review/") && !path.isAbsolute(approved.body.eventRelPath), `an approval names its record by the room-relative path, got ${JSON.stringify(approved.body.eventRelPath)}`);
 	const approvalJson = JSON.stringify(approved.body);
 	for (const key of ["archivedL1bPath", "updatedL1bPath", "eventRecordPath"]) {

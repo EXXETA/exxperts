@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 // Environment check for every exxperts install type: verifies the things that
-// actually bite new setups and prints the fix for anything missing.
+// actually bite new setups and prints the fix for anything missing. The
+// desktop app's Health Check runs it.
 //
-//   exxperts doctor [--profile <clone|global|archive>]
+//   node scripts/doctor.mjs [--profile <clone|global|archive>]
 //   npm run doctor          (from a clone; same as --profile clone)
+//   node scripts/doctor.mjs --start-checks
+//                           (the launcher, after a failed start: only the
+//                           failing required checks that can stop a start)
 //
 // Install types (auto-detected, overridable with --profile):
 //   archive  prebuilt release archive (app/ next to vendor/node/)
@@ -48,7 +52,7 @@ function detectProfile() {
 
 const argv = process.argv.slice(2);
 if (argv.includes("--help") || argv.includes("-h")) {
-	console.log(`Usage: exxperts doctor [--profile <clone|global|archive>]
+	console.log(`Usage: node scripts/doctor.mjs [--profile <clone|global|archive>]
 
 Health check for any exxperts install. Auto-detects the install type (git
 clone, global install from source via npm, or prebuilt archive) and runs the
@@ -64,17 +68,23 @@ let profile = null;
 	const at = argv.indexOf("--profile");
 	if (at !== -1) profile = argv[at + 1] ?? "";
 	if (profile !== null && !["clone", "global", "archive"].includes(profile)) {
-		console.error(`Usage: exxperts doctor [--profile <clone|global|archive>]`);
+		console.error(`Usage: node scripts/doctor.mjs [--profile <clone|global|archive>]`);
 		process.exit(2);
 	}
 }
 const profileForced = profile !== null;
 profile = profile ?? detectProfile();
 const isClone = profile === "clone";
+// The launcher's question after a failed start: which required check that
+// can stop a start fails? Only those failures print; install-time checks,
+// the optional layers and the network are skipped.
+const startChecks = argv.includes("--start-checks");
 
 let failures = 0;
 let warnings = 0;
-const ok = (label, detail = "") => console.log(`  ✓ ${label}${detail ? ` - ${detail}` : ""}`);
+const ok = (label, detail = "") => {
+	if (!startChecks) console.log(`  ✓ ${label}${detail ? ` - ${detail}` : ""}`);
+};
 const bad = (label, fix) => {
 	failures++;
 	console.log(`  ✗ ${label}`);
@@ -82,17 +92,20 @@ const bad = (label, fix) => {
 };
 const warn = (label, hint) => {
 	warnings++;
+	if (startChecks) return;
 	console.log(`  ! ${label}`);
 	if (hint) console.log(`      ${hint}`);
 };
-const section = (title) => console.log(`\n${title}`);
+const section = (title) => {
+	if (!startChecks) console.log(`\n${title}`);
+};
 
 const isWindows = process.platform === "win32";
 
 // Doctor has to look at the tree the APP runs against, not at whatever
 // ~/.exxperts happens to be there. So it adopts the exxperts home the way the
 // launchers do (EXXPERTS_DATA_DIR, then the moved-folder pointer) and then
-// follows the active-profile pointer, the same two steps `exxperts cli` takes.
+// follows the active-profile pointer, the same two steps the launcher takes.
 // Both only move EXXPERTS_STATE_HOME: HOME is left alone, which is why the
 // browser cache and the shared MCP config further down still resolve against
 // the login home, exactly as they do for a running server.
@@ -121,7 +134,7 @@ function stateHome() {
 // npm version: only meaningful for the clone workflow. Under `npm run doctor`
 // the parent npm always sets npm_config_user_agent; fall back to spawning npm
 // when run directly.
-const npmVersion = isClone
+const npmVersion = isClone && !startChecks
 	? (() => {
 		const agentMatch = (process.env.npm_config_user_agent ?? "").match(/\bnpm\/(\d+[^ ]*)/);
 		if (agentMatch) return agentMatch[1];
@@ -132,7 +145,7 @@ const npmVersion = isClone
 
 // Environment header: the npm-gates week was debugged from screenshots, so
 // doctor's output alone should identify the environment.
-{
+if (!startChecks) {
 	const proxyVars = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"]
 		.filter((name) => process.env[name])
 		.map((name) => `${name}=${process.env[name]}`);
@@ -141,7 +154,7 @@ const npmVersion = isClone
 		global: "global (installed from source via npm, under an npm prefix)",
 		archive: "archive (prebuilt release, vendored Node)",
 	}[profile];
-	console.log("exxperts doctor");
+	console.log("exxperts health check");
 	console.log(`  install type: ${profileLabel}`);
 	console.log(`  root: ${root}`);
 	console.log(`  node ${process.version}${isClone ? ` | npm ${npmVersion ?? "(not detected)"}` : ""} | ${process.platform} ${process.arch}`);
@@ -260,7 +273,7 @@ if (profile === "global") {
 	ok("updates", "re-run the one-line installer (migrates to the prebuilt archive install), or from a clone: git pull && npm run install:global");
 }
 
-if (isClone) {
+if (isClone && !startChecks) {
 	section("Clone (source install)");
 
 	// --- npm / Node compatibility ---------------------------------------------------
@@ -369,7 +382,7 @@ if (isClone) {
 
 // --- xlsx (the one dependency fetched from cdn.sheetjs.com, not the npm registry;
 // corporate proxies that block that host make npm install fail on exactly this) ---
-if (isClone) {
+if (isClone && !startChecks) {
 	let xlsxInstalled = true;
 	try {
 		require.resolve("xlsx");
@@ -404,9 +417,13 @@ if (isClone) {
 	if (fs.existsSync(cliDist)) {
 		ok("runtime built (runtime/packages/coding-agent/dist)");
 	} else {
-		bad("runtime not built, the server and CLI will not start", "run `npm run build` from the repo root");
+		bad("runtime not built, the server will not start", "run `npm run build` from the repo root");
 	}
 }
+
+// The start checks end here. No fetch has run in this mode, so the hard exit
+// cannot race undici's teardown (see the end of this file).
+if (startChecks) process.exit(failures > 0 ? 1 : 0);
 
 section("Optional features");
 
@@ -458,7 +475,7 @@ section("Optional features");
 	} catch {
 		// unconfigured is a valid state
 	}
-	// One source of truth with `exxperts setup search`: spawn searxng.mjs (a CLI
+	// One source of truth with the app's web search setup: spawn searxng.mjs (a
 	// script, so spawn it rather than import it) and interpret its `status` line.
 	// Its resolveDocker() knows the container engines' off-PATH install
 	// locations that a bare which/where docker probe misses.
@@ -484,7 +501,7 @@ section("Optional features");
 		} else {
 			warn(
 				`web search: SearXNG configured but not answering at ${baseUrl} (${detail}); the built-in DuckDuckGo backend covers searches meanwhile`,
-				"run `exxperts setup search` and make sure the container engine (OrbStack, Docker Desktop, Colima or Podman) is running",
+				"start it in Settings, Web search, and make sure the container engine (OrbStack, Docker Desktop, Colima or Podman) is running",
 			);
 		}
 	} else if (provider === "disabled") {
@@ -495,12 +512,12 @@ section("Optional features");
 	} else if (containerRunning) {
 		warn(
 			`web search: the ${containerName} container is running but not configured as the backend (built-in DuckDuckGo is active)`,
-			"run `exxperts setup search` to use your SearXNG instance, then restart the app",
+			"choose it in Settings, Web search to use your SearXNG instance",
 		);
 	} else {
 		ok(
 			"web search built-in (DuckDuckGo)",
-			"optional: `exxperts setup search` runs a local SearXNG for heavier use",
+			"optional: Settings, Web search runs a local SearXNG for heavier use",
 		);
 	}
 }

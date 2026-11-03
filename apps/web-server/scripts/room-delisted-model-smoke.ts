@@ -6,15 +6,15 @@
 // Claude sign-in, then checks through the server: the room status names the
 // model, the thread resumes (PUT and WebSocket bind) on its own lock whatever
 // model the client names, a new conversation starts on the room's model even
-// when the client names the delisted one, the old model-selection route is
-// gone, and the fresh thread after a Forget and after a Remember starts on the
-// room's model (the first curated one, by default).
+// when the client names the delisted one, and the fresh thread after a Forget
+// and after a Remember starts on the room's model (the first curated one, by
+// default).
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -39,23 +39,6 @@ const delisted = { provider: "anthropic", model: "claude-opus-4-5", label: "Opus
 const curatedFirst = { provider: "anthropic", model: "claude-opus-5-5" };
 const serverOutput: string[] = [];
 let server: ChildProcessWithoutNullStreams | null = null;
-
-async function waitForServer(child: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (child.exitCode != null) throw new Error(`server exited before startup with code ${child.exitCode}: ${serverOutput.join("")}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 async function requestJson(pathname: string, init: { method?: string; body?: string } = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, { ...init, headers: init.body ? { "content-type": "application/json" } : {} });
@@ -129,7 +112,9 @@ try {
 	server = spawn("npx", ["tsx", "src/index.ts"], { shell: process.platform === "win32", ...SMOKE_SERVER_SPAWN_TREE_OPTIONS, cwd: webServerDir, env: smokeEnv() });
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20000).catch((error: Error) => {
+		throw new Error(`${error.message}: ${serverOutput.join("")}`);
+	});
 
 	// The room status names the model the conversation runs on.
 	const statuses = await requestJson("/api/persistent-agents");
@@ -163,8 +148,6 @@ try {
 	assert(newPut.status === 200 && newPut.body?.thread?.model?.model === curatedFirst.model, `a PUT that creates a thread naming the delisted model starts it on the room's model, got ${newPut.status}: ${JSON.stringify(newPut.body?.thread?.model)}`);
 	const newBind = await firstSessionFrame(agentId, "c_new_on_delisted", delisted);
 	assert(newBind.type === "ready" && newBind.model?.model === curatedFirst.model, `and the session binds on it, got ${JSON.stringify(newBind)}`);
-	const selection = await requestJson("/api/persistent-agent-room/model-selection", { method: "POST", body: JSON.stringify(curatedFirst) });
-	assert(selection.status === 404, `the old model-selection route is gone, got ${selection.status}`);
 
 
 	await stopSmokeServer(server);

@@ -183,26 +183,17 @@ try {
 	assert(!/topology|missing Recent Context|is not a note of this group/.test(leftAsIs), "a cut reply must not surface as a structure complaint");
 
 	// 5. Remember never refuses a cut reply: it climbs the ladder (the next
-	// lower density, a word target) and keeps what came complete.
+	// lower density, a word target) before it keeps what came complete. What the
+	// salvage keeps, and a missing BODY, are remember-never-fails-smoke.ts's.
 	const conversationId = "c_truncation_smoke";
 	const items = [{ kind: "user" as const, id: "u1", text: "Synthetic session message for the truncation smoke." }];
 	writePersistentAgentThread(agentId, conversationId, { state: "active", origin: "home", model: CHECKPOINT_MODEL, items });
 	let checkpointCalls = 0;
-	const salvaged = await buildCheckpointProposal({ agentId, conversationId, model: CHECKPOINT_MODEL, density: "standard", items }, async () => {
+	await buildCheckpointProposal({ agentId, conversationId, model: CHECKPOINT_MODEL, density: "standard", items }, async () => {
 		checkpointCalls += 1;
 		return truncatedResult("TITLE:\nCut checkpoint\n\nSESSION_ARC:\nThe session was cut.\n\nBODY:\n- A complete point.\n\n- A cut poi");
 	});
 	assert(checkpointCalls === 3, `a cut reply is asked twice more, then kept (got ${checkpointCalls} calls)`);
-	assert(/A complete point/.test(salvaged.fields.body) && !/A cut poi/.test(salvaged.fields.body) && !/Shortened/.test(salvaged.fields.body), "the salvage keeps the complete paragraphs, with no marker");
-
-	// 6. A reply missing BODY, then cut replies: the same ladder, never a refusal.
-	checkpointCalls = 0;
-	const afterMissing = await buildCheckpointProposal({ agentId, conversationId, model: CHECKPOINT_MODEL, density: "standard", items }, async () => {
-		checkpointCalls += 1;
-		if (checkpointCalls === 1) return { text: "TITLE:\nRetry smoke\n\nSESSION_ARC:\nComplete first attempt missing BODY.\n\nPARKED:\nNone\n" };
-		return truncatedResult("TITLE:\nRetry cut");
-	});
-	assert(checkpointCalls === 3 && afterMissing.fields.title.length > 0, `a missing BODY climbs the ladder too (got ${checkpointCalls} calls)`);
 
 	// 7. Consult: truncated answer refuses honestly instead of returning a cut answer.
 	await expectRejects(

@@ -18,6 +18,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 {
 	const p = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
@@ -46,15 +49,6 @@ process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
 process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -121,7 +115,7 @@ try {
 		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		const failures: string[] = [];
 		const enterRoom = async (page: Page, name: string) => {
-			await page.locator(".persistent-agent-card").filter({ hasText: name }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await page.locator(".persistent-agent-card").filter({ hasText: name }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await page.locator("textarea").first().waitFor({ timeout: 20_000 });
 		};
 		const openRoomSettings = async (page: Page, pane: string) => {
@@ -144,7 +138,7 @@ try {
 		const connectors = await openPage(ctx);
 		await openSettings(connectors, "Web search");
 		const room = await openPage(ctx);
-		await room.locator(".persistent-agent-card").filter({ hasText: "Strip Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await room.locator(".persistent-agent-card").filter({ hasText: "Strip Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await room.locator("textarea").first().waitFor({ timeout: 20_000 });
 		await room.keyboard.press("ControlOrMeta+Comma");
 		await room.waitForSelector(".settings-overlay", { timeout: 10_000 });
@@ -171,7 +165,7 @@ try {
 		await home.goBack();
 		await strip(home).waitFor({ timeout: 15_000 });
 		if ((await stripText(home)) !== SENTENCE) failures.push(`a room left with no answer to its save: the strip reads "${await stripText(home)}", not the sentence alone`);
-		await home.locator(".persistent-agent-card").filter({ hasText: "Strip Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await home.locator(".persistent-agent-card").filter({ hasText: "Strip Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		const sentenceStrip = strip(home).filter({ hasText: SENTENCE });
 		await sentenceStrip.waitFor({ timeout: 15_000 });
 		const banner = home.locator(".connection-lost-banner");

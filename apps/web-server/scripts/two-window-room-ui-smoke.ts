@@ -12,6 +12,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -78,15 +81,6 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 const MOVED = "This room went on in another window. Reload to continue there.";
@@ -119,6 +113,9 @@ try {
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
 	await waitUntil(() => fetch(`${baseUrl}/healthz`).then((r) => r.ok).catch(() => false), "server ready");
+	// When the room's lock was last taken: a window whose connection is ready holds it.
+	const lockTakenAt = async () => Number(((await (await authedFetch(`${baseUrl}/api/persistent-agents`)).json()) as Array<{ id: string; activeLock?: { acquiredAt?: number } | null }>).find((room) => room.id === agentId)?.activeLock?.acquiredAt ?? 0);
+	const lockTakenSince = (before: number, label: string) => waitUntil(async () => (await lockTakenAt()) > before, label);
 	const activeThread = async () => String(((await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/status`)).json()) as { runtime?: { activeThreadId?: string } }).runtime?.activeThreadId ?? "");
 
 	const browser = await chromium.launch();
@@ -129,10 +126,10 @@ try {
 		await a.waitForLoadState("networkidle");
 		const dismiss = a.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
-		await a.locator(".persistent-agent-card").filter({ hasText: "Two Window Room" }).getByRole("button", { name: "Enter →" }).click();
+		await a.locator(".persistent-agent-card").filter({ hasText: "Two Window Room" }).getByRole("button", { name: "Enter" }).click();
 		const composerA = a.locator("textarea").first();
 		await a.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await a.waitForTimeout(800);
+		await lockTakenSince(0, "window A's connection is ready");
 		await composerA.fill("First question.");
 		await composerA.press("Enter");
 		await a.getByText("Answer from claude-fake.").first().waitFor({ timeout: 20000 });
@@ -142,15 +139,17 @@ try {
 
 		// Window B opens the room by its address and moves it on: Forget starts a fresh conversation.
 		const b = await ctx.newPage();
+		const beforeB = await lockTakenAt();
 		await b.goto(`${baseUrl}/#/room/${agentId}`);
 		await b.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await b.getByText("First question.").first().waitFor({ timeout: 30000 });
-		await b.waitForTimeout(800);
+		await lockTakenSince(beforeB, "window B's connection is ready");
+		const beforeForget = await lockTakenAt();
 		await b.getByRole("button", { name: "Forget" }).click();
 		await b.getByRole("button", { name: "Forget", exact: true }).last().click();
 		await waitUntil(async () => { const now = await activeThread(); return !!now && now !== first; }, "the room is on a new conversation");
 		const moved = await activeThread();
-		await b.waitForTimeout(1500);
+		await lockTakenSince(beforeForget, "window B's fresh conversation is connected");
 
 		// Window A still shows the old conversation: a message typed there stays in the box with the plain line.
 		const typed = "Typed in the old window.";
@@ -165,10 +164,11 @@ try {
 		assert(await a.getByRole("button", { name: "Reload" }).count() === 1, "the line offers Reload");
 
 		// Reload joins the room's new conversation, keeps the message, and sends it there.
+		const beforeReload = await lockTakenAt();
 		await a.getByRole("button", { name: "Reload" }).click();
 		await waitUntil(async () => (await a.getByText(MOVED).count()) === 0, "the line goes after Reload");
 		await a.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await a.waitForTimeout(800);
+		await lockTakenSince(beforeReload, "window A's connection is ready after Reload");
 		assert(await activeThread() === moved, "Reload does not retire the conversation the other window shows");
 		assert(await a.locator("textarea").first().inputValue() === typed, `the message is still in the box after Reload, got ${JSON.stringify(await a.locator("textarea").first().inputValue())}`);
 		assert(await a.getByText("First question.").count() === 0, "window A now shows the room's new conversation");
@@ -179,10 +179,11 @@ try {
 		// A third window moves the room on again: Remember in window A says the same line, never that it stopped unexpectedly.
 		await waitUntil(async () => JSON.stringify(await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/threads/${moved}`)).json()).includes(typed), "window A's message is saved");
 		const c = await ctx.newPage();
+		const beforeC = await lockTakenAt();
 		await c.goto(`${baseUrl}/#/room/${agentId}`);
 		await c.getByText(typed).first().waitFor({ timeout: 15000 });
 		await c.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await c.waitForTimeout(800);
+		await lockTakenSince(beforeC, "window C's connection is ready");
 		await c.getByRole("button", { name: "Forget" }).click();
 		await c.getByRole("button", { name: "Forget", exact: true }).last().click();
 		await waitUntil(async () => { const now = await activeThread(); return !!now && now !== moved; }, "the room is on a third conversation");

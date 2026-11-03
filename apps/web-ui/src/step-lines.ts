@@ -5,6 +5,7 @@
  * the step from running) from a failure (the step ran and did not work).
  */
 import { contentPolicyPlainLine } from "../../../pi-package/extensions/content-policy/words";
+import { STOPPED_BEFORE_ANSWER_SENTENCE } from "../../web-server/src/turn-ended-by";
 
 /** The step a refusal came from: its tool, what it was asked, and the details the tool sent back. */
 type Step = { name?: string; args?: any; details?: any };
@@ -29,13 +30,17 @@ const NO_SUCH_TOOL = /^Tool (\S+) not found$/;
 // The stop's answer to a turn's questions: STOP_QUESTIONS_SENTENCE in server-stop.ts.
 const STOPPED_BEFORE_ASKING = /^exxperts is stopping, so questions cannot be answered now\./;
 
+// The answer the person's Stop gives a turn's open question.
+const STOPPED_BEFORE_ANSWER = new RegExp(`^${STOPPED_BEFORE_ANSWER_SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+
 const CONNECTOR_OFF = "This connector is not on for this room. You can turn it on in Room settings, Connectors.";
 
 // Each pattern is a sentence the tools write (persistent-room-workspace-tools.ts,
 // the runtime's file tools, mcp/room-scope.ts, persistent-room-skill-tool.ts,
 // persistent-room-shelf-tools.ts, persistent-room-bash-approval.ts, persistent-room-delegate-tool.ts, fetch_url,
-// web-search, the message index.ts gives a turn's questions when the person leaves, and
-// the one server-stop.ts gives them when exxperts stops);
+// web-search, the message room-socket.ts gives a turn's questions when the person leaves, and
+// the one server-stop.ts gives them when exxperts stops, and the one turn-ended-by.ts gives
+// them when the person presses Stop);
 // a change there must change its match here. The line never repeats the
 // label's words: the label already says the step did not happen.
 const REFUSED_LINES: Array<[RegExp, Line]> = [
@@ -53,10 +58,11 @@ const REFUSED_LINES: Array<[RegExp, Line]> = [
 	[/^Skill "[^"]*" is not enabled for this room\./, "This skill is not on for this room. You can turn it on in Room settings, Skills."],
 	[/^The user declined this command\./, "You declined this command."],
 	[STOPPED_BEFORE_ASKING, "exxperts was stopping, so it could not ask you."],
+	[STOPPED_BEFORE_ANSWER, "You pressed Stop before answering."],
 	[/^File already exists in selected workspace\./, "That file is already there; the room did not overwrite it."],
 	// Switched off in AI setup: the tool's own sentence already says where to turn it back on.
 	[/^(Web search is switched off in AI setup under Web search\. Turn it back on there to use it\.)/, (match) => match[1]],
-	// A room runs one specialist at a time (index.ts), so the count is usually 1.
+	// A room runs one specialist at a time (room-socket.ts), so the count is usually 1.
 	[/^The specialist limit \((\d+) at a time\) is reached\./, (match) => (match[1] === "1" ? "1 specialist is already working. Try again when it finishes." : `${match[1]} specialists are already working. Try again when one finishes.`)],
 ];
 
@@ -87,7 +93,7 @@ export function stepOutcome(result: string, step: Step = {}, sharedServer = fals
 		return { line, refused: true };
 	}
 	// The connector adapter's sign-in refusals vary in wording; its error code does not.
-	// On a shared server only the admin can sign a connector in.
+	// On a shared server connector sign-ins are off, so the person is sent to the admin.
 	if (step.details?.error === "auth_required") return { line: sharedServer ? "This connector needs a sign-in: tell your admin." : "This connector needs you to sign in: Settings, Connectors.", refused: false };
 	for (const [lines, refused] of [[REFUSED_LINES, true], [FAILED_LINES, false]] as const) {
 		for (const [pattern, line] of lines) {
@@ -123,6 +129,11 @@ export function nobodyToApprove(result: string | undefined): boolean {
 /** A step whose question exxperts declined because it was stopping. */
 export function stoppedBeforeAsking(result: string | undefined): boolean {
 	return typeof result === "string" && STOPPED_BEFORE_ASKING.test(result);
+}
+
+/** A step whose question the person's Stop answered: it did not happen. */
+export function stoppedBeforeAnswer(result: string | undefined): boolean {
+	return typeof result === "string" && result.startsWith(STOPPED_BEFORE_ANSWER_SENTENCE);
 }
 
 /** A command ended by Stop: the shell tool ends its result with this line. */

@@ -15,6 +15,7 @@
  * construct it.
  */
 
+import { isNoShellFoundMessage } from "@exxeta/exxperts-runtime";
 import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "./room-approval-titles.js";
 
 export type PersistentRoomBashApprovalDecision = { allow: true } | { allow: false; reason: string };
@@ -62,7 +63,7 @@ export function createPersistentRoomBashApprovalGuard(options: CreatePersistentR
 				PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE,
 				[
 					...(cwd ? [`Runs in: ${cwd}`] : []),
-					"You can auto-approve bash for this room in Workspace settings.",
+					"You can auto-approve bash for this room in Room settings, Folder.",
 					"",
 					// Anti-spoof separator: everything below is the room model's own
 					// text appended after the app-drawn facts above; a command that
@@ -80,20 +81,48 @@ export function createPersistentRoomBashApprovalGuard(options: CreatePersistentR
 	};
 }
 
+// Set on a command's result details once it ran. The runtime gives a
+// refused, a missing and a failed command the same error result, and a
+// command that ran and then failed may still have changed things
+// (edit-last-message.ts names it among the steps an edit does not undo).
+const COMMAND_RAN = "commandRan";
+
+/** Whether a command's result says it ran, whatever its exit. */
+export function commandRan(details: unknown): boolean {
+	return !!details && typeof details === "object" && (details as Record<string, unknown>)[COMMAND_RAN] === true;
+}
+
+interface BashApprovalExtensionApi {
+	on(event: "tool_call", handler: (event: any, ctx: any) => Promise<{ block: boolean; reason: string } | undefined>): void;
+	on(event: "tool_result", handler: (event: any) => Promise<{ details: Record<string, unknown> } | undefined>): void;
+}
+
 /**
  * The room-scoped extension that interposes the guard: only `bash` tool calls
  * are touched, every other tool passes through untouched. Built inside the
  * live web session bind only, so background, scheduled, and specialist runs
- * (which never get bash anyway) never see an approval pause.
+ * (which never get bash anyway) never see an approval pause. The runtime
+ * calls `tool_result` for a call it executed, never for one a hook blocked or
+ * the turn stopped before, so a bash result there marks the command as run,
+ * except the no-shell failure, which started nothing. This extension is
+ * registered before the one that rewrites that failure's words, so it reads
+ * them raw (persistent-room-shell-missing.ts).
  */
 export function createPersistentRoomBashApprovalExtension(guard: PersistentRoomBashApprovalGuard) {
-	return async function persistentRoomBashApproval(pi: { on: (event: "tool_call", handler: (event: any, ctx: any) => Promise<{ block: boolean; reason: string } | undefined>) => void }) {
+	return async function persistentRoomBashApproval(pi: BashApprovalExtensionApi) {
 		pi.on("tool_call", async (event: any, ctx: any) => {
 			if (event?.toolName !== "bash") return undefined;
 			const command = typeof event?.input?.command === "string" ? event.input.command : "";
 			const decision = await guard.beforeBashCall(command, ctx);
 			if (decision.allow) return undefined;
 			return { block: true, reason: decision.reason };
+		});
+		pi.on("tool_result", async (event: any) => {
+			if (event?.toolName !== "bash") return undefined;
+			const content: Array<{ type?: string; text?: string }> = Array.isArray(event.content) ? event.content : [];
+			if (event.isError === true && isNoShellFoundMessage(content.map((part) => (part?.type === "text" ? String(part.text ?? "") : "")).join("\n"))) return undefined;
+			const details = event.details && typeof event.details === "object" ? event.details as Record<string, unknown> : {};
+			return { details: { ...details, [COMMAND_RAN]: true } };
 		});
 	};
 }

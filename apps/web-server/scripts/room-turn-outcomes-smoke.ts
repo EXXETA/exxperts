@@ -25,6 +25,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -123,15 +126,6 @@ const endpoint = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -187,15 +181,17 @@ try {
 			}, `"${text}" was sent`, 15000);
 		};
 		const callsFor = (pattern: RegExp) => calls.filter((words) => pattern.test(words)).length;
+		// Once the server has settled the turn, the page shows its end: Stop gives way to Send.
+		const pageTurnEnded = () => waitUntil(async () => (await page.locator(".stop-btn").count()) === 0 && (await page.locator('button[title="Send"]').count()) > 0, "the page shows the turn ended", 15000);
 
 		// Too long in a fresh conversation: nothing earlier to summarize, so no summary call, and the overflow line is the turn's one line.
 		let before = (await errorTexts()).length;
 		await send("Too long already, sorry.");
 		await waitUntil(async () => (await errorTexts()).length > before, "the fresh overflow shows a line", 30000);
 		await settled();
-		await new Promise((resolve) => setTimeout(resolve, 1500));
+		await pageTurnEnded();
 		const freshLines = (await errorTexts()).slice(before);
-		assert(freshLines.length === 1 && freshLines[0] === `${MODEL_NAME} can't read this conversation at once. Your message is back in the box. Continue on a model that can read more at once.`, `one overflow line for the fresh turn in a room with nothing in memory: the model and the conversation, where the message is, then the way on, got ${JSON.stringify(freshLines)}`);
+		assert(freshLines.length === 1 && freshLines[0] === `${MODEL_NAME} can't read this conversation at once. Continue on a model that can read more at once.`, `one overflow line for the fresh turn in a room with nothing in memory: the model and the conversation, then the way on, got ${JSON.stringify(freshLines)}`);
 		assert((await newest.locator(".failure-actions .rs-btn").allInnerTexts()).join("|") === "Choose another model", `with nothing in memory yet, the overflow line offers another model and no Review, got ${JSON.stringify(await newest.locator(".failure-actions .rs-btn").allInnerTexts())}`);
 		assert((await composer.inputValue()) === "Too long already, sorry.", `the fresh overflow hands the message back, got ${JSON.stringify(await composer.inputValue())}`);
 		assert(callsFor(/<conversation>/i) === 0, `no summary is asked for when nothing precedes the message, got ${callsFor(/<conversation>/i)}`);
@@ -206,9 +202,9 @@ try {
 		await send("A spent quota, sorry.");
 		await waitUntil(async () => (await errorTexts()).length > before, "the spent quota shows a line");
 		await settled();
-		await new Promise((resolve) => setTimeout(resolve, 2500));
+		await pageTurnEnded();
 		assert(callsFor(/spent quota/i) === 1, `a spent quota is asked once, got ${callsFor(/spent quota/i)} calls`);
-		assert((await errorTexts()).at(-1) === `${MODEL_NAME} has reached its usage limit or run out of credit. Your message is back in the box. Check the balance at console.anthropic.com, or choose another model.`, `the usage-limit line stays, got ${JSON.stringify((await errorTexts()).at(-1))}`);
+		assert((await errorTexts()).at(-1) === `${MODEL_NAME} has reached its usage limit or run out of credit. Check the balance at console.anthropic.com, or choose another model.`, `the usage-limit line stays, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		assert((await page.getByText(/Trying again…|Retrying…/).count()) === 0, "no retry note is left");
 		console.log("  ok  a spent quota is asked once, then the usage-limit line");
 
@@ -218,7 +214,7 @@ try {
 		// The assert below says what happened when the second call never comes.
 		await waitUntil(() => callsFor(/per-minute quota/i) >= 2, "the per-minute quota is asked again", 30000).catch(() => {});
 		await settled();
-		await new Promise((resolve) => setTimeout(resolve, 1500));
+		await pageTurnEnded();
 		assert(callsFor(/per-minute quota/i) >= 2, `a per-minute quota is asked again, got ${callsFor(/per-minute quota/i)} calls and the line ${JSON.stringify((await errorTexts()).at(-1))}`);
 		assert((await errorTexts()).length === before, `no failure line after the retry got through, got ${JSON.stringify((await errorTexts()).slice(before))}`);
 		console.log("  ok  a per-minute limit that says quota is asked again, and answers");
@@ -231,7 +227,7 @@ try {
 		await send("An empty page, please.");
 		await waitUntil(async () => (await errorTexts()).length > before, "the empty answer shows a line");
 		await settled();
-		assert((await errorTexts()).at(-1) === `${MODEL_NAME} sent back an empty answer. Your message is back in the box. Try again; if it repeats, choose another model.`, `an empty answer says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
+		assert((await errorTexts()).at(-1) === `${MODEL_NAME} sent back an empty answer. Try again; if it repeats, choose another model.`, `an empty answer says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		await waitUntil(async () => (await composer.inputValue()) === "An empty page, please.", `an empty answer hands the message back, got ${JSON.stringify(await composer.inputValue())}`, 15000);
 		assert(usageRows() === rowsBefore, `an empty answer writes no Wallet row, got ${usageRows() - rowsBefore} new`);
 		console.log("  ok  an HTML page sent as an answer reads as an empty answer, with no Wallet row");
@@ -241,7 +237,7 @@ try {
 		await send("Use a tool, then fail.");
 		await waitUntil(async () => (await errorTexts()).length > before, "the failed tool turn shows a line");
 		await settled();
-		await new Promise((resolve) => setTimeout(resolve, 2500));
+		await pageTurnEnded();
 		assert(callsFor(/INTERNAL_TOOL_SUMMARY_REQUEST/) === 0, `no summary request after a failed tool turn, got ${callsFor(/INTERNAL_TOOL_SUMMARY_REQUEST/)}`);
 		assert((await errorTexts()).length === before + 1, `one line for the failed tool turn, got ${JSON.stringify((await errorTexts()).slice(before))}`);
 		// The message was not handed back: it stays above, and the line says so, as when something was typed meanwhile.
@@ -264,7 +260,7 @@ try {
 		await send("Use a tool, then a daily quota.");
 		await waitUntil(async () => (await errorTexts()).length > before, "the daily quota after a tool shows a line");
 		await settled();
-		await new Promise((resolve) => setTimeout(resolve, 2500));
+		await pageTurnEnded();
 		dailyQuotaSpent = false;
 		assert(callsFor(/INTERNAL_TOOL_SUMMARY_REQUEST/) === 0, `the spent model is not asked for the missing answer, got ${callsFor(/INTERNAL_TOOL_SUMMARY_REQUEST/)} requests and the lines ${JSON.stringify((await errorTexts()).slice(before))}`);
 		assert((await errorTexts()).length === before + 1 && (await errorTexts()).at(-1)!.startsWith(`${MODEL_NAME} has reached its usage limit`), `one usage-limit line for the turn, got ${JSON.stringify((await errorTexts()).slice(before))}`);
@@ -278,10 +274,10 @@ try {
 		await send("Again too long, and the summary is busy.");
 		await waitUntil(async () => callsFor(/<conversation>/i) > summariesBefore && (await errorTexts()).length > before, "the summary call is refused and a line shows", 30000);
 		await settled();
-		await new Promise((resolve) => setTimeout(resolve, 1500));
+		await pageTurnEnded();
 		summaryBusy = false;
 		const busyLines = (await errorTexts()).slice(before);
-		assert(busyLines.length === 1 && /^Claude Haiku 5\.5 is still busy after several tries\. Your message is (?:back in the box|still above)\. Try again in a minute\.$/.test(busyLines[0] ?? ""), `a summary call refused for a rate limit says the model is busy, got ${JSON.stringify(busyLines)}`);
+		assert(busyLines.length === 1 && /^Claude Haiku 5\.5 is still busy after several tries\. (?:Your message is still above\. )?Try again in a minute\.$/.test(busyLines[0] ?? ""), `a summary call refused for a rate limit says the model is busy, got ${JSON.stringify(busyLines)}`);
 		assert((await newest.locator(".failure-cause").innerText()).trim() === `${MODEL_NAME} is still busy after several tries.` && (await newest.locator(".failure-details-toggle").count()) === 1, `the busy line is a usual failure row: its cause first, with Details, got ${JSON.stringify(await newest.innerText())}`);
 		await composer.fill("");
 		console.log("  ok  a summary call refused for a rate limit ends in the busy line, a usual failure row, never the line about shortening");
@@ -294,7 +290,7 @@ try {
 		const shorten = `The room could not shorten this conversation enough for ${MODEL_NAME}. Your message is still above. Your memory is unchanged. Remember, then continue, or choose a model that reads more at once.`;
 		await waitUntil(async () => (await errorTexts()).includes(shorten), `the overflow notice shows, got ${JSON.stringify((await errorTexts()).slice(before))}`, 30000);
 		await settled();
-		await new Promise((resolve) => setTimeout(resolve, 1500));
+		await pageTurnEnded();
 		const overflowLines = (await errorTexts()).slice(before);
 		assert(overflowLines.length === 1 && overflowLines[0] === shorten, `one line for the turn, the room's own words, got ${JSON.stringify(overflowLines)}`);
 		assert((await newest.locator(".failure-actions .rs-btn").allInnerTexts()).join("|") === "Choose another model", `the line offers another model, got ${JSON.stringify(await newest.locator(".failure-actions .rs-btn").allInnerTexts())}`);

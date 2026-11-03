@@ -10,8 +10,10 @@ import { ensureProductAppStateRoot, productAppStatePath } from "../../../pi-pack
 // A hidden room must be indistinguishable from a nonexistent one to a remote
 // device: absent from listings, refused on direct access with the same
 // not-found shape as an unknown id, filtered out of memory aggregations, and
-// its task artifacts unreachable. The enforcement lives in index.ts; this
-// module is only the stored set.
+// its task artifacts unreachable. Every check goes through the one store
+// request-checks.ts creates (remoteRoomExposure): remote-routes.ts refuses
+// direct access by id, and the listings, the memory routes and the room socket
+// leave hidden rooms out. This module is only the stored set.
 
 const EXPOSURE_FILE = () => productAppStatePath("remote-room-exposure.json");
 

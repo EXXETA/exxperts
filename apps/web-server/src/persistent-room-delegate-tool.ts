@@ -101,8 +101,14 @@ export function userAuthoredPromptText(wireText: string): string {
 	// families in all untrusted content, so no literal marker should survive
 	// into a block at all — but were one ever to, a foreign-family close must
 	// not terminate the block early and launder its tail into consent scope.
-	const openFence = /^\[(CONSULT HANDOFF FROM|SPECIALIST RESULT:)[^\]\n]*\]$/;
-	const closeFence = /^\[\/(CONSULT HANDOFF FROM|SPECIALIST RESULT:)[^\]\n]*\]$/;
+	// The server's own notes in front of a message the person sent after a cut
+	// or a Stop, or while the room worked (cut-answer-note.ts), go too. The cut
+	// note's markers carry nothing after their name, so they match only exactly:
+	// a suffix such as "[/ANSWER CUT OFFx]" escapes the defanging's word
+	// boundary and must not close the note early.
+	const openFence = /^\[(CONSULT HANDOFF FROM|SPECIALIST RESULT:|ANSWER CUT OFF(?=\]))[^\]\n]*\]$/;
+	const closeFence = /^\[\/(CONSULT HANDOFF FROM|SPECIALIST RESULT:|ANSWER CUT OFF(?=\]))[^\]\n]*\]$/;
+	const oneLineFence = /^\[SENT WHILE YOU WORKED\].*\[\/SENT WHILE YOU WORKED\]$/;
 	// Deliberately unanchored at the tail: a note line that somehow lost its
 	// closing bracket must still strip (stripping MORE is the safe direction —
 	// it can only shrink what counts as consent).
@@ -111,7 +117,7 @@ export function userAuthoredPromptText(wireText: string): string {
 	let at = 0;
 	while (at < lines.length) {
 		const line = lines[at].trim();
-		if (line === "" || attachmentNote.test(line)) { at++; continue; }
+		if (line === "" || attachmentNote.test(line) || oneLineFence.test(line)) { at++; continue; }
 		const open = openFence.exec(line);
 		if (!open) break;
 		const family = open[1];

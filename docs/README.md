@@ -6,14 +6,14 @@ This is the canonical index for documentation in this repository. Treat this pag
 
 - [Quickstart](quickstart.md): install, connect your AI, first room, first memory; plus backup/move and uninstall. All platforms.
 - [How Exxperts works](how-exxperts-works.md): what the product is and how the pieces fit; the right orientation read.
-- [Memory](memory.md): how room memory (Remember → Memorize → Review) and CLI memory work, the memory budget, what is stored where, and who approves it.
-- [Workspace and Bash](workspace-and-bash.md): the two access modes, per-tool toggles, derived read-only, the bounded fence, and Bash asks/auto with the approval card.
+- [Memory](memory.md): how room memory works (Remember → Memorize → Review), the memory budget, what is stored where, and who approves it.
+- [Workspace and Bash](workspace-and-bash.md): the two access modes, per-tool toggles, derived read-only, the bounded fence, and the Bash chip's Ask first and Auto with the approval card.
 - [Provider setup](provider-setup.md): connecting a provider (in-app sign-in for Claude and ChatGPT Plus/Pro, the OpenAI-compatible gateway path), and which model a room uses.
 - [Web search](web-search.md): built-in DuckDuckGo backend and its limits; SearXNG setup for heavy use or blocked networks, keeping it running, and configuration reference.
 - [Data profiles](data-profiles.md): running more than one complete state world on one machine (private setup vs. curated demo), switching between them, what the standard `.exxperts` tree guarantees, and moving the whole data folder from Settings (cloud-synced folder across computers, Docker volume via `EXXPERTS_DATA_DIR`).
 - [Wallet](wallet.md): what rooms spend, where gateway prices come from, the approximation mark and "no price on file", caching savings, and the CSV export.
 - [Security](../SECURITY.md): threat model, supported deployments, release integrity, and vulnerability reporting.
-- [MCP client support](mcp.md): MCP connectors: transports, config locations, and commands.
+- [MCP client support](mcp.md): MCP connectors: transports, config locations, and the Connectors page.
 
 ## Current command and storage truth
 
@@ -23,10 +23,7 @@ Preferred commands today:
 | --- | --- |
 | Desktop app | none: open the app; it runs its own server and window |
 | Repo/dev web app | `./scripts/exxperts-web` |
-| Repo/dev CLI/TUI | `./scripts/exxperts-cli` |
-| Packaged web app | `exxperts web` |
-| Packaged CLI/TUI | `exxperts cli` |
-| Packaged picker | bare `exxperts` (choose web app or CLI) |
+| Installed app (terminal install) | `exxperts`: starts the app and opens it in your browser |
 
 Current storage roots:
 

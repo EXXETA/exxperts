@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 // Pins the enrollment + per-device-key unit (src/remote-devices.ts, the
 // enrollment routes, and the device-auth arm of the guard's tunnel branch),
@@ -90,23 +90,6 @@ function tunnelWsOpen(headers: Record<string, string>): Promise<{ status: number
 	});
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function mintCode(): Promise<string> {
 	const res = await authedFetch(`${baseUrl}/api/remote/enroll-code`, { method: "POST" });
 	assert(res.status === 200, `enroll-code: expected 200, got ${res.status}`);
@@ -157,7 +140,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20000);
 
 	// 1. Minting requires a serving remote; the loopback listener has no
 	//    enrollment surface at all (Fastify's own not-found, so the loopback

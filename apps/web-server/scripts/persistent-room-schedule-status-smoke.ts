@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,23 +40,6 @@ const repoRoot = path.resolve(webServerDir, "..", "..");
 const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
 		...init,
@@ -81,7 +64,6 @@ async function createRoom(displayName: string): Promise<string> {
 	assert(created.status === 201, `create room ${displayName} should succeed, got ${created.status}: ${JSON.stringify(created.body)}`);
 	const agentId = String(created.body?.agent?.agentId ?? "");
 	assert(agentId, `create room ${displayName} should return agentId`);
-	assert(created.body?.status?.scheduleSummary?.executionEnabled === false, "create response status should include disabled schedule summary");
 	assert(created.body?.status?.scheduleSummary?.totalCount === 0, "new room status schedule summary should start empty");
 	return agentId;
 }
@@ -112,7 +94,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	const agentId = await createRoom("Schedule Status Smoke Room");
 	const encodedAgentId = encodeURIComponent(agentId);
@@ -121,9 +103,7 @@ try {
 	let schedules = await requestJson(`/api/persistent-agents/${encodedAgentId}/schedules`);
 	assert(schedules.status === 200, `empty schedules GET should succeed, got ${schedules.status}: ${JSON.stringify(schedules.body)}`);
 	assert(schedules.body?.roomId === agentId, "empty schedules response should include room id");
-	assert(schedules.body?.executionEnabled === false, "empty schedules response should report execution disabled");
 	assert(Array.isArray(schedules.body?.jobs) && schedules.body.jobs.length === 0, "empty schedules response should return no jobs");
-	assert(schedules.body?.summary?.executionEnabled === false, "empty summary should report execution disabled");
 	assert(schedules.body?.summary?.totalCount === 0, "empty summary total count should be zero");
 	assert(schedules.body?.summary?.enabledCount === 0, "empty summary enabled count should be zero");
 	assert(schedules.body?.summary?.nextRunAt === null, "empty summary nextRunAt should be null");
@@ -163,7 +143,6 @@ try {
 
 	schedules = await requestJson(`/api/persistent-agents/${encodedAgentId}/schedules`);
 	assert(schedules.status === 200, `populated schedules GET should succeed, got ${schedules.status}: ${JSON.stringify(schedules.body)}`);
-	assert(schedules.body?.executionEnabled === false, "populated schedules response should report execution disabled");
 	assert(schedules.body?.jobs?.length === 3, "populated schedules response should return three jobs");
 	assert(schedules.body?.summary?.totalCount === 3, "summary should count all jobs");
 	assert(schedules.body?.summary?.enabledCount === 2, "summary should count only enabled jobs as enabled");
@@ -177,7 +156,6 @@ try {
 	assert(status.status === 200, `status should succeed, got ${status.status}: ${JSON.stringify(status.body)}`);
 	assert(status.body?.scheduleSummary?.totalCount === 3, "status should include schedule summary total count");
 	assert(status.body?.scheduleSummary?.enabledCount === 2, "status should include schedule summary enabled count");
-	assert(status.body?.scheduleSummary?.executionEnabled === false, "status schedule summary should report execution disabled");
 	assert(status.body?.runtime?.state === "idle", "schedule status reads should not start a runtime turn");
 	assert(status.body?.runtime?.activeThreadId === null, "schedule status reads should not select an active runtime thread");
 	assertEmptyRuntimeThreads(agentId, "populated schedule status");
@@ -186,7 +164,6 @@ try {
 	assert(listed.status === 200 && Array.isArray(listed.body), `list should succeed, got ${listed.status}: ${JSON.stringify(listed.body)}`);
 	const listedRoom = listed.body.find((room: any) => room.id === agentId);
 	assert(listedRoom?.scheduleSummary?.totalCount === 3, "room list should include schedule summary");
-	assert(listedRoom?.scheduleSummary?.executionEnabled === false, "room list schedule summary should report execution disabled");
 
 	const missing = await requestJson("/api/persistent-agents/not-a-real-room/schedules");
 	assert(missing.status === 404, `missing room schedules should return 404, got ${missing.status}: ${JSON.stringify(missing.body)}`);
@@ -202,7 +179,6 @@ try {
 	const errorRoomSchedules = await requestJson(`/api/persistent-agents/${encodedErrorRoomId}/schedules`);
 	assert(errorRoomSchedules.status === 200, `schedules should remain readable for existing non-archived error room, got ${errorRoomSchedules.status}: ${JSON.stringify(errorRoomSchedules.body)}`);
 	assert(errorRoomSchedules.body?.summary?.totalCount === 1, "error room schedules should return stored jobs");
-	assert(errorRoomSchedules.body?.executionEnabled === false, "error room schedules should report execution disabled");
 
 	const corruptRoomId = await createRoom("Schedule Corrupt Store Room");
 	const encodedCorruptRoomId = encodeURIComponent(corruptRoomId);

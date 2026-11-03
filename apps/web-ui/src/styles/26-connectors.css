@@ -1,0 +1,353 @@
+/* Connectors page ---------------------------------------------------- */
+.connector-form {
+	display: grid;
+	gap: 12px;
+	max-width: 560px;
+}
+.connector-form-field {
+	display: grid;
+	gap: 6px;
+}
+.connector-oauth-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	background: none;
+	border: none;
+	padding: 0;
+	text-align: left;
+	font-size: 13px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.connector-oauth-toggle:hover {
+	color: var(--fg);
+}
+.connector-oauth-fields {
+	display: grid;
+	gap: 12px;
+}
+/* A custom header: its name, its value, and a remove button. */
+.connector-header-row {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+	gap: 8px;
+	align-items: center;
+}
+.connector-header-add {
+	justify-self: start;
+	background: none;
+	border: none;
+	padding: 0;
+	font-size: 13px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.connector-header-add:hover {
+	color: var(--fg);
+}
+.connector-header-remove {
+	background: none;
+	border: none;
+	padding: 4px 6px;
+	display: inline-grid;
+	place-items: center;
+	color: var(--muted);
+	cursor: pointer;
+}
+.connector-header-remove:hover {
+	color: var(--fg);
+}
+.connector-form-field span {
+	font-size: 13px;
+	color: var(--muted);
+}
+.connector-form-field input {
+	width: 100%;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	background: var(--bg-2);
+	color: var(--fg);
+	padding: 10px 11px;
+	font: inherit;
+}
+.connector-form-field input:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-color: var(--exx-focus);
+}
+/* Same surface for textareas (no `font: inherit` — .skill-write-instructions owns its mono font). */
+.connector-form-field textarea {
+	width: 100%;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	background: var(--bg-2);
+	color: var(--fg);
+	padding: 10px 11px;
+}
+.connector-form-field textarea:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-color: var(--exx-focus);
+}
+.connector-form-kind {
+	display: flex;
+	gap: 18px;
+	font-size: 13px;
+	color: var(--fg);
+}
+.connector-form-kind label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+}
+.connector-form-kind input[type="radio"] {
+	accent-color: var(--fg);
+}
+.connector-outcome-error {
+	color: var(--exx-danger, #e85858) !important;
+}
+
+/* Connectors, Added: each connector is a row of one table, a grid whose
+   columns the table head sets (icon, name, type, status, actions), with a
+   hairline between rows only. The name area is a plain button that opens
+   the row's detail under it, at the name's edge. */
+.connector-rows {
+	display: grid;
+}
+.connector-row {
+	display: grid;
+	grid-template-columns: 24px minmax(0, 1fr) auto;
+	gap: 6px 12px;
+	align-items: center;
+	padding: 12px 0;
+}
+.connector-rows > .connector-row + .connector-row {
+	border-top: 1px solid var(--exx-divider);
+}
+.connector-row-toggle {
+	background: none;
+	border: none;
+	margin: 0;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.connector-row-main {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.connector-row-title {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+.connector-row-title strong {
+	font-size: 14px;
+	font-weight: 500;
+}
+.connector-row-meta {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.4;
+}
+.connector-row-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 14px;
+	min-height: 32px;
+}
+/* An action's outcome: a full-width line under the row that wraps instead
+   of truncating inside the name cell. */
+.connector-row-outcome {
+	grid-column: 2 / -1;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.4;
+	min-width: 0;
+}
+/* The status after a failed Test, in the outcome line's colour. */
+.settings-overlay .connector-table-status.connector-status-failed {
+	color: var(--exx-danger, #e85858);
+}
+/* A failed test's own words from the server: quiet, under the next step. */
+.connector-outcome-details {
+	margin-top: 4px;
+}
+.connector-outcome-details .cli-note {
+	margin: 0;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+.connector-row-expansion {
+	grid-column: 2 / -1;
+	display: grid;
+	gap: 8px;
+	padding: 2px 0 4px;
+	min-width: 0;
+}
+.connector-expansion-desc {
+	margin: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
+	max-width: 44rem;
+}
+.connector-tool-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.connector-tool-chip {
+	border: none;
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--fg) 6%, transparent);
+	color: var(--muted);
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	line-height: 1;
+	padding: 5px 8px;
+	white-space: nowrap;
+}
+/* The toggle after the eighth tool reads as an action, not a tool name. */
+.connector-tool-chip-more {
+	background: none;
+	font-family: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+.connector-tool-chip-more:hover,
+.connector-tool-chip-more:focus-visible {
+	color: var(--fg);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.connector-expansion-meta {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+/* A connector's icon: its brand glyph or monogram on a quiet tile, sized by
+   the caller (24 px in the table, 28 px in Room settings, 32 px in the
+   directory). */
+.connector-avatar {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1;
+}
+
+/* Connector directory ------------------------------------------------ */
+.connector-dir-search {
+	width: 220px;
+}
+/* A directory row: the icon, the name with its login kind as a small tag,
+   the description, one Add. A token entry opens its field as the next row,
+   with no hairline between the connector and its field. */
+.connector-dir-row {
+	justify-content: flex-start;
+	gap: 14px;
+}
+/* The custom form opens under its row, at the row's label edge. */
+.connector-dir-row-group > .ai-setup-block {
+	padding: 0 0 16px 46px;
+}
+.connector-dir-token-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 0 0 12px 46px;
+}
+.connector-dir-kind {
+	margin-left: 8px;
+	white-space: nowrap;
+	font-size: 11px;
+	font-weight: 400;
+	color: var(--muted);
+}
+.connector-dir-note {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+.connector-dir-token-input {
+	flex: 1 1 240px;
+	min-width: 0;
+	max-width: 320px;
+}
+
+/* Connectors polish ---------------------------------------------------- */
+.connectors-hero-title {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+.connectors-hero-title h1 {
+	margin: 0;
+}
+
+/* Connectors page: match home/dashboard framing — full width, no section
+   borders; the only separators are the row dividers. */
+.connectors-page {
+	gap: 22px;
+}
+.connectors-page .landing-hero p,
+.connectors-page .ai-setup-copy {
+	max-width: none;
+}
+.connectors-page > * {
+	width: min(1120px, 100%);
+}
+.connectors-page .ai-setup-section {
+	border-bottom: none;
+	padding: 0 0 8px;
+}
+/* Connectors: hero/list rhythm + active-connections head + off state */
+.connector-row em.off {
+	font-style: normal;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 11px;
+	white-space: nowrap;
+	color: color-mix(in srgb, var(--exx-danger, #e85858) 72%, var(--muted));
+}
+.connector-row em.idle {
+	font-style: normal;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 11px;
+	white-space: nowrap;
+	color: var(--muted);
+}
+
+/* Config/provenance plumbing lives as a quiet footnote, not a section:
+   muted prose under the list, no headings or status pills. */
+.connectors-page .connector-config-note {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 16px 0 8px;
+}
+.connectors-page .connector-config-note .cli-note {
+	margin: 0;
+	max-width: none;
+}
+

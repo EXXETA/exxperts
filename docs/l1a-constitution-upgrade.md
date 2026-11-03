@@ -36,7 +36,7 @@ when nothing changed is safe; rooms already on the current template are skipped
    npm install
    ```
 
-2. **Close all rooms.** Quit any open exxperts web or CLI room sessions. The
+2. **Close all rooms.** Close every room open in a browser window or the desktop app. The
    upgrade refuses to touch a room that is open somewhere or mid-turn, so
    nothing can be corrupted, but closing everything first avoids refusals.
 
@@ -137,7 +137,7 @@ of both versions, so the transition stays auditable either way.
 
 ## Troubleshooting
 
-- `room is currently open on surface "…"`: close that web/CLI session (or
+- `room is currently open on surface "…"`: close the room in that window (or
   wait for the scheduled run to finish) and re-run.
 - `room runtime state is "…"`: the room has an unfinished turn. Open the
   room once, let it settle, close it, and re-run.

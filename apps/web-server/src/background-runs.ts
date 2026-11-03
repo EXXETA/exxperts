@@ -173,6 +173,8 @@ export interface RecoverExpiredBackgroundRunLeasesInput {
 	limit?: unknown;
 	kind?: BackgroundRunKind;
 	scope?: BackgroundRunScope;
+	/** Asked for each run whose lease ran out: an ending cancels the run with it instead of deferring it to run again. */
+	endInsteadOfRetry?: (record: BackgroundRunRecord) => { reason: string; message: string } | null;
 }
 
 export interface ListClaimableScheduledPromptBackgroundRunsOptions {
@@ -710,7 +712,7 @@ export function recoverExpiredBackgroundRunLeases(input: RecoverExpiredBackgroun
 		// scheduler tick, so a throw here would silently halt scheduled prompts in ALL rooms.
 		let updated: BackgroundRunRecord | null = null;
 		try {
-			updated = recoverExpiredBackgroundRunLease(candidate.runId, now, nowIso);
+			updated = recoverExpiredBackgroundRunLease(candidate.runId, now, nowIso, input.endInsteadOfRetry);
 		} catch (error) {
 			console.warn(`Failed to recover expired background run lease: ${candidate.runId}`, error);
 		}
@@ -719,10 +721,16 @@ export function recoverExpiredBackgroundRunLeases(input: RecoverExpiredBackgroun
 	return recovered;
 }
 
-function recoverExpiredBackgroundRunLease(runId: string, now: Date, nowIso: string): BackgroundRunRecord | null {
+function recoverExpiredBackgroundRunLease(runId: string, now: Date, nowIso: string, endInsteadOfRetry: RecoverExpiredBackgroundRunLeasesInput["endInsteadOfRetry"]): BackgroundRunRecord | null {
 	return withBackgroundRunMutationLock(runId, () => {
 		const existing = readBackgroundRun(runId);
 		if (existing.status !== "running" || !existing.lease || isBackgroundRunLeaseActive(existing.lease, now)) return null;
+		const ending = endInsteadOfRetry?.(existing) ?? null;
+		if (ending) {
+			const ended = normalizeRecord(removeUndefinedOptionalFields({ ...existing, status: "cancelled", reason: ending.reason, message: ending.message, finishedAt: nowIso, updatedAt: nowIso, revision: nextRevision(existing), lease: undefined }));
+			atomicWriteJson(backgroundRunRecordPath(runId), ended);
+			return ended;
+		}
 		const message = "Background run lease expired before completion; it will be rechecked before execution.";
 		const record = normalizeRecord(removeUndefinedOptionalFields({
 			...existing,

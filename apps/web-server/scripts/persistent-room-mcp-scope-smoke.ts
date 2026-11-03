@@ -10,11 +10,10 @@
 //  LIVE  - grants re-read per call: editing the room's settings file changes
 //          the very next answer, no re-registration needed;
 //  DOORS - the live web session and the background execution path both build
-//          their extension via createRoomScopedMcpExtension, a CLI room
-//          process scopes itself from EXXETA_PERSISTENT_ROOM_AGENT, an
-//          unscoped session stays untouched, specialists cannot even be
-//          granted the mcp tool, and the isolated worker (consults, maintain
-//          flows) runs with no extensions and no tools at all.
+//          their extension via createRoomScopedMcpExtension, the only door,
+//          specialists cannot even be granted the mcp tool, and the isolated
+//          worker (consults, maintain flows) runs with no extensions and no
+//          tools at all.
 //
 // Offline, isolated HOME + agent dir + agents root - set BEFORE any import
 // that reads them.
@@ -224,14 +223,12 @@ try {
 	writePersistentRoomMcpSettings(roomId, ["alpha"]);
 
 	// A legacy room on the DEFAULT agents root: the extension's room-scoped
-	// registration (the CLI door's exact path) must run the update-day
-	// migration itself, so a terminal-opened room is never stuck at zero
-	// grants waiting for the web server's first boot.
+	// registration must run the update-day migration itself, so a room is
+	// never stuck at zero grants waiting for the web server's first boot.
 	fs.mkdirSync(path.join(tempAgentsRoot, "cli-legacy-room"), { recursive: true });
 	fs.writeFileSync(path.join(tempAgentsRoot, "cli-legacy-room", "agent.json"), "{}");
 
-	const mcpExtModule = await import("../../../pi-package/extensions/mcp/index.js");
-	const { createRoomScopedMcpExtension } = mcpExtModule;
+	const { createRoomScopedMcpExtension } = await import("../../../pi-package/extensions/mcp/index.js");
 
 	// ── The room-scoped session (the web door's exact assembly) ──────────────
 	const pi = makeFakePi();
@@ -340,7 +337,7 @@ try {
 	assert(reportedFingerprint === JSON.stringify(["alpha"]), `the wrapper must report the grants fingerprint its description used, got ${JSON.stringify(reportedFingerprint)}`);
 
 	// ── The --mcp-config override: one baseline for adapter and wrapper ──────
-	// A CLI room launched with --mcp-config reads connectors from the override
+	// A process started with --mcp-config reads connectors from the override
 	// file; the grant context must see the SAME baseline or an override-only
 	// connector is granted-but-refused by the configured intersection.
 	const overridePath = path.join(tempHome, "override-mcp.json");
@@ -370,22 +367,8 @@ try {
 	assert(emptyDescription.includes("No MCP connectors are enabled for this room"), "a zero-grant room's manifest description should say so");
 	assert(!emptyDescription.includes("alpha") && !emptyDescription.includes("beta"), "a zero-grant room's description must name no connectors");
 
-	// ── The CLI room door: the process env scopes the default export ─────────
-	process.env.EXXETA_PERSISTENT_ROOM_AGENT = roomId;
-	const piCli = makeFakePi();
-	await (mcpExtModule.default as (pi: unknown) => Promise<unknown>)(piCli);
-	const cliDescription = String(piCli.tools.get("mcp")?.description ?? "");
-	assert(cliDescription.includes("alpha") && !cliDescription.includes("beta"), "a CLI room process must scope itself from EXXETA_PERSISTENT_ROOM_AGENT");
-	delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-
-	// ── An unscoped session stays untouched ──────────────────────────────────
-	const piGlobal = makeFakePi();
-	await (mcpExtModule.default as (pi: unknown) => Promise<unknown>)(piGlobal);
-	const globalDescription = String(piGlobal.tools.get("mcp")?.description ?? "");
-	assert(globalDescription.includes("alpha") && globalDescription.includes("beta"), "an unscoped session must keep the full connector surface");
-
 	// ── Door wiring: the session assemblers really use the wrapper ───────────
-	const indexSource = fs.readFileSync(path.join(webServerSrc, "index.ts"), "utf-8");
+	const indexSource = fs.readFileSync(path.join(webServerSrc, "room-socket.ts"), "utf-8");
 	assert(indexSource.includes("createRoomScopedMcpExtension(persistentAgentId"), "the live web session must build its mcp extension through the room-scope wrapper");
 	assert(indexSource.includes("mcpGrantsFingerprintAtBind ?? persistentRoomMcpGrantsFingerprint"), "the live web session must record the bound grants fingerprint from the description's own read");
 	const backgroundSource = fs.readFileSync(path.join(webServerSrc, "persistent-room-background-execution.ts"), "utf-8");

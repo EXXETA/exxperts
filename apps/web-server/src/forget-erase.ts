@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
+import { heldMessageFiles } from "./held-messages-store.js";
 
 function readJson(file: string): any {
 	try {
@@ -129,6 +130,7 @@ function eraseWords(agentId: string, roomDir: string, threadId: string, legacySe
 	for (const name of list(path.dirname(threadFile))) if (name.startsWith(`${threadId}.json.tmp-`)) erased = remove(path.join(path.dirname(threadFile), name)) || erased;
 	erased = remove(path.join(runtime, "remember", threadId)) || erased;
 	erased = remove(path.join(runtime, "workspace-policies", `${threadId}.json`)) || erased;
+	for (const file of heldMessageFiles(roomDir, threadId)) erased = remove(file) || erased;
 	// The conversation's task notes and task folders.
 	for (const task of stores.tasks.get(threadId) ?? []) {
 		erased = remove(task.file) || erased;

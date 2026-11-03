@@ -6,7 +6,7 @@
 // run rewrote, cancel, and approve. The routes live under
 // /api/persistent-agents/:id/review/ beside the room's other maintenance
 // routes, share their auth, their `{ error, code? }` envelope and their
-// remote-route classification, and are registered from index.ts with one line
+// remote-route classification, and are registered from room-fold-routes.ts with one line
 // next to the Memorize run's routes.
 //
 // Nothing here decides anything: every refusal, every number and the one write

@@ -68,7 +68,7 @@ export function replyCopyTargets(items: ChatItem[], busy = false): Map<string, R
 				texts.push(text);
 				lastTextId = item.id;
 			}
-		} else if (item.kind === "tool" && item.status === "running") {
+		} else if (item.kind === "tool" && (item.status === "writing" || item.status === "running")) {
 			settled = false;
 		}
 	}

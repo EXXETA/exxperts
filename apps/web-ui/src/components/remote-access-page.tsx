@@ -22,6 +22,7 @@ import {
 } from "../remote-access-api";
 import { fetchRemoteClientContext, useRemoteClientContext } from "../remote-client-context";
 import { shownRoomName } from "../../../web-server/src/room-name";
+import { GroupHeader } from "./pane-header";
 
 /**
  * Remote access, managed where the other app-level choices live instead of a
@@ -95,6 +96,22 @@ function deviceHint(device: RemoteDeviceRow): string {
 	return parts.filter(Boolean).join(" · ");
 }
 
+/** Whether the rooms' choices are in force: remote access serving, off, or on but not serving. */
+type RoomsReach = "serving" | "off" | "paused";
+
+// While not serving, the Rooms line already says when an allowed room becomes reachable, so allowing one adds no notice.
+const ROOMS_REACH: Record<RoomsReach, { line?: string; allowed: string; allowedNote?: (room: string) => string }> = {
+	serving: { allowed: "Reachable", allowedNote: (room) => `"${room}" is reachable remotely again.` },
+	off: { line: "Rooms become reachable when remote access is on.", allowed: "Allowed when on" },
+	paused: { line: "Rooms become reachable once remote access is serving again.", allowed: "Allowed" },
+};
+
+/** A room's exposure change, kept as data so its notice is worded for the state on screen, not the state when it was asked. */
+interface ExposureNote {
+	room: string;
+	exposed: boolean;
+}
+
 function CapabilityControl({ value, disabled, onChange }: { value: "full" | "read-only"; disabled: boolean; onChange: (next: "full" | "read-only") => void }) {
 	return (
 		<div className="remote-capability-seg" role="group" aria-label="Device access">
@@ -150,7 +167,7 @@ export function RemoteAccessPage() {
 	const [roomBusy, setRoomBusy] = useState<string | null>(null);
 	const [switching, setSwitching] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [note, setNote] = useState<string | null>(null);
+	const [note, setNote] = useState<string | ExposureNote | null>(null);
 	/** The live pairing code the QR renders; null until the auto-mint lands. */
 	const [code, setCode] = useState<RemotePairingCode | null>(null);
 	/** requestId of the pairing approval mid-flight, if any. */
@@ -343,11 +360,7 @@ export function RemoteAccessPage() {
 		try {
 			await setRemoteRoomExposure(room.id, exposed);
 			setRooms((rows) => (rows ?? []).map((row) => (row.id === room.id ? { ...row, exposed } : row)));
-			setNote(
-				exposed
-					? `"${shownRoomName(room.displayName) || room.id}" is reachable remotely again.`
-					: `"${shownRoomName(room.displayName) || room.id}" is hidden from remote devices. Not a security control; to keep it truly unreachable, revoke the device.`,
-			);
+			setNote({ room: shownRoomName(room.displayName) || room.id, exposed });
 		} catch (e) {
 			setError((e as Error).message);
 		} finally {
@@ -416,6 +429,12 @@ export function RemoteAccessPage() {
 
 	const on = status.enabled;
 	const degraded = !on && status.stateFile === "valid";
+	const roomsReach = ROOMS_REACH[on ? "serving" : degraded ? "paused" : "off"];
+	const noteText = typeof note === "string" || note === null
+		? note
+		: note.exposed
+			? roomsReach.allowedNote?.(note.room) ?? null
+			: `"${note.room}" is hidden from remote devices. Not a security control; to keep it truly unreachable, revoke the device.`;
 	const tunnelReady = Boolean(status.tunnelAddress);
 	const host = status.scheme === "https" && status.dnsName ? status.dnsName : status.address && status.address.includes(":") ? `[${status.address}]` : status.address;
 	const servingUrl = `${status.scheme ?? "http"}://${host}:${status.port}`;
@@ -473,7 +492,7 @@ export function RemoteAccessPage() {
 			</div>
 			{/* Status lines live right under the switch they most often describe
 			    (the off-state note especially), not below the rooms list. */}
-			{note && <p className="archived-rooms-note" role="status">{note}</p>}
+			{noteText && <p className="archived-rooms-note" role="status">{noteText}</p>}
 			{error && <div className="workspaces-error archived-rooms-note" role="alert">{error}</div>}
 
 			<div className="remote-devices settings-group">
@@ -571,8 +590,8 @@ export function RemoteAccessPage() {
 			</div>
 
 			{(rooms ?? []).length > 0 && (
-				<div className="remote-devices remote-rooms settings-group">
-					<p className="settings-group-kicker">Rooms</p>
+				<div className={`remote-devices remote-rooms settings-group${on ? "" : " remote-rooms-off"}`}>
+					<GroupHeader kicker="Rooms" line={roomsReach.line} />
 					<div className="settings-rows">{(rooms ?? []).map((room) => (
 						<div key={room.id} className="settings-row remote-room-row">
 							<div className="settings-row-main">
@@ -581,9 +600,9 @@ export function RemoteAccessPage() {
 								{!room.bashEnabled && room.writeEnabled && <span className="settings-row-sub">Can change files in its workspace</span>}
 							</div>
 							<div className="remote-device-actions">
-								<div className="remote-capability-seg" role="group" aria-label="Remote reachability">
-									<button type="button" className={room.exposed ? "on" : ""} aria-pressed={room.exposed} disabled={roomBusy === room.id} onClick={() => !room.exposed && void changeExposure(room, true)}>Reachable</button>
-									<button type="button" className={room.exposed ? "" : "on"} aria-pressed={!room.exposed} disabled={roomBusy === room.id} onClick={() => room.exposed && void changeExposure(room, false)}>Hidden</button>
+								<div className="settings-segments" role="group" aria-label="Remote reachability">
+									<button type="button" className={`settings-segment${room.exposed ? " active" : ""}`} aria-pressed={room.exposed} disabled={roomBusy === room.id} onClick={() => !room.exposed && void changeExposure(room, true)}>{roomsReach.allowed}</button>
+									<button type="button" className={`settings-segment${room.exposed ? "" : " active"}`} aria-pressed={!room.exposed} disabled={roomBusy === room.id} onClick={() => room.exposed && void changeExposure(room, false)}>Hidden</button>
 								</div>
 							</div>
 						</div>

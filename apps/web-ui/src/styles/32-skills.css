@@ -1,0 +1,794 @@
+/* --- Skills library (MR-3) ------------------------------------------------- */
+/* Same framing as the Connectors page: full width, no section hairlines. */
+.skills-page {
+	min-width: 0;
+	gap: 22px;
+}
+.skills-page > * {
+	width: min(1120px, 100%);
+}
+.skills-page .landing-hero p,
+.skills-page .ai-setup-copy {
+	max-width: none;
+}
+.skills-page .landing-hero {
+	border-bottom: none;
+	padding-bottom: 14px;
+}
+.skills-page .landing-hero h1 {
+	margin: 0 0 12px;
+}
+.skills-page .ai-setup-section {
+	border-bottom: none;
+	padding: 0 0 8px;
+}
+/* The hidden file input the Upload menu item triggers. */
+.skill-upload-input {
+	display: none;
+}
+
+/* Add-skill menu: a button that reveals Write / Upload (Claude-app shape). */
+.skill-add-menu-wrap {
+	position: relative;
+	margin-left: auto;
+}
+.skill-add-menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	min-width: 180px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-card);
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 50;
+}
+.skill-add-menu .menu-item {
+	display: flex;
+	width: 100%;
+	text-align: left;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--fg);
+	font-size: var(--exx-font-size-xs);
+	padding: 8px 10px;
+	cursor: pointer;
+}
+.skill-add-menu .menu-item:hover,
+.skill-add-menu .menu-item:focus-visible {
+	background: var(--panel-2);
+	outline: none;
+}
+
+/* Library list: a table whose every row is one button that opens the
+   skill's page. */
+.skill-rows {
+	display: grid;
+	margin-top: 6px;
+}
+.skill-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 6px 14px;
+	align-items: center;
+	width: 100%;
+	padding: 12px 0;
+	background: transparent;
+	border: none;
+	border-bottom: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+	border-radius: 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.skill-row:last-child {
+	border-bottom: none;
+}
+.skill-row:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-radius: 6px;
+}
+.skill-row:disabled {
+	cursor: progress;
+}
+.skill-table-chevron {
+	color: var(--muted);
+	font-size: 16px;
+	line-height: 1;
+	text-align: right;
+}
+.skill-table-narrow {
+	display: none;
+}
+
+/* Write form specifics (reuses .connector-form + .ai-setup-block). */
+.skill-write-id-hint {
+	color: var(--muted);
+	font-size: 11px;
+}
+.skill-write-instructions {
+	font-family: var(--exx-font-mono);
+	font-size: 13px;
+	line-height: 1.5;
+	resize: vertical;
+	min-height: 200px;
+}
+
+/* --- The shared review screen (the trust moment) -------------------------- */
+.skill-review {
+	max-width: 820px;
+	margin: 0 auto;
+	padding: 8px 0 40px;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+.skill-review-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+}
+.skill-review-title-block {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+.skill-review-title-block h2 {
+	margin: 0;
+}
+.skill-review-desc {
+	color: var(--muted);
+	margin: 0;
+}
+.skill-review-lead {
+	color: var(--fg);
+	font-size: 13.5px;
+	line-height: 1.55;
+	margin: 0;
+}
+/* Editable description field (upload/accept review only): matches the write-form field. */
+.skill-review-field {
+	display: grid;
+	gap: 6px;
+}
+.skill-review-field-label {
+	font-size: 12px;
+	color: var(--muted);
+}
+.skill-review-desc-input {
+	width: 100%;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	background: var(--bg-2);
+	color: var(--fg);
+	padding: 10px 11px;
+	font: inherit;
+}
+.skill-review-desc-input:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-color: var(--exx-focus);
+}
+.skill-review-desc-counter {
+	justify-self: end;
+	font-size: 11px;
+	color: var(--muted);
+}
+.skill-review-desc-counter.over {
+	color: var(--danger, #d84a4a);
+}
+
+/* Warning/danger banners: unknown license, hidden characters, bundled scripts. */
+.skill-review-banner {
+	font-size: 13px;
+	line-height: 1.55;
+	padding: 12px 14px;
+	border-radius: var(--exx-radius-card);
+	border: 1px solid var(--border-soft);
+	background: var(--panel-2);
+}
+.skill-review-banner.warn {
+	border-color: color-mix(in srgb, var(--exx-warning, #e8a838) 55%, transparent);
+	background: color-mix(in srgb, var(--exx-warning, #e8a838) 12%, transparent);
+}
+.skill-review-banner.danger {
+	border-color: color-mix(in srgb, var(--exx-danger, #d9534f) 55%, transparent);
+	background: color-mix(in srgb, var(--exx-danger, #d9534f) 12%, transparent);
+}
+.skill-review-findings {
+	margin: 8px 0 0;
+	padding-left: 18px;
+	display: grid;
+	gap: 3px;
+	font-size: 12.5px;
+}
+.skill-review-findings code {
+	font-family: var(--exx-font-mono);
+}
+.skill-review-body-label {
+	color: var(--muted);
+	font-size: 11px;
+}
+.skill-review-error {
+	margin: 0;
+}
+.skill-review-actions {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+
+/* A library skill's page (skill-detail.tsx): a back link, the pane header
+   with the description held to three lines, the facts as settings rows, the
+   instructions, and Delete as the last row. The pane is the one scroll. */
+.skills-page .skill-detail {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.skill-detail-back {
+	align-self: flex-start;
+	margin: 0 0 10px;
+	padding: 0;
+	background: none;
+	border: none;
+	color: var(--muted);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+.skill-detail-back:hover {
+	color: var(--fg);
+}
+.skill-detail-back:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.skill-detail-desc {
+	display: block;
+}
+.skill-detail-desc.clamped {
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.skill-detail .skill-detail-more {
+	display: block;
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 13px;
+}
+.skill-detail .skill-review-banner {
+	margin: 10px 0 0;
+}
+.skill-detail .settings-row-value .rs-text-btn {
+	margin-left: 10px;
+}
+.skill-fact-value {
+	max-width: 65%;
+	text-align: right;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.skill-fact-link {
+	color: var(--fg);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.skill-fact-warn {
+	color: var(--exx-warning, #c47f00);
+}
+.skill-detail-files {
+	padding-bottom: 12px;
+}
+.skill-review-files {
+	margin-top: 10px;
+}
+
+/* A skill's instructions at the pane's scale (skill-instructions.tsx):
+   headings in the UI font, code that wraps, tables that fit the width, and
+   an optional fold with a fade. */
+.skills-page .skill-doc {
+	min-width: 0;
+	color: var(--fg);
+	font-size: 13.5px;
+	line-height: 1.6;
+	overflow-wrap: break-word;
+}
+.skills-page .skill-doc > :first-child {
+	margin-top: 0;
+}
+.skills-page .skill-doc :is(h1, h2, h3, h4, h5, h6) {
+	font-family: inherit;
+	font-weight: 600;
+	letter-spacing: 0;
+	line-height: 1.35;
+	text-transform: none;
+}
+.skills-page .skill-doc h1 {
+	font-size: 17px;
+	margin: 4px 0 8px;
+}
+.skills-page .skill-doc h2 {
+	font-size: 15px;
+	margin: 20px 0 6px;
+}
+.skills-page .skill-doc :is(h3, h4, h5, h6) {
+	font-size: 13.5px;
+	margin: 16px 0 4px;
+}
+.skills-page .skill-doc :is(p, li, td, th) {
+	font-size: 13.5px;
+}
+.skills-page .skill-doc pre {
+	margin: 8px 0;
+	padding: 9px 11px;
+	border: 1px solid var(--border-soft);
+	border-radius: 6px;
+	background: var(--code-bg);
+	color: var(--code-fg);
+}
+.skills-page .skill-doc .code-block-tools {
+	background: var(--code-bg);
+}
+.skills-page .skill-doc .code-block > pre {
+	margin: 0;
+	border-top: none;
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
+}
+.skills-page .skill-doc pre,
+.skills-page .skill-doc pre code {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 12px;
+}
+.skills-page .skill-doc .code-block {
+	margin: 8px 0;
+}
+.skills-page .skill-doc table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	border-collapse: collapse;
+	margin: 8px 0;
+}
+.skills-page .skill-doc :is(td, th) {
+	padding: 4px 14px 4px 0;
+	vertical-align: top;
+	text-align: left;
+	word-break: normal;
+	overflow-wrap: normal;
+}
+/* Code in a cell wraps at its spaces, never inside a token (the tokens are
+   spans, see MarkdownRenderer codeTokens); a table still too wide scrolls. */
+.skills-page .skill-doc :is(td, th) code {
+	white-space: normal;
+	word-break: normal;
+	overflow-wrap: normal;
+}
+.skills-page .skill-doc :is(td, th) .md-code-token {
+	white-space: nowrap;
+}
+.skills-page .skill-doc.folded {
+	max-height: 340px;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(#000 60%, transparent);
+	mask-image: linear-gradient(#000 60%, transparent);
+}
+.skill-doc-toggle {
+	align-self: flex-start;
+	margin-top: 10px;
+}
+
+/* --- Browse featured directory (MR-P2) ------------------------------------ */
+.skill-browse-directory {
+	display: grid;
+	gap: 22px;
+	margin-top: 6px;
+}
+.skill-browse-loading {
+	color: var(--muted);
+	font-size: 13px;
+}
+.skill-browse-error {
+	color: var(--exx-danger, #e85858);
+	font-size: 13px;
+}
+.skill-browse-retry {
+	display: grid;
+	gap: 8px;
+	justify-items: start;
+}
+.skill-browse-source-warn {
+	color: var(--exx-warning, #c47f00);
+	font-size: 13px;
+}
+
+/* --- Upload modal (MR-P2): reuses the app overlay/dialog language ---------- */
+.skill-upload-overlay {
+	position: fixed;
+	inset: 0;
+	background: var(--overlay-bg);
+	backdrop-filter: blur(10px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	/* Above the settings overlay (70): this dialog opens from inside it. */
+	z-index: 90;
+	padding: 24px;
+}
+.skill-upload-modal {
+	background: var(--panel);
+	border: 1px solid var(--exx-edge-dialog);
+	border-radius: 14px;
+	max-width: 460px;
+	width: 100%;
+	padding: 20px 22px 22px;
+	display: grid;
+	gap: 16px;
+}
+.skill-upload-modal-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.skill-upload-modal-head h3 {
+	margin: 0;
+}
+.skill-upload-drop {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	width: 100%;
+	padding: 30px 18px;
+	border: 1px dashed color-mix(in srgb, var(--fg) 28%, transparent);
+	border-radius: var(--exx-radius-card);
+	background: var(--bg-2);
+	color: var(--fg);
+	cursor: pointer;
+	transition: border-color 120ms ease, background 120ms ease;
+}
+.skill-upload-drop:hover,
+.skill-upload-drop:focus-visible,
+.skill-upload-drop.dragging {
+	border-color: var(--exx-focus, var(--fg));
+	background: var(--panel-2);
+	outline: none;
+}
+.skill-upload-drop-glyph {
+	font-size: 22px;
+	line-height: 1;
+	opacity: 0.7;
+}
+.skill-upload-drop-label {
+	font-size: 13.5px;
+}
+.skill-upload-reqs {
+	display: grid;
+	gap: 6px;
+}
+.skill-upload-reqs-title {
+	color: var(--muted);
+	font-size: 11px;
+}
+.skill-upload-reqs ul {
+	margin: 0;
+	padding-left: 18px;
+	display: grid;
+	gap: 4px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
+}
+.skill-upload-reqs code {
+	font-family: var(--exx-font-mono);
+}
+
+/* --- Import from repo (MR-P2) --------------------------------------------- */
+.skill-import-from-repo {
+	display: grid;
+	gap: 14px;
+	margin-top: 6px;
+}
+.skill-import-help {
+	margin: 0;
+}
+.skill-import-row {
+	display: flex;
+	gap: 8px;
+	max-width: 620px;
+}
+.skill-import-url {
+	flex: 1;
+	min-width: 0;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	background: var(--bg-2);
+	color: var(--fg);
+	padding: 10px 12px;
+	font: inherit;
+}
+.skill-import-url:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-color: var(--exx-focus);
+}
+.skill-import-loading {
+	color: var(--muted);
+	font-size: 13px;
+}
+.skill-import-found {
+	display: grid;
+	gap: 8px;
+}
+.skill-import-found-count {
+	color: var(--muted);
+	font-size: 13px;
+}
+.skill-import-option {
+	display: flex;
+	gap: 10px;
+	align-items: flex-start;
+	padding: 11px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-card);
+	background: var(--panel);
+	cursor: pointer;
+}
+.skill-import-option:hover {
+	border-color: color-mix(in srgb, var(--fg) 22%, transparent);
+}
+.skill-import-option-main {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+.skill-import-option-name {
+	font-weight: 500;
+}
+.skill-import-option-desc {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
+}
+.skill-import-option-meta {
+	color: var(--muted);
+	font-size: 12px;
+}
+.skill-import-queue {
+	color: var(--muted);
+	font-size: 12px;
+}
+
+/* Phone: Featured and the import list stay one column the width of the
+   screen. A grid column sizes to its widest unbroken word by default, and a
+   long one in a description pushed every row, Scan and Add past the edge. */
+@media (max-width: 760px) {
+	.skill-browse-directory,
+	.skill-import-from-repo,
+	.skill-import-found {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.skill-browse-directory .settings-row-label,
+	.skill-browse-directory .settings-row-sub,
+	.skill-browse-directory .group-head-line,
+	.skill-import-found-count,
+	.skill-import-option-name,
+	.skill-import-option-desc {
+		overflow-wrap: anywhere;
+	}
+	.skill-import-option {
+		min-width: 0;
+	}
+}
+
+/* Room settings — Skills panel (MR-5). */
+.room-skills-rows {
+	display: grid;
+	gap: 8px;
+	margin-top: 8px;
+}
+.room-skills-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 10px;
+	border: 1px solid var(--exx-border, rgba(128, 128, 128, 0.25));
+	border-radius: 8px;
+}
+.room-skills-row-main {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.room-skills-name-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.room-skills-name {
+	font-weight: 600;
+}
+.room-skills-desc {
+	font-size: 12px;
+	opacity: 0.75;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.room-skills-warn {
+	font-size: 12px;
+	color: var(--exx-warning, #c47f00);
+}
+.room-skills-row-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-shrink: 0;
+}
+/* Room settings Connectors panel: skills-row layout plus the global page's
+   connector avatar as a leading column, so the main column fills the middle. */
+.room-connectors-section .room-skills-row-main {
+	flex: 1;
+}
+.room-connectors-section .connector-avatar {
+	font-size: 13px;
+}
+
+/* Room settings, Skills: an enabled skill is a settings row; a skill that can
+   run files adds a second row for that, with no hairline above it, and its
+   file list opens under it in the pane's own scroll. */
+.room-skill-row {
+	align-items: flex-start;
+}
+.room-skill-actions {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.room-skill-problem {
+	color: var(--exx-warning, #c47f00);
+}
+.room-skill-files-row {
+	padding-top: 0;
+}
+.room-skill-files-label {
+	font-size: 13px;
+}
+.room-skill-files {
+	padding-bottom: 12px;
+}
+/* A text action inside a sentence: normal ink, underlined. */
+.rs-text-btn {
+	background: none;
+	border: none;
+	border-radius: 0;
+	padding: 0;
+	font: inherit;
+	color: var(--fg);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+.rs-text-btn:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+/* Files grouped by folder (file-groups.tsx): the folder in normal ink, its
+   names muted; a name never breaks inside itself. */
+.file-groups {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	font-family: var(--exx-font-mono, monospace);
+	font-size: 12px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.file-groups-folder {
+	color: var(--fg);
+}
+.file-groups-token {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: top;
+}
+
+/* Room settings — drifted-skill re-review gate (MR-5 hardening). */
+.room-skills-review {
+	border: 1px solid var(--exx-warning, #c47f00);
+	border-radius: 8px;
+	padding: 12px;
+	margin: 8px 0;
+	display: grid;
+	gap: 8px;
+}
+.room-skills-review-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.room-skills-review-body {
+	max-height: 260px;
+	overflow: auto;
+	padding: 8px 10px;
+	border: 1px solid var(--exx-border, rgba(128, 128, 128, 0.25));
+	border-radius: 6px;
+	font-size: 13px;
+}
+.room-skills-empty {
+	color: var(--muted);
+}
+.room-skills-live {
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--success);
+	flex-shrink: 0;
+}
+.room-skills-picker {
+	display: grid;
+	gap: 8px;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-card, 10px);
+	padding: 10px;
+	background: var(--panel-2, var(--bg-2));
+}
+.room-skills-picker-head {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+.room-skills-picker-search {
+	flex: 1;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control, 8px);
+	background: var(--bg-2);
+	color: var(--fg);
+	padding: 8px 10px;
+	font: inherit;
+}
+.room-skills-picker-search:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-color: var(--exx-focus);
+}
+.room-skills-picker-list {
+	max-height: 320px;
+	overflow: auto;
+	display: grid;
+	gap: 6px;
+}
+
+/* Round 2: overflow + growth guards on the delegation surfaces. */
+.task-file-chip .task-file-name { overflow-wrap: anywhere; }
+.consult-q, .approval-title { overflow-wrap: anywhere; }
+.approval-message { overflow-wrap: anywhere; }
+.task-notes .task-summary { max-height: 300px; overflow: auto; }
+.consult-answer { max-height: 340px; overflow: auto; }
+

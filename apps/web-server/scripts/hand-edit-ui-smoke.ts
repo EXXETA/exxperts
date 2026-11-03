@@ -20,6 +20,8 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Locator, type Page, type Route } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+import { closeBrowser } from "./smoke-close-context.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -140,14 +142,7 @@ async function check(name: string, body: () => Promise<void>): Promise<void> {
 	}
 }
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await Promise.resolve().then(predicate).catch(() => false)) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(150);
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -346,20 +341,6 @@ try {
 			await row.getByRole("button", { name: "Cancel", exact: true }).click();
 		});
 
-		await check("Memorize card: a typed heading saves as bold words in its note", async () => {
-			assert(memorizeReady, "the card is open");
-			const row = await heldRow(memorize, "Fold note beta");
-			await row.getByRole("button", { name: "Edit", exact: true }).click();
-			await row.getByLabel("Note text").fill("Exam facts:\n## Booking\nBook the date.");
-			await row.getByRole("button", { name: "Save", exact: true }).click();
-			await waitUntil(async () => (await row.getByLabel("Note text").count()) === 0, "the editor closes", 10_000);
-			await shot("memorize-card-typed-heading", row);
-			const saved = changeRow(memorize, "Exam facts:");
-			const text = await saved.innerText();
-			assert(text.includes("Booking") && text.includes("Book the date."), `the note shows every typed word, got ${JSON.stringify(text)}`);
-			assert(await saved.locator("h1, h2, h3, h4, h5, h6").count() === 0 && await saved.locator("strong").filter({ hasText: "Booking" }).count() === 1, "the typed heading is bold words in the note, not a heading");
-		});
-
 		await check("Memorize card: an edit whose answer is lost says so under the note, then shows the saved words", async () => {
 			assert(memorizeReady, "the card is open");
 			const row = await heldRow(memorize, "Fold note alpha");
@@ -458,7 +439,7 @@ try {
 		let proposalReady = false;
 		await check("Remember: the proposal opens", async () => {
 			await home();
-			await card(rooms.remember.name).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await card(rooms.remember.name).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			const composer = page.locator("textarea").first();
 			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15_000 });
 			await page.waitForTimeout(800);
@@ -531,7 +512,7 @@ try {
 
 		await check("Remember: a lost Save whose What to keep the person typed over an empty one shows the saved page, saved once, with no refusal", async () => {
 			await home();
-			await card(rooms.rememberTyped.name).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await card(rooms.rememberTyped.name).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			const composer = page.locator("textarea").first();
 			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15_000 });
 			await page.waitForTimeout(800);
@@ -741,7 +722,7 @@ try {
 			await shot("pane-open-conversation", pane);
 		});
 	} finally {
-		await browser.close();
+		await closeBrowser(browser);
 	}
 
 	const failed = rows.filter((row) => !row.ok);

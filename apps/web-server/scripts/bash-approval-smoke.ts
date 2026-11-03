@@ -48,13 +48,12 @@ try {
 		const decision = await guard.beforeBashCall('echo "hello approval"', ctx);
 		assert(decision.allow === true, "an approved command must be allowed");
 		assert(confirms.length === 1, "approval must ask exactly once");
-		assert(confirms[0].title === APPROVAL_TITLE, `card title must be pinned, got ${JSON.stringify(confirms[0].title)}`);
 		const message = confirms[0].message;
 		assert(message.includes(FENCE_LINE), "card must carry the anti-spoof fence line");
 		assert(message.includes('echo "hello approval"'), "card must show the command");
 		assert(message.indexOf(FENCE_LINE) < message.indexOf('echo "hello approval"'), "the command must render below the fence, never above it");
 		assert(message.includes("Runs in: /tmp/room-workspace"), "card must name the working directory when the context has one");
-		assert(message.includes("You can auto-approve bash for this room in Workspace settings."), "card must mention the auto-approve setting");
+		assert(message.includes("You can auto-approve bash for this room in Room settings, Folder."), "card must mention the auto-approve setting");
 		assert(message.indexOf("You can auto-approve bash") < message.indexOf(FENCE_LINE), "the app-drawn facts must sit above the fence");
 	}
 	{
@@ -179,6 +178,63 @@ try {
 	}
 	console.log("ok: the upgrade grant preserves pre-card bash rooms, respects choices, and never fires twice");
 
+	// ── 2c. A grant that fails still finishes the step ──────────────────────
+	{
+		// Its own root, so this run starts before any marker exists.
+		const options = { persistentAgentsRoot: path.join(tempRoot, "upgrade-with-a-failed-grant") };
+		const failedRoom = "bash-grant-fails-room";
+		const grantedRoom = "bash-grant-lands-room";
+		const lateRoom = "bash-enabled-later-room";
+		const asksPerCommand = async (agentId: string): Promise<boolean> => {
+			const { ctx, confirms } = makeCtx();
+			const guard = approval.createPersistentRoomBashApprovalGuard({
+				isAutoApproved: () => bashSettings.readPersistentRoomBashSettings(agentId, options).autoApprove === true,
+			});
+			await guard.beforeBashCall("ls", ctx);
+			return confirms.length === 1;
+		};
+		// A file where the room's runtime folder belongs makes its write fail.
+		const blocker = path.join(options.persistentAgentsRoot, failedRoom, "runtime");
+		fs.mkdirSync(path.dirname(blocker), { recursive: true });
+		fs.writeFileSync(blocker, "not a folder", "utf-8");
+		const warnings: string[] = [];
+		const realWarn = console.warn;
+		console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+		const first = (() => {
+			try {
+				return bashSettings.migratePersistentRoomBashAutoApproveDefaults([
+					{ id: failedRoom, bashEnabled: true },
+					{ id: grantedRoom, bashEnabled: true },
+				], options);
+			} finally {
+				console.warn = realWarn;
+			}
+		})();
+		assert(first.migrated.join(",") === grantedRoom && first.failed.join(",") === failedRoom, `one failed grant must not stop the others, got ${JSON.stringify(first)}`);
+		assert(warnings.length === 1 && warnings[0].includes(JSON.stringify(failedRoom)), `the failed room must be logged with its id, got ${JSON.stringify(warnings)}`);
+		const markerPath = path.join(options.persistentAgentsRoot, ".bash-auto-approve-defaults-v1");
+		const marker = JSON.parse(fs.readFileSync(markerPath, "utf-8"));
+		assert(typeof marker.startedAt === "string" && JSON.stringify([marker.migrated, marker.failed]) === JSON.stringify([[grantedRoom], [failedRoom]]),`the marker must name the granted and the failed rooms, got ${JSON.stringify(marker)}`);
+		assert(await asksPerCommand(failedRoom), "the room whose grant failed asks before each command");
+		assert(!(await asksPerCommand(grantedRoom)), "the room whose grant landed runs without asking");
+
+		// The next start: the failed room could be written now, and another room
+		// turned commands on in between. Neither may gain auto-approve.
+		fs.rmSync(blocker);
+		const second = bashSettings.migratePersistentRoomBashAutoApproveDefaults([
+			{ id: failedRoom, bashEnabled: true },
+			{ id: grantedRoom, bashEnabled: true },
+			{ id: lateRoom, bashEnabled: true },
+		], options);
+		assert(second.migrated.length === 0 && second.failed.length === 0, `the step must not run again after a failed grant, got ${JSON.stringify(second)}`);
+		assert(fs.readFileSync(markerPath, "utf-8") === JSON.stringify(marker, null, 2) + "\n", "the next start leaves the marker as the upgrade wrote it");
+		assert(!fs.existsSync(bashSettings.persistentRoomBashSettingsPath(failedRoom, options)), "the next start writes nothing for the room whose grant failed");
+		assert(!fs.existsSync(bashSettings.persistentRoomBashSettingsPath(lateRoom, options)), "the next start writes nothing for a room that turned commands on later");
+		assert(await asksPerCommand(failedRoom), "after the next start, the room whose grant failed still asks before each command");
+		assert(await asksPerCommand(lateRoom), "after the next start, a room that turned commands on later asks before each command");
+	}
+	console.log("ok: a failed grant is logged, the step still finishes, and the next start grants nothing");
+
 	// ── 3. Remote route policy ───────────────────────────────────────────────
 	{
 		assert(routePolicy.classifyRemoteRoute("PUT", "/api/persistent-agents/:id/bash-settings") === "local", "PUT bash-settings must be loopback-only: a phone must never flip a room to auto-approve");
@@ -214,6 +270,33 @@ try {
 		assert(autoDeclined.length === 1 && autoDeclined[0].kind === "confirm" && autoDeclined[0].title === APPROVAL_TITLE, `the detach must report the card to the transcript-note listener, got ${JSON.stringify(autoDeclined)}`);
 	}
 	console.log("ok: the card rides the ui_request bridge and a detach auto-declines with the transcript note");
+
+	// ── 4b. Stop answers the open card, then the next turn asks again ───────
+	{
+		const { STOPPED_BEFORE_ANSWER_SENTENCE } = await import("../src/turn-ended-by.js");
+		const autoDeclined: unknown[] = [];
+		const sentFrames: any[] = [];
+		const uiContext = webUiContext.createWebUiContext((msg: unknown) => sentFrames.push(msg), (question) => autoDeclined.push(question));
+		const guard = approval.createPersistentRoomBashApprovalGuard({ isAutoApproved: () => false });
+		const liveCtx = { hasUI: true, ui: uiContext } as any;
+		const outcome = (command: string) => guard.beforeBashCall(command, liveCtx).then((d) => `allowed:${d.allow}`, (error: Error) => error.message);
+		const open = outcome("rm notes.txt");
+		const asked = sentFrames.find((f) => f?.type === "ui_request" && f?.kind === "confirm");
+		assert(asked, "the card is asked");
+		uiContext.declineOpenQuestions(STOPPED_BEFORE_ANSWER_SENTENCE);
+		assert((await open) === STOPPED_BEFORE_ANSWER_SENTENCE, "Stop answers the open card with the stop's sentence for the model");
+		assert(sentFrames.some((f) => f?.type === "ui_request_closed" && f.id === asked.id && f.reason === "stopped"), "the page is told the card closed");
+		const framesBefore = sentFrames.length;
+		assert((await outcome("rm other.txt")) === STOPPED_BEFORE_ANSWER_SENTENCE && sentFrames.length === framesBefore, "a card asked while the stop is under way is answered at once, never shown");
+		assert(autoDeclined.length === 0, "a Stop is not an away decline: nothing is noted for the landing");
+		uiContext.reopen();
+		const next = outcome("ls");
+		const askedAgain = sentFrames.slice(framesBefore).find((f) => f?.type === "ui_request" && f?.kind === "confirm");
+		assert(askedAgain, "the next turn asks again");
+		uiContext.resolveResponse(askedAgain.id, true);
+		assert((await next) === "allowed:true", "and its answer counts");
+	}
+	console.log("ok: Stop answers the open card and later cards, then the next turn asks again");
 
 	// ── 5. Extension shape: only bash is touched ─────────────────────────────
 	{

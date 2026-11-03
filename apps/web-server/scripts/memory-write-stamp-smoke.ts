@@ -31,7 +31,7 @@ const {
 } = await import("../src/persistent-agents.js");
 const { loadMemoryDocument, writeMemoryDocument } = await import("../src/memory-entries-store.js");
 const { applyUserEdit } = await import("../src/memory-entries.js");
-const { NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } = await import("../../web-ui/src/memory-surface-copy.js");
+const { nothingToMaintain } = await import("../../web-ui/src/memory-surface-copy.js");
 
 const model = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
 let checks = 0;
@@ -91,7 +91,6 @@ try {
 	assert(freshStatus.lastMemoryWriteAt === null, `a fresh room has no memory write, got ${freshStatus.lastMemoryWriteAt}`);
 	assert(freshStatus.recentContextCount === 0, "a fresh room has nothing waiting");
 	assert(nothingToMaintain(freshStatus) === true, "a fresh room has nothing to maintain");
-	assert(/Remember first/.test(NOTHING_TO_MAINTAIN_SENTENCE), "the blocked sentence names Remember as the way out");
 	// Reading the memory without migrating it writes nothing.
 	loadMemoryDocument(fresh, { migrate: "in-memory" });
 	assert(memoryStatus(fresh).lastMemoryWriteAt === null, "reading the memory is not a write");

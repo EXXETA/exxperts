@@ -11,6 +11,7 @@ import {
 	persistentRoomWorkspaceToolSelectionViewForPolicy,
 } from "./persistent-room-tool-policy.js";
 import { productAppStatePath, productAppStateRoot, stateHome } from "../../../pi-package/product-state-paths.js";
+import { serverHooks } from "./server-hooks.js";
 
 export type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
 export type PersistentRoomWorkspaceRootSource = "manual" | "query-param" | "runtime-state" | "admin-dev";
@@ -506,6 +507,7 @@ export function persistentRoomWorkspaceWriterToolsEnabled(allowedToolNames: read
 }
 
 function normalizePersistentRoomCapabilityPolicy(raw: any, agentId: string, conversationId: string): PersistentRoomCapabilityPolicy | null {
+	if (serverHooks().ignoresStoredWorkspaceSettings?.()) return null;
 	if (!raw || typeof raw !== "object" || raw.schemaVersion !== 1) return null;
 	if (raw.agentId !== agentId || raw.conversationId !== conversationId) return null;
 	const roots: Array<PersistentRoomWorkspaceRootGrant | null> = Array.isArray(raw.roots) ? raw.roots.map(normalizePersistentRoomWorkspaceRootGrant) : [];
@@ -911,6 +913,14 @@ export function resolvePersistentRoomEffectiveWorkspacePolicy(agentIdRaw: string
 	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
 	const resolution = resolvePersistentRoomCapabilityPolicy(agentId, conversationId, options);
 	return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: resolution.source, policy: resolution.policy });
+}
+
+/** What a new conversation of this room starts on: the room's default, whatever settings one conversation keeps for itself. */
+export function resolvePersistentRoomNewConversationWorkspacePolicy(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomEffectiveWorkspacePolicy {
+	const agentId = safePolicyFileId(agentIdRaw, "agent id");
+	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
+	const policy = readPersistentRoomDefaultCapabilityPolicy(agentId, options);
+	return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: policy ? "room-default" : "none", policy });
 }
 
 /** Content identity for workspace policies: everything that decides what the

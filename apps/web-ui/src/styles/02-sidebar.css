@@ -1,0 +1,329 @@
+/* Layout ------------------------------------------------------------ */
+.app {
+	display: grid;
+	grid-template-columns: 260px 1fr;
+	height: 100%;
+}
+.sidebar {
+	background: var(--exx-surface-inset);
+	border-right: 1px solid var(--exx-divider);
+	color: var(--fg);
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+:root[data-theme="light"] .sidebar {
+	background: var(--exx-surface);
+	color: var(--fg);
+	border-right-color: var(--exx-divider);
+}
+/* One row at the top: the sidebar toggle, fixed on its spot at the top left
+   (.sidebar-toggle-floating, in 35-sidebar-remote.css), then the logo,
+   left-aligned and centred on the toggle's 28px from 8px down. The list
+   starts right under the row. The mac app keeps the window buttons' row for
+   the toggle alone and gives the logo a row of its own (html.desktop-app-mac,
+   in 34-desktop-app.css). */
+/* Where the sidebar's words start: the logo's left edge, and both lists'
+   labels on it (the logo's image has no margin of its own to speak of). In
+   the browser the logo starts right of the fixed toggle (10px, 28px wide,
+   3px of air); the mac app sets its own (34-desktop-app.css). */
+:root {
+	--sidebar-text-left: 41px;
+}
+.sidebar-header,
+.product-sidebar-header {
+	display: flex;
+	align-items: center;
+	min-height: 36px;
+	padding: 8px 12px 0 var(--sidebar-text-left);
+}
+/* Centred on whole pixels, the toggle's glyph draws half a pixel below the
+   logo's lowercase letters; a sharp screen can draw the half pixel, so there
+   it rises by it. Both buttons rise, the floating one too, so they keep one
+   spot. Not in the mac app, whose toggle sits on the window buttons' row, nor
+   on the phone, whose home button keeps the toggle's line (38-phone.css). */
+@media (min-resolution: 2dppx) and (min-width: 761px) {
+	html:not(.desktop-app-mac) .sidebar-header .sidebar-toggle,
+	html:not(.desktop-app-mac) .product-sidebar-header .sidebar-toggle,
+	html:not(.desktop-app-mac) .sidebar-toggle-floating {
+		translate: 0 -0.5px;
+	}
+}
+.brand {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+}
+/* The logo's lowercase height a little above the list's capitals, as a
+   wordmark beside a sidebar button usually sits. It scales down rather than
+   overflow when the row is short of room. */
+.brand img.logo {
+	height: 22px;
+	width: auto;
+	max-width: 100%;
+	object-fit: contain;
+	object-position: left center;
+	display: block;
+	filter: none;
+}
+:root[data-theme="light"] .landing-brand img {
+	filter: invert(1);
+}
+/* The sidebar's lists (this one and .product-nav): rows 34px apart (32px
+   boxes, 2px between) in regular weight, a tight list in the manner of a
+   sidebar beside a chat; the mac app steps 28px (html.desktop-app-mac). */
+.sidebar-primary-nav {
+	padding: 14px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+/* An item's text starts at --sidebar-text-left: the list's 12px padding and
+   the item's 1px border come off it. */
+.sidebar-primary-nav .list-btn {
+	position: relative;
+	width: 100%;
+	background: transparent;
+	border-color: transparent;
+	border-radius: var(--exx-radius-control);
+	color: var(--fg-soft);
+	font-weight: 400;
+	line-height: 1.2;
+	padding: 6px 12px 6px calc(var(--sidebar-text-left) - 13px);
+	transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+.sidebar-primary-nav .list-btn::before {
+	content: "";
+	position: absolute;
+	left: 5px;
+	top: 8px;
+	bottom: 8px;
+	width: 2px;
+	border-radius: var(--exx-radius-pill);
+	background: transparent;
+}
+.sidebar-primary-nav .list-btn:hover,
+.sidebar-primary-nav .list-btn:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border-soft);
+	color: var(--fg);
+}
+.sidebar-primary-nav .list-btn:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+
+.sidebar-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	scrollbar-width: thin;
+	scrollbar-color: currentColor transparent;
+}
+.sidebar-body::-webkit-scrollbar,
+.sidebar-list::-webkit-scrollbar {
+	width: 8px;
+}
+.sidebar-body::-webkit-scrollbar-thumb,
+.sidebar-list::-webkit-scrollbar-thumb {
+	background: currentColor;
+	border-radius: 4px;
+}
+.sidebar-body::-webkit-scrollbar-track,
+.sidebar-list::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.sidebar-section {
+	padding: 12px;
+	border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+}
+.sidebar-section:last-child { border-bottom: none; }
+.sidebar-title {
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--dim);
+	margin-bottom: 8px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+}
+/* Section head wrapper aligned to the landing product-nav style.
+   It intentionally sets no font so the .product-nav-label inside renders in
+   the same body font as the landing (not the Bandeins .sidebar-title). */
+.sidebar-section-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 2px;
+}
+.section-toggle {
+	appearance: none;
+	background: transparent;
+	border: none;
+	color: var(--dim);
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0;
+	font: inherit;
+	text-transform: inherit;
+	letter-spacing: inherit;
+	font-weight: inherit;
+}
+.section-toggle:hover { color: var(--fg); }
+.section-caret {
+	font-size: 12px;
+	line-height: 1;
+	width: 10px;
+	text-align: center;
+}
+.sidebar-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-height: 38vh;
+	overflow-y: auto;
+	padding-right: 2px;
+}
+
+.list-btn {
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--fg);
+	padding: 8px 9px;
+	text-align: left;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	transition: background 80ms, border-color 80ms;
+}
+.list-btn:hover,
+.list-btn:focus-visible {
+	background: color-mix(in srgb, currentColor 10%, transparent);
+	border-color: color-mix(in srgb, currentColor 24%, transparent);
+	outline: none;
+}
+.compact-list { max-height: 220px; }
+.conversation-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+}
+.conversation-btn {
+	padding: 8px 9px;
+	min-width: 0;
+	width: 100%;
+}
+.conversation-btn .name { font-family: "Sen", sans-serif; font-size: 12px; letter-spacing: 0; }
+.conversation-inline-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 10px;
+	white-space: nowrap;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+}
+.conversation-row:hover .conversation-inline-actions,
+.conversation-row:focus-within .conversation-inline-actions {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+}
+.conversation-inline-action {
+	background: transparent;
+	border: none;
+	padding: 0;
+	margin: 0;
+	color: currentColor;
+	font-size: 10px;
+	line-height: 1;
+	text-decoration: underline;
+}
+.conversation-inline-action:hover,
+.conversation-inline-action:focus-visible {
+	outline: none;
+	font-weight: 700;
+}
+.conversation-action-sep {
+	font-size: 10px;
+	line-height: 1;
+}
+.list-btn .name-row { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; min-width: 0; }
+.list-btn .name {
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-weight: 700;
+	font-size: 14px;
+	letter-spacing: -0.005em;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.row-badge {
+	font-size: 9px;
+	font-weight: 700;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 1px 6px;
+}
+.list-btn .desc { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.list-btn .meta {
+	color: var(--dim);
+	font-size: 10px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+.row-action {
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 0 6px;
+	font-size: 9px;
+	font-weight: 700;
+	color: var(--fg);
+	display: none;
+}
+.list-btn:hover .row-action,
+.list-btn:focus-within .row-action {
+	display: inline-flex;
+	align-items: center;
+}
+.row-action:hover,
+.row-action:focus-visible {
+	background: var(--fg);
+	color: var(--bg);
+	outline: none;
+}
+
+.list-btn.active {
+	background: var(--fg);
+	color: var(--bg);
+	border-color: var(--fg);
+}
+.list-btn.active .name { color: var(--bg); }
+.list-btn.active .row-badge { color: var(--bg); border-color: color-mix(in srgb, currentColor 34%, transparent); }
+.list-btn.active .row-action { color: var(--bg); border-color: color-mix(in srgb, currentColor 34%, transparent); }
+.list-btn.active .row-action:hover { background: var(--bg); color: var(--fg); }
+.list-btn.active .desc,
+.list-btn.active .meta { color: var(--bg); }
+.sidebar-footer {
+	margin-top: auto;
+	padding: 10px 12px;
+	color: var(--muted);
+	font-size: 11px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}

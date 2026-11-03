@@ -209,7 +209,7 @@ async function pollRun(url: string, working: string[]): Promise<any> {
 		if (polled.status !== 200) throw new Error(`${url} answered ${polled.status}: ${JSON.stringify(polled.body).slice(0, 200)}`);
 		if (!working.includes(String(polled.body.state))) return polled.body;
 		if (Date.now() > deadline) throw new Error(`${url} stayed ${polled.body.state}`);
-		await sleep(250);
+		await sleep(50);
 	}
 }
 
@@ -480,7 +480,7 @@ try {
 			const progress = await api(`/api/persistent-agents/${agentId}/checkpoint/progress?conversationId=${conversationId}`);
 			if (progress.body?.state && progress.body.state !== "reading") break;
 			if (Date.now() > deadline) throw new Error("Remember kept reading");
-			await sleep(250);
+			await sleep(50);
 		}
 		const result = await api(`/api/persistent-agents/${agentId}/checkpoint/result?conversationId=${conversationId}`);
 		assert(result.status === 200 && result.body?.proposedRecentContext, `Remember has a proposal, got ${result.status} ${JSON.stringify(result.body).slice(0, 200)}`);

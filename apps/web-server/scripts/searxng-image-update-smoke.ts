@@ -65,6 +65,30 @@ const enginePort = String((engine.address() as AddressInfo).port);
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-searxng-update-"));
 
+// The app reads the engine's port when it loads, so it is set before the first import.
+process.env.SEARXNG_PORT = enginePort;
+
+// An engine that takes SearXNG's full 3 s on a slow search site is healthy.
+// The row only waits, so it runs beside the others and is awaited at the end.
+const slowEngineRow = (async () => {
+	const slow = http.createServer((_req, res) => {
+		setTimeout(() => {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ results: [] }));
+		}, 3100);
+	});
+	await new Promise<void>((resolve) => slow.listen(0, "127.0.0.1", resolve));
+	try {
+		const setup = await import("../src/searxng-setup.js");
+		const answered = await setup.probeSearxng(`http://127.0.0.1:${(slow.address() as AddressInfo).port}`);
+		assert(answered, "an engine answering after 3 s reads as answering, not as silent");
+	} finally {
+		slow.closeAllConnections();
+		slow.close();
+	}
+})();
+slowEngineRow.catch(() => {});
+
 type Case = {
 	home: string;
 	state: string;
@@ -298,7 +322,6 @@ try {
 		const stub = path.join(tempRoot, "helper-stub.mjs");
 		fs.writeFileSync(stub, `import fs from "node:fs";\nfs.appendFileSync(${JSON.stringify(record)}, process.argv[2] + "\\n");\nconsole.log("SearXNG ready at http://127.0.0.1:${enginePort}");\n`);
 		process.env.EXXPERTS_SEARXNG_SCRIPT = stub;
-		process.env.SEARXNG_PORT = enginePort;
 		const setup = await import("../src/searxng-setup.js");
 		const asked = () => (fs.existsSync(record) ? fs.readFileSync(record, "utf8").trim().split("\n") : []);
 		const settle = async () => {
@@ -324,24 +347,7 @@ try {
 		assert(done.phase === "ready" && done.baseUrl === local, `the screen reads ready after an update: ${JSON.stringify(done)}`);
 	}
 
-	// An engine that takes SearXNG's full 3 s on a slow search site is healthy.
-	{
-		const slow = http.createServer((_req, res) => {
-			setTimeout(() => {
-				res.writeHead(200, { "content-type": "application/json" });
-				res.end(JSON.stringify({ results: [] }));
-			}, 3100);
-		});
-		await new Promise<void>((resolve) => slow.listen(0, "127.0.0.1", resolve));
-		try {
-			const setup = await import("../src/searxng-setup.js");
-			const answered = await setup.probeSearxng(`http://127.0.0.1:${(slow.address() as AddressInfo).port}`);
-			assert(answered, "an engine answering after 3 s reads as answering, not as silent");
-		} finally {
-			slow.closeAllConnections();
-			slow.close();
-		}
-	}
+	await slowEngineRow;
 
 	console.log("searxng image update smoke: ok");
 } finally {

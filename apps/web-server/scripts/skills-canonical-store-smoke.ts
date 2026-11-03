@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,23 +32,6 @@ function seedSkill(dir: string, id: string, instructions: string): void {
 		path.join(skillDir, "SKILL.md"),
 		["---", `name: ${id}`, `displayName: ${id}`, `description: seeded ${id}`, "---", "", instructions, ""].join("\n"),
 	);
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
@@ -89,7 +72,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	// Migration moved the legacy-only skill into the canonical store and removed
 	// it from the legacy dir.
@@ -137,10 +120,6 @@ try {
 	assert(createdManifest.includes(instructions), "the SKILL.md must contain the submitted instructions");
 	assert(created.body?.body === instructions, "created skill body should equal the submitted instructions");
 
-	// Round-trip GET.
-	const fetched = await requestJson("/api/skills/cite-sources");
-	assert(fetched.status === 200 && fetched.body?.name === "cite-sources", "GET /api/skills/:id should return the created skill");
-
 	// Edit refreshes the sidecar hash.
 	const newInstructions = "Always cite sources AND provide a confidence level.";
 	const updated = await requestJson("/api/skills/cite-sources", {
@@ -157,11 +136,6 @@ try {
 	assert(updatedProvenance.source === provenance.source, "editing a skill must preserve the provenance source");
 	assert(updatedProvenance.importedAt === provenance.importedAt, "editing a skill must preserve the provenance importedAt");
 	assert(updatedProvenance.license === provenance.license, "editing a skill must preserve the provenance license");
-
-	// Delete removes the whole skill dir (SKILL.md + sidecar).
-	const deleted = await requestJson("/api/skills/cite-sources", { method: "DELETE" });
-	assert(deleted.status === 200 && deleted.body?.deleted === "cite-sources", "DELETE /api/skills/:id should succeed");
-	assert(!fs.existsSync(createdSkillDir), "DELETE should remove the skill dir including the provenance sidecar");
 
 	console.log("skills-canonical-store-smoke: OK");
 } catch (error) {

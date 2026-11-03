@@ -39,7 +39,7 @@ import { fileURLToPath } from "node:url";
 import { estimateTokens } from "../../src/token-estimate.js";
 import type { ArchivedEntry, MemoryDocument, MemoryEntry } from "../../src/memory-entries.js";
 import { NOTE_VALUE_WORDS, type ConflictNotePair } from "../../src/memory-duplicates.js";
-import { memoryCallCacheRetention, type MemoryCallKind } from "../../src/memory-call-cache.js";
+import type { MemoryCallKind } from "../../src/memory-call-cache.js";
 import { exactFoldModel } from "./fold-models.mjs";
 import { CONFLICT_SHAPES, stripRecallDirectives, type ConflictShape, type RecallAbility, type RecallPlant, type RecallQuestion, type RecallSession } from "./recall-fixtures.mjs";
 
@@ -3404,7 +3404,7 @@ export async function createMaintenanceWorker(): Promise<MaintenanceWorker> {
 				...(input.modelDefaultThinking ? {} : { thinkingLevel: "low" as const }),
 				...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
 				...(input.signal ? { signal: input.signal } : {}),
-				...(input.callKind ? { cacheRetention: memoryCallCacheRetention(input.callKind) } : {}),
+				...(input.callKind ? { callKind: input.callKind } : {}),
 			}), { signal: input.signal });
 			spent.calls += 1;
 			spent.input += result.usage?.input ?? 0;

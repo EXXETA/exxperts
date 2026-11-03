@@ -12,7 +12,6 @@
 # Extensionless bash launcher scripts must stay LF
 /scripts/exxeta text eol=lf
 /scripts/exxeta-web text eol=lf
-/scripts/exxperts-cli text eol=lf
 /scripts/exxperts-web text eol=lf
 /scripts/searxng text eol=lf
 

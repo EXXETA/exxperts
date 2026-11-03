@@ -57,7 +57,7 @@ export const ROOM_SORT_MIN_ROOMS = 2;
  * while that write is in flight (a write already sent cannot be cancelled,
  * and closing the line under it would say the previous order is back when
  * it may not be). Whether there is anything to save, and what happens on
- * Save and Cancel, is the home screen's (App.tsx, Landing); the line only
+ * Save and Cancel, is the home screen's (landing.tsx, Landing); the line only
  * draws it. The line is drawn whatever the room count: a room gone elsewhere
  * mid-arrange must not take Save and Cancel with it.
  */

@@ -77,14 +77,6 @@ try {
 		assert(kernel.startsWith("# exxperts — Persistent Agent Platform Kernel"), `${label} should start with the kernel H1`);
 		assert(!kernel.slice(1).includes("\n# "), `${label} should contain exactly one H1-level heading`);
 
-		// 2. The capabilities section exists exactly once, between Platform Identity and Privacy & Compliance.
-		assert(countOccurrences(kernel, "## How Capabilities Reach You") === 1, `${label} should contain How Capabilities Reach You exactly once`);
-		const identityIndex = kernel.indexOf("## Platform Identity");
-		const capabilitiesIndex = kernel.indexOf("## How Capabilities Reach You");
-		const privacyIndex = kernel.indexOf("## Privacy & Compliance");
-		assert(identityIndex !== -1 && privacyIndex !== -1, `${label} should keep Platform Identity and Privacy & Compliance sections`);
-		assert(identityIndex < capabilitiesIndex && capabilitiesIndex < privacyIndex, `${label} should place the capabilities section after Platform Identity and before Privacy & Compliance`);
-
 		// 5. One documentation URL, nothing else that smells like a link.
 		assert(countOccurrences(kernel, "github.com/EXXETA/exxperts") === 1, `${label} should reference the public repo exactly once`);
 		assert(countOccurrences(kernel, "docs/README.md") === 1, `${label} should reference the docs index exactly once`);
@@ -105,9 +97,11 @@ try {
 		// budget. The ceiling binds the no-org kernel: the org section is
 		// user-configured content of arbitrary length, so the org variant is
 		// held to the same ceiling plus whatever the org section itself costs.
+		// The ceiling moved from 2100 to 2200 on purpose, for the Rendering
+		// line that teaches the chart block (about 92 estimated tokens).
 		const kernelTokens = estimateTextTokens(kernel);
 		const orgSectionTokens = label === "org kernel" ? estimateTextTokens(kernelWithOrg) - estimateTextTokens(kernelWithoutOrg) : 0;
-		assert(kernelTokens <= 2100 + orgSectionTokens, `${label} should estimate at most 2100 tokens of product-owned text, got ${kernelTokens - orgSectionTokens}`);
+		assert(kernelTokens <= 2200 + orgSectionTokens, `${label} should estimate at most 2200 tokens of product-owned text, got ${kernelTokens - orgSectionTokens}`);
 
 		// 10. Every tool name the kernel utters exists; workspace advice has left.
 		assert(!kernel.includes("grep"), `${label} should no longer mention grep (workspace advice lives in L2 now)`);
@@ -130,12 +124,6 @@ try {
 			assert(knownToolNames.has(toolName), `${label} mentions tool ${toolName}, which no persistent-room tool constant defines`);
 		}
 	}
-
-	// 3. Org identity appears exactly once, in its slot, and only when configured.
-	assert(countOccurrences(kernelWithOrg, "## Organization Context") === 1, "org kernel should contain the org section exactly once");
-	const orgIndex = kernelWithOrg.indexOf("## Organization Context");
-	assert(kernelWithOrg.indexOf("## Platform Identity") < orgIndex && orgIndex < kernelWithOrg.indexOf("## How Capabilities Reach You"), "org section should sit between Platform Identity and the capabilities section");
-	assert(!kernelWithoutOrg.includes("Organization Context"), "no-org kernel should not contain an org section");
 
 	// 4. The full ordered section list is exactly the contract.
 	assert(JSON.stringify(sectionHeadings(kernelWithoutOrg)) === JSON.stringify(expectedHeadings), `no-org kernel headings drifted: ${sectionHeadings(kernelWithoutOrg).join(" | ")}`);

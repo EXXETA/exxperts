@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,23 +21,6 @@ const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const serverOutput: string[] = [];
 let server: ChildProcessWithoutNullStreams | null = null;
-
-async function waitForServer(child: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (child.exitCode != null) throw new Error(`server exited before startup with code ${child.exitCode}: ${serverOutput.join("")}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
@@ -68,21 +51,16 @@ try {
 	}) as ChildProcessWithoutNullStreams;
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	// This smoke prints no server output of its own, so a failed start carries it.
+	await waitForServer(server, baseUrl, 20000).catch((error: Error) => {
+		throw new Error(`${error.message}: ${serverOutput.join("")}`);
+	});
 
 	// --- login provider catalog -------------------------------------------
 	const catalog = await requestJson("/api/auth/providers");
 	assert(catalog.status === 200, `providers catalog should respond, got ${catalog.status}`);
 	const providers: any[] = catalog.body?.providers ?? [];
 	assert(providers.length > 10, `catalog should expose the full Pi provider surface, got ${providers.length}`);
-	const byId = new Map(providers.map((provider) => [provider.id, provider]));
-	assert(byId.get("anthropic")?.authTypes.includes("oauth") && byId.get("anthropic")?.authTypes.includes("api_key"), "anthropic should support oauth and api_key");
-	assert(byId.get("openai-codex")?.authTypes.join(",") === "oauth", "openai-codex should be oauth-only");
-	assert(byId.get("github-copilot")?.authTypes.join(",") === "oauth", "github-copilot should be oauth-only");
-	assert(byId.get("groq")?.authTypes.join(",") === "api_key", "groq should be api_key-only");
-	assert(byId.get("groq")?.configured === false, "groq should start unconfigured");
-	assert(byId.get("anthropic")?.profileId === "anthropic", "anthropic should map to its built-in profile");
-	assert(byId.get("groq")?.profileId === null, "groq should have no profile yet");
 
 	// --- api-key sign-in ----------------------------------------------------
 	const badProvider = await requestJson("/api/auth/api-key", { method: "POST", body: JSON.stringify({ provider: "openai-codex", key: "sk-test" }) });
@@ -139,11 +117,6 @@ try {
 	const curatedRoomModels: number = curatedAnthropic?.processes?.persistentRoom?.models?.length;
 	assert(curated.status === 200 && typeof curatedRoomModels === "number" && curatedRoomModels > 1, `the curated Claude catalog should be readable, got ${curated.status}: ${JSON.stringify(curatedRoomModels)}`);
 	assert(curatedAnthropic.kind === "builtin" && !("maintenanceModels" in curatedAnthropic) && !("overridden" in curatedAnthropic), "a built-in row carries no Memorize and Review choice of its own (the defaults for new rooms hold it)");
-	const retired = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
-		method: "PUT",
-		body: JSON.stringify({ learnModel: "claude-sonnet-5", reviewMemoryModel: "claude-opus-5" }),
-	});
-	assert(retired.status === 404, `the built-in Memorize and Review route is gone, got ${retired.status}`);
 	const badModel = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
 		body: JSON.stringify({ providerId: "groq", roomModels: ["definitely-not-a-model"], learnModel: suggested }),

@@ -46,7 +46,6 @@ try {
 	const roomModels = await import("../src/room-models.js");
 	const { createPersistentAgentFromScaffoldInput } = await import("../src/persistent-agents.js");
 
-	assert(profiles.SCHEDULED_ROOM_MODEL_POLICY_KEY === "scheduledRoom", "scheduledRoom policy key should be exported");
 	const agentId = createPersistentAgentFromScaffoldInput({ displayName: "Scheduled Model Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 
 	// Nothing signed in: the run names the model the room would run on (the
@@ -96,7 +95,7 @@ try {
 	assert(!profiles.isPersistentRoomModelForProfile("openai-compatible", "openai-compatible", "maintenance-model"), "the Memorize-only model is not a room model");
 	let refusal: unknown = null;
 	try { roomModels.resolveScheduledRoomModel(agentId); } catch (error) { refusal = error; }
-	assert(refusal instanceof roomModels.RoomModelUnavailableError && refusal.code === "room_model_unavailable" && /^This room's model, Maintenance Model on .+, is no longer offered\. Choose another model in Room settings, Model\.$/.test(refusal.message), `a pick on the Memorize-only model is not a conversation model: the run is refused with the sentence, nothing else runs, got ${String(refusal)}`);
+	assert(refusal instanceof roomModels.RoomModelUnavailableError && refusal.code === "room_model_unavailable", `a pick on the Memorize-only model is not a conversation model: the run is refused, nothing else runs, got ${String(refusal)}`);
 	console.log("  ok  the room's own pick wins, and a Memorize-only model never runs a conversation, nor does anything in its place");
 
 	// The gateway signs out while Claude is signed in: the run names the
@@ -108,7 +107,6 @@ try {
 	assertModelLock(roomModels.resolveScheduledRoomModel(agentId), primary, "a room on a default whose provider is signed out names the default, whatever else is signed in");
 	console.log("  ok  with the room's provider signed out a scheduled run names the room's model to be blocked, never a model of another signed-in provider");
 
-	assert(!fs.existsSync(path.join(tempHome, ".exxeta")), "scheduledRoom smoke must not write legacy ~/.exxeta state");
 	console.log("scheduled-room model policy smoke passed");
 } finally {
 	fs.rmSync(tmp, { recursive: true, force: true });

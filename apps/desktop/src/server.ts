@@ -16,6 +16,13 @@ export const SERVER_ORIGIN = `http://localhost:${PORT}`;
 
 const LOG_LINES_KEPT = 300;
 
+// The stop message's type; apps/web-server/src/server-stop.ts takes it as a stop.
+const SERVER_STOP_MESSAGE = "exxperts:stop";
+// The server's own stop ends within about 3.5 s (its 2 s wait, then its endings and its close).
+const STOP_LIMIT_MS = 5000;
+const SIGNAL_LIMIT_MS = 1000;
+const KILL_LIMIT_MS = 2000;
+
 // Packaged: the release-archive tree (app/ + vendor/node/) ships as an
 // extraResource next to the asar, so the payload is exactly what the prebuilt
 // archives install. Dev: the repo checkout three levels up from dist/.
@@ -274,10 +281,11 @@ export class ServerHandle {
     // kept answering /healthz and faked out the watchdog).
     const serverEntry = require(path.join(root, "bin", "lib", "server-entry.cjs")) as ServerEntryModule;
     const serverArgs = serverEntry.serverLaunchArgs(root, { tsxLoader: true });
+    // The IPC channel carries the stop message (stop()).
     const child = spawn(nodeBinary(), serverArgs, {
       cwd: root,
       env: serverEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     const keep = (chunk: Buffer, sink: NodeJS.WriteStream) => {
       const text = chunk.toString("utf8");
@@ -353,22 +361,41 @@ export class ServerHandle {
     throw new Error(`No auth token appeared at ${tokenFile}; cannot sign the window in.`);
   }
 
+  // The server's own stop first, through the stop message: on Windows a
+  // signal is a forced kill, which skips the server's stop (the cut answer and
+  // its line are lost, the room's lock is left behind). A signal comes only
+  // once the stop's time limit has passed, or at once when the channel is gone.
   async stop(): Promise<void> {
     const child = this.child;
     this.stopping = true;
     if (!child || this.exited) return;
-    child.kill("SIGTERM");
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && !this.exited) {
-      await sleep(100);
+    const asked = this.sendStopMessage(child);
+    if (!asked) child.kill("SIGTERM");
+    await this.waitExit(STOP_LIMIT_MS);
+    if (asked && !this.exited) {
+      child.kill("SIGTERM");
+      await this.waitExit(SIGNAL_LIMIT_MS);
     }
     if (!this.exited) {
       child.kill("SIGKILL");
       // Wait for the kill to land so quit cannot exit above a live child.
-      const hardDeadline = Date.now() + 2000;
-      while (Date.now() < hardDeadline && !this.exited) {
-        await sleep(50);
-      }
+      await this.waitExit(KILL_LIMIT_MS);
+    }
+  }
+
+  // With a callback, a failed send reaches it instead of the child's "error"
+  // listener, which would record a live server as exited; the time limit's
+  // signal then stops it.
+  private sendStopMessage(child: ChildProcess): boolean {
+    if (!child.connected) return false;
+    child.send({ type: SERVER_STOP_MESSAGE }, () => {});
+    return true;
+  }
+
+  private async waitExit(limitMs: number): Promise<void> {
+    const deadline = Date.now() + limitMs;
+    while (Date.now() < deadline && !this.exited) {
+      await sleep(50);
     }
   }
 }

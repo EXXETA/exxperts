@@ -114,3 +114,52 @@ import { DDG_BLOCKED_MESSAGE, isDdgChallenge } from "../../../pi-package/extensi
 	if (/try again in a moment/i.test(DDG_BLOCKED_MESSAGE)) fail("block message must not promise that waiting helps");
 	console.log("web-search-fallback-smoke: challenge OK (detection edges pinned, honest block message pinned)");
 }
+
+// A turn stopped during a SearXNG search ends the search there: SearXNG is not
+// marked down and DuckDuckGo is not asked. The next search still goes to SearXNG.
+// An empty state folder, so that only the settings below count.
+import webSearchExtension from "../../../pi-package/extensions/web-search/index.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+{
+	const savedFetch = globalThis.fetch;
+	const savedStateHome = process.env.EXXPERTS_STATE_HOME;
+	const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-web-search-stop-"));
+	process.env.EXXPERTS_STATE_HOME = stateHome;
+	const savedProvider = process.env.EXXETA_SEARCH_PROVIDER;
+	const savedBaseUrl = process.env.EXXETA_SEARCH_BASE_URL;
+	process.env.EXXETA_SEARCH_PROVIDER = "searxng";
+	process.env.EXXETA_SEARCH_BASE_URL = "http://searxng.test";
+	const asked: string[] = [];
+	let searxngAnswers = false;
+	globalThis.fetch = ((input: string | URL, init?: RequestInit) => {
+		const url = String(input);
+		asked.push(url);
+		if (!url.startsWith("http://searxng.test/")) return Promise.reject(new Error("DuckDuckGo is not reachable in this smoke"));
+		if (searxngAnswers) return Promise.resolve(new Response(JSON.stringify({ results: [{ title: "Found", url: "https://example.com/", content: "a result" }] }), { headers: { "content-type": "application/json" } }));
+		return new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+	}) as typeof fetch;
+	try {
+		let tool: any;
+		webSearchExtension({ registerTool: (definition: any) => { tool = definition; } } as any);
+		const stop = new AbortController();
+		setTimeout(() => stop.abort(), 50);
+		await tool.execute("smoke", { query: "stopped" }, stop.signal).catch(() => {});
+		if (asked.some((url) => !url.startsWith("http://searxng.test/"))) fail(`a stopped search must not fall back to DuckDuckGo, asked ${JSON.stringify(asked)}`);
+		searxngAnswers = true;
+		asked.length = 0;
+		const next = await tool.execute("smoke", { query: "after" });
+		if (!asked.length || !asked.every((url) => url.startsWith("http://searxng.test/")) || next?.details?.count !== 1) fail(`a stopped search must not mark SearXNG down, the next search asked ${JSON.stringify(asked)}`);
+		console.log("web-search-fallback-smoke: stop OK (a stopped search neither marks SearXNG down nor asks DuckDuckGo)");
+	} finally {
+		globalThis.fetch = savedFetch;
+		if (savedStateHome === undefined) delete process.env.EXXPERTS_STATE_HOME;
+		else process.env.EXXPERTS_STATE_HOME = savedStateHome;
+		fs.rmSync(stateHome, { recursive: true, force: true });
+		if (savedProvider === undefined) delete process.env.EXXETA_SEARCH_PROVIDER;
+		else process.env.EXXETA_SEARCH_PROVIDER = savedProvider;
+		if (savedBaseUrl === undefined) delete process.env.EXXETA_SEARCH_BASE_URL;
+		else process.env.EXXETA_SEARCH_BASE_URL = savedBaseUrl;
+	}
+}

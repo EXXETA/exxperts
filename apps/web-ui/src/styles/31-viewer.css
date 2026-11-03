@@ -1,0 +1,392 @@
+/* Artifact viewer -----------------------------------------------------------
+   Second occupant of the right pane (sibling to .preview-pane). Namespaced
+   .artifact-viewer-* and built on the theme-aware alias tokens (--fg/--bg/…),
+   which resolve to the --exx-* palette in 01-base.css :root, plus the --exx-*
+   spacing/radius scale directly.
+   -------------------------------------------------------------------------- */
+.artifact-viewer {
+	min-width: 0;
+	min-height: 0;
+	background: var(--bg);
+	border-left: 1px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	color: var(--fg);
+	/* A brief slide+fade so opening a row reads as the pane arriving, not
+	 * content blinking in; the rail toggle then feels like one object. */
+	animation: artifact-viewer-in 150ms ease-out;
+}
+@keyframes artifact-viewer-in {
+	from { opacity: 0; transform: translateX(10px); }
+	to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+	.artifact-viewer { animation: none; }
+}
+.artifact-viewer-head {
+	min-height: 72px;
+	border-bottom: 1px solid var(--border);
+	padding: var(--exx-sp-3) var(--exx-sp-4);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--exx-sp-3);
+	flex-wrap: wrap;
+}
+.artifact-viewer-provenance {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.artifact-viewer-kicker {
+	font-family: var(--exx-font-display);
+	font-size: var(--exx-font-size-xs);
+	font-weight: 700;
+	color: var(--dim);
+}
+.artifact-viewer-template {
+	font-family: var(--exx-font-display);
+	font-size: 15px;
+	font-weight: 700;
+	color: var(--fg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
+}
+/* Room-scoped history: the one-line origin disclosure for rows born in an
+   earlier conversation — muted, informative, not invasive. */
+.artifact-viewer-origin {
+	font-size: var(--exx-font-size-xs);
+	color: var(--dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
+}
+.artifact-viewer-head-right {
+	display: flex;
+	align-items: center;
+	gap: var(--exx-sp-3);
+	flex-wrap: wrap;
+}
+.artifact-viewer-badge {
+	font-family: var(--exx-font-display);
+	font-size: var(--exx-font-size-xs);
+	font-weight: 700;
+	color: var(--exx-success);
+	border: 1px solid color-mix(in srgb, var(--exx-success) 55%, transparent);
+	border-radius: 999px;
+	padding: 3px 9px;
+	white-space: nowrap;
+	flex: none;
+}
+.artifact-viewer-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--exx-sp-2);
+}
+.artifact-viewer-action {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--fg);
+	border-radius: var(--exx-radius-sm);
+	padding: 5px 11px;
+	font-size: 12px;
+	font-weight: 700;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.artifact-viewer-action:hover:not(:disabled),
+.artifact-viewer-action:focus-visible:not(:disabled) {
+	background: var(--fg);
+	color: var(--bg);
+	border-color: var(--fg);
+	outline: none;
+}
+.artifact-viewer-action-primary {
+	background: var(--exx-action-primary-bg);
+	color: var(--exx-action-primary-fg);
+	border-color: var(--exx-action-primary-bg);
+}
+.artifact-viewer-action-primary:hover:not(:disabled),
+.artifact-viewer-action-primary:focus-visible:not(:disabled) {
+	/* Brand Lila on hover ties the pane's one primary to the accent; the ink
+	 * is themed with the accent since light mode darkens the Lila. */
+	background: var(--exx-plan);
+	color: var(--exx-plan-ink);
+	border-color: var(--exx-plan);
+}
+.artifact-viewer-action:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+/* Quiet footer/header actions: one primary
+ * per state, everything else steps back until hover. Same affordance language
+ * as the room-settings rs-quiet controls. */
+.artifact-viewer-quiet {
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--muted);
+	border-radius: var(--exx-radius-sm);
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 11px;
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.artifact-viewer-quiet:hover:not(:disabled),
+.artifact-viewer-quiet:focus-visible:not(:disabled) {
+	color: var(--fg);
+	border-color: var(--border);
+	background: var(--exx-surface, transparent);
+}
+.artifact-viewer-quiet:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.asset-viewer-details {
+	margin-left: auto;
+}
+/* Screen-reader-only text: visually removed, still announced. */
+.artifact-viewer-sr-note {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+/* Orphan rows render Delete then Details; only the first right-aligner keeps
+ * the auto margin, so the pair sits together at the edge. */
+.asset-viewer-delete:has(+ .asset-viewer-details) {
+	margin-left: 0;
+}
+.artifact-viewer-icon,
+.artifact-viewer-close {
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--muted);
+	border-radius: var(--exx-radius-sm);
+	width: 28px;
+	height: 28px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	flex: none;
+	cursor: pointer;
+}
+.artifact-viewer-icon:hover,
+.artifact-viewer-icon:focus-visible,
+.artifact-viewer-close:hover,
+.artifact-viewer-close:focus-visible {
+	color: var(--fg);
+	border-color: var(--border);
+	background: var(--exx-surface, transparent);
+}
+.artifact-viewer-body {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	align-items: stretch;
+}
+.artifact-viewer-body-frame {
+	overflow: hidden;
+}
+.artifact-viewer-body-image {
+	overflow: auto;
+	align-items: center;
+	justify-content: center;
+	padding: var(--exx-sp-5);
+	/* The letterbox mat: a barely-raised surface derived from the contrast
+	 * plate, so an artifact that does not fill the pane sits ON something
+	 * instead of floating in void. Full-bleed frames are unaffected. */
+	margin: 2px;
+	background: color-mix(in srgb, var(--contrast-fg) 5%, var(--contrast-bg));
+	border: 1px solid color-mix(in srgb, var(--contrast-fg) 10%, var(--contrast-bg));
+	border-radius: var(--exx-radius-sm);
+}
+.artifact-viewer-body-image .artifact-viewer-image {
+	/* A print lying on the mat, not a texture painted onto it. */
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+.artifact-viewer-frame {
+	display: block;
+	flex: 1 1 auto;
+	width: 100%;
+	height: 100%;
+	min-height: 100%;
+	border: 0;
+	background: var(--contrast-bg);
+	color: var(--contrast-fg);
+}
+.artifact-viewer-frame-text {
+	background: var(--panel);
+	color: var(--fg);
+}
+/* The text/plain page inside draws in the browser's own ink, which follows the
+   browser's scheme, not the app's. A dark browser paints the page its own dark
+   paper; a light one leaves it see-through, so a dark app under a light browser
+   gives it light paper for the black ink. */
+@media (prefers-color-scheme: light) {
+	:root[data-theme="dark"] .artifact-viewer-frame-text { background: var(--contrast-fg); }
+}
+.artifact-viewer-image {
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
+}
+.artifact-viewer-error {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	padding: var(--exx-sp-6);
+	color: var(--dim);
+	font-size: var(--exx-font-size-small);
+}
+
+/* Maximize: the viewer asks the pane grid to hand it (almost) the whole
+   workbench. The App applies .artifact-pane-maximized to .workbench (see
+   wiring-spec-v5.md); this rule is the in-pane fallback when the occupant
+   itself is asked to fill available space. */
+.artifact-viewer-maximized {
+	width: 100%;
+}
+
+@media (max-width: 900px) {
+	.artifact-viewer {
+		border-left: none;
+		border-top: 1px solid var(--border);
+	}
+	.artifact-viewer-frame { min-height: 0; }
+}
+
+/* Visuals V6: the permanent transferred task item in the thread transcript —
+   the sibling of .consult-item (same rail, same lila edge, no card chrome).
+   Reuses the .task-artifact-strip/.task-thumb/.task-file-chip atoms of
+   30-tasks.css. */
+.task-item {
+	width: min(var(--chat-rail-width), 100%);
+	box-sizing: border-box;
+	border-left: 3px solid var(--exx-plan);
+	padding: 2px 0 2px 14px;
+	margin: 6px 0;
+}
+.task-item > * { max-width: 780px; }
+.task-item .head-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Plain grey speaker label for the task family (the lila chip stays consult-only,
+   where it marks another room's voice). */
+.task-who { font-weight: 700; color: var(--exx-text-soft); font-size: 12.5px; }
+.task-item-sub { font-size: 12px; color: var(--exx-text-muted); }
+.task-item-foot { margin-top: 8px; }
+.task-item-foot .meta { font-size: 11.5px; color: var(--exx-text-muted); font-family: var(--exx-font-sans); font-variant-numeric: tabular-nums; }
+
+/* One toast home (taste pass): every transient notice lands in this stack,
+   floating directly above the composer and anchored to the COMPOSER COLUMN —
+   a viewport-centred overlay drifts off the composer the moment the viewer
+   pane opens. `bottom: 100%` puts the stack's floor on the composer's ceiling,
+   so appending a newer toast pushes the older ones upward on their own.
+   Replaces three separate anchors (bottom-centre export, bottom-left remove,
+   top-right done) that gave "something happened" three places to look. */
+.composer-toasts {
+	position: absolute;
+	bottom: calc(100% + var(--above-composer-dock-height, 0px));
+	left: 0;
+	right: 0;
+	z-index: 60;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding-bottom: 10px;
+	pointer-events: none; /* the gaps stay click-through; the toasts re-enable it */
+}
+.room-toast {
+	pointer-events: auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	max-width: min(560px, calc(100% - 32px));
+	padding: 10px 16px;
+	border-radius: 8px;
+	font-size: 13px;
+	background: var(--exx-surface-raised);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	box-shadow: var(--exx-shadow-popover);
+}
+.room-toast.success { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
+.room-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
+/* The two lines are a deliberate hierarchy (fact, then the nuance the fact
+   must not carry), not an accidental wrap. */
+.room-toast-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1;
+}
+.room-toast-sub {
+	color: var(--muted);
+	font-size: 12px;
+}
+.room-toast-action {
+	border: none;
+	background: none;
+	padding: 2px 4px;
+	font: 600 13px/1 inherit;
+	color: var(--exx-plan);
+	cursor: pointer;
+	border-radius: 6px;
+	white-space: nowrap;
+}
+.room-toast-action:hover { text-decoration: underline; }
+.room-toast-action:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+
+/* The run view (the viewer chrome's RUNNING state): the live mono stream,
+   pinned to the newest line by the component. */
+.task-run-view-stream {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	margin: var(--exx-sp-3);
+	padding: var(--exx-sp-3);
+	background: var(--exx-surface-inset);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	font-family: var(--exx-font-mono);
+	font-size: 11.5px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.task-run-view-stream .task-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-run-view-stream .task-line.is-tool { color: var(--exx-plan); }
+.task-run-view-stream .task-line:last-child { color: var(--fg-soft); }
+.task-run-view-error { color: var(--exx-danger); margin-top: 6px; }
+.task-run-view-pulse { margin-right: 7px; }
+.artifact-viewer-template .task-run-view-pulse { display: inline-block; }
+
+/* The relocated done-card "Details": the specialist's summary, collapsed by
+   default behind the footer toggle. */
+.asset-viewer-summary {
+	margin-top: 8px;
+	padding: 8px 10px;
+	background: var(--exx-surface-inset);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--fg-soft);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 180px;
+	overflow-y: auto;
+}
+

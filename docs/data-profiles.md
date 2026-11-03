@@ -45,11 +45,7 @@ row, and, once other profiles exist, the list of profiles on this computer.
 - **Delete** also asks twice, and refuses the loaded profile. The standard
   profile has no delete button at all.
 
-The CLI follows along: `exxperts cli` reads the pointer at launch, announces
-which profile it runs against, and opens that profile's rooms. `exxperts
-remote` talks to whichever profile the running server has loaded.
-
-Switching needs a supervisor that can restart the server: the `exxperts web`
+Switching needs a supervisor that can restart the server: the `exxperts`
 launcher, the desktop app, or the repo's dev harness (`./scripts/exxperts-web`);
 all three do this on their own. A bare server started any other way refuses
 the switch with an explanation instead of exiting into nothing.
@@ -118,8 +114,7 @@ it is set, the in-app move is disabled and Settings shows where the location
 comes from. The directory is created automatically; an unusable path refuses
 startup with the reason; a relative path resolves against the launch
 directory (use absolute paths in production). Honored by every way of
-running exxperts: `exxperts web`, `exxperts cli`, `exxperts remote`, the
-desktop app, and the dev harness.
+running exxperts: `exxperts`, the desktop app, and the dev harness.
 
 ```yaml
 services:

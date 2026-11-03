@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,30 +43,13 @@ process.env.USERPROFILE = tempHome;
 process.env.EXXPERTS_CODING_AGENT_DIR = tempAgentRuntimeRoot;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
-const { persistentRoomScheduleStorePath } = await import("../../../pi-package/extensions/schedule-prompt/index.js");
+const { addPersistentRoomScheduleJob, persistentRoomScheduleStorePath } = await import("../../../pi-package/extensions/schedule-prompt/index.js");
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
 const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
@@ -139,7 +122,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	const agentId = await createRoom("Schedule Management API Smoke Room");
 	createdRoomIds.push(agentId);
@@ -170,6 +153,8 @@ try {
 	assert(schedules.status === 200, `GET after POST should succeed, got ${schedules.status}: ${JSON.stringify(schedules.body)}`);
 	assert(schedules.body?.jobs?.some((job: any) => job.id === jobId), "GET should see created schedule job");
 	assert(schedules.body?.executionEnabled === false, "GET should remain execution-disabled compatible");
+	assert(schedules.body?.timeZone === Intl.DateTimeFormat().resolvedOptions().timeZone, `GET carries the server's time zone, got ${schedules.body?.timeZone}`);
+	assert(created.body?.timeZone === schedules.body.timeZone, "a write's answer carries the zone too");
 
 	const patched = await requestJson(`/api/persistent-agents/${encodedAgentId}/schedules/${encodeURIComponent(jobId)}`, {
 		method: "PATCH",
@@ -246,6 +231,29 @@ try {
 		body: JSON.stringify({ name: "bad schedule", type: "interval", schedule: "not an interval", prompt: "bad" }),
 	});
 	assert(invalidSchedule.status === 400, `invalid schedule/type should return 400, got ${invalidSchedule.status}: ${JSON.stringify(invalidSchedule.body)}`);
+
+	// A cron pattern the server can't run is refused with the sentence, typed as Cron or left to Auto, saved or edited in;
+	// the weekly shapes it can run are saved, and a pattern saved before the refusal can still be switched off.
+	const cronRoomId = await createRoom("Schedule Management Cron Room");
+	createdRoomIds.push(cronRoomId);
+	const cronSchedulesUrl = `/api/persistent-agents/${encodeURIComponent(cronRoomId)}/schedules`;
+	const cannotRun = "This pattern can't run yet. Use Daily or Weekly, or the Interval type to repeat every few minutes or hours.";
+	for (const body of [{ type: "cron", schedule: "0 */15 * * * *" }, { schedule: "0 */15 * * * *" }, { type: "cron", schedule: "0 0 7 1 * *" }]) {
+		const refused = await requestJson(cronSchedulesUrl, { method: "POST", body: JSON.stringify({ name: "every quarter hour", prompt: "check", ...body }) });
+		assert(refused.status === 400 && refused.body?.error === cannotRun, `${JSON.stringify(body)} is refused with the sentence, got ${refused.status}: ${JSON.stringify(refused.body)}`);
+	}
+	const weekly = await requestJson(cronSchedulesUrl, { method: "POST", body: JSON.stringify({ name: "weekdays", type: "cron", schedule: "0 30 8 * * 1-5", prompt: "check" }) });
+	assert(weekly.status === 201 && weekly.body?.job?.schedule === "0 30 8 * * 1-5", `a weekly range is saved, got ${weekly.status}: ${JSON.stringify(weekly.body)}`);
+	const weeklyEdit = await requestJson(`${cronSchedulesUrl}/${encodeURIComponent(weekly.body.job.id)}`, { method: "PATCH", body: JSON.stringify({ schedule: "0 */15 * * * *" }) });
+	assert(weeklyEdit.status === 400 && weeklyEdit.body?.error === cannotRun, `editing in a pattern the server can't run is refused, got ${weeklyEdit.status}: ${JSON.stringify(weeklyEdit.body)}`);
+	const oldJob = addPersistentRoomScheduleJob(cronRoomId, { name: "saved before", type: "cron", schedule: "0 */15 * * * *", prompt: "check" });
+	const oldOff = await requestJson(`${cronSchedulesUrl}/${encodeURIComponent(oldJob.id)}`, { method: "PATCH", body: JSON.stringify({ enabled: false }) });
+	assert(oldOff.status === 200 && oldOff.body?.job?.enabled === false, `a pattern saved before can be switched off, got ${oldOff.status}: ${JSON.stringify(oldOff.body)}`);
+	// Its edit form sends the pattern back unchanged with the other fields.
+	const oldRenamed = await requestJson(`${cronSchedulesUrl}/${encodeURIComponent(oldJob.id)}`, { method: "PATCH", body: JSON.stringify({ name: "saved before, renamed", prompt: "check", enabled: false, type: "cron", schedule: "0 */15 * * * *" }) });
+	assert(oldRenamed.status === 200 && oldRenamed.body?.job?.name === "saved before, renamed", `a pattern saved before can be renamed through its edit form, got ${oldRenamed.status}: ${JSON.stringify(oldRenamed.body)}`);
+	const cronJobs = await requestJson(cronSchedulesUrl);
+	assert(JSON.stringify(cronJobs.body?.jobs?.map((job: any) => job.schedule)) === JSON.stringify(["0 30 8 * * 1-5", "0 */15 * * * *"]), `only the weekly one and the old one are saved, got ${JSON.stringify(cronJobs.body?.jobs)}`);
 
 	const missingJob = await requestJson(`/api/persistent-agents/${encodedAgentId}/schedules/sched_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`, {
 		method: "PATCH",

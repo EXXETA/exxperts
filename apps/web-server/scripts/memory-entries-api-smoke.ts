@@ -18,7 +18,8 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "memory-entries-api-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -46,23 +47,6 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	env.EXXETA_HOME = repoRoot;
 	env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 	return env;
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 30_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
@@ -123,14 +107,7 @@ const gateway = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 30_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(100, 30_000);
 
 let server: ChildProcessWithoutNullStreams | null = null;
 const serverOutput: string[] = [];
@@ -162,7 +139,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 30_000);
 
 	const created = await requestJson("/api/persistent-agents", jsonBody("POST", { displayName: "Memory Entries API Smoke Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }));
 	assert(created.status === 201, `room creation should return 201, got ${created.status}: ${JSON.stringify(created.body)}`);

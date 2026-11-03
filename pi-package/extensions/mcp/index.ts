@@ -5,17 +5,12 @@
  * proxy tool (search/describe/call). Transports: stdio, HTTP (StreamableHTTP
  * with SSE fallback), and OAuth-protected servers.
  *
- * The bare `/mcp` command opens OUR connectors panel (connectors-panel.ts) —
- * the adapter is used as a library there, matching the web Connectors page.
- * Subcommands (`/mcp setup`, `reconnect`, `logout`, …) and headless calls
- * delegate to the adapter's original handler, which we capture at
- * registration time.
- *
- * Server configuration is read from, in precedence order:
+ * Server configuration is read from the person's own settings, in
+ * precedence order:
  *   ~/.config/mcp/mcp.json     shared user-global (Cursor/Claude compatible)
  *   ~/.exxperts/agent/mcp.json exxperts user-global
- *   .mcp.json                  project-local (not in a room)
- *   .pi/mcp.json               project override (not in a room)
+ * It runs only in a room's session, and a room never reads a project's
+ * .mcp.json or .pi/mcp.json: the adapter's cwd is the room connector folder.
  */
 
 import * as path from "node:path";
@@ -26,8 +21,6 @@ import { ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, r
 // and so no tsconfig `paths` remap is needed — a remap would also be applied
 // by tsx at runtime and break the real import.
 const PI_MCP_ADAPTER_SPECIFIER = "pi-mcp-adapter" as string;
-const ADAPTER_CONFIG_SPECIFIER = "pi-mcp-adapter/config.ts" as string;
-const CONNECTORS_PANEL_SPECIFIER = "./connectors-panel.ts" as string;
 
 type EventHandlerLike = (event: unknown, ctx: unknown) => unknown;
 
@@ -45,17 +38,10 @@ function withRoomConnectorConfigCwd(ctx: unknown): unknown {
 	return Object.create(Object.getPrototypeOf(ctx), descriptors);
 }
 
-interface RegisteredCommandLike {
-	description?: string;
-	handler: (args: string | undefined, ctx: unknown) => Promise<void> | void;
-}
-
 /**
  * Per-room MCP: the session assemblers (web server room sessions, scheduled
- * background room runs) pass the room id explicitly; a CLI room process
- * carries it in EXXETA_PERSISTENT_ROOM_AGENT (set by the launcher for the
- * whole process), which the default export picks up. No room id means an
- * unscoped session: the adapter registers untouched.
+ * background room runs) pass the room id explicitly. This is the only door:
+ * the adapter never registers without a room scope.
  */
 export function createRoomScopedMcpExtension(roomId: string, options: RoomScopeRegistrationOptions = {}) {
 	const scopedRoomId = String(roomId ?? "").trim();
@@ -63,30 +49,22 @@ export function createRoomScopedMcpExtension(roomId: string, options: RoomScopeR
 	return (pi: unknown) => registerMcpExtension(pi, scopedRoomId, options);
 }
 
-export default async function (pi: unknown) {
-	const envRoomId = String(process.env.EXXETA_PERSISTENT_ROOM_AGENT ?? "").trim();
-	return registerMcpExtension(pi, envRoomId || null, {});
-}
-
-async function registerMcpExtension(pi: unknown, roomScopeId: string | null, scopeOptions: RoomScopeRegistrationOptions) {
+async function registerMcpExtension(pi: unknown, roomScopeId: string, scopeOptions: RoomScopeRegistrationOptions) {
 	// The adapter resolves its agent-global config dir from PI_CODING_AGENT_DIR
 	// (defaulting to ~/.pi/agent); point it at the exxperts agent dir instead.
 	if (!process.env.PI_CODING_AGENT_DIR) {
 		process.env.PI_CODING_AGENT_DIR = path.join(stateHome(), ".exxperts", "agent");
 	}
-	if (roomScopeId) {
-		// Whichever room door registers first after the update runs the
-		// marker-guarded migration - a CLI room must not read zero grants just
-		// because the web server has not booted yet. Then, on a truly cold
-		// metadata cache, warm ONLY this room's granted connectors so the
-		// adapter's bootstrap-all never connects ungranted servers.
-		try {
-			await ensureRoomScopedMcpGrantsMigration();
-		} catch {
-			// migration is retried by the next door; enforcement stays fail-closed
-		}
-		await prepareRoomScopedMcpSessionCache(roomScopeId);
+	// Whichever room door registers first after the update runs the
+	// marker-guarded migration. Then, on a truly cold
+	// metadata cache, warm ONLY this room's granted connectors so the
+	// adapter's bootstrap-all never connects ungranted servers.
+	try {
+		await ensureRoomScopedMcpGrantsMigration();
+	} catch {
+		// migration is retried by the next door; enforcement stays fail-closed
 	}
+	await prepareRoomScopedMcpSessionCache(roomScopeId);
 	// Dynamic import: default-export interop differs between the jiti and tsx
 	// loading paths — including a double `default` wrapper when this module
 	// itself is loaded through an extension factory. Unwrap until callable.
@@ -96,25 +74,11 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 	}
 	if (typeof register !== "function") throw new Error("pi-mcp-adapter did not export a register function");
 
-	// Capture the adapter's /mcp command so subcommands keep working after we
-	// override the bare command with our own panel. Commands are stored per
-	// extension keyed by name, so the later registration below wins.
-	let adapterMcpCommand: RegisteredCommandLike | null = null;
 	const api = pi as {
-		registerCommand?: (name: string, options: RegisteredCommandLike) => void;
 		registerTool?: (tool: RegisteredToolLike) => void;
 		on?: (event: string, handler: EventHandlerLike) => void;
 	};
-	const originalRegisterCommand = api.registerCommand?.bind(pi);
-	if (originalRegisterCommand) {
-		api.registerCommand = (name: string, options: RegisteredCommandLike) => {
-			if (name === "mcp") adapterMcpCommand = options;
-			// /mcp-auth duplicates the connectors panel's login (l); skip it.
-			if (name === "mcp-auth") return;
-			originalRegisterCommand(name, options);
-		};
-	}
-	// Per-room MCP: in a room-scoped session the adapter's tool registrations
+	// Per-room MCP: the adapter's tool registrations
 	// (the `mcp` proxy tool, optional per-server direct tools) are captured and
 	// re-registered through the shared room-scope wrapper, which filters what
 	// the room's model can see, gates what it can call, and sanitizes results
@@ -123,15 +87,15 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 	// nothing.
 	const deferredRoomScopedTools: RegisteredToolLike[] = [];
 	const originalRegisterTool = api.registerTool?.bind(pi);
-	if (roomScopeId && originalRegisterTool) {
+	if (originalRegisterTool) {
 		api.registerTool = (tool: RegisteredToolLike) => {
 			deferredRoomScopedTools.push(tool);
 		};
 	}
-	// In a room the adapter's session handlers (its session start loads the
-	// config) see the room connector folder as their cwd.
+	// The adapter's session handlers (its session start loads the config) see
+	// the room connector folder as their cwd.
 	const originalOn = api.on?.bind(pi);
-	if (roomScopeId && originalOn) {
+	if (originalOn) {
 		api.on = (event: string, handler: EventHandlerLike) => {
 			originalOn(event, (eventValue: unknown, ctx: unknown) => handler(eventValue, withRoomConnectorConfigCwd(ctx)));
 		};
@@ -139,17 +103,16 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 	// ...and its startup config read (direct tools, settings) uses the same
 	// folder (scripts/patch-mcp-adapter.mjs, patch 6).
 	const configCwdCarrier = pi as { exxpertsConnectorConfigCwd?: string };
-	if (roomScopeId) configCwdCarrier.exxpertsConnectorConfigCwd = roomConnectorConfigCwd();
+	configCwdCarrier.exxpertsConnectorConfigCwd = roomConnectorConfigCwd();
 	let result: unknown;
 	try {
 		result = await (register as (pi: unknown) => unknown)(pi);
 	} finally {
-		if (originalRegisterCommand) api.registerCommand = originalRegisterCommand;
-		if (roomScopeId && originalRegisterTool) api.registerTool = originalRegisterTool;
-		if (roomScopeId && originalOn) api.on = originalOn;
-		if (roomScopeId) delete configCwdCarrier.exxpertsConnectorConfigCwd;
+		if (originalRegisterTool) api.registerTool = originalRegisterTool;
+		if (originalOn) api.on = originalOn;
+		delete configCwdCarrier.exxpertsConnectorConfigCwd;
 	}
-	if (roomScopeId && originalRegisterTool) {
+	if (originalRegisterTool) {
 		const getAllTools = (pi as { getAllTools?: () => Array<{ name: string }> }).getAllTools?.bind(pi);
 		const registrationOptions: RoomScopeRegistrationOptions = {
 			...scopeOptions,
@@ -159,34 +122,6 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 			const scoped = await roomScopedMcpToolRegistration(roomScopeId, tool, registrationOptions);
 			if (scoped) originalRegisterTool(scoped);
 		}
-	}
-
-	// Fingerprint the connector list as loaded for this session, so the panel
-	// can say when the on-disk config has drifted (rooms load config once).
-	let sessionConfigKey: string | null = null;
-	try {
-		const [configMod, panelMod] = await Promise.all([import(ADAPTER_CONFIG_SPECIFIER), import(CONNECTORS_PANEL_SPECIFIER)]);
-		sessionConfigKey = panelMod.connectorConfigKey(roomScopeId ? configMod.loadMcpConfig(undefined, roomConnectorConfigCwd()) : configMod.loadMcpConfig());
-	} catch {
-		// drift detection is best-effort
-	}
-
-	if (originalRegisterCommand && adapterMcpCommand) {
-		const adapterHandler = (adapterMcpCommand as RegisteredCommandLike).handler;
-		originalRegisterCommand("mcp", {
-			description: "Manage MCP connectors (/mcp setup imports Cursor/Claude configs)",
-			handler: async (args: string | undefined, ctx: unknown) => {
-				const sub = args?.trim() ?? "";
-				const hasUI = Boolean((ctx as { hasUI?: boolean }).hasUI);
-				if (sub !== "" || !hasUI) {
-					await adapterHandler(args, ctx);
-					return;
-				}
-				const panelMod = await import(CONNECTORS_PANEL_SPECIFIER);
-				const result = await panelMod.openConnectorsPanel(ctx as Parameters<typeof panelMod.openConnectorsPanel>[0], sessionConfigKey, roomScopeId ? roomConnectorConfigCwd() : undefined);
-				if (result === "setup") await adapterHandler("setup", ctx);
-			},
-		});
 	}
 
 	return result;

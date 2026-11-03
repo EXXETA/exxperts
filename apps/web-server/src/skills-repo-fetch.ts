@@ -924,7 +924,7 @@ function readPlainScalar(rest: string, lines: string[], start: number): [string,
  * escapes + line folding), or a block scalar (`|`, `>` and their chomping variants). A value
  * that is a nested map/list is treated as "". Never throws (falls back to the lenient parse on
  * any trouble). NOTE: the skill fingerprint is sha256 of the RAW SKILL.md bytes elsewhere
- * (index.ts `sha256(manifest)`), so this only shapes derived display/stored metadata.
+ * (skills-library.ts `sha256(manifest)`), so this only shapes derived display/stored metadata.
  */
 export function parseSkillFrontmatter(raw: string): { fm: Record<string, string>; body: string } {
 	// Normalize CRLF/CR to LF up front: the fence regex is LF-only, so a CRLF (or

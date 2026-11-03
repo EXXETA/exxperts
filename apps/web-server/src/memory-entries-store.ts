@@ -282,7 +282,7 @@ export function assertMemoryWriteAllowed(agentIdRaw: string): void {
 	if (memoryRoomBusy(agentIdRaw)) throw memoryRoomBusyError();
 }
 
-/** The budget line: Deep Memory and Active Items in their context render against the owner's budget; the shared numerator in persistent-agents.ts measures the same render. */
+/** The budget line: Deep Memory and Active Items in their context render against the owner's budget; the shared numerator in persistent-agent-memory-files.ts measures the same render. */
 export function memoryBudgetState(agentIdRaw: string, doc: MemoryDocument, limitTo?: number): BudgetState {
 	settleMemoryBudget(agentIdRaw);
 	const budgetTokens = limitTo ?? readPersistentRoomMaintenanceSettings(agentIdRaw).memoryBudgetTokens;

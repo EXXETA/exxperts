@@ -6,15 +6,14 @@ Audience: users who need to connect a provider before using rooms, and anyone wh
 
 There are two setup paths, depending on how the provider authenticates:
 
-- **Subscription (OAuth) providers (Claude, ChatGPT Plus/Pro):** sign in directly from the web app's **AI setup** page. Each provider that is not connected yet shows a **Sign in** button; it opens the provider's login in a new browser tab, and the page updates when the sign-in completes. The CLI `/login` flow remains available as an alternative; both paths write to the same local credential store.
-- **API-key providers, including OpenAI-compatible gateways:** set up in the web app: open **AI setup**, then **Add provider**, then **Add gateway**; give the gateway a name, enter its base URL and API key, load the models it routes, and approve the ones your rooms may use. You can save several gateways, for example a personal endpoint and a company one; each appears as its own row in AI setup, and its approved models join the model pickers. The terminal wizard (`exxperts setup openai-compatible`, with the API key entered through the CLI `/login` prompt) remains available for the first gateway.
+- **Subscription (OAuth) providers (Claude, ChatGPT Plus/Pro):** sign in directly from the web app's **AI setup** page. Each provider that is not connected yet shows a **Sign in** button; it opens the provider's login in a new browser tab, and the page updates when the sign-in completes.
+- **API-key providers, including OpenAI-compatible gateways:** set up in the web app: open **AI setup**, then **Add provider**, then **Add gateway**; give the gateway a name, enter its base URL and API key, load the models it routes, and approve the ones your rooms may use. You can save several gateways, for example a personal endpoint and a company one; each appears as its own row in AI setup, and its approved models join the model pickers.
 
 In both cases:
 
-- Credentials stay on your machine in the local runtime auth store (`~/.exxperts/agent/auth.json`), shared between the web app and the CLI.
+- Credentials stay on your machine in the local runtime auth store (`~/.exxperts/agent/auth.json`), shared between the web app and the desktop app.
 - The web app's **AI setup** page shows every provider's status and room models, and the **Default models** (see [Which model a room uses](#which-model-a-room-uses)).
 - Persistent-agent room state references provider/model identity only; provider credentials and transport details stay outside room memory/state.
-- The `./scripts/exxperts-cli` repo wrapper used throughout this page is a bash script (macOS/Linux/Git Bash); on Windows PowerShell/cmd, run `node bin\exxperts-cli.cjs` with the same arguments instead.
 
 ## Current first-class providers
 
@@ -22,9 +21,9 @@ These are the providers the product approves for rooms, with the profile ids the
 
 | Product profile | User-facing label | Runtime provider | Setup path |
 | --- | --- | --- | --- |
-| `chatgpt-codex` | ChatGPT Plus/Pro | `openai-codex` | In-app sign-in (or CLI `/login`). Requires an eligible ChatGPT Plus/Pro Codex subscription. |
-| `anthropic` | Claude | `anthropic` | In-app sign-in (or CLI `/login`). Requires a Claude Pro/Max subscription. |
-| `openai-compatible` | The name you gave your first gateway | `openai-compatible` | In-app **Add gateway**, or terminal setup + CLI `/login` API-key entry; bring-your-own gateway for advanced users/orgs. |
+| `chatgpt-codex` | ChatGPT Plus/Pro | `openai-codex` | In-app sign-in. Requires an eligible ChatGPT Plus/Pro Codex subscription. |
+| `anthropic` | Claude | `anthropic` | In-app sign-in. Requires a Claude Pro/Max subscription. |
+| `openai-compatible` | The name you gave your first gateway | `openai-compatible` | In-app **Add gateway**; bring-your-own gateway for advanced users/orgs. |
 | `gateway-<name>` | The name you gave that gateway | `gateway-<name>` | In-app **Add gateway**. Every gateway after the first gets ids of its own so the first one's ids never move. |
 
 Any other provider the runtime knows (Google Gemini, Groq, Mistral, DeepSeek, OpenRouter, xAI, and about 25 more) can be added from the web app: open **AI setup** and use **Add provider**, then sign in with a subscription where the provider offers one, or paste an API key. After signing in, approve the models that provider may use in rooms and pick its recommended memory model. Approval creates the provider's AI profile and puts its models in the pickers; without it, the provider is signed in but not usable in rooms.
@@ -34,7 +33,7 @@ Any other provider the runtime knows (Google Gemini, Groq, Mistral, DeepSeek, Op
 Every room has two model rows in **Room settings, Model**:
 
 - **Conversation**: the model the room talks with. A new conversation starts on it, and so do the room's scheduled tasks.
-- **Memory**: the model that does the room's memory work: Remember, Memorize and Review, and also its file and document tasks, Consult, and a question asked in the Memory page's **HiveMind** tab. A HiveMind question across several rooms runs on the Memory default.
+- **Memory**: the model that does the room's memory work: Remember, Memorize and Review, and also its file and document tasks, Consult, and a question asked in the Memory page's **Ask your rooms** tab. A question asked across several rooms there runs on the Memory default.
 
 Each row has one picker with the approved models grouped by provider. In the Memory picker, the models this release recommends for Claude and ChatGPT Plus/Pro are marked **Recommended**, and the Claude API key's models take the Claude sign-in's tag.
 
@@ -44,13 +43,19 @@ A room never switches models on its own. If a row's model can no longer run (its
 
 ### Switching the open conversation
 
-A conversation keeps the model it started on. Changing the Conversation row applies to your next conversation, and while a conversation is open the pane also offers **Switch the open conversation too**:
+A conversation keeps the model it started on. The Conversation row is the default for new conversations; the open conversation changes its own model under the message box (on a phone, under the room's name at the top). Click the model's name, then the name again in the panel, and pick another model. **Choose another model** in the chat opens the same panel.
 
-- The conversation continues on the new model, and a line "Continued on" with the model's name marks where it switched. The first answer after a switch reads the whole conversation again.
-- If the conversation is too long for the new model, the switch is refused and says how much it needs and how much the model holds. Remember it and continue on the new model, or Forget it.
-- The switch waits while the room is answering or remembering, and while the CLI or a scheduled task holds the room. The pane says which.
+- The conversation continues on the new model, and a line "Continued on" with the model's name marks where it switched. Two switches with nothing said between them leave one line, the last. The first answer after a switch reads the whole conversation again.
+- A model picked while the room answers shows at once and takes over from the next answer: Send waits until the switch has gone through.
+- A model this conversation is too long for is greyed and marked **New conversation**. Picking it asks first, then runs Remember as its own button does; once the memory is saved, the new conversation starts on that model with its "Continued on" line. Cancel or Discard switches nothing. When this save would fill the room, the window offers Remember alone, since a full room opens no new conversation until you Memorize.
+- A model too small even for a new conversation of this room is greyed and marked **Too small**; hover it for why.
+- The switch is refused while the room is remembering or a scheduled task holds the room, with a line that says so.
 
-A conversation with no messages yet simply follows a new pick at its first message.
+Switching changes only the open conversation: the Conversation row stays the model new conversations start on. A conversation with no messages yet simply follows a new pick at its first message, unless it was switched: then it keeps the model it was switched to.
+
+### Effort
+
+The effort is set in the same panel, with the slider under the model's name; the speedometer beside the name shows it. A pick applies to the open conversation from its next answer, the conversation keeps it, and it becomes the room's default: a new conversation starts at the effort last picked in the room, or at the app's default when nothing was ever picked, and keeps that level from its first message. Other conversations keep their own. Scheduled tasks follow the same rule.
 
 ### Remember reads the whole conversation
 
@@ -67,7 +72,6 @@ Current identities:
 | Product profile id | `chatgpt-codex` |
 | Web profile label | ChatGPT Plus/Pro |
 | Runtime provider id | `openai-codex` |
-| CLI/TUI OAuth option | ChatGPT Plus/Pro (Codex Subscription) |
 | First approved persistent-room model | `openai-codex/gpt-6.1-sol` |
 
 Requirements:
@@ -80,8 +84,6 @@ Requirements:
 Open the web app's **AI setup** page. On the **ChatGPT Plus/Pro** row, click **Sign in**. The provider's login opens in a new browser tab; complete it there. Back in Exxperts, the page updates automatically once the sign-in finishes (use **Cancel** on the row to abort a stuck attempt, then retry).
 
 One sign-in can run at a time. If your browser blocks the login tab, allow pop-ups for the Exxperts page and retry.
-
-Alternative (CLI `/login`): start the CLI/TUI (`exxperts cli`, `exxperts-cli`, or the repo wrapper `./scripts/exxperts-cli`), run `/login`, select `Use a subscription`, then `ChatGPT Plus/Pro (Codex Subscription)`, and complete the browser OAuth flow. If the CLI/TUI asks you to paste a redirect URL or code, paste it only into the CLI/TUI prompt. Both paths store credentials in the same local auth store.
 
 Do not paste redirect URLs, auth codes, tokens, screenshots, or raw auth files into docs, issues, or chat. Provider OAuth labels and browser screens can change outside this repository.
 
@@ -102,7 +104,6 @@ Current identities:
 | Product profile id | `anthropic` |
 | Web profile label | Claude |
 | Runtime provider id | `anthropic` |
-| CLI/TUI OAuth option | Anthropic (Claude Pro/Max) |
 | Recommended approved persistent-room model | `anthropic/claude-opus-5-5` |
 
 Requirements:
@@ -115,8 +116,6 @@ Requirements:
 Open the web app's **AI setup** page. On the **Claude** row, click **Sign in**. The provider's login opens in a new browser tab; complete it there. Back in Exxperts, the page updates automatically once the sign-in finishes (use **Cancel** on the row to abort a stuck attempt, then retry).
 
 The sign-in flow uses a local callback on port `53692`; one sign-in can run at a time. If your browser blocks the login tab, allow pop-ups for the Exxperts page and retry.
-
-Alternative (CLI `/login`): start the CLI/TUI (`exxperts cli`, `exxperts-cli`, or the repo wrapper `./scripts/exxperts-cli`), run `/login`, select `Use a subscription`, then `Anthropic (Claude Pro/Max)`, and complete the browser OAuth flow. If the CLI/TUI asks you to paste a redirect URL or code, paste it only into the CLI/TUI prompt. Both paths store credentials in the same local auth store.
 
 Do not paste redirect URLs, auth codes, tokens, screenshots, or raw auth files into docs, issues, or chat. Anthropic/Claude OAuth labels, browser screens, and account entitlement behavior can change outside this repository.
 
@@ -141,8 +140,6 @@ Current identities:
 | Product profile id | `openai-compatible` for the first gateway, `gateway-<name>` for each one after it |
 | Web profile label | The name you gave the gateway |
 | Runtime provider id | Same as the product profile id |
-| Setup command | `exxperts setup openai-compatible` (first gateway only) |
-| CLI/TUI API-key option | OpenAI-compatible gateway (first gateway only) |
 | Transport/API mode | `openai-completions` |
 
 The first gateway keeps the ids it has always had. Every room thread stores the provider and model it is locked to, so those ids are load-bearing: an existing setup carries over untouched and nothing needs re-approving. Gateways added afterwards get ids derived from the name you give them.
@@ -152,7 +149,6 @@ Requirements:
 - A gateway base URL, for example `https://gateway.example.com/v1`.
 - A real API key for that gateway.
 - Non-confidential test prompts for validation.
-- Terminal access, if you use the terminal wizard rather than the app.
 
 Rooms call tools on every turn, so a model has to support function calling to be usable in one. A model that does not is not a good candidate to approve as a room model, however well it writes.
 
@@ -197,95 +193,17 @@ Every gateway's row on the **AI setup** page carries its own menu:
 
 Removing a gateway is not reversible from inside the app, and it does not migrate rooms. A room row that named one of its models waits, and says so, until you pick another model on it, and a conversation running on one of them cannot continue there until you switch it to another model in Room settings, Model (or Remember or Forget it), so prefer editing a gateway over removing and re-adding one. A gateway added again later gets a new provider id even if you give it the same name, precisely so that rooms still pointing at the removed one do not silently re-attach to a different endpoint.
 
-### Terminal setup for the first gateway
-
-The terminal wizard remains available and manages the first gateway only. It and the app write the same files, so a gateway set up in the terminal is editable in the app and an edit made in the app is visible to the wizard. The wizard does not ask about image support, web search or context windows; it preserves whatever the app recorded rather than resetting it.
-
-### 1. Configure non-secret gateway and model policy
-
-Run the setup command in Terminal:
-
-```bash
-exxperts setup openai-compatible
-```
-
-For repo/branch validation, prefer:
-
-```bash
-./scripts/exxperts-cli setup openai-compatible
-```
-
-The setup command prompts only for non-secret values:
-
-- gateway display name, default `OpenAI-compatible gateway`;
-- gateway base URL;
-- primary persistent-room model id or gateway alias;
-- optional additional persistent-room model ids or gateway aliases;
-- optional maintenance model id or gateway alias (the gateway's memory model), defaulting to the primary model.
-
-Model ids are exact strings supplied by your gateway. They are often case-sensitive, and Exxperts does not discover or validate them during setup. If you are unsure whether the id is `gpt-5.5`, `GPT-5.5`, `gpt5.5`, or another alias, ask the gateway owner/admin or check the gateway's API/model documentation before approving it for Exxperts.
-
-It writes non-secret runtime transport/model config to:
-
-```text
-~/.exxperts/agent/models.json
-```
-
-It also writes the product-approved local process/model policy to:
-
-```text
-~/.exxperts/app/openai-compatible-ai-profile.json
-```
-
-It does **not** ask for, store, or print the API key.
-
-### 2. Add the API key through `/login`
-
-Start the CLI/TUI:
-
-```bash
-exxperts cli
-```
-
-For repo/branch validation:
-
-```bash
-./scripts/exxperts-cli
-```
-
-Inside the CLI/TUI, run:
-
-```text
-/login
-```
-
-Then select:
-
-```text
-Use an API key
-```
-
-Then select:
-
-```text
-OpenAI-compatible gateway
-```
-
-Paste the API key only into the CLI/TUI prompt. The key is stored in runtime auth state under `~/.exxperts/agent/auth.json`; do not paste it into docs, issues, pull requests, chat, screenshots, or `models.json`.
-
-### 3. Check the gateway in AI setup
-
-Return to the web app and open **AI setup**.
+### Check the gateway in AI setup
 
 A gateway is readiness-gated. Its models reach the pickers only when all of these are true:
 
 1. The gateway is described either by `~/.exxperts/app/openai-compatible-gateways.json` or, for the first gateway, by `~/.exxperts/app/openai-compatible-ai-profile.json`.
 2. `~/.exxperts/agent/models.json` contains the gateway's provider entry and the mapped model ids.
-3. Credentials are configured for that gateway's provider id through `/login`, the app, or another runtime-supported auth source.
+3. Credentials are configured for that gateway's provider id through the app or another runtime-supported auth source.
 
 When ready, the pickers offer only the room models approved for it.
 
-### 4. Understand the local policy
+### Understand the local policy
 
 The local app policy approves only the model ids you approved:
 
@@ -296,7 +214,7 @@ The local app policy approves only the model ids you approved:
 
 A memory-only model is included in runtime `models.json` so memory work can use it, but it is not offered for conversation unless you also list it as a room model.
 
-### 5. Gateway limitations and responsibilities
+### Gateway limitations and responsibilities
 
 OpenAI-compatible gateway support means Exxperts can call a configured Chat Completions-compatible endpoint with model ids you approve locally. It does not mean Exxperts can guarantee every upstream model behavior.
 
@@ -311,7 +229,7 @@ You or your organization remain responsible for:
 
 One of those the app does handle for you: a Claude model behind a gateway that declares prompt caching gets Anthropic cache markers on its prompt prefix automatically, so long conversations reuse it; nothing to configure, and the Wallet's "Caching saved" figure shows the effect.
 
-The terminal setup command does not fetch `/models`, list available model ids, validate reachability, validate the API key, or automatically approve every model exposed by the gateway. The app's **Add gateway** and **Approve models** steps do fetch the model list and read whatever capabilities the gateway publishes, but neither approves anything on your behalf and neither validates that a model actually works. If a disposable validation room later fails with a non-secret error such as "model not found" or "unknown model", correct the model id in **Approve models**, or rerun the terminal setup with the exact id or alias expected by the gateway.
+The app's **Add gateway** and **Approve models** steps fetch the model list and read whatever capabilities the gateway publishes, but neither approves anything on your behalf and neither validates that a model actually works. If a disposable validation room later fails with a non-secret error such as "model not found" or "unknown model", correct the model id in **Approve models** to the exact id or alias expected by the gateway.
 
 Capability values that were auto-detected are still the gateway's claims, not verified behavior. A model marked as supporting images may still refuse them upstream, and a declared context window may not match what the upstream provider enforces. Validate with non-confidential prompts before relying on either.
 
@@ -323,10 +241,10 @@ Current `chatgpt-codex` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `openai-codex/gpt-6.1-sol`, `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `openai-codex/gpt-6-sol`, `openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-terra`, `openai-codex/gpt-5.6-luna` |
+| Persistent-room conversation | `openai-codex/gpt-6.1-sol`, `openai-codex/gpt-6.1-terra`, `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `openai-codex/gpt-6-sol`, `openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-terra`, `openai-codex/gpt-5.6-luna` |
 | Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; recommended: `openai-codex/gpt-6.1-sol` |
 
-`gpt-6.1-sol` is the default conversation model and the default Memory model. The list puts the default first, then follows the order of OpenAI's Codex models page: its recommended models, then the previous ones. On the update, a conversation or Memory default of GPT-6 Sol moves to GPT-6.1 Sol once, unless the app can tell it was chosen: kept from the conversation model last picked before 0.14, or changed after 0.14 first set it. To keep GPT-6 Sol, choose it again in **Settings, AI setup**; it then stays. A room's own pick, and a conversation already under way, keep their model.
+`gpt-6.1-sol` is the default conversation model and the default Memory model. The list puts the default first and `gpt-6.1-terra` right after it, then follows the order of OpenAI's Codex models page: its recommended models, then the previous ones. On the update, a conversation or Memory default of GPT-6 Sol moves to GPT-6.1 Sol once, unless the app can tell it was chosen: kept from the conversation model last picked before 0.14, or changed after 0.14 first set it. To keep GPT-6 Sol, choose it again in **Settings, AI setup**; it then stays. A room's own pick, and a conversation already under way, keep their model.
 
 The room list of these two providers is fixed by the release. Each room picks its Conversation and Memory models from it in Room settings, Model. A conversation keeps the model it started on even after a list change; new conversations start on the room's Conversation row.
 
@@ -359,7 +277,7 @@ When adding a newly released provider model to an approved AI profile:
 
 2. Inspect `runtime/packages/ai/src/models.generated.ts` and confirm the exact `provider/model` IDs generated for the target provider.
 3. Only after the runtime registry contains the model, add it to the approved product AI profile policy in `apps/web-server/src/persistent-agent-ai-profiles.ts`, limited to the process or processes explicitly approved.
-4. Update display labels / curated model labels in `apps/web-server/src/index.ts` if the model should appear in UI.
+4. Update display labels / curated model labels in `apps/web-server/src/ai-models.ts` if the model should appear in UI.
 5. Update docs/current mapping tables.
 6. Run model-policy/status smokes.
 7. Manually validate with an eligible account before claiming real-provider validation.
@@ -392,10 +310,8 @@ Status endpoints and UI should be used for readiness checks, not for copying or 
 | Symptom | What to check |
 | --- | --- |
 | **Sign in** does nothing or the login tab never opens | Allow pop-ups for the Exxperts page and retry. Only one sign-in can run at a time; use **Cancel** on the provider row to clear a stuck attempt first. |
-| In-app sign-in reports "Sign-in timed out" | The flow expires after 5 minutes. Retry from **AI setup**; if it keeps failing, try the CLI `/login` path and report a non-secret description. |
-| ChatGPT Plus/Pro or Anthropic option is not visible in `/login` | Confirm you chose `Use a subscription`; provider labels may have changed; escalate with a non-secret description. |
-| OpenAI-compatible gateway is not visible under `/login` → `Use an API key` | Run `exxperts setup openai-compatible` first so runtime `models.json` defines provider `openai-compatible`; restart the CLI/TUI if needed. |
-| Gateway validation fails with `model not found`, `unknown model`, or similar | Confirm the exact model id/alias with the gateway owner/admin. Model ids can be case-sensitive. Correct it in **Approve models**, or rerun `exxperts setup openai-compatible` with the corrected id; do not paste raw gateway logs or keys. |
+| In-app sign-in reports "Sign-in timed out" | The flow expires after 5 minutes. Retry from **AI setup**; if it keeps failing, report a non-secret description. |
+| Gateway validation fails with `model not found`, `unknown model`, or similar | Confirm the exact model id/alias with the gateway owner/admin. Model ids can be case-sensitive. Correct it in **Approve models**; do not paste raw gateway logs or keys. |
 | A gateway model ignores an attached image | The model is registered as text-only. Tick **images** for it in **Approve models**, and confirm with the gateway owner/admin that the model really accepts image input. |
 | A room compacts far too early, or its context reading never moves | The model's context window is wrong. Correct it per model in **Approve models**; auto-detection fills it in only where the gateway declares it. |
 | Sign-in succeeds but the web still shows not connected | Close and reopen AI setup; restart the web app if needed; do not inspect or share raw credential files. |

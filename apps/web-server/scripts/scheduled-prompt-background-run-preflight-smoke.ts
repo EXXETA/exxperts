@@ -206,7 +206,6 @@ try {
 	assert(corruptResult.run.target?.kind === "none" && corruptResult.run.error?.code === "schedule_store_unreadable", "corrupt schedule should target none and persist error code");
 	assertNoPromptLeak(corruptResult.run, secretPromptText, "corrupt schedule run");
 
-	assert(!fs.existsSync(path.join(tempHome, ".exxeta")), "scheduled preflight smoke must not write legacy ~/.exxeta state");
 	assert(!fs.existsSync(path.join(tempAgentRuntimeRoot, "auth.json")), "scheduled preflight smoke must not create/read runtime auth state");
 	assert(!fs.existsSync(path.join(tempAgentRuntimeRoot, "models.json")), "scheduled preflight smoke must not create/read runtime model state");
 

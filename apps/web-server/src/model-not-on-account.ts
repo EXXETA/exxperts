@@ -46,10 +46,10 @@ export function providerAccountName(provider: string): string | undefined {
 	return ACCOUNT_NAMES[provider];
 }
 
-/** "isn't available on your ChatGPT account" (draft wording), after the model's name. */
-export function notOnAccountWhy(provider: string | undefined): string {
+/** "isn't available on your ChatGPT account" (draft wording), after the model's name; on a shared server (`shared`) the account is the server's. */
+export function notOnAccountWhy(provider: string | undefined, shared = false): string {
 	const account = provider ? ACCOUNT_NAMES[provider] : undefined;
-	return `isn't available on your ${account ? `${account} ` : ""}account`;
+	return `isn't available on ${shared ? "this server's" : "your"} ${account ? `${account} ` : ""}account`;
 }
 
 /**
@@ -60,14 +60,17 @@ export function notOnAccountWhy(provider: string | undefined): string {
  */
 export type NotOnAccountWayOut = "room" | "room-memory" | { room: string } | "defaults";
 
-/** The line a chat turn, a scheduled run, a specialist task, a consult and HiveMind show (draft wording): what happened and the way out. */
-export function modelNotOnAccountSentence(modelName: string, provider: string | undefined, where: NotOnAccountWayOut = "room"): string {
+/**
+ * The line a chat turn, a scheduled run, a specialist task, a consult and HiveMind show (draft wording): what happened
+ * and the way out. `shared` on a shared server, where the defaults are the admin's.
+ */
+export function modelNotOnAccountSentence(modelName: string, provider: string | undefined, where: NotOnAccountWayOut = "room", shared = false): string {
 	const wayOut = where === "room"
 		? "Choose another model in Room settings, Model."
 		: where === "room-memory"
 			? "Choose another Memory model in Room settings, Model."
 			: where === "defaults"
-				? "Choose another default in Settings, AI setup."
+				? shared ? "Tell your admin." : "Choose another default in Settings, AI setup."
 				: `Choose another Memory model in ${where.room}'s Room settings, Model.`;
-	return `${modelName} ${notOnAccountWhy(provider)}. ${wayOut}`;
+	return `${modelName} ${notOnAccountWhy(provider, shared)}. ${wayOut}`;
 }

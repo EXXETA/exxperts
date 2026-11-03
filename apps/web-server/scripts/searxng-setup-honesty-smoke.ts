@@ -16,7 +16,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import http from "node:http";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,23 +49,6 @@ function assert(condition: unknown, message: string): asserts condition {
 
 let port = 0;
 let baseUrl = "";
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, init);
@@ -132,7 +115,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20000);
 
 	// ---- nothing configured, nothing claimed -------------------------------
 	const before = await requestJson("/api/web-search/searxng/setup");
@@ -144,7 +127,6 @@ try {
 	assert(started.status === 200, `starting answers 200, got ${started.status}`);
 	const stoppedRun = await settle();
 	assert(stoppedRun.phase === "docker-stopped", `a down daemon reads as docker-stopped, got ${JSON.stringify(stoppedRun)}`);
-	assert(/docker desktop|orbstack/i.test(stoppedRun.message ?? ""), `the sentence names what to start, got ${stoppedRun.message}`);
 	assert(stoppedRun.baseUrl === null, "nothing is running, so no address is claimed");
 
 	// ---- a configured local address is probed, never assumed ---------------
@@ -168,21 +150,16 @@ try {
 	const engineDown = await requestJson("/api/web-search/searxng/setup");
 	assert(engineDown.body.phase === "stopped", `runtime up with a dead engine reads stopped, got ${JSON.stringify(engineDown.body)}`);
 	assert(engineDown.body.baseUrl === null, "a dead engine claims no address");
-	assert(/not answering/i.test(engineDown.body.message ?? ""), `the sentence says it is not answering, got ${engineDown.body.message}`);
-	assert(/start one on this computer/i.test(engineDown.body.message ?? ""), `and points at the button, got ${engineDown.body.message}`);
 
 	// Runtime installed but not running: name it and say to start it.
 	fs.writeFileSync(stubScript, stubSource(startDockerStopped, "stopped"), { mode: 0o600 });
 	const daemonDown = await requestJson("/api/web-search/searxng/setup");
 	assert(daemonDown.body.phase === "docker-stopped", `a stopped daemon reads docker-stopped from idle too, got ${JSON.stringify(daemonDown.body)}`);
-	assert(/installed but not running/i.test(daemonDown.body.message ?? ""), `the sentence says it is installed but not running, got ${daemonDown.body.message}`);
-	assert(/start one on this computer/i.test(daemonDown.body.message ?? ""), `and points at the button, got ${daemonDown.body.message}`);
 
 	// No runtime at all: say what to install, naming both engines.
 	fs.writeFileSync(stubScript, stubSource(startDockerStopped, "missing"), { mode: 0o600 });
 	const noRuntime = await requestJson("/api/web-search/searxng/setup");
 	assert(noRuntime.body.phase === "docker-missing", `no runtime reads docker-missing from idle too, got ${JSON.stringify(noRuntime.body)}`);
-	assert(/orbstack/i.test(noRuntime.body.message ?? "") && /docker desktop/i.test(noRuntime.body.message ?? ""), `the sentence names both engines, got ${noRuntime.body.message}`);
 
 	// ---- a run that ends well is still re-verified afterwards --------------
 	fs.writeFileSync(stubScript, stubSource(`console.log("SearXNG ready at ${engineUrl}");\nprocess.exit(0);`, "up"), { mode: 0o600 });

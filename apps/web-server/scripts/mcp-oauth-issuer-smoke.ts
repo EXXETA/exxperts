@@ -26,6 +26,9 @@
 //    registration is replaced at the next sign-in, not refused.
 // 9. A configured client switched to a server without dynamic registration
 //    gets our message too, not the SDK's registration error.
+// 10. A configured client at a server without dynamic registration: the whole
+//     chain works, with no registration attempt, and the issued token is
+//     on the tools list and on a tool call.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -88,11 +91,14 @@ interface AsRequest {
 	method: string;
 	path: string;
 	body: string;
+	query: URLSearchParams;
 	// Query, body and authorization header (a Basic header decoded), for searching.
 	text: string;
 }
 
-function makeAuthServer(label: "a" | "b" | "c", { acceptAnyClient = false, registration = true } = {}) {
+// `minimal`: authorization codes only, no list of client auth methods (the
+// adapter's own fallback picks how the secret is sent) and no refresh token.
+function makeAuthServer(label: "a" | "b" | "c" | "d", { acceptAnyClient = false, registration = true, minimal = false } = {}) {
 	const requests: AsRequest[] = [];
 	const clients = new Map<string, string | undefined>();
 	const refreshTokens = new Map<string, string>();
@@ -105,6 +111,7 @@ function makeAuthServer(label: "a" | "b" | "c", { acceptAnyClient = false, regis
 		const access = `${label}-access-${counter}`;
 		const refresh = `${label}-refresh-${counter}`;
 		validAccess.add(access);
+		if (minimal) return { access_token: access, token_type: "Bearer", expires_in: 3600 };
 		refreshTokens.set(refresh, clientId);
 		return { access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh };
 	}
@@ -127,7 +134,7 @@ function makeAuthServer(label: "a" | "b" | "c", { acceptAnyClient = false, regis
 		const url = new URL(req.url ?? "/", base);
 		const body = await readBody(req);
 		const basic = req.headers.authorization?.startsWith("Basic ") ? Buffer.from(req.headers.authorization.slice(6), "base64").toString() : "";
-		requests.push({ method: req.method ?? "GET", path: url.pathname, body, text: `${url.search} ${body} ${req.headers.authorization ?? ""} ${basic}` });
+		requests.push({ method: req.method ?? "GET", path: url.pathname, body, query: url.searchParams, text: `${url.search} ${body} ${req.headers.authorization ?? ""} ${basic}` });
 
 		if (url.pathname.startsWith("/.well-known/oauth-authorization-server") || url.pathname.startsWith("/.well-known/openid-configuration")) {
 			json(res, 200, {
@@ -136,9 +143,9 @@ function makeAuthServer(label: "a" | "b" | "c", { acceptAnyClient = false, regis
 				token_endpoint: `${base}/token`,
 				...(registration ? { registration_endpoint: `${base}/register` } : {}),
 				response_types_supported: ["code"],
-				grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
+				grant_types_supported: minimal ? ["authorization_code"] : ["authorization_code", "refresh_token", "client_credentials"],
 				code_challenge_methods_supported: ["S256"],
-				token_endpoint_auth_methods_supported: ["client_secret_post"],
+				...(minimal ? {} : { token_endpoint_auth_methods_supported: ["client_secret_post"] }),
 			});
 			return;
 		}
@@ -229,10 +236,15 @@ const authA = makeAuthServer("a");
 // any client. C offers no dynamic registration.
 const authB = makeAuthServer("b", { acceptAnyClient: true });
 const authC = makeAuthServer("c", { acceptAnyClient: true, registration: false });
+// D offers no dynamic registration and knows only the clients configured at it.
+const authD = makeAuthServer("d", { registration: false, minimal: true });
 
 // The connector: names one authorization server at a time.
 let namedAuthServer = "";
 let connectorBase = "";
+// The bearer token on the last tools list and the last tool call.
+let listBearer = "";
+let callBearer = "";
 const connector = http.createServer(async (req, res) => {
 	const url = new URL(req.url ?? "/", connectorBase);
 	if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
@@ -246,7 +258,7 @@ const connector = http.createServer(async (req, res) => {
 			json(res, 401, { error: "unauthorized" }, { "www-authenticate": `Bearer resource_metadata="${connectorBase}/.well-known/oauth-protected-resource"` });
 			return;
 		}
-		const message = JSON.parse(body) as { id?: number; method?: string; params?: { protocolVersion?: string } };
+		const message = JSON.parse(body) as { id?: number; method?: string; params?: { protocolVersion?: string; name?: string; arguments?: { text?: string } } };
 		if (message.method === "initialize") {
 			json(res, 200, { id: message.id, jsonrpc: "2.0", result: { protocolVersion: message.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "issuer-smoke", version: "1" } } });
 			return;
@@ -256,7 +268,13 @@ const connector = http.createServer(async (req, res) => {
 			return;
 		}
 		if (message.method === "tools/list") {
+			listBearer = bearer;
 			json(res, 200, { id: message.id, jsonrpc: "2.0", result: { tools: [{ name: "echo", description: "Echo text back", inputSchema: { type: "object", properties: {} } }] } });
+			return;
+		}
+		if (message.method === "tools/call") {
+			callBearer = bearer;
+			json(res, 200, { id: message.id, jsonrpc: "2.0", result: { content: [{ type: "text", text: `${message.params?.name}:${message.params?.arguments?.text ?? ""}` }] } });
 			return;
 		}
 		json(res, 200, { id: message.id, jsonrpc: "2.0", result: {} });
@@ -289,6 +307,7 @@ async function main(): Promise<void> {
 	await authA.start();
 	await authB.start();
 	await authC.start();
+	await authD.start();
 	connectorBase = await listen(connector);
 	const serverUrl = `${connectorBase}/mcp`;
 	// The SDK stamps the authorization server URL as discovery used it and
@@ -303,16 +322,20 @@ async function main(): Promise<void> {
 	const configMod = await import("pi-mcp-adapter/config.ts" as string);
 	const entryOf = (name: string) => configMod.loadMcpConfig().mcpServers[name];
 
-	async function signIn(name: string): Promise<void> {
+	/** Signs in as the person would and gives back where authorize sent the browser. */
+	async function signIn(name: string): Promise<string> {
 		const { authorizationUrl } = await authFlow.startAuth(name, serverUrl, entryOf(name));
 		if (!authorizationUrl) throw new Error(`startAuth gave no authorization URL for ${name}`);
 		const callbackPromise = callbackMod.waitForCallback(authStore.getOAuthState(name));
 		const authorize = await fetch(authorizationUrl, { redirect: "manual" });
 		const location = authorize.headers.get("location");
 		if (authorize.status !== 302 || !location) throw new Error(`authorize answered ${authorize.status} for ${name}`);
+		const callback = new URL(location);
+		if (callback.hostname !== "localhost" || callback.pathname !== "/callback") throw new Error(`authorize sent ${name} to ${location}, not the loopback callback`);
 		await fetchCallback(location);
 		await authFlow.completeAuth(name, await callbackPromise);
 		if (!authStore.hasStoredTokens(name)) throw new Error(`no tokens stored after the sign-in of ${name}`);
+		return location;
 	}
 
 	// What the web Connectors page's Test shows the person.
@@ -579,10 +602,48 @@ async function main(): Promise<void> {
 		`case 8 client ID added later, the next sign-in at A: ${addedRun}; the stored client went from ${staleClient ?? "none"} to ${addedClient.clientId ?? "none"} (issuer ${addedClient.issuer ?? "none"}), the configured secret is ${secretInStore(added) ? "in" : "not in"} tokens.json`,
 	);
 
+	// --- Case 10: a configured client at a server without dynamic registration ---
+	namedAuthServer = authD.base;
+	const staticOnly = "static-client-only";
+	authD.clients.set("static-client", "static-client-pass");
+	await admin.addMcpServer({ name: staticOnly, url: serverUrl, oauth: { clientId: "static-client", clientSecret: "static-client-pass" } });
+	let staticSignIn: string;
+	try {
+		// A configured client's redirect is the fixed port it was registered with.
+		const location = await withTimeout(signIn(staticOnly), "signIn");
+		staticSignIn = location.startsWith(`http://localhost:${CALLBACK_PORT}/callback`) ? "signed in" : `signed in through ${location}`;
+	} catch (error) {
+		staticSignIn = `failed: ${(error as Error).message}`;
+	}
+	const issued: string | undefined = authStore.getAuthEntry(staticOnly)?.tokens?.accessToken;
+	const authorizeAtD = authD.requests.find((r) => r.path === "/authorize");
+	check(
+		staticSignIn === "signed in" && !authD.requests.some((r) => r.path.includes("register")) && authorizeAtD?.query.get("client_id") === "static-client" && Boolean(issued?.startsWith("d-access-")),
+		`case 10 static client, the sign-in at a server without registration: ${staticSignIn}; D got ${describe(authD.requests)}; authorize client_id ${authorizeAtD?.query.get("client_id") ?? "none"}; access token ${issued ?? "none"}`,
+	);
+	const staticTest = await withTimeout(admin.testMcpServer(staticOnly), "testMcpServer");
+	check(
+		staticTest.ok && JSON.stringify(staticTest.toolNames) === JSON.stringify(["echo"]) && listBearer === issued,
+		`case 10 static client, the Test lists ${JSON.stringify(staticTest.toolNames)} (${staticTest.ok ? "ok" : staticTest.error}) with token ${listBearer} (want ${issued})`,
+	);
+	const staticManager = new managerMod.McpServerManager();
+	let echoed: string;
+	try {
+		const connection = (await withTimeout(staticManager.connect(staticOnly, entryOf(staticOnly)), "connect")) as { client: { callTool(call: { name: string; arguments: Record<string, unknown> }): Promise<{ content: unknown }> } };
+		const result = await withTimeout(connection.client.callTool({ name: "echo", arguments: { text: "full-chain" } }), "callTool");
+		echoed = (result.content as Array<{ text?: string }>)[0]?.text ?? "nothing";
+	} catch (error) {
+		echoed = `threw: ${(error as Error).message}`;
+	} finally {
+		await staticManager.closeAll().catch(() => {});
+	}
+	check(echoed === "echo:full-chain" && callBearer === issued, `case 10 static client, a tool call through the manager answers ${echoed} with token ${callBearer} (want ${issued})`);
+
 	await callbackMod.stopCallbackServer().catch(() => {});
 	authA.close();
 	authB.close();
 	authC.close();
+	authD.close();
 	connector.close();
 	fs.rmSync(agentDir, { recursive: true, force: true });
 	fs.rmSync(home, { recursive: true, force: true });

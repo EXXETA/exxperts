@@ -9,8 +9,8 @@ pi-package/          Extensions, themes, product-state path helpers
 runtime/             Owned exxperts runtime packages (the Pi fork)
 apps/web-server/     Fastify server: persistent rooms, memory lifecycle, tool policy
 apps/web-ui/         React/Vite web UI
-scripts/             Repo/dev launchers: exxperts-cli, exxperts-web; legacy exxeta aliases
-bin/                 Packaged bin shim: exxperts (plus direct-node dev entry points)
+scripts/             Repo/dev launchers: exxperts-web; legacy exxeta aliases
+bin/                 Packaged bin shim: exxperts (plus a direct-node dev entry point)
 docs/                Product, architecture, ops, demo, collaboration docs
 ```
 
@@ -23,18 +23,14 @@ lifecycle), start with [`how-exxperts-works.md`](how-exxperts-works.md).
 npm install
 npm run build
 ./scripts/exxperts-web     # dev web launcher
-./scripts/exxperts-cli     # dev Exxperts CLI/TUI
+npm run doctor             # checks the install and the optional layers
 ```
 
-On Windows PowerShell/cmd, use `node scripts\exxeta-web.mjs` (dev web) and `node bin\exxperts-cli.cjs` (CLI/TUI); the bash launchers above also work from Git Bash.
+On Windows PowerShell/cmd, use `node scripts\exxeta-web.mjs` (dev web); the bash launcher above also works from Git Bash.
 
-OpenAI-compatible gateway setup from a repo clone uses the matching dev launcher command:
+Provider sign-in and OpenAI-compatible gateways are set up in the app, under **Settings, AI setup**; see [`provider-setup.md`](provider-setup.md).
 
-```bash
-./scripts/exxperts-cli setup openai-compatible
-```
-
-Do not use globally installed packaged commands to validate current-branch setup behavior unless you have rebuilt, packed, and installed that branch. Global commands may point at an older packaged product.
+Do not use the globally installed packaged command to validate current-branch behavior unless you have rebuilt, packed, and installed that branch. Global commands may point at an older packaged product.
 
 After modifying runtime source:
 
@@ -53,7 +49,6 @@ There are two loops; keep them separate:
    npm install
    npm run build
    ./scripts/exxperts-web
-   ./scripts/exxperts-cli
    ```
    These repo scripts are dev-only fallbacks and continue to work. Packaging cleanup does not make normal product development harder.
 
@@ -62,31 +57,27 @@ There are two loops; keep them separate:
    npm run build
    npm pack
    npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts --help
-   npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts cli --help
    ```
-   For a realistic installed-command check, install the tarball globally and verify `which exxperts`, `exxperts --help`, `exxperts web --help`, and `exxperts cli --help`.
+   For a realistic installed-command check, install the tarball globally and verify `which exxperts` and `exxperts --help`.
 
-After code changes, rebuild/repack/reinstall only when you need to test installed behaviour: bin resolution, package-root paths, packaged assets, first-run dirs, browser opening, or cwd handling from another repo.
+After code changes, rebuild/repack/reinstall only when you need to test installed behaviour: bin resolution, package-root paths, packaged assets, first-run dirs, or browser opening.
 
 ## `npm exec`, global install, and npm prefix
 
 - Use `npm exec --package ./exxeta-exxperts-app-*.tgz -- <command>` for one-off tarball smoke tests without changing your global `PATH`.
-- Use `npm install -g ./exxeta-exxperts-app-*.tgz` when you want the normal `exxperts` command (`exxperts web`, `exxperts cli`, bare `exxperts` picker) available from any shell.
+- Use `npm install -g ./exxeta-exxperts-app-*.tgz` when you want the normal `exxperts` command available from any shell.
 - If global install fails with `EACCES`, configure a user-level npm prefix such as `~/.npm-global`; do not use `sudo` for local product validation.
-
-`exxperts web --port <port>` and `exxperts web --no-open` are test/debug flags for port conflicts, CI-style checks, and asset validation. They are not the normal user path; normal users run `exxperts web`.
 
 ## Product surfaces
 
-- Web (`exxperts web`, `./scripts/exxperts-web`) is the business/user workspace: persistent rooms and the memory lifecycle.
-- CLI (`exxperts cli`, `./scripts/exxperts-cli`) is the coding workspace (ExxCode). It preserves the caller cwd so it can inspect/edit the target repo.
-- Installed gateway setup should be presented as `exxperts setup openai-compatible`. The repo/development equivalent is `./scripts/exxperts-cli setup openai-compatible`. Keep these loops separate when validating onboarding.
+The app (`exxperts`, `./scripts/exxperts-web`, or the desktop app) is the one product surface: persistent rooms and the memory lifecycle. Everything a person sets up, from provider sign-in to connectors, web search and remote access, is in the app's Settings.
 
 ## How prompts are assembled
 
 **Persistent rooms (web)** boot from four code-assembled layers (L0
 platform kernel, L1a constitution, L1b durable memory, L2 runtime
-envelope) built in `apps/web-server/src/persistent-agents.ts`, plus the
+envelope) built in `apps/web-server/src/persistent-agent-constitution.ts` and
+`persistent-agent-boot.ts`, plus the
 user's optional instructions layer between L1a and L1b
 (`persistent-room-instructions.ts`: the room's file and the global file
 under the app's state folder, read and written by the same code;
@@ -112,23 +103,16 @@ isolated, tool-less sessions (`persistent-agent-worker-runtime.ts`)
 on the room's Memory model (`room-models.ts`), drawn from the models
 each provider approves (`persistent-agent-ai-profiles.ts`).
 
-**CLI sessions** open a room: the launcher runs the runtime with
-`--no-context-files` (no `AGENTS.md` or `CLAUDE.md`) and loads only the
-six room extensions in `ROOM_EXTENSIONS`
-(`bin/lib/exxcode-launcher.cjs`), gated by permissions and
-content-policy.
-
 ### Room tool boundary
 
 Persistent rooms do not load arbitrary Pi extensions. This is deliberate: the
 room surface exposes a reviewed, product-owned tool set under explicit
-permission and workspace policies. Packages installed with `exxperts install`
-can add extensions to plain pi sessions, but persistent rooms run only the
-product-owned extension set and will not load them. Skills reach rooms only
+permission and workspace policies. Rooms do not install anything from the
+`packages` list in `settings.json` (old entries stay there, ignored), and run
+only the product-owned extension set. Skills reach rooms only
 through the skill library: imported in the web app, or placed in
 `~/.exxperts/agent/skills` or the shared `~/.agents/skills`, and enabled per
-room. Skills bundled inside installed packages are not picked up by rooms
-either.
+room.
 
 ## Local data
 
@@ -148,20 +132,20 @@ Embedded runtime provider/auth/model/session state lives under `~/.exxperts/agen
 
 Root package bins:
 
-- `exxperts` → `bin/exxperts.cjs` → product router; `exxperts web` starts the web app, `exxperts cli` starts the CLI/TUI, `exxperts setup ...` routes to runtime setup without starting the web server, and bare `exxperts` opens an interactive picker between the two surfaces (web app recommended).
+- `exxperts` → `bin/exxperts.cjs`: starts the local server and opens the app in the browser. The removed terminal commands print that they were removed and exit 1.
 
-This is the only installed command. The other files in `bin/` (`exxperts-web.cjs`, `exxperts-cli.cjs`, `exxcode.cjs`) are direct-node dev entry points (`node bin/exxperts-web.cjs`), not global commands.
+This is the only installed command. The other file in `bin/` (`exxperts-web.cjs`) is a direct-node dev entry point (`node bin/exxperts-web.cjs`), not a global command.
 
-The package uses its installed root as `EXXETA_HOME` so packaged agents, extensions, runtime assets, and `apps/web-ui/dist` resolve independently of the caller's cwd. `exxperts cli` intentionally preserves the caller cwd so ExxCode can inspect/edit the target repo.
+The package uses its installed root as `EXXETA_HOME` so packaged agents, extensions, runtime assets, and `apps/web-ui/dist` resolve independently of the caller's cwd.
 
-The embedded runtime package bin is named `exxperts-runtime`; it must not expose `exxperts`, otherwise `npm exec --package <tarball> -- exxperts` may resolve the runtime TUI instead of the product web launcher.
+The embedded runtime package bin is named `exxperts-runtime`; it must not expose `exxperts`, otherwise `npm exec --package <tarball> -- exxperts` may resolve the runtime's own command instead of the product web launcher.
 
 See [`packaging-local.md`](packaging-local.md) for packaging validation commands and current blockers.
 
 ## Related docs
 
 - [`how-exxperts-works.md`](how-exxperts-works.md): product architecture: rooms, prompt layers, memory lifecycle.
-- [`memory.md`](memory.md): user-facing memory walkthrough (rooms + CLI).
+- [`memory.md`](memory.md): user-facing memory walkthrough.
 - [`l1a-constitution-upgrade.md`](l1a-constitution-upgrade.md): constitution versioning/migration.
 - [`provider-setup.md`](provider-setup.md): provider setup, and which model a room uses.
 - [`mcp.md`](mcp.md)

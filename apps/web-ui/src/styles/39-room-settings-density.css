@@ -1,0 +1,91 @@
+/* Room settings at the main Settings' density -----------------------------
+   The room settings modal speaks the Settings overlay's quiet grammar:
+   hairline row rhythm instead of boxes, sentence-case action pills,
+   tracked-caps group labels, outcomes as plain colored sentences. Everything
+   is scoped to .rs-shell so the full-page borrowers of the rs-* control
+   language (remote devices, web search, archived rooms) keep their scale.
+   Appended after the base rules on purpose: same-specificity overrides here
+   must win on order. */
+/* Errors as plain colored sentences, no card: the boxed treatment read
+   heavier than the pane itself and the color already carries the meaning. */
+.rs-shell .checkpoint-proposal-error {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 0;
+}
+
+/* Skills + connectors: bordered row-cards flatten to the shared divider
+   rhythm; the picker keeps its outline as a boundary but loses the fill. */
+.rs-shell .room-skills-rows {
+	gap: 0;
+	margin-top: 4px;
+}
+.rs-shell .room-skills-row {
+	border: none;
+	border-radius: 0;
+	padding: 8px 0;
+}
+.rs-shell .room-skills-row + .room-skills-row {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.rs-shell .room-skills-picker {
+	background: transparent;
+	border-color: var(--border-soft);
+}
+.rs-shell .room-skills-picker-list {
+	gap: 0;
+}
+/* The drifted-skill review gate keeps its warning identity, softened from a
+   full-strength outline to a tinted one. */
+.rs-shell .room-skills-review {
+	border-color: color-mix(in srgb, var(--exx-warning, #c47f00) 45%, transparent);
+}
+/* Choice chips rest transparent at chip weight; the selected one keeps the
+   app's filled-selection treatment from the base rules. */
+.rs-shell .room-schedules-day-chip {
+	background: transparent;
+	font-weight: 500;
+}
+.rs-shell .room-schedules-day-chip.active {
+	background: var(--fg);
+}
+/* Task cards flatten to divider-separated entries. */
+.rs-shell .room-schedules-list {
+	gap: 0;
+}
+.rs-shell .room-schedules-job {
+	border: none;
+	border-radius: 0;
+	padding: 12px 0;
+}
+.rs-shell .room-schedules-job + .room-schedules-job {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+/* Status reads as colored caps text rather than an outlined pill, the way
+   the Settings tables show provenance as muted text instead of chips. */
+.rs-shell .room-schedules-record-state,
+.rs-shell .room-schedules-run-status {
+	border: none;
+	border-radius: 0;
+	padding: 0;
+}
+
+/* Review: the depth picker borrows the chooser's rows; the picked row shows a check. */
+.review-depth-section .maintain-actions { margin-top: 12px; }
+.review-depth-option .maintain-action-go { min-width: 28px; text-align: right; }
+.review-depth-option.selected { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.review-depth-option.selected .maintain-action-title { text-decoration: underline; text-underline-offset: 4px; }
+/* Review card: the changes of one topic open together; a note leaving carries the reason it left. */
+.review-change-note { margin: 6px 0 0; font-size: 13.5px; color: var(--fg-soft); }
+.review-topic-group > summary { cursor: pointer; }
+.review-topic-group .absorb-run-conversation-body { display: grid; gap: 12px; padding-top: 10px; }
+.review-change + .review-change { border-top: 1px solid var(--border); padding-top: 12px; }
+.review-change-reason { font-size: 12.5px; color: var(--fg-soft); text-transform: lowercase; }
+.review-change-leaving { opacity: 0.8; }
+.review-run-topics { margin-top: 12px; }
+
+/* Memorize and Review while they work: the card's headline carries the progress and a small spinner. */
+.absorb-run-card-working { display: flex; align-items: center; gap: 10px; }
+.absorb-run-card-working .spinner { width: 18px; height: 18px; flex: none; }
+

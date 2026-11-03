@@ -350,18 +350,11 @@ await section("same-failure-stops", async () => {
 	let badCalls = 0;
 	const bad = await settle(small.agentId, startReviewRun(small.agentId, { depth: "tidy", model: MODEL, generate: async () => { badCalls++; throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}'); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
 	assert(badCalls === 1 && bad.leftAsIs.flatMap((row) => row.topics).sort().join(",") === "Alpha,Beta,Gamma", `a 400 is asked once and the group is not split, got ${JSON.stringify({ calls: badCalls, left: bad.leftAsIs })}`);
-	// The same refusal in Mistral's words, or with its status on the error itself: one call each.
-	for (const [label, refusal, name] of [
-		["Mistral's 400", () => new Error('Mistral API error (400): {"object":"error","message":"Bad request","type":"invalid_request_error"}'), "Mistral Refusal Room"],
-		["a 400 on the error", () => Object.assign(new Error("Bad request"), { status: 400 }), "Status Refusal Room"],
-		["a 400 on the error's statusCode", () => Object.assign(new Error("Bad request"), { statusCode: 400 }), "Status Code Refusal Room"],
-		["a 400 only as the runtime's errorStatus", () => Object.assign(new Error("Bad request"), { errorStatus: 400 }), "Error Status Refusal Room"],
-	] as const) {
-		const refusedRoom = createRoom(name, { Alpha: [["m-0531", "- Alpha one."]] });
-		let refusedCalls = 0;
-		const refusedRun = await settle(refusedRoom.agentId, startReviewRun(refusedRoom.agentId, { depth: "tidy", model: MODEL, generate: async () => { refusedCalls++; throw refusal(); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
-		assert(refusedCalls === 1 && refusedRun.leftAsIs.length === 1, `${label} is asked once, got ${JSON.stringify({ calls: refusedCalls, left: refusedRun.leftAsIs })}`);
-	}
+	// A 400 only as the runtime's errorStatus, the words naming none: Review reads the error itself, so one call.
+	const statusRoom = createRoom("Error Status Refusal Room", { Alpha: [["m-0531", "- Alpha one."]] });
+	let statusCalls = 0;
+	const statusRun = await settle(statusRoom.agentId, startReviewRun(statusRoom.agentId, { depth: "tidy", model: MODEL, generate: async () => { statusCalls++; throw Object.assign(new Error("Bad request"), { errorStatus: 400 }); }, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
+	assert(statusCalls === 1 && statusRun.leftAsIs.length === 1, `a 400 only as the runtime's errorStatus is asked once, got ${JSON.stringify({ calls: statusCalls, left: statusRun.leftAsIs })}`);
 
 	// The same 400 on every group of six: the run stops after the groups already in flight.
 	const big = createRoom("Same Failure Room", { Alpha: many("Alpha", 5100), Beta: many("Beta", 5200), Gamma: many("Gamma", 5300), Delta: many("Delta", 5400), Epsilon: many("Epsilon", 5500), Zeta: many("Zeta", 5600) });
@@ -423,16 +416,6 @@ await section("first-read-missing", async () => {
 	const finding = createRoom("Finding Room", { Alpha: [["m-0611", twice]], Beta: [["m-0612", "- Beta one says the crates leave on Thursdays."]], Gamma: [["m-0613", twice]] });
 	const missingWithFinding = await ask(async () => { throw new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}'); }, finding.agentId);
 	assert(missingWithFinding.body.firstReadMissing === true && missingWithFinding.body.fields.saysTheSameTwice.length === 1 && missingWithFinding.body.fields.topics.length === 0, `a missing read names no topics to tidy, got ${JSON.stringify(missingWithFinding.body.fields)}`);
-});
-
-// A stop on a company gateway names it as AI setup does, so the card never shows its id.
-await section("gateway-named", async () => {
-	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
-	const notes = Array.from({ length: 30 }, (_, n): [string, string] => [`m-${3000 + n}`, `- Alpha invoice ${n} was approved by the finance desk after the quarterly budget review.`]);
-	const room = createRoom("Gateway Review Room", { Alpha: notes });
-	const signedOut: ReviewRunGenerate = async () => { throw new ModelUnreachableError("signed-out", MODEL); };
-	const stopped = await settle(room.agentId, startReviewRun(room.agentId, { depth: "tidy", model: MODEL, generate: signedOut, resolveModelWindow: () => WINDOW, now: RUN_CLOCK }).runId);
-	assert(stopped.stop?.cause === "signed-out" && (stopped.stop as { gateway?: string }).gateway === "Synthetic Gateway", `the stop names the gateway, got ${JSON.stringify(stopped.stop)}`);
 });
 
 // Each cause stops the run with the stop the card reads: the cause, the key, why it was not reached, who can lift a

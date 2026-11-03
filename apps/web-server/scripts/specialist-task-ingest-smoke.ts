@@ -8,7 +8,7 @@
 // Also pins: nested outputs can never claim the canonical file, non-target
 // outputs absorb as plain task outputs, and inputs/ never lists as outputs.
 //
-// Run: npm run smoke:specialist-task-ingest   (or: node scripts/run-smokes.mjs specialist-task-ingest)
+// Run: node scripts/run-smokes.mjs specialist-task-ingest   (from the repo root)
 
 import crypto from "node:crypto";
 import fs from "node:fs";

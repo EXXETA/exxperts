@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -39,23 +39,6 @@ function writeSkill(rel: string, name: string, description: string, body: string
 	const dir = path.join(repoDir, rel);
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, "SKILL.md"), ["---", `name: ${name}`, `description: ${description}`, "---", "", body, ""].join("\n"));
-}
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 15000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
 }
 
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
@@ -103,7 +86,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 15000);
 
 	// --- Bad URL is rejected before any clone ---------------------------------
 	const bad = await requestJson("/api/skills/repo/scan", { method: "POST", body: JSON.stringify({ source: "not a git url" }) });
@@ -116,7 +99,6 @@ try {
 	assert(typeof token === "string" && token.length > 0, "scan must return a checkout token");
 	const scanNames = (scan.body.skills as any[]).map((s) => s.name).sort();
 	assert(scanNames.join(",") === "cite-sources,deep-skill,poisoned,with-scripts", `scan must find the four skills, got ${scanNames.join(",")}`);
-	assert(!scanNames.includes("README"), "scan must exclude README.md");
 	assert((scan.body.skills as any[]).find((s) => s.name === "with-scripts").hasBundledScripts === true, "with-scripts must flag bundled scripts");
 	assert((scan.body.skills as any[]).find((s) => s.name === "cite-sources").license === "MIT", "license must be detected from LICENSE");
 

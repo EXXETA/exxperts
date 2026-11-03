@@ -71,10 +71,42 @@ function smokeFail(message: string): never {
   throw new Error(message);
 }
 
+// Enough of the server's log to hold its stop's lines.
+const LOG_TAIL_AT_QUIT = 20;
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The smoke's quit must stop a live server: a stop with nothing running
+// passes the driver's port-free check without proving anything. The server's
+// own stop must have run on the stop message (its start line in the log),
+// not on a signal: on Windows a signal skips it.
+function reportSmokeQuit(livePid: number | null): void {
+  const stopped = livePid !== null && !pidAlive(livePid);
+  const byMessage = server.logTail(LOG_TAIL_AT_QUIT).includes("server stop: started by stop message;");
+  const result = !stopped ? (livePid === null ? "fail(no live server at quit)" : `fail(server pid ${livePid} still alive)`)
+    : byMessage ? `ok(stopped live server pid ${livePid} by the stop message)`
+    : `fail(server pid ${livePid} stopped, but not by the stop message)`;
+  console.log(`DESKTOP_SMOKE_QUIT ${result}`);
+  if (!stopped || !byMessage) process.exitCode = 1;
+}
+
 function showMainWindow(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    mainWindow.focus();
+    // The smoke runs on machines where someone is working: its window shows
+    // without taking the front from them.
+    if (SMOKE) {
+      mainWindow.showInactive();
+    } else {
+      mainWindow.show();
+      mainWindow.focus();
+    }
   }
   setTrayBadge(false);
 }
@@ -368,7 +400,7 @@ async function offerOneClickUpdate(version: string): Promise<void> {
   // The panel opens in its checking state: the check can take seconds behind
   // a slow proxy, and a heading that claimed a download before one ran made
   // that look like a stalled transfer.
-  const panel = openUpdatePanel({ version, parent: mainWindow ?? undefined });
+  const panel = openUpdatePanel({ version, parent: mainWindow ?? undefined, inactive: SMOKE });
   let cancelDownload: (() => void) | null = null;
   panel.window.on("closed", () => cancelDownload?.());
   // Under the smoke, a moment with the panel on screen before the download
@@ -667,8 +699,8 @@ let crashSurfacedAt = 0;
 function surfaceCrash(message: string, tail: string): void {
   if (Date.now() - crashSurfacedAt < 5000) return;
   crashSurfacedAt = Date.now();
-  showTextWindow("exxperts server stopped", message, tail || "(no server output)");
-  void showHealthCheck(mainWindow ?? undefined);
+  showTextWindow("exxperts server stopped", message, tail || "(no server output)", { inactive: SMOKE });
+  void showHealthCheck(mainWindow ?? undefined, { inactive: SMOKE });
 }
 
 // Data profiles: a switch exits the server with a sentinel code after
@@ -799,7 +831,7 @@ async function boot(): Promise<void> {
   if (!startHidden) {
     showBootWindow(() => {
       if (!quitting) app.quit();
-    });
+    }, { inactive: SMOKE });
   }
 
   const state = await probePort();
@@ -925,7 +957,7 @@ async function smokeReport(): Promise<void> {
   }
   // Exercise the Health Check window end to end too: doctor runs, its output
   // lands in the rendered pre, and the window screenshots alongside the app.
-  const healthWin = await showHealthCheck();
+  const healthWin = await showHealthCheck(undefined, { inactive: SMOKE });
   const healthText: unknown = await healthWin.webContents
     .executeJavaScript(`document.querySelector("pre").textContent`)
     .catch(() => "");
@@ -945,10 +977,20 @@ async function smokeReport(): Promise<void> {
       const cs = getComputedStyle(h);
       const strip = document.querySelector(".desktop-drag-strip");
       const ss = strip ? getComputedStyle(strip) : null;
-      const stripOk = !!ss && ss.display === "block" && ss.position === "fixed" && ss.webkitAppRegion === "drag" && ss.height === "48px";
+      // The strip is the window buttons' row, 50 window points tall: its CSS height times the page's zoom.
+      const windowZoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--window-zoom")) || 1;
+      const stripOk = !!ss && ss.display === "block" && ss.position === "fixed" && ss.webkitAppRegion === "drag" && Math.abs(parseFloat(ss.height) * windowZoom - 50) <= 0.5;
       const cls = document.documentElement.className;
-      return cls.includes("desktop-app-mac") && cs.webkitAppRegion === "drag" && cs.paddingTop === "56px" && stripOk
-        ? "ok" : "fail(" + cls + "|" + cs.webkitAppRegion + "|" + cs.paddingTop + "|strip=" + (ss ? ss.display + "," + ss.webkitAppRegion : "missing") + ")";
+      // The drag strip is the window buttons' row; the logo has its own row
+      // under it, and the list starts below the logo, never inside the strip,
+      // where a click would drag the window.
+      const stripBottom = strip ? strip.getBoundingClientRect().bottom : 0;
+      const box = (el) => el ? el.getBoundingClientRect() : null;
+      const lb = box(h.querySelector("img.logo"));
+      const ib = box(h.parentElement.querySelector(".product-nav .list-btn, .sidebar-primary-nav .list-btn"));
+      const rowOk = !!lb && !!ib && lb.height > 0 && lb.top >= stripBottom && ib.top >= lb.bottom;
+      return cls.includes("desktop-app-mac") && cs.webkitAppRegion === "drag" && rowOk && stripOk
+        ? "ok" : "fail(" + cls + "|" + cs.webkitAppRegion + "|logo=" + (lb ? [lb.left, lb.top, lb.right, lb.bottom].map(Math.round).join(",") : "none") + "|firstItemTop=" + (ib ? Math.round(ib.top) : "none") + "|stripBottom=" + Math.round(stripBottom) + "|strip=" + (ss ? ss.display + "," + ss.webkitAppRegion : "missing") + ")";
     })()`)
     .catch(() => "error");
   const dragOk = dragRegion === "ok" || dragRegion === "n/a";
@@ -1112,7 +1154,7 @@ async function smokeReport(): Promise<void> {
     // Electron's source, not exercised here. The smoke's own quit below
     // cannot stand in for this: under the smoke before-quit ends in
     // app.exit, which closes no window.
-    const installingPanel = openUpdatePanel({ version: "9.9.9", parent: win });
+    const installingPanel = openUpdatePanel({ version: "9.9.9", parent: win, inactive: SMOKE });
     installingPanel.setInstalling(59 * 1024 * 1024);
     await new Promise((r) => setTimeout(r, 600));
     const closableOff = installingPanel.window.isClosable();
@@ -1222,7 +1264,7 @@ async function smokeReport(): Promise<void> {
     .catch((err: unknown) => `error:${err instanceof Error ? err.message : String(err)}`);
   await new Promise((r) => setTimeout(r, 600));
   const badgeSet = trayBadged;
-  win.show();
+  win.showInactive();
   await new Promise((r) => setTimeout(r, 300));
   const badgeCleared = !trayBadged;
   const notifyE2EOk = notifyHook === "called" && badgeSet && badgeCleared;
@@ -1238,21 +1280,13 @@ async function smokeReport(): Promise<void> {
     } catch {
       // leave watchdogOk false
     }
-    const alive = (pid: number) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
     const deadline = Date.now() + 25_000;
     while (Date.now() < deadline && !watchdogOk) {
       // Non-vacuous: the restart flag alone is not enough - the killed pid
       // must be genuinely gone, the handle must hold a NEW pid, and that
       // server must answer (the tsx-wrapper era produced a green from the
       // orphaned OLD server answering healthz).
-      if (smokeWatchdogRestarted && !alive(killedPid) && server.pid && server.pid !== killedPid) {
+      if (smokeWatchdogRestarted && !pidAlive(killedPid) && server.pid && server.pid !== killedPid) {
         try {
           const res = await fetch(`${SERVER_ORIGIN}/healthz`, { signal: AbortSignal.timeout(1000) });
           if (res.ok) watchdogOk = true;
@@ -1263,10 +1297,61 @@ async function smokeReport(): Promise<void> {
       if (!watchdogOk) await new Promise((r) => setTimeout(r, 300));
     }
   }
-  const ok = landedUrl.startsWith(SERVER_ORIGIN) && !landedUrl.includes("token=") && healthOk && trayIconOk && stateOk && dragOk
+
+  // A second crash inside the watchdog window surfaces the server log and
+  // the health check instead of restarting; under the smoke both must open
+  // without taking the front. A shown window that activates the app gets
+  // focus, so any focus event on them from the kill on is the failure. The
+  // doctor's output landing in the health window is the state waited for:
+  // by then both windows have long been shown.
+  let crashWindows = "fail(no restarted server to crash again)";
+  const crashTitles = ["exxperts server stopped", "exxperts health check"];
+  const restartedPid = watchdogOk ? server.pid : undefined;
+  if (restartedPid) {
+    const focusedTitles = new Set<string>();
+    const onFocus = (_e: unknown, w: BrowserWindow) => {
+      if (crashTitles.includes(w.getTitle())) focusedTitles.add(w.getTitle());
+    };
+    app.on("browser-window-focus", onFocus);
+    try {
+      process.kill(restartedPid, "SIGKILL");
+    } catch {
+      // the windows never appear and the check below reports it
+    }
+    const shown = () => BrowserWindow.getAllWindows()
+      .filter((w) => !w.isDestroyed() && w.isVisible() && crashTitles.includes(w.getTitle()));
+    const doctorDone = async (w: BrowserWindow) => {
+      const text: unknown = await w.webContents.executeJavaScript(`document.querySelector("pre")?.textContent ?? ""`).catch(() => "");
+      return typeof text === "string" && text.includes("Node");
+    };
+    const deadline = Date.now() + 20_000;
+    let found = shown();
+    for (;;) {
+      const health = found.find((w) => w.getTitle() === "exxperts health check");
+      if (found.length === crashTitles.length && health && await doctorDone(health)) break;
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 300));
+      found = shown();
+    }
+    for (const w of found) if (w.isFocused()) focusedTitles.add(w.getTitle());
+    app.removeListener("browser-window-focus", onFocus);
+    if (found.length < crashTitles.length) crashWindows = `fail(shown: ${found.map((w) => w.getTitle()).join(", ") || "none"})`;
+    else if (focusedTitles.size) crashWindows = `fail(took the front: ${[...focusedTitles].join(", ")})`;
+    else crashWindows = "ok";
+    for (const w of found) w.close();
+  }
+  // The second crash left no server; start one again so the quit below
+  // stops a live server, which reportSmokeQuit checks.
+  try {
+    server.start();
+    await server.waitReady(30_000);
+  } catch (err) {
+    console.error(`[smoke] restart before quit failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const ok =landedUrl.startsWith(SERVER_ORIGIN) && !landedUrl.includes("token=") && healthOk && trayIconOk && stateOk && dragOk
     && contextOk && spellOk && deepLinkOk && notifOk && payload !== "unknown" && bootVisibleOk && bootFeedbackOk && loginItemPresent
-    && updateLogicOk && updateConsistent && updaterFlowOk && updateNoticeUiOk && updatePanelOk && notifyE2EOk && watchdogOk && appMenuOk && sidebarToggleOk && matrixFailure === null;
-  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} updateNoticeUi=${updateNoticeUi} updatePanel=${updatePanel} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"}`);
+    && updateLogicOk && updateConsistent && updaterFlowOk && updateNoticeUiOk && updatePanelOk && notifyE2EOk && watchdogOk && crashWindows === "ok" && appMenuOk && sidebarToggleOk && matrixFailure === null;
+  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} updateNoticeUi=${updateNoticeUi} updatePanel=${updatePanel} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"} crashWindows=${crashWindows}`);
   if (!ok) process.exitCode = 1;
   app.quit();
 }
@@ -1311,7 +1396,11 @@ if (!gotLock) {
     // the quit event it needs), so this quit must proceed unintercepted.
     if (updaterQuitting) return;
     event.preventDefault();
-    void server.stop().finally(() => app.exit(typeof process.exitCode === "number" ? process.exitCode : 0));
+    const livePid = server.running ? server.pid : null;
+    void server.stop().finally(() => {
+      if (SMOKE) reportSmokeQuit(livePid);
+      app.exit(typeof process.exitCode === "number" ? process.exitCode : 0);
+    });
   });
   void app.whenReady().then(() => boot().catch(startupFailed));
 }

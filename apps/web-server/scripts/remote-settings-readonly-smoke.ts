@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-remote-readonly-"));
 process.env.HOME = tempHome;
@@ -33,18 +33,6 @@ fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ "openai-codex": { type: "api_key", key: "sk-smoke" } }), { mode: 0o600 });
 
 let server: ChildProcessWithoutNullStreams | null = null;
-
-async function waitForServer(): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (server?.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const res = await fetch(`${baseUrl}/healthz`);
-			if (res.ok) return;
-		} catch { /* not up yet */ }
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error("server did not come up");
-}
 
 const SECTIONS: Array<{ tab: string; honest: string; absent: string[] }> = [
 	{
@@ -89,7 +77,7 @@ try {
 		env: { ...process.env, PORT: String(port), ...SMOKE_SERVER_AUTH_ENV },
 		stdio: ["ignore", "pipe", "pipe"],
 	}) as unknown as ChildProcessWithoutNullStreams;
-	await waitForServer();
+	await waitForServer(server, baseUrl, { tries: 100 });
 	// One room, so Home shows a card whose model label opens Room settings, Model.
 	const created = await authedFetch(`${baseUrl}/api/persistent-agents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ displayName: "Readonly Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
 	assert(created.ok, `room create failed: ${created.status}`);

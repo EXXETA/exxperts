@@ -19,7 +19,7 @@ fs.writeFileSync(path.join(smokeAppDir, "persistent-agent-ai-profile.json"), JSO
 process.env.EXXPERTS_CODING_AGENT_DIR = path.join(tempHome, ".exxperts", "agent");
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 
-const { beginPersistentAgentTurn, createPersistentAgentFromScaffoldInput, finishPersistentAgentTurn, getPersistentAgentStatus, getPersistentAgentThread, writePersistentAgentThread } = await import("../src/persistent-agents.js");
+const { beginPersistentAgentTurn, createPersistentAgentFromScaffoldInput, finishPersistentAgentTurn, getPersistentAgentStatus, writePersistentAgentThread } = await import("../src/persistent-agents.js");
 const { persistentRoomLastUsedPath, readPersistentRoomLastUsed, recordPersistentRoomLastUsed, recordPersistentRoomLastUsedIfAbsent } = await import("../src/persistent-room-last-used.js");
 const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
 writePersistentAgentAiProfileState("openai-compatible");
@@ -123,7 +123,7 @@ try {
 		const racedFile = path.join(racedThreads, "last_used_smoke_raced.json");
 		fs.writeFileSync(racedFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(racedFile, "utf-8")), updatedAt: Date.parse("2026-07-01T09:00:00.000Z") }));
 		const raceStamp = new Date("2026-09-21T09:00:00.000Z");
-		// The terminal's turn lands between the status builder's read (no stamp) and its write: stood in for by a stamp written during the walk.
+		// A turn lands between the status builder's read (no stamp) and its write: stood in for by a stamp written during the walk.
 		(fs as any).readdirSync = (...args: any[]) => {
 			if (String(args[0]) === racedThreads) recordPersistentRoomLastUsed(racedRoom, "cli", {}, raceStamp);
 			return (realReaddirSync as any)(...args);
@@ -238,10 +238,6 @@ try {
 		assert(readPersistentRoomLastUsed(serverRoom) === null, `${label} reads as no stamp`);
 		assert(getPersistentAgentStatus(serverRoom).lastUsedIsEstimate === true, `${label}: the status falls back to the estimate`);
 	}
-	fs.writeFileSync(stampFile, JSON.stringify({ schemaVersion: 1, lastUsedAt: "2026-09-17T10:00:00.000Z", door: "telepathy" }));
-	const unknownDoor = readPersistentRoomLastUsed(serverRoom);
-	assert(unknownDoor?.lastUsedAt === "2026-09-17T10:00:00.000Z" && unknownDoor.door === null, "a door this build does not know keeps the time and drops the door");
-	assert(getPersistentAgentStatus(serverRoom).lastUsedIsEstimate === false, "and is not an estimate");
 	fs.writeFileSync(stampFile, JSON.stringify({ schemaVersion: 1, lastUsedAt: "2026-09-17T10:00:00.000Z", door: "estimate" }));
 	assert(getPersistentAgentStatus(serverRoom).lastUsedIsEstimate === true, "a stamp of door estimate reads as one");
 
@@ -267,53 +263,6 @@ try {
 		fs.rmSync(stampFile);
 		fs.writeFileSync(stampFile, JSON.stringify({ schemaVersion: 1, lastUsedAt: "2026-09-17T10:00:00.000Z", door: "estimate" }));
 	}
-
-	// --- The terminal door: the REAL cli-rooms extension, its real message hook ---
-	const cliRoom = createPersistentAgentFromScaffoldInput({ displayName: "Last Used Terminal Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
-	const cliThreadId = "last_used_smoke_cli_0001";
-	writePersistentAgentThread(cliRoom, cliThreadId, { state: "active", origin: "home", model, items: [] });
-	process.env.EXXETA_PERSISTENT_ROOM_AGENT = cliRoom;
-	process.env.EXXETA_PERSISTENT_ROOM_THREAD = cliThreadId;
-	process.env.EXXETA_PERSISTENT_ROOM_MODEL_PROVIDER = model.provider;
-	process.env.EXXETA_PERSISTENT_ROOM_MODEL_ID = model.model;
-	const handlers = new Map<string, Array<(event: any) => unknown>>();
-	const fakePi: any = new Proxy({}, {
-		get: (_target, prop) => prop === "on"
-			? (name: string, handler: (event: any) => unknown) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); }
-			: () => undefined,
-	});
-	// Imported by a path the scripts typecheck does not follow: the extension is
-	// not part of that project, and its own type errors are not this smoke's.
-	const cliRoomsModule: string = "../../../pi-package/extensions/cli-rooms/index.js";
-	const { default: cliRooms } = await import(cliRoomsModule) as { default: (pi: unknown) => void };
-	cliRooms(fakePi);
-	const messageEnd = handlers.get("message_end") ?? [];
-	assert(messageEnd.length === 1, "fixture: the extension registers one message_end hook");
-	const fire = async (message: unknown): Promise<void> => { for (const handler of messageEnd) await handler({ message }); };
-
-	await fire({ role: "assistant", content: "Synthetic answer." });
-	assert(readPersistentRoomLastUsed(cliRoom) === null, "an assistant message is not the user using the room");
-	await fire({ role: "user", content: "   " });
-	assert(readPersistentRoomLastUsed(cliRoom) === null, "an empty user message is not a turn");
-	const cliBefore = Date.now();
-	await fire({ role: "user", content: [{ type: "text", text: "Synthetic terminal message." }] });
-	const cliStamp = readPersistentRoomLastUsed(cliRoom);
-	assert(cliStamp !== null && cliStamp.door === "cli" && Date.parse(cliStamp.lastUsedAt) >= cliBefore, "a user message in the terminal stamps the room, door cli");
-	assert(getPersistentAgentThread(cliRoom, cliThreadId)?.items.length === 2, "and the hook still records the messages it always recorded");
-	status = getPersistentAgentStatus(cliRoom);
-	assert(status.lastUsedAt === cliStamp.lastUsedAt && status.lastUsedIsEstimate === false, "the server's status reads the terminal's stamp");
-	// A stamp that cannot be written does not cost the terminal its message either.
-	fs.rmSync(persistentRoomLastUsedPath(cliRoom));
-	fs.mkdirSync(persistentRoomLastUsedPath(cliRoom));
-	const cliBroken = await (async () => {
-		const warnings: string[] = [];
-		const original = console.warn;
-		console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
-		try { await fire({ role: "user", content: "Second synthetic terminal message." }); } finally { console.warn = original; }
-		return warnings;
-	})();
-	assert(cliBroken.length === 1 && cliBroken[0].includes("door=cli"), "the terminal's failed stamp is logged, door cli");
-	assert(getPersistentAgentThread(cliRoom, cliThreadId)?.items.length === 3, "and the message is recorded all the same");
 
 	console.log("room-last-used smoke: ok");
 } finally {

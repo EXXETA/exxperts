@@ -14,7 +14,7 @@ import { productAppStatePath } from "../../../pi-package/product-state-paths.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Same resolution index.ts uses for REPO_ROOT: EXXETA_HOME when the launcher
+// Same resolution server-install-root.ts uses for REPO_ROOT: EXXETA_HOME when the launcher
 // names the install root, else three levels up from this file's directory
 // (apps/web-server/src, or apps/web-server/dist for the bundled server), which
 // is the repo checkout in development and the package root when installed;

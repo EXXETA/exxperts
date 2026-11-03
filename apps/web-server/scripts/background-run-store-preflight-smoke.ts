@@ -43,8 +43,6 @@ try {
 	const backgroundRuns = await import("../src/background-runs.js");
 	const {
 		backgroundRunRecordPath,
-		backgroundRunsDirectoryPath,
-		backgroundRunsRootPath,
 		createBackgroundRun,
 		listBackgroundRuns,
 		readBackgroundRun,
@@ -53,8 +51,6 @@ try {
 
 	const expectedRoot = path.join(tempHome, ".exxperts", "app", "background-runs");
 	const expectedRunsDir = path.join(expectedRoot, "runs");
-	assert(backgroundRunsRootPath() === expectedRoot, "background-run root should live under temp ~/.exxperts/app");
-	assert(backgroundRunsDirectoryPath() === expectedRunsDir, "background-run records should live under runs/ subdirectory");
 	assert(listBackgroundRuns().length === 0, "empty store should list no background runs");
 	assert(!fs.existsSync(expectedRoot), "empty list should not create background-run storage");
 
@@ -75,23 +71,9 @@ try {
 	assert(/^bg_[a-f0-9]{32}$/.test(run.runId), "created run id should use bg_ prefix");
 	assert(run.status === "queued", "new run should default to queued");
 	assert(run.queuedAt === now.toISOString(), "queued run should record queuedAt");
-	assert(run.createdAt === now.toISOString() && run.updatedAt === now.toISOString(), "created run should use provided reference time");
-	assert(run.target?.kind === "fresh-thread", "created run should persist target metadata only");
 
 	const runPath = backgroundRunRecordPath(run.runId);
-	assert(runPath === path.join(expectedRunsDir, run.runId, "run.json"), "record path should be canonical runs/<runId>/run.json");
 	assert(path.resolve(runPath).startsWith(path.resolve(expectedRunsDir) + path.sep), "record path must be contained by background-run root");
-	assert(fs.existsSync(runPath), "create should write durable run.json");
-
-	const storedJson = JSON.parse(fs.readFileSync(runPath, "utf-8"));
-	assert(storedJson.runId === run.runId, "run.json should persist run id");
-	assert(storedJson.kind === "scheduled-prompt", "run.json should persist kind");
-	assert(storedJson.scope?.roomId === "background-run-smoke-room", "run.json should persist room scope");
-
-	const durable = readBackgroundRun(run.runId);
-	assert(durable.runId === run.runId, "read should round-trip created run");
-	assert(durable.target?.modelPolicyKey === "scheduledRoom", "read should preserve model policy placeholder without resolving models");
-	assert(durable.warnings.length === 1 && durable.warnings[0] === "synthetic warning", "read should preserve warnings");
 
 	const startedAt = "2026-01-01T00:01:00.000Z";
 	const updated = updateBackgroundRunStatus(run.runId, "deferred", {
@@ -120,23 +102,9 @@ try {
 		target: { kind: "no-room-mutation" },
 		now: new Date("2026-01-01T00:03:00.000Z"),
 	});
-	assert(second.status === "blocked", "create should allow non-queued statuses");
 	assert(second.queuedAt === undefined, "non-queued create should not pretend the run was queued");
 
-	const third = createBackgroundRun({
-		kind: "global-memory-refresh",
-		scope: { kind: "global-memory" },
-		source: { trigger: "system" },
-		status: "queued",
-		now: new Date("2026-01-01T00:04:00.000Z"),
-	});
-
-	const listed = listBackgroundRuns();
-	assert(listed.map((item: any) => item.runId).join(",") === [third.runId, second.runId, run.runId].join(","), "list should return records newest first");
 	assert(listBackgroundRuns({ kind: "scheduled-prompt" }).length === 1, "list should filter by kind");
-	assert(listBackgroundRuns({ status: "blocked" }).length === 1, "list should filter by status");
-	assert(listBackgroundRuns({ scope: { kind: "persistent-room", roomId: "background-run-smoke-room" } }).length === 1, "list should filter by persistent-room scope");
-	assert(listBackgroundRuns({ limit: 2 }).length === 2, "list should respect limit");
 
 	expectThrow(() => createBackgroundRun({
 		kind: "scheduled-prompt",

@@ -40,22 +40,6 @@ function ensureProductAppUserDirs() {
   ensureProductAppStateDir("skills");
 }
 
-function cliLauncherStateDir() {
-  const fromEnv = process.env.EXXPERTS_LAUNCHER_STATE_DIR;
-  if (fromEnv && fromEnv.trim()) return fromEnv;
-  return productAppStatePath("run", "cli");
-}
-
-function ensureCliLauncherStateDir() {
-  const dir = cliLauncherStateDir();
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
-}
-
-function cliLauncherStatePath(...segments) {
-  return path.join(cliLauncherStateDir(), ...segments);
-}
-
 module.exports = {
   stateHome,
   productAppStateRoot,
@@ -63,7 +47,4 @@ module.exports = {
   ensureProductAppStateRoot,
   ensureProductAppStateDir,
   ensureProductAppUserDirs,
-  cliLauncherStateDir,
-  ensureCliLauncherStateDir,
-  cliLauncherStatePath,
 };

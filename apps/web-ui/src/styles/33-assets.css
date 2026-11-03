@@ -1,0 +1,401 @@
+/* ── Assets panel (contract §2 rung 3, mockup v2) ─────────────────────────── */
+.sidebar-assets {
+	margin: 2px 12px 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.assets-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	background: transparent;
+	border: none;
+	padding: 8px 4px 6px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 700;
+	cursor: pointer;
+	text-align: left;
+}
+.assets-head:hover { color: var(--fg-soft); }
+.assets-head-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assets-count {
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--fg-soft);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-pill);
+	padding: 0 6px;
+	line-height: 16px;
+}
+.assets-rows { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; }
+.assets-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: var(--exx-radius-control);
+	padding: 5px 6px;
+	cursor: pointer;
+	text-align: left;
+	position: relative;
+	transition: background 120ms ease, border-color 120ms ease;
+}
+.assets-row:hover:not(:disabled) { background: var(--exx-surface-raised); }
+.assets-row.sel { background: var(--exx-surface-raised); border-color: var(--border); }
+.assets-row:disabled { cursor: default; opacity: 0.85; }
+/* Remove from list: the hover-reveal ✕ on every settled row (a ✕ on a list
+ * row reads as remove, so it IS remove — closing the pane stays with the
+ * row click, the viewer's own ✕, and Escape). Same reveal mechanics as the
+ * running row's Stop; rows reserve the right padding so titles never shift. */
+.assets-row-wrap:not(.running) .assets-row { padding-right: 26px; }
+.assets-row-remove {
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 18px;
+	height: 18px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.assets-row-wrap:hover .assets-row-remove,
+.assets-row-remove:focus-visible,
+.assets-row-wrap:focus-within .assets-row-remove { opacity: 1; }
+.assets-row-remove:hover { color: var(--fg); background: var(--exx-surface-raised); }
+/* Inline rename (files-management slice): the hover-reveal ✎ sits left of the
+ * ✕ with the same reveal mechanics; file rows reserve wider right padding so
+ * titles never shift under the second control. */
+.assets-row-wrap:has(.assets-row-rename) .assets-row { padding-right: 46px; }
+.assets-row-rename {
+	position: absolute;
+	right: 28px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 18px;
+	height: 18px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.assets-row-wrap:hover .assets-row-rename,
+.assets-row-rename:focus-visible,
+.assets-row-wrap:focus-within .assets-row-rename { opacity: 1; }
+.assets-row-rename:hover { color: var(--fg); background: var(--exx-surface-raised); }
+/* Save… filename step (files-management slice). */
+.save-as-input {
+	width: 100%;
+	min-width: 0;
+	font: inherit;
+	font-size: 13px;
+	color: var(--fg);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	padding: 7px 9px;
+	margin: 10px 0 4px;
+}
+.save-as-input:focus { outline: none; border-color: var(--fg); }
+.assets-rename-input {
+	width: 100%;
+	min-width: 0;
+	font: inherit;
+	font-size: 12px;
+	color: var(--fg);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	padding: 1px 4px;
+}
+.assets-icon {
+	flex: none;
+	width: 26px;
+	height: 26px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--exx-surface-raised);
+	color: var(--muted);
+	font-size: 8px;
+	font-weight: 800;
+	letter-spacing: 0.04em;
+}
+.assets-icon.orphan { border-style: dashed; background: transparent; }
+.assets-pulse {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--exx-working);
+	animation: task-pulse 1.6s ease-in-out infinite;
+}
+/* Status dots in the subline: green steady = done-unread (decays on first
+   open), danger steady = didn't finish. Never animated — oscillation is the
+   running row's alone. */
+.assets-dot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	margin-right: 5px;
+	vertical-align: 1px;
+}
+.assets-dot-ready { background: var(--success); }
+.assets-dot-failed { background: var(--exx-danger); }
+/* The running row's hover-reveal stop square: zero idle chrome, visible on
+   row hover or keyboard focus. */
+.assets-row-wrap { position: relative; display: block; }
+.assets-row-wrap.running .assets-row { padding-right: 28px; }
+.assets-row-stop {
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	background: var(--exx-surface-raised);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.assets-row-wrap:hover .assets-row-stop,
+.assets-row-stop:focus-visible,
+.assets-row-wrap:focus-within .assets-row-stop { opacity: 1; }
+.assets-row-stop::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 2px;
+	background: var(--exx-danger);
+}
+.assets-row-stop:hover { border-color: color-mix(in srgb, var(--exx-danger) 55%, var(--border)); }
+.assets-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.assets-row-title {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--fg);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.assets-row.orphan .assets-row-title { color: var(--muted); }
+.assets-row-sub {
+	font-size: 10.5px;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.assets-showall {
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	font-size: 10.5px;
+	padding: 4px 6px 6px 40px;
+	cursor: pointer;
+	text-align: left;
+}
+.assets-showall:hover { color: var(--fg-soft); text-decoration: underline; }
+/* On a wide screen the block keeps the sidebar's one left edge
+   (--sidebar-text-left, where the logo and Home start): the header's word and
+   each file's tile start on it, and the card's box starts where Home's
+   highlight does, on the list's 12px, its 1px border included. The header is
+   a small grey label with the count on the right; a click on it still folds
+   the list. */
+@media (min-width: 761px) {
+	.assets-head {
+		padding-left: calc(var(--sidebar-text-left) - 12px);
+		font-size: 12px;
+		font-weight: 500;
+	}
+	.assets-row { padding-left: calc(var(--sidebar-text-left) - 13px); }
+	/* Under the file names: the tile's 26px and the 8px gap past the edge. */
+	.assets-showall { padding-left: calc(var(--sidebar-text-left) + 22px); }
+}
+/* The phone keeps its fold arrow, drawn from the button's state. The empty
+   alternative text keeps the arrow out of the button's name, which
+   aria-expanded already carries. */
+@media (max-width: 760px) {
+	.assets-head::before { content: "▾"; content: "▾" / ""; font-size: 9px; width: 10px; }
+	.assets-head[aria-expanded="false"]::before { content: "▸"; content: "▸" / ""; }
+}
+
+/* Reconstituted done-card viewer: header file list + action footer */
+.artifact-viewer-files {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 8px 14px 0;
+}
+.artifact-viewer-file {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-pill);
+	color: var(--muted);
+	font-size: 11px;
+	padding: 2px 10px;
+	cursor: pointer;
+	max-width: 200px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.artifact-viewer-file:hover { color: var(--fg); }
+.artifact-viewer-file.active { color: var(--fg); background: var(--exx-surface-raised); }
+.artifact-viewer-foot {
+	border-top: 1px solid var(--border);
+	padding: 10px 14px;
+	flex: none;
+}
+.asset-viewer-footer { display: flex; flex-direction: column; gap: 8px; }
+.asset-viewer-footer-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.asset-viewer-iterate { display: flex; gap: 8px; }
+.asset-viewer-iterate-input {
+	flex: 1;
+	min-width: 0;
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	color: var(--fg);
+	font-size: 12.5px;
+	padding: 6px 10px;
+}
+.asset-viewer-iterate-input:focus { outline: none; border-color: var(--fg-soft); }
+.asset-viewer-iterate-notice { font-size: 12px; color: var(--exx-danger, #c0392b); }
+
+/* ── Task-store GC (contract §4) + panel delete ───────────────────────────── */
+.task-store-gc-banner {
+	position: fixed;
+	bottom: 24px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 60;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: min(680px, calc(100vw - 32px));
+	padding: 10px 12px 10px 16px;
+	border-radius: 8px;
+	font-size: 13px;
+	background: var(--exx-surface-raised);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	box-shadow: var(--exx-shadow-popover);
+}
+.task-store-gc-card { max-width: 560px; }
+.task-store-gc-list {
+	max-height: 260px;
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	margin: 10px 0;
+}
+.task-store-gc-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 10px;
+	font-size: 12.5px;
+	border-bottom: 1px solid var(--exx-divider);
+}
+.task-store-gc-row:last-child { border-bottom: none; }
+.task-store-gc-title {
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--fg);
+}
+.task-store-gc-meta { flex: none; color: var(--muted); font-size: 11px; }
+.asset-viewer-delete { color: var(--danger, #d33); margin-left: auto; }
+
+/* ── Connection lost (exception only) ─────────────────────────────────────
+   Anchored to the window, not to a screen: the condition belongs to the whole
+   app and every screen shows the same one. Bottom centre is where this app
+   already floats a banner (task-store GC), and unlike the top it covers no
+   page heading. When both are up the older, quieter one steps aside. */
+.connection-lost-banner {
+	position: fixed;
+	bottom: 24px;
+	left: 50%;
+	transform: translateX(-50%);
+	/* Above settings (70), memory fullscreen (80) and the mermaid viewer (85):
+	   a dead connection concerns the whole app, whatever is on screen. Portaled
+	   menus (90) stay above; they dismiss on any click anyway. */
+	z-index: 86;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	max-width: min(560px, calc(100vw - 32px));
+	padding: 10px 16px;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 1.35;
+	background: var(--exx-surface-raised);
+	color: var(--fg);
+	border: 1px solid var(--error);
+	box-shadow: var(--exx-shadow-popover);
+}
+.connection-lost-banner a {
+	color: inherit;
+	text-decoration: underline;
+}
+.person-changed-cover {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 16px;
+	background: var(--bg);
+	color: var(--fg);
+}
+.connection-lost-dot {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--error);
+}
+/* Two things want the bottom centre: this banner and the task-store banner.
+   They are rendered in that order, so the second steps up one slot when the
+   first is on screen. The pitch clears the taller one even when its text
+   wraps to two lines. */
+.connection-lost-banner ~ .task-store-gc-banner { bottom: 120px; }
+

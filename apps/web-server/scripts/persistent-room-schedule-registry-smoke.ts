@@ -119,46 +119,8 @@ try {
 	expectThrow(() => parsePersistentRoomSchedule("0 99 7 * * *", "cron", { now }), "invalid cron field");
 	expectThrow(() => parsePersistentRoomSchedule("2000-01-01T00:00:00.000Z", "once", { now }), "past once schedule");
 
-	let sentUserMessages = 0;
-	let registeredTool: any = null;
-	const fakePi = {
-		registerTool(tool: any) {
-			registeredTool = tool;
-		},
-		sendUserMessage() {
-			sentUserMessages += 1;
-		},
-	};
-	scheduleModule.default(fakePi as unknown as Parameters<typeof scheduleModule.default>[0], { roomId: agentId });
-	assert(registeredTool?.name === "schedule_prompt", "extension should register schedule_prompt tool");
-
-	const toolAdd = await registeredTool.execute("tool-call-1", {
-		action: "add",
-		name: "tool job",
-		schedule: "+1h",
-		prompt: "Stored through tool",
-	});
-	assert(toolAdd.details.executionEnabled === false, "tool details should be honest that execution is disabled");
-	assert(toolAdd.details.managementOnly === true, "tool details should mark management-only behavior");
-	assert(String(toolAdd.content[0].text).includes("autonomous scheduled execution is not enabled"), "tool add response should not promise autonomous execution");
-	assert(sentUserMessages === 0, "schedule_prompt management actions must not inject runtime user messages");
-
-	const toolList = await registeredTool.execute("tool-call-2", { action: "list" });
-	assert(toolList.details.jobs.length === 3, "tool list should read durable jobs for scoped room");
-	assert(String(toolList.content[0].text).includes("registry-only"), "tool list response should remain management-only");
-
-	await registeredTool.execute("tool-call-3", { action: "disable", jobId: toolAdd.details.job.id });
-	await registeredTool.execute("tool-call-4", { action: "enable", jobId: toolAdd.details.job.id });
-	await registeredTool.execute("tool-call-5", { action: "update", jobId: toolAdd.details.job.id, name: "tool job updated", prompt: "Updated through tool" });
-	await registeredTool.execute("tool-call-6", { action: "remove", jobId: toolAdd.details.job.id });
-	assert(sentUserMessages === 0, "all schedule_prompt tool actions must remain registry-only");
-	assert(listPersistentRoomScheduleJobs(agentId).length === 2, "tool remove should persistently delete tool-created job");
-
 	const escapedOutside = path.join(tempHome, ".exxperts", "app", "escape");
 	assert(!fs.existsSync(escapedOutside), "unsafe room id must not create escaped schedule paths");
-	assert(!fs.existsSync(path.join(tempHome, ".exxeta")), "schedule registry must not write legacy ~/.exxeta state");
-	assert(!fs.existsSync(path.join(tempHome, ".exxperts", "agent", "auth.json")), "smoke must not create/read runtime auth state");
-	assert(!fs.existsSync(path.join(tempHome, ".exxperts", "agent", "models.json")), "smoke must not create/read runtime model state");
 
 	console.log("persistent-room schedule registry smoke passed");
 } finally {

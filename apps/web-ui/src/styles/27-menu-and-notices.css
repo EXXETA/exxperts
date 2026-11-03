@@ -1,0 +1,275 @@
+/* Settings menu footer: the version in use and the GitHub link, quiet
+   metadata below the menu rows. Spacing separates it; no line. */
+.sidebar-config-menu .menu-meta-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 8px 2px;
+	font-size: var(--exx-font-size-xs);
+	color: var(--muted);
+}
+.sidebar-config-menu .menu-meta-link {
+	color: var(--muted);
+	text-decoration: none;
+}
+.sidebar-config-menu .menu-meta-link:hover,
+.sidebar-config-menu .menu-meta-link:focus-visible {
+	color: var(--fg);
+	text-decoration: underline;
+	outline: none;
+}
+
+/* Update notice (desktop app): a dot on the gear and an "Update to" row in
+   the menu. Both dots wear var(--warning), the orange of the room badges, so
+   "something here wants you" reads the same everywhere. The gear's dot sits
+   inside the button so it follows the gear in both sidebar layouts. */
+.sidebar-config-gear {
+	position: relative;
+}
+.sidebar-config-dot {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--warning);
+	/* A ring in the surface colour keeps the dot legible over the gear's
+	   hover fill instead of melting into it. */
+	box-shadow: 0 0 0 1.5px var(--panel);
+	pointer-events: none;
+}
+/* The update row: a menu item whose label lines up with Settings and Help,
+   the dot right after the label, and "Not now" at the right end. */
+.sidebar-config-menu .menu-update-row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+.sidebar-config-menu .menu-update {
+	flex: 1 1 auto;
+	width: auto;
+	justify-content: flex-start;
+	gap: 6px;
+}
+.sidebar-config-menu .menu-update-dot {
+	flex: none;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--warning);
+}
+.sidebar-config-menu .menu-update-later {
+	flex: none;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--muted);
+	font-size: var(--exx-font-size-xs);
+	padding: 6px 8px;
+	cursor: pointer;
+}
+.sidebar-config-menu .menu-update-later:hover,
+.sidebar-config-menu .menu-update-later:focus-visible {
+	color: var(--fg);
+	background: var(--panel-2);
+	outline: none;
+}
+
+/* Help ›: its rows, How it works and Shortcuts, open beside the menu as a
+   menu of their own, the last row level with Help. The strip before it
+   bridges the gap, so a pointer on its way across keeps the rows open. */
+.sidebar-config-menu .menu-sub-wrap { position: relative; }
+.sidebar-config-menu .menu-item-caret { color: var(--muted); }
+.sidebar-config-menu .menu-sub {
+	position: absolute;
+	left: calc(100% + 13px);
+	bottom: -7px;
+	min-width: 200px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 6px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-card);
+	box-shadow: var(--exx-shadow-popover);
+}
+.sidebar-config-menu .menu-sub::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	right: 100%;
+	width: 14px;
+}
+/* No room beside the menu on a touch screen or a phone: the rows show in
+   place, under Help. The same query as HELP_ROWS_IN_PLACE in product-shell.tsx. */
+@media (hover: none), (max-width: 760px) {
+	.sidebar-config-menu .menu-sub { position: static; min-width: 0; padding: 0 0 0 12px; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+	.sidebar-config-menu .menu-sub::before { content: none; }
+	.sidebar-config-menu .menu-sub-wrap > .menu-item[aria-expanded="true"] .menu-item-caret { transform: rotate(90deg); }
+}
+
+/* The Shortcuts window: the Help window's frame, one row per key, the
+   action on the left and its keys on the right. */
+/* The chord opens it over any screen, Settings and its own dialogs (up to
+   95) included, so it stacks above them; a confirm dialog (100) stays on top. */
+.keys-list-overlay { z-index: 96; }
+.keys-list { max-width: 520px; }
+.keys-list-table {
+	display: block;
+	overflow-y: auto;
+	padding: 12px 22px 20px;
+	font-size: 14px;
+	line-height: 1.45;
+}
+/* Each row lays itself out, not as a column: the words take what its own keys
+   leave, so a short row's words are not wrapped for the widest row's keys. */
+.keys-list-table tbody { display: block; }
+.keys-list-table tr { display: flex; align-items: flex-start; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--border-soft); }
+.keys-list-table tr:last-child { border-bottom: 0; }
+/* A section's heading: plain words above its rows, no line under it. */
+.keys-list-table .keys-list-section { padding: 0 0 2px; border-bottom: 0; }
+.keys-list-table tbody + tbody .keys-list-section { padding-top: 18px; }
+.keys-list-section th { flex: 1 1 auto; padding: 0; text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.keys-list-table td { padding: 0; color: var(--fg-soft); }
+.keys-list-table td:first-child { flex: 1 1 auto; }
+.keys-list-table td + td { flex: 0 1 auto; text-align: right; }
+/* Each key is its own cap. On a wide screen a row's keys stay on one line; on
+   a phone they may wrap between caps, never inside one. */
+.keys-list-table td + td > span { display: inline-block; margin-bottom: 4px; }
+@media (min-width: 761px) {
+	.keys-list-table td + td { flex-shrink: 0; white-space: nowrap; }
+}
+.keys-list-table kbd {
+	white-space: nowrap;
+	padding: 1px 6px;
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	background: var(--panel-2);
+	color: var(--fg);
+	/* The system font draws ⌘ ⇧ ↵ at a letter's height; a monospace one draws them at about half of it. */
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: 12.5px;
+}
+@media (max-width: 760px) {
+	.keys-list-table { padding: 8px 16px 16px; }
+}
+
+/* --- Wallet: Rhythm heatmap hover tooltip --------------------------------- */
+/* Styled hover readout for the weekday-by-hour heatmap: names the slot and
+   shows the measured turn count behind the cell's shading. Anchored inside
+   the chart wrap; theme-aware through the shared variables. */
+.heat-hover-wrap { position: relative; }
+.heat-cell-hover {
+	fill: none;
+	stroke: var(--fg);
+	stroke-width: 1.5;
+	pointer-events: none;
+}
+.heat-tip {
+	position: absolute;
+	transform: translate(-50%, calc(-100% - 8px));
+	pointer-events: none;
+	z-index: 6;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 6px 10px;
+	white-space: nowrap;
+	box-shadow: 0 4px 16px color-mix(in srgb, var(--bg) 55%, transparent);
+	text-align: center;
+}
+.heat-tip-when {
+	color: var(--muted);
+	font-size: 10.5px;
+	letter-spacing: 0.02em;
+}
+.heat-tip-value {
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	font-size: 12.5px;
+	font-weight: 700;
+	color: var(--fg);
+	margin-top: 1px;
+}
+
+
+/* --- Memory: detail vitals extras (budget meter + honest weekly state) ----- */
+/* Same visual language as the vitals tiles; the meter mirrors the comp bar. */
+.mem-vitals-strip .mem-g .v.mem-g-quiet {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--muted);
+	line-height: 24px;
+}
+.mem-budget { margin-top: 32px; }
+.mem-budget-line {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 16px;
+	margin-bottom: 6px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.mem-budget-line strong {
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+	color: var(--fg);
+}
+.mem-budget-line strong.over { color: var(--warning); }
+.mem-budget-meter {
+	height: 6px;
+	border-radius: 999px;
+	background: var(--panel-2);
+	border: 1px solid var(--border-soft);
+	overflow: hidden;
+}
+.mem-budget-fill {
+	height: 100%;
+	background: var(--exx-plan);
+	border-radius: 999px;
+}
+.mem-budget-fill.over { background: var(--warning); }
+
+/* First-open workspace nudge: one dismissible line above the composer for a
+   room without a workspace. Sized and centred like the consult dock so it sits
+   in the same column as the composer without covering it. */
+.room-workspace-nudge {
+	margin: 0 26px 10px;
+	max-width: 780px;
+	align-self: center;
+	width: calc(100% - 52px);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 10px 16px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--panel-2) 78%, transparent);
+	padding: 10px 14px;
+	font-size: 12.5px;
+}
+.room-workspace-nudge-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+/* A finger needs a 44px target: on a touch screen the notice's buttons (Set
+   workspace, Dismiss, a stopped room's ways on) grow to it. */
+@media (hover: none) {
+	.room-workspace-nudge-actions button { min-height: 44px; }
+}
+.room-workspace-nudge-text { text-wrap: pretty; }
+/* A notice that stops the room on its key or sign-in: the failure lines' mark before its sentence. */
+.room-workspace-nudge-text.with-failure-mark {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+}
+

@@ -8,7 +8,6 @@ import {
 	buildReviewAssessmentRetryPrompt,
 	buildReviewDiscussionTurnPrompt,
 	buildReviewSignoffPrompt,
-	countNotes,
 	parseReviewAssessment,
 	parseReviewGuidance,
 	parseReviewRetryFeedback,
@@ -84,8 +83,6 @@ assert(assessment.prompt.includes(`"The Nordwind contract" — 6 notes`), "the f
 assert(assessment.prompt.includes("within the budget"), "a room inside its budget should be told so");
 assert(assessment.prompt.includes(`At most ${REVIEW_MAX_QUESTIONS} short questions`), "the first read prompt should cap the questions");
 assert(!assessment.prompt.includes("the prune"), "the Review never calls its work a prune");
-assert(assessment.telemetry.topicCount === 3 && assessment.telemetry.noteCount === 13, "telemetry should count the topics and their notes");
-assert(countNotes(TOPICS) === 13, "countNotes should add up the room's notes");
 
 const overBudget = buildReviewAssessmentPrompt({ ...BASE, reviewTargetTokens: 30000 });
 assert(overBudget.prompt.includes("above the budget"), "a room past its budget should be told so");
@@ -208,7 +205,6 @@ const waiting = reviewMachineFindings(unsortedDoc, "2026-09-14");
 assert(JSON.stringify(waiting.waitInUnsorted) === JSON.stringify(["3 notes wait in Unsorted. The tidy sorts them into topics."]), `the first read counts every note in Deep Memory's Unsorted, tried or not, got ${JSON.stringify(waiting.waitInUnsorted)}`);
 const joined = withMachineFindings({ ...parsed.fields, topics: [] }, waiting, unsortedDoc.topics.map((topic) => topic.title));
 assert(waiting.duplicateNotes.length === 0 && waiting.conflictNotes.length === 0 && joined.topics.join(" | ") === "Unsorted" && joined.waitInUnsorted?.join("") === waiting.waitInUnsorted.join(""), `Unsorted joins the topics to tidy, got ${JSON.stringify(joined.topics)}`);
-assert(reviewMachineFindings(parseMemoryDocument(["## Deep Memory", "", "### Unsorted", "", ...triedNote("m-0002")].join("\n"))).waitInUnsorted[0] === "1 note waits in Unsorted. The tidy sorts it into a topic.", "one note reads in the singular");
 
 const available = reviewAvailability({ roomBusy: false, migrated: true, runActive: false, topics: TOPICS, budgetTokens: 20000, reviewTargetTokens: 820 });
 assert(available.available && available.reason === "available", "a quiet migrated room with notes can be reviewed");

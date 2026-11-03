@@ -104,6 +104,22 @@ async function main(): Promise<void> {
 			server.closeAllConnections();
 			server.close();
 		}
+
+		// An address that answers "not found": the test keeps its message and
+		// hands the page the status, which the page words its next step from.
+		const missing = http.createServer((_req, res) => res.writeHead(404).end());
+		await new Promise<void>((resolve) => missing.listen(0, "127.0.0.1", resolve));
+		try {
+			await addMcpServer({ name: "missing", url: `http://127.0.0.1:${(missing.address() as AddressInfo).port}/mcp` });
+			const result = await testMcpServer("missing");
+			assert.equal(result.ok, false);
+			assert.equal(result.needsAuth, false);
+			assert.equal(result.error, "The server rejected the connection: HTTP 404", "the message stays as it was");
+			assert.equal(result.httpStatus, 404, "the status the address answered with");
+		} finally {
+			missing.closeAllConnections();
+			missing.close();
+		}
 		console.log("mcp admin headers smoke: ok");
 	} finally {
 		fs.rmSync(agentDir, { recursive: true, force: true });

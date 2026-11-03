@@ -1,0 +1,237 @@
+.standalone-shell {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg);
+	color: var(--fg);
+}
+.standalone-header {
+	border-bottom: 1px solid var(--border);
+	padding: 18px 28px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 18px;
+}
+:root[data-theme="light"] .standalone-header {
+	background: #000;
+	color: #fff;
+	border-bottom-color: #000;
+}
+.standalone-brand {
+	display: flex;
+	align-items: center;
+	gap: 20px;
+}
+.standalone-brand img {
+	height: 30px;
+	width: auto;
+	display: block;
+}
+:root[data-theme="light"] .standalone-brand img,
+:root[data-theme="light"] .brand img.logo {
+	filter: none;
+}
+.standalone-title {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 24px;
+	font-weight: 700;
+	line-height: 1;
+}
+.standalone-subtitle {
+	font-size: 12px;
+	margin-top: 4px;
+}
+.standalone-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+/* Dashboard ------------------------------------------------------- */
+.dashboard {
+	display: flex;
+	flex-direction: column;
+	gap: 28px;
+}
+/* Each section groups a label with its content; the label sits tight
+   above its block, while .dashboard's gap separates the sections. */
+.dash-section {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.dash-section-label {
+	color: var(--muted);
+	font-family: var(--exx-font-display);
+	font-size: var(--exx-font-size-xs);
+	font-weight: 700;
+	margin: 0;
+}
+.dash-section-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.dash-toggles {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+.range-toggle {
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	overflow: hidden;
+}
+.range-toggle button {
+	appearance: none;
+	background: transparent;
+	border: none;
+	border-left: 1px solid var(--border);
+	color: var(--muted);
+	font-family: var(--exx-font-display);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	padding: 4px 11px;
+	cursor: pointer;
+}
+.range-toggle button:first-child { border-left: none; }
+.range-toggle button:hover { color: var(--fg); }
+.range-toggle button.active { background: var(--fg); color: var(--bg); }
+.model-select {
+	appearance: none;
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	color: var(--fg);
+	font-family: var(--exx-font-display);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	padding: 5px 26px 5px 11px;
+	cursor: pointer;
+	/* chevron */
+	background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+	background-position: right 13px center, right 9px center;
+	background-size: 4px 4px, 4px 4px;
+	background-repeat: no-repeat;
+}
+.model-select:hover { border-color: var(--fg); }
+.dashboard h2 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 28px;
+	margin: 0;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+.dashboard .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.kpis {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 14px;
+}
+.kpi {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 14px 16px;
+	background: var(--panel);
+}
+.kpi .label {
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--dim);
+}
+.kpi .value {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 30px;
+	font-weight: 700;
+	margin-top: 4px;
+	letter-spacing: -0.01em;
+}
+.kpi .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
+/* Clickable KPI (e.g. Memory → deep-links into the Memory view). */
+.kpi-link { text-align: left; font: inherit; cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
+.kpi-link:hover { border-color: var(--fg); background: var(--panel-2); }
+.kpi-link:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: 2px; }
+.sparkline { display: block; width: 100%; height: 24px; margin-top: 10px; color: var(--dim); }
+
+/* bar-row is a button so each agent can filter the recent-turns table. */
+.bar-row {
+	display: grid;
+	grid-template-columns: 160px 1fr 56px 230px;
+	gap: 14px;
+	align-items: center;
+	padding: 8px 6px;
+	border: none;
+	border-bottom: 1px solid var(--border-soft);
+	border-radius: 6px;
+	width: 100%;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.bar-row:last-child { border-bottom: none; }
+.bar-row:hover { background: var(--panel-2); }
+.bar-row.selected { background: var(--panel-2); }
+.bar-row.dim { opacity: 0.55; }
+.bar-row:focus-visible { outline: 1px solid var(--fg); outline-offset: -2px; }
+.bar-row-more {
+	display: block;
+	width: 100%;
+	padding: 8px 6px;
+	border: none;
+	background: transparent;
+	color: var(--fg-soft);
+	font: inherit;
+	font-size: 12px;
+	letter-spacing: 0.04em;
+	text-align: center;
+	cursor: pointer;
+	border-radius: 6px;
+}
+.bar-row-more:hover { background: var(--panel-2); color: var(--fg); }
+.bar-row-more:focus-visible { outline: 1px solid var(--fg); outline-offset: -2px; }
+.bar-row .name { font-weight: 700; font-size: 13px; }
+.bar-track { background: var(--panel-2); border-radius: 4px; height: 8px; overflow: hidden; border: 1px solid var(--border-soft); }
+.bar-row:hover .bar-track, .bar-row.selected .bar-track { background: var(--panel); }
+.bar-fill { background: var(--fg); height: 100%; border-radius: 4px; }
+.bar-row .pct { font-family: var(--exx-font-sans); font-variant-numeric: tabular-nums; font-size: 12px; color: var(--fg); text-align: right; white-space: nowrap; }
+.bar-row .num { font-family: var(--exx-font-sans); font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }
+
+.dashboard table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dashboard table th {
+	text-align: left;
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--dim);
+	border-bottom: 1px solid var(--border);
+	padding: 8px 10px;
+}
+.dashboard table td {
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--border-soft);
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	color: var(--fg-soft);
+}
+.dashboard table td.first { font-family: "Sen", sans-serif; font-weight: 700; }
+/* Right-align the numeric columns (in / out / cache R / cost). */
+.dashboard table th:nth-child(n+4),
+.dashboard table td:nth-child(n+4) { text-align: right; }
+
+
+@media (max-width: 760px) {
+	/* A section's label keeps one line; its controls move under it when both do not fit. */
+	.dash-section-head { flex-wrap: wrap; }
+	.dash-toggles { justify-content: flex-start; }
+	.dash-section-label { white-space: nowrap; }
+}

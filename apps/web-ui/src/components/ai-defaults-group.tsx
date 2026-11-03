@@ -2,16 +2,17 @@ import { useEffect, useState } from "react";
 import { withoutServiceLine } from "../api";
 import { credentialGoneWords, modelCredentialWords } from "../../../web-server/src/model-not-offered";
 import { modelDisplayName, modelOnProvider } from "../model-names";
-import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
-import { fetchAiDefaults, fetchRoomModelProviders, putAiDefaults } from "../room-models-api";
+import { NEW_ADMIN_HINT, SHARED_SERVER_ADMIN_LINE, sharedServerNonAdmin, useRemoteClientContext } from "../remote-client-context";
+import { fetchAiDefaults, fetchRoomModelProviders, keyRefusalMarks, putAiDefaults } from "../room-models-api";
 import type { AiDefaultsView, RoomModelLock, RoomModelLockView, RoomModelProviderView, RoomModelTask } from "../types";
 import { GroupHeader } from "./pane-header";
-import { RoomModelPicker } from "./room-model-picker";
+import { RoomModelPicker, useKeyRefusals } from "./room-model-picker";
 
 // AI setup's first group: the models a room uses until it sets its own in
 // Room settings, Model. The same two rows and the same picker as the pane. A
 // default that cannot run (its provider signed out, or no longer offered) says
-// so, and the rooms on it wait: nothing runs in its place.
+// so, and the rooms on it wait: nothing runs in its place. A provider whose
+// saved key was refused at the last call has its models muted in the pickers.
 
 /** The line under the Memory list while a model is too small for a room on the default (draft). */
 const DEFAULT_TOO_SMALL_LINE = "A Memory model must read all of a room's memory at once. To use a smaller one as the default, give that room its own Memory model, or lower its memory budget.";
@@ -30,13 +31,18 @@ function defaultUnavailableSentence(row: AiDefaultsView[RoomModelTask]): string 
 		: `${named} is no longer offered. Rooms on this default wait until you choose another here.`;
 }
 
-export function AiDefaultsGroup({ refreshKey, serviceBack }: { refreshKey?: string; /** Counts the page's reconnects after an outage. */ serviceBack?: number }) {
+/** onSaved: a default was saved; Home's AI setup state follows the model status, which it changes. */
+export function AiDefaultsGroup({ refreshKey, serviceBack, onSaved }: { refreshKey?: string; /** Counts the page's reconnects after an outage. */ serviceBack?: number; onSaved?: () => void }) {
 	const remoteClient = useRemoteClientContext();
 	// A read-only device sees the defaults but cannot change them; on a shared
-	// server only its admin may, so they read the same way, with one line.
-	const readOnly = (remoteClient.remote && remoteClient.capability !== "full") || remoteClient.sharedServer;
+	// server only its admin may, so for everyone else they read the same way,
+	// with one line.
+	const readOnly = (remoteClient.remote && remoteClient.capability !== "full") || sharedServerNonAdmin(remoteClient);
 	const [defaults, setDefaults] = useState<AiDefaultsView | null>(null);
 	const [providers, setProviders] = useState<RoomModelProviderView[]>([]);
+	// Read again each time a picker opens: a key saved again above clears its marks.
+	const { refusals, refresh: refreshRefusals } = useKeyRefusals();
+	const marks = keyRefusalMarks(refusals);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -50,6 +56,7 @@ export function AiDefaultsGroup({ refreshKey, serviceBack }: { refreshKey?: stri
 			setProviders(nextProviders);
 			setError(withoutServiceLine);
 		}, (e) => { if (!cancelled) setError((e as Error).message); });
+
 		return () => { cancelled = true; };
 	}, [refreshKey, serviceBack]);
 
@@ -58,6 +65,7 @@ export function AiDefaultsGroup({ refreshKey, serviceBack }: { refreshKey?: stri
 		setError(null);
 		try {
 			setDefaults(await putAiDefaults({ [task]: lock }));
+			onSaved?.();
 		} catch (e) {
 			setError((e as Error).message);
 		} finally {
@@ -84,6 +92,8 @@ export function AiDefaultsGroup({ refreshKey, serviceBack }: { refreshKey?: stri
 						ariaLabel={`Default ${label.toLowerCase()} model`}
 						unpickable={new Map((view?.tooSmall ?? []).map((lock) => [`${lock.provider}/${lock.model}`, `Too small for ${lock.room ?? "a room"}'s memory`]))}
 						unpickableLine={DEFAULT_TOO_SMALL_LINE}
+						providerMarks={marks}
+						onOpen={refreshRefusals}
 						onPick={(lock) => void save(task, lock)}
 					/>
 				</div>
@@ -101,7 +111,12 @@ export function AiDefaultsGroup({ refreshKey, serviceBack }: { refreshKey?: stri
 					{row("memory", "Memory")}
 				</div>
 			)}
-			{remoteClient.sharedServer && <p className="cli-note">{SHARED_SERVER_ADMIN_LINE}</p>}
+			{remoteClient.sharedServer && readOnly && (
+				<>
+					<p className="cli-note">{SHARED_SERVER_ADMIN_LINE}</p>
+					<p className="cli-note">{NEW_ADMIN_HINT}</p>
+				</>
+			)}
 			{error && <p className="room-model-error" role="alert">{error}</p>}
 		</div>
 	);

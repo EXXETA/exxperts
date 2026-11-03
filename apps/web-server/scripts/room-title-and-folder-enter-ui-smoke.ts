@@ -1,9 +1,11 @@
 // Small things in the page, against a real server: the window title names
 // the room a person is in ("Room name - exxperts"), and Home and Settings keep
 // "exxperts"; a room whose name is only invisible characters reads "Unnamed
-// room" wherever its name shows; and Enter in Room settings' workspace folder
-// box accepts the folder and keeps the editor open, so nothing is saved until
-// Save changes is clicked. Offline: a synthetic model that is never called. Throwaway HOME.
+// room" wherever its name shows; Rename's Save is never greyed without a
+// reason (an empty name says why, the name left as it is closes the field and
+// saves nothing); and Enter in Room settings' Folder box accepts the folder and
+// keeps the editor open, so nothing is saved until Save changes is clicked.
+// Offline: a synthetic model that is never called. Throwaway HOME.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -51,14 +54,7 @@ async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ stat
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 15_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(150, 15_000);
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -106,13 +102,13 @@ try {
 		await card.waitFor({ timeout: 10_000 });
 		const title = () => page.title();
 
-		// ONLY=title, ONLY=enter or ONLY=unnamed runs one section alone, so each is its own red-first command.
+		// ONLY=title, ONLY=rename, ONLY=enter or ONLY=unnamed runs one section alone, so each is its own red-first command.
 		const only = process.env.ONLY;
 
 		// 1. The window title follows the room; Home and Settings keep the app's name.
 		if (!only || only === "title") {
 			assert(await title() === "exxperts", `Home is called exxperts, got ${await title()}`);
-			await card.getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await card.getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await waitUntil(async () => (await title()) === "Client Desk - exxperts", `the room's title, got ${await title()}`);
 			await page.keyboard.press("ControlOrMeta+Comma");
 			await page.locator(".settings-dialog").first().waitFor({ timeout: 10_000 });
@@ -154,11 +150,16 @@ try {
 			assert(await page.locator(".room-settings-rename-input").inputValue() === "", `Rename starts empty, got ${JSON.stringify(await page.locator(".room-settings-rename-input").inputValue())}`);
 			await page.keyboard.press("Escape");
 			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Archive or delete$/ }).first().click();
-			await page.getByText("Delete Unnamed room permanently").waitFor({ timeout: 10_000 });
+			// The pane's Delete asks by the room's shown name; Cancel keeps it.
+			await page.locator(".settings-dialog").getByRole("button", { name: "Delete room", exact: true }).click();
+			const deleteQuestion = page.getByRole("alertdialog", { name: "Delete Unnamed room?" });
+			await deleteQuestion.waitFor({ timeout: 10_000 });
+			await deleteQuestion.getByRole("button", { name: "Cancel", exact: true }).click();
+			await deleteQuestion.waitFor({ state: "detached", timeout: 10_000 });
 			await page.keyboard.press("Escape");
 			await page.locator(".settings-dialog").first().waitFor({ state: "detached", timeout: 10_000 });
 			// The room itself: the title.
-			await ghostCard.getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await ghostCard.getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await waitUntil(async () => (await title()) === "Unnamed room - exxperts", `the unnamed room's title, got ${JSON.stringify(await title())}`);
 			await page.evaluate(() => { window.location.hash = "#/"; });
 			await card.waitFor({ timeout: 10_000 });
@@ -178,14 +179,46 @@ try {
 			console.log("  ok  an invisible name is refused in plain words; an old one reads Unnamed room on Home, in Room settings, in the room, Maintain and Memory");
 		}
 
+		// 4. Rename's Save: the name left as it is closes the field without a request; an empty name greys Save and says why.
+		if (!only || only === "rename") {
+			const renames: string[] = [];
+			const onRequest = (request: { method(): string; url(): string }) => { if (request.method() !== "GET" && /\/rename(\?|$)/.test(request.url())) renames.push(request.url()); };
+			page.on("request", onRequest);
+			await card.locator(".card-gear-btn").click();
+			await page.waitForSelector(".settings-dialog", { timeout: 10_000 });
+			await page.getByRole("button", { name: "Rename room" }).click();
+			const input = page.locator(".room-settings-rename-input");
+			const save = page.locator(".room-settings-rename-form").getByRole("button", { name: "Save" });
+			assert(await input.inputValue() === "Client Desk", `Rename starts on the name, got ${JSON.stringify(await input.inputValue())}`);
+			assert(await save.isEnabled(), "Save is enabled while the name is left as it is");
+			await save.click();
+			await page.locator("#room-settings-title").waitFor({ timeout: 10_000 });
+			assert(await page.locator("#room-settings-title").textContent() === "Client Desk", "the name left as it is stays");
+			assert(renames.length === 0, `the name left as it is sends no rename, got ${JSON.stringify(renames)}`);
+			await page.getByRole("button", { name: "Rename room" }).click();
+			await input.fill("  ");
+			assert(await save.isDisabled(), "Save is greyed for an empty name");
+			const why = page.getByText("Type a name to save.", { exact: true });
+			await why.waitFor({ timeout: 10_000 });
+			const describedBy = await save.getAttribute("aria-describedby");
+			assert(describedBy && (await why.getAttribute("id")) === describedBy, `the greyed Save names the line that says why, got ${describedBy}`);
+			await input.fill("Client Desk 2");
+			assert(await save.isEnabled() && (await why.count()) === 0, "a new name enables Save and the line goes");
+			await page.keyboard.press("Escape");
+			await page.keyboard.press("Escape");
+			await page.locator(".settings-dialog").first().waitFor({ state: "detached", timeout: 10_000 });
+			page.off("request", onRequest);
+			console.log("  ok  Rename's Save: the name left as it is closes the field and saves nothing; an empty name greys Save and says why");
+		}
+
 		// 2. Enter in the folder box accepts the folder and keeps the editor open; Save changes saves.
 		if (!only || only === "enter") {
 			await card.locator(".card-gear-btn").click();
 			await page.waitForSelector(".settings-dialog", { timeout: 10_000 });
-			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Workspace$/ }).first().click();
+			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 			const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
-			await pane.getByRole("button", { name: "Edit workspace" }).click();
-			const folder = pane.getByLabel("Workspace folder path");
+			await pane.getByRole("button", { name: "Edit", exact: true }).click();
+			const folder = pane.getByLabel("Folder path");
 			await folder.fill(clientB);
 			await folder.press("Enter");
 			await page.waitForTimeout(800);

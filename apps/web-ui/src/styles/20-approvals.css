@@ -1,0 +1,247 @@
+/* Approval cards (inline in chat) -------------------------------- */
+.approval-row {
+	display: flex;
+	width: min(var(--chat-rail-width), 100%);
+}
+.approval-card {
+	max-width: 760px;
+	background: var(--panel);
+	border: 1px solid var(--fg);
+	border-radius: 10px;
+	padding: 14px 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+/* Resolved approvals fold to one quiet line (dock redesign 2026-07): mark,
+   verdict, title. No card chrome; the decision is chat history. */
+.approval-resolved-line {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	max-width: 760px;
+	min-width: 0;
+	padding: 2px 0;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.approval-resolved-mark { flex: 0 0 auto; }
+.approval-resolved-verdict { flex: 0 0 auto; }
+.approval-resolved-line .approval-resolved-title {
+	color: var(--fg-soft);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* A question that ended with nobody there to answer it: only the question, greyed; its step says what happened. */
+.approval-unanswered .approval-resolved-title { color: var(--muted); }
+.approval-head { display: flex; align-items: baseline; gap: 12px; }
+.approval-tag {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--bg);
+	background: var(--fg);
+	padding: 3px 9px;
+	border-radius: 999px;
+}
+.approval-title {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 15px;
+	font-weight: 700;
+	color: var(--fg);
+}
+.approval-message { color: var(--fg-soft); font-size: 13px; white-space: pre-wrap; }
+
+/* The delegate approval wears the delegation family's chrome. */
+.approval-card.delegate {
+	max-width: 780px;
+	border-radius: 12px;
+	border-left: 3px solid var(--exx-plan);
+}
+
+.approval-command {
+	margin: 6px 0 2px;
+	max-height: 180px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+.approval-card.delegate .approval-question {
+	display: block;
+	margin: 2px 0 0;
+}
+
+/* Delegate approvals: the guidance facts shown behind Details. */
+.approval-delegate { display: flex; flex-direction: column; gap: 10px; }
+.approval-delegate-facts { line-height: 1.55; }
+/* Approval details disclosure + task-card notes fold + not-kept confirm. */
+.approval-details-toggle {
+	background: none;
+	border: none;
+	padding: 0;
+	font: inherit;
+	font-size: 11px;
+	color: var(--muted);
+	cursor: pointer;
+	margin-left: auto;
+	align-self: center;
+}
+.approval-details-toggle:hover { color: var(--fg-soft); }
+.task-notes { margin-top: 10px; }
+.task-notes-toggle {
+	background: none;
+	border: none;
+	padding: 0;
+	font: inherit;
+	font-size: 11.5px;
+	color: var(--exx-text-muted);
+	cursor: pointer;
+}
+.task-notes-toggle:hover { color: var(--fg-soft); }
+.task-notes .task-summary { margin-top: 8px; }
+.task-close-confirm { font-size: 11.5px; color: var(--exx-text-muted); align-self: center; }
+/* Done-card thumbnails are the card's hero: larger, with a hover lift. */
+.task-dock .task-thumb { width: 240px; transition: transform 120ms ease, box-shadow 120ms ease; }
+.task-dock .task-thumb:hover { transform: translateY(-1px); box-shadow: var(--exx-shadow-popover); }
+
+.approval-meta-compact {
+	margin-top: 6px;
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	font-size: 11px;
+	line-height: 1.4;
+	word-break: break-word;
+}
+.approval-detail {
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 10px 12px;
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	color: var(--fg-soft);
+	max-height: 360px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	margin: 0;
+}
+.approval-input {
+	width: 100%;
+	background: var(--bg-2);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 10px 12px;
+	font-family: inherit;
+	font-size: 13px;
+	resize: vertical;
+	min-height: 80px;
+}
+.approval-input:focus { outline: none; border-color: var(--fg); }
+/* The composer's keyboard path to the one pending card, said quietly. */
+.approval-key-hint {
+	margin-left: auto;
+	align-self: center;
+	color: var(--muted);
+	font-size: 11px;
+}
+/* At phone width the card spans its row (a flex row), as the consult card and the message box do. */
+@media (max-width: 640px) {
+	.approval-card { flex: 1 1 auto; }
+}
+/* No keyboard hint where there is no hover: a touch screen has no Enter or Esc to press. */
+@media (hover: none) {
+	.approval-key-hint { display: none; }
+}
+.approval-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Keyboard approval: a pending card may focus its Approve button
+   programmatically, and script-moved focus does not reliably match
+   :focus-visible — so the ring rides plain :focus. Whenever an approval
+   button holds focus the ring MUST be visible, because an unseen focus
+   would turn a stray Enter into a silent approval. */
+.approval-buttons button:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.btn-primary:hover { background: color-mix(in srgb, var(--fg) 88%, var(--bg)); }
+.btn-primary {
+	background: var(--fg);
+	color: var(--bg);
+	border: 1px solid var(--fg);
+	border-radius: 6px;
+	padding: 7px 16px;
+	font-weight: 700;
+	font-size: 12px;
+}
+.btn-secondary {
+	background: transparent;
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 7px 16px;
+	font-weight: 700;
+	font-size: 12px;
+}
+.btn-secondary:hover { border-color: var(--fg); }
+.btn-neutral {
+	background: var(--panel-2);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 7px 16px;
+	font-weight: 700;
+	font-size: 12px;
+}
+.btn-neutral:hover { border-color: var(--fg); }
+
+:root[data-theme="light"] .assistant-markdown :not(pre) > code {
+	background: color-mix(in srgb, var(--bg-2) 88%, var(--fg) 4%);
+	border-color: var(--border);
+	color: var(--fg);
+}
+:root[data-theme="light"] .assistant-markdown pre {
+	background: color-mix(in srgb, var(--bg-2) 92%, var(--panel) 8%);
+	border-color: var(--border);
+}
+:root[data-theme="light"] .assistant-markdown table {
+	background: color-mix(in srgb, var(--panel) 76%, transparent);
+	border-color: var(--border);
+}
+:root[data-theme="light"] .assistant-markdown thead {
+	background: color-mix(in srgb, var(--fg) 6%, var(--bg-2));
+}
+:root[data-theme="light"] .assistant-markdown th,
+:root[data-theme="light"] .assistant-markdown td {
+	border-color: var(--border-soft);
+}
+:root[data-theme="light"] .tool-chip {
+	border-color: color-mix(in srgb, var(--border-soft) 72%, transparent);
+}
+:root[data-theme="light"] .tool-chip.done:not([open]) {
+	border-color: transparent;
+}
+:root[data-theme="light"] .tool-chip.done:not([open]):hover,
+:root[data-theme="light"] .tool-chip.done:not([open]):focus-within {
+	background: color-mix(in srgb, var(--fg) 4%, transparent);
+	border-color: color-mix(in srgb, var(--border-soft) 74%, transparent);
+}
+:root[data-theme="light"] .tool-chip.running {
+	background: color-mix(in srgb, var(--fg) 5%, transparent);
+	border-color: color-mix(in srgb, var(--fg-soft) 28%, var(--border-soft));
+}
+:root[data-theme="light"] .tool-chip[open] {
+	background: color-mix(in srgb, var(--panel) 88%, var(--bg) 12%);
+	border-color: var(--border-soft);
+}
+:root[data-theme="light"] .tool-chip pre {
+	background: var(--bg-2);
+	border-color: var(--border-soft);
+}
+:root[data-theme="light"] .approval-card {
+	background: color-mix(in srgb, var(--panel) 88%, var(--bg) 12%);
+	border-color: var(--border);
+}
+

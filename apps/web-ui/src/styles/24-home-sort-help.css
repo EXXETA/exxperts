@@ -1,0 +1,326 @@
+/* Home hero "+ New room" --------------------------------------- */
+.landing-hero-head {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 16px;
+}
+/* Home screen order -------------------------------------------- */
+/* The sort control sits at the right end of the hero head.
+   The control is one line of text, not a button-shaped thing: it must be
+   findable and never louder than the rooms. */
+.landing-hero-actions {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	flex: 0 0 auto;
+}
+/* The arrange line is long: where it does not fit beside the title (a phone,
+   a narrow window) it takes its own row and its hint wraps, so Save and
+   Cancel stay on screen. */
+.landing-hero-head.is-arranging { flex-wrap: wrap; }
+.landing-hero-head.is-arranging .landing-hero-actions {
+	flex: 1 1 auto;
+	min-width: 0;
+	justify-content: flex-end;
+}
+.room-sort {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	min-width: 0;
+}
+.room-sort-row {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+.room-sort-btn,
+.room-sort-current {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 26px;
+	padding: 0 8px;
+	border: none;
+	border-radius: var(--exx-radius-pill);
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+	font-size: 12.5px;
+	line-height: 1.2;
+	white-space: nowrap;
+}
+.room-sort-btn { cursor: pointer; }
+.room-sort-btn:hover,
+.room-sort-btn:focus-visible,
+.room-sort-btn[aria-expanded="true"] {
+	color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+	outline: none;
+}
+.room-sort-btn:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.room-sort-caret { font-size: 10px; }
+.room-sort-menu {
+	position: absolute;
+	top: 32px;
+	right: 0;
+	min-width: 176px;
+	max-width: min(280px, calc(100vw - 32px));
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+}
+.room-sort-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: none;
+	border-radius: 8px;
+	padding: 7px 10px;
+	background: transparent;
+	color: var(--fg-soft);
+	font: inherit;
+	font-size: 12.5px;
+	line-height: 1.3;
+	text-align: left;
+	cursor: pointer;
+}
+.room-sort-option:hover:not(:disabled),
+.room-sort-option:focus-visible {
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.room-sort-option:disabled {
+	color: var(--dim);
+	cursor: progress;
+}
+/* The current order is marked, not merely highlighted: hover must not be able
+   to impersonate "this is what you have". */
+.room-sort-option.is-current {
+	color: var(--fg);
+	font-weight: 700;
+}
+.room-sort-option.is-current::after {
+	content: "✓";
+	font-weight: 700;
+	color: var(--success);
+}
+/* .landing-scoped to beat `.landing p` (0,1,1), which would take their
+   colour, margin and width. */
+.landing .room-sort-menu-error {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--error);
+	font-size: 11px;
+	line-height: 1.35;
+}
+.landing .room-sort-menu-error.is-note { color: var(--muted); }
+.landing .room-sort-problem {
+	margin: 4px 0 0;
+	/* Never wider than half a phone: the title beside it keeps its room. */
+	max-width: min(320px, 46vw);
+	color: var(--muted);
+	font-size: 11.5px;
+	line-height: 1.4;
+	text-align: right;
+}
+/* After .room-sort-problem on purpose: same weight, this colour wins. */
+.landing .room-sort-save-error { color: var(--error); }
+/* Room card settings gear -------------------------------------- */
+.persistent-agent-header-end {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+	/* The height of a status pill, pill or not, so every card's rows line up. */
+	min-height: 22px;
+}
+.card-gear-btn {
+	background: transparent;
+	border: 0;
+	color: var(--muted);
+	border-radius: 7px;
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	cursor: pointer;
+}
+.card-gear-btn:hover,
+.card-gear-btn:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+
+/* Help modal --------------------------------------------------- */
+.help-overlay {
+	position: fixed;
+	inset: 0;
+	background: var(--overlay-bg);
+	backdrop-filter: blur(10px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 50;
+	padding: 24px;
+}
+.help-modal {
+	background: var(--panel);
+	color: var(--fg); /* drawn inside the gear menu, whose muted colour it would inherit */
+	border: 1px solid var(--exx-edge-dialog);
+	border-radius: 14px;
+	max-width: 600px;
+	width: 100%;
+	max-height: 90vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+.help-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 18px 22px;
+	border-bottom: 1px solid var(--border);
+}
+.help-head h2 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	margin: 0;
+	font-size: 24px;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+/* One type scale: the hook, then everything at one size, the leads and the
+   heading set apart by weight alone. */
+.help-body {
+	overflow-y: auto;
+	padding: 24px 26px 28px;
+	font-size: 14px;
+	line-height: 1.55;
+	color: var(--fg-soft);
+	/* The quiet scroll bar of Settings and What's new, not the page's dark one. */
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+.help-lede {
+	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
+	font-size: 19px;
+	line-height: 1.35;
+	color: var(--fg);
+	letter-spacing: -0.005em;
+	margin: 0 0 22px;
+}
+.help-body strong,
+.help-body h3 { color: var(--fg); font-weight: 700; }
+.help-body h3 { font-size: inherit; margin: 28px 0 10px; }
+.help-steps,
+.help-notes {
+	margin: 0;
+	padding-left: 22px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+.help-notes { gap: 8px; }
+.help-steps li::marker { color: var(--fg); font-weight: 700; }
+/* A quiet aside, used by the Maintain screens. */
+.help-note {
+	font-size: 12px;
+	color: var(--muted);
+	font-style: italic;
+}
+
+/* Fixture gallery --------------------------------------------------- */
+.fixture-gallery {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	background: var(--bg);
+	color: var(--fg);
+}
+.fixture-gallery-header {
+	background: var(--panel);
+	border-bottom: 1px solid color-mix(in srgb, var(--fg) 22%, transparent);
+	display: flex;
+	align-items: flex-start;
+	gap: 16px;
+	padding: 14px 18px;
+}
+.fixture-gallery-title {
+	flex: 0 0 260px;
+}
+.fixture-gallery-title h1 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 24px;
+	line-height: 1;
+	margin: 0 0 8px;
+}
+.fixture-gallery-title p {
+	color: var(--fg-soft);
+	margin: 0;
+}
+.fixture-gallery-nav {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+.fixture-gallery-nav .list-btn {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+.fixture-gallery-header .theme-toggle {
+	flex: 0 0 auto;
+}
+.fixture-gallery-main {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 18px;
+}
+.fixture-gallery-main > * {
+	width: 100%;
+	margin: 0;
+}
+.fixture-gallery-note {
+	font-size: 12px;
+}
+.fixture-gallery-stage {
+	position: relative;
+	border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+	min-height: 720px;
+	overflow: hidden;
+}
+/* The sidebar toggle is fixed to the window in the app; in a preview it keeps
+   to the preview's corner instead of floating over the gallery. */
+.fixture-gallery-stage .sidebar-header .sidebar-toggle,
+.fixture-gallery-stage .product-sidebar-header .sidebar-toggle {
+	position: absolute;
+}
+.fixture-gallery-stage > .landing-shell,
+.fixture-gallery-stage > .app {
+	height: 720px;
+}
+
+/* Scrollbar (subtle) ----------------------------------------------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--fg); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-soft); }
+::-webkit-scrollbar-track { background: transparent; }
+

@@ -1087,7 +1087,7 @@ try {
 	// holding; and the same file, copied, passes as its own "before".
 	const webServerDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 	const bench = (args: string[]): { status: number | null; stdout: string; stderr: string } => {
-		const run = spawnSync("npx", ["tsx", "scripts/memory-bench/recall-bench.mts", ...args], { cwd: webServerDir, shell: process.platform === "win32", encoding: "utf-8", env: process.env, maxBuffer: 64 * 1024 * 1024 });
+		const run = spawnSync(process.execPath, ["--import", "tsx", "scripts/memory-bench/recall-bench.mts", ...args], { cwd: webServerDir, encoding: "utf-8", env: process.env, maxBuffer: 64 * 1024 * 1024 });
 		return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 	};
 	const dry = bench(["--interleave", "--dry-run", "--language", "de"]);
@@ -1598,7 +1598,7 @@ try {
 	const lmeMarked = "smoke_lme_b";
 	const adapterScript = "scripts/memory-bench/longmemeval-adapter.mts";
 	const adapter = (args: string[], env: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string } => {
-		const run = spawnSync("npx", ["tsx", adapterScript, "--scripted", "--data", lmeData, ...args], { cwd: webServerDir, shell: process.platform === "win32", encoding: "utf-8", env: { ...process.env, RECALL_BENCH_RETRY_SCHEDULE_MS: "10,10,10,10,10", ...env }, maxBuffer: 64 * 1024 * 1024 });
+		const run = spawnSync(process.execPath, ["--import", "tsx", adapterScript, "--scripted", "--data", lmeData, ...args], { cwd: webServerDir, encoding: "utf-8", env: { ...process.env, RECALL_BENCH_RETRY_SCHEDULE_MS: "10,10,10,10,10", ...env }, maxBuffer: 64 * 1024 * 1024 });
 		return { status: run.status, stdout: run.stdout ?? "", stderr: run.stderr ?? "" };
 	};
 	const jsonlIds = (file: string): string[] => fs.readFileSync(file, "utf-8").split("\n").filter((line) => line.trim()).map((line) => (JSON.parse(line) as { question_id: string }).question_id);

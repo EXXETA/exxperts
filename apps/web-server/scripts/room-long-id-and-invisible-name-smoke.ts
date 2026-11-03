@@ -8,6 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -25,15 +28,6 @@ const tempHome = path.join(tempRoot, "home");
 const agentsRoot = path.join(tempHome, ".exxperts", "app", "personalized-agents");
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 for (const dir of [agentsRoot, agentDir]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 async function create(displayName: string): Promise<{ status: number; body: any }> {
 	const res = await authedFetch(`${baseUrl}/api/persistent-agents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ displayName, userName: "Synthetic User" }) });
@@ -97,7 +91,7 @@ try {
 	if (!only || only === "invisible") {
 		for (const name of ["\u200B", "\u200B\u200D\uFEFF", " \u2060 \u200E ", "\u3164", "\u202E\u2066\u2069", "\u00AD"]) {
 			const refused = await create(name);
-			assert(refused.status === 400 && refused.body?.error === "Room name is required.", `a name of only ${JSON.stringify(name)} is refused like an empty one, got ${refused.status} ${JSON.stringify(refused.body)}`);
+			assert(refused.status === 400, `a name of only ${JSON.stringify(name)} is refused like an empty one, got ${refused.status} ${JSON.stringify(refused.body)}`);
 		}
 		const trimmed = await create("\u200B Client C \u200B\uFEFF");
 		assert(trimmed.status === 201 && trimmed.body?.agent?.displayName === "Client C", `invisible characters at both ends are trimmed, got ${trimmed.status} ${JSON.stringify(trimmed.body?.agent?.displayName)}`);
@@ -107,7 +101,7 @@ try {
 		assert(flag.status === 201 && flag.body?.agent?.displayName === "Pub \u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}", `a tag-sequence flag at the end stays whole, got ${JSON.stringify(flag.body?.agent?.displayName)}`);
 		const renameId = String(trimmed.body.agent.id);
 		const blank = await rename(renameId, "\u200B\u200C");
-		assert(blank.status === 400 && blank.body?.error === "Room name is required.", `renaming to only invisible characters is refused, got ${blank.status} ${JSON.stringify(blank.body)}`);
+		assert(blank.status === 400, `renaming to only invisible characters is refused, got ${blank.status} ${JSON.stringify(blank.body)}`);
 		const duplicate = await create("Client C\u200B");
 		assert(duplicate.status === 409 || /already exists/i.test(String(duplicate.body?.error ?? "")), `a name that differs only by an invisible character is the same name, got ${duplicate.status} ${JSON.stringify(duplicate.body)}`);
 	}

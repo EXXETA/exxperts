@@ -29,6 +29,7 @@ import { minimumMemoryWindow } from "./token-estimate.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 import { canonicalModelName, modelOnProvider } from "../../web-ui/src/model-names.js";
 import { roomModelUnavailableLine, type RoomModelRefusalOf } from "./model-not-offered.js";
+import { isSharedServer } from "./server-hooks.js";
 
 export type RoomModelTask = "conversation" | "memory";
 export const ROOM_MODEL_TASKS: readonly RoomModelTask[] = ["conversation", "memory"];
@@ -495,7 +496,7 @@ export type { RoomModelRefusalOf };
 /** That refusal's sentence (draft wording), also for a call the provider refused because it no longer serves the model. */
 export function roomModelUnavailableSentence(chosen: PersistentAgentModelLock, reason: RoomModelUnavailableReason, task: RoomModelTask, names: RoomModelNames, of: RoomModelRefusalOf = "room"): string {
 	const bare = { model: names.model(chosen), provider: names.provider(chosen.provider) };
-	return roomModelUnavailableLine(modelOnProvider(bare.model, bare.provider), reason, task, of, providerSignsIn(chosen.provider), bare);
+	return roomModelUnavailableLine(modelOnProvider(bare.model, bare.provider), reason, task, of, providerSignsIn(chosen.provider), bare, isSharedServer());
 }
 
 /**
@@ -535,7 +536,8 @@ export function memoryModelHoldsBudget(lock: PersistentAgentModelLock, budgetTok
  * room on the default whose own pick is the other way out.
  */
 export function memoryModelTooSmallSentence(model: string, of: "room" | "maintenance" | "default" | { room: string } = "room"): string {
-	if (of === "default") return `The default, ${model}, is too small for this room's memory. Keep this room's own Memory model, or choose a larger default in Settings, AI setup.`;
+	// On a shared server the defaults are the admin's.
+	if (of === "default") return `The default, ${model}, is too small for this room's memory. Keep this room's own Memory model, or ${isSharedServer() ? "ask your admin for a larger default" : "choose a larger default in Settings, AI setup"}.`;
 	if (typeof of === "object") return `${model} is too small for ${of.room}'s memory. Choose a larger default, or give ${of.room} its own Memory model in its Room settings.`;
 	// Memorize, Remember and Review say it outside Room settings, so they say where the budget is.
 	return `${model} is too small for this room's memory. Choose another Memory model, or lower the memory budget in ${of === "maintenance" ? "Room settings, Memory" : "Memory"}.`;

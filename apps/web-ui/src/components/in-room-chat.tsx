@@ -1,17 +1,22 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
-import { Approval, confirmApprovalLabels, declinesSaidOnCards } from "./Approval";
-import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type FailureLineActions, type MessageAttachmentAccess } from "./Message";
+import { approvalAsking, confirmApprovalLabels } from "./Approval";
+import { BubbleEditor, ConsultThreadItem, Message, QueuedBubbles, TaskThreadItem, type FailureLineActions, type MessageAttachmentAccess, type QueuedBubbleActions } from "./Message";
+import type { QueuedBubble } from "../outgoing-messages";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
-import { useEscapeKey } from "./use-escape-key";
-import { SpinnerIcon } from "./icons";
-import { SidebarDrawerBackdrop } from "../sidebar-collapse";
+import { escapeLayerOpen, useEscapeKey } from "./use-escape-key";
+import { foldChoiceOf, TurnCard, WorkStretch } from "./work-card";
+import { isThoughtOpen } from "../thinking-text-store";
+import { isWorkItem, workPieces } from "../work-look";
+import { enterReachesQuestion, isTextField, setComposerEmpty } from "../question-keys";
+import { SidebarDrawerBackdrop, usePhoneWidth } from "../sidebar-collapse";
 import type { ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem, ContextHealthStatus } from "../types";
 import { completeMention, detectMentionQuery, filterMentionCandidates, resolveLeadingMention, type MentionCandidateRoom } from "../mention-popover";
 import { replyCopyTargets } from "../reply-copy";
-import { formatModelWithProvider, modelDisplayName } from "../model-names";
-import { allInput, cacheWords } from "../usage-words";
+import { chordHeld } from "../platform";
+import { formatModelWithProvider } from "../model-names";
+import { useRemoteClientContext } from "../remote-client-context";
 
 export interface InRoomChatUsage {
 	turns: number;
@@ -35,11 +40,18 @@ export interface InRoomChatShellViewProps {
 	busy: boolean;
 	usage: InRoomChatUsage;
 	contextHealth?: ContextHealthStatus | null;
+	/** The model's canonical name, shown as given: a gateway's saved name can hold a dash. */
 	currentModelLabel?: string | null;
 	/** Provider behind that label. Tooltip only; the face stays the bare name. */
 	currentModelProvider?: string | null;
 	topbarActions?: ReactNode;
 	composerRightActions?: ReactNode;
+	/** The paperclip: inside the box, at the left on wider screens and beside Remember on the phone. */
+	composerAttachSlot?: ReactNode;
+	/** Remember (and on the phone the command mode before it): in the row under the box on wider screens, inside the box on the phone. */
+	composerRememberSlot?: ReactNode;
+	/** The model and effort control, drawn for where the layout puts it: the row under the box, or the phone's header. */
+	composerModelSlot?: (placement: "row" | "header") => ReactNode;
 	/** Files UI slice: staged-attachment chips above the composer textarea. */
 	composerStagingSlot?: ReactNode;
 	/** Files UI slice: staged attachments make an attachments-only send legal. */
@@ -58,9 +70,21 @@ export interface InRoomChatShellViewProps {
 	messagesRef?: Ref<HTMLDivElement>;
 	onSend: (text: string) => boolean;
 	onStop?: () => void;
+	/** While the room answers, Stop shows with an empty box; Send takes its place once text is typed. */
 	stopVisible?: boolean;
 	stopDisabled?: boolean;
 	stopLabel?: string;
+	/** Cmd/Ctrl+Enter with text: send now, stopping the answer at the words on screen. */
+	onSendNow?: (text: string) => boolean;
+	/** Cmd/Ctrl+Enter in an empty box: the first queued message goes now. */
+	onSendQueuedNow?: () => boolean;
+	/** While the room answers: why the box cannot queue this text, or null; Send greys with it as its hover. */
+	queueRefusal?: (text: string) => string | null;
+	/** Esc while the room answers, nothing else taking it: true when it stopped the answer. */
+	onEscapeStop?: () => boolean;
+	/** Messages the room has not taken, drawn as "Queued" bubbles under the answer. */
+	queued?: ReadonlyArray<QueuedBubble>;
+	queuedActions?: QueuedBubbleActions;
 	textareaRef?: Ref<HTMLTextAreaElement>;
 	composerPlaceholder: string;
 	sendUnavailable?: boolean;
@@ -95,14 +119,32 @@ export interface InRoomChatShellViewProps {
 	attachmentAccess?: MessageAttachmentAccess;
 	/** What the newest failure line's buttons do. */
 	failureLineActions?: FailureLineActions;
+	/** The answer a reconnect's replay drew in one paint: the blocks drawn then do not fade in. */
+	answerDrawnAtOnceId?: string | null;
+	/** Another window took the room: its running steps go on there. */
+	stepsElsewhere?: boolean;
+	/** A quiet line in the working dot's place while the room does something other than answer, such as shortening the conversation. */
+	statusLine?: string | null;
 	aboveComposerSlot?: ReactNode;
+	/** Editing the newest message: where the pencil shows, what is being edited, and what is dimmed. */
+	edit?: LastMessageEdit;
 }
 
-function fmtTok(n: number): string {
-	if (n < 1000) return String(n);
-	if (n < 10_000) return (n / 1000).toFixed(1) + "k";
-	if (n < 1_000_000) return Math.round(n / 1000) + "k";
-	return (n / 1_000_000).toFixed(1) + "M";
+/**
+ * Editing the newest message the person sent, in its bubble. From Edit until
+ * the server takes the edit, the message's turn is dimmed: its answer while
+ * the bubble is edited, all of it once the edit is sent.
+ */
+export interface LastMessageEdit {
+	/** The bubble that shows the pencil, when one may be edited. */
+	editableId: string | null;
+	/** The bubble being edited, with the text it shows. */
+	editing: { id: string; text: string } | null;
+	/** The bubble whose edit was sent and is not yet taken. */
+	sentId: string | null;
+	onEdit: (id: string) => void;
+	onCancel: () => void;
+	onSend: (text: string) => void;
 }
 
 /**
@@ -110,16 +152,32 @@ function fmtTok(n: number): string {
  * math (the tail of a trackpad gesture used to count as a move down, and a
  * near-bottom threshold then pulled the reader back). A gesture up (wheel,
  * touch, PageUp/ArrowUp/Home, a scrollbar drag) stops following at once,
- * wherever the view is. Following resumes only when the reader reaches the
- * true bottom themselves (within this distance), clicks the pill, or sends.
+ * wherever the view is; a wheel up only where the chat overflows, so a
+ * wheel on a short chat does not leave the answer growing out of sight.
+ * Following resumes when the reader reaches the true bottom themselves
+ * (within this distance) or clicks the pill; or when a scroll down driven by
+ * a downward wheel, finger or key, or by the scroll bar (a scroll with no
+ * wheel or finger behind it), lands within FOLLOW_CATCH_BOTTOM_PX of a
+ * bottom that keeps moving away, with no gesture up in the last
+ * UP_GESTURE_QUIET_MS (that rules out a gesture's tail). After Send the
+ * message glides to the top of the view and the view stays there while the
+ * answer grows below it: only the reader's own scroll to the end, or the
+ * pill, starts following.
  */
 const FOLLOW_RESUME_BOTTOM_PX = 2;
+const FOLLOW_CATCH_BOTTOM_PX = 24;
+const UP_GESTURE_QUIET_MS = 300;
 /** A scroll this soon after a wheel or touch event belongs to that gesture. */
 const GESTURE_SCROLL_WINDOW_MS = 100;
 /** A scroll this soon after the app wrote scrollTop is the app's own. */
 const PROGRAMMATIC_SCROLL_WINDOW_MS = 50;
-/** How long a smooth programmatic scroll may run before the bottom pin resumes. */
-const SMOOTH_SCROLL_MS = 600;
+/**
+ * A smooth programmatic scroll is the page's own until it lands on its
+ * target; this caps one that never lands. A long glide runs well past half a
+ * second, and its last steps reach the bottom: read as the reader's, they
+ * would start following.
+ */
+const SMOOTH_SCROLL_MAX_MS = 2000;
 /** A dropped socket this short is a blink, not news: the banner waits this long. */
 const CONNECTION_BANNER_DELAY_MS = 800;
 
@@ -137,6 +195,8 @@ export interface ConnectionStopped {
 	onMemorize?: () => void;
 	/** A window the room moved on from: join the room's conversation. */
 	onReload?: () => void;
+	/** A window another took the room from: take it back here. */
+	onOpenHere?: () => void;
 	/** The room stopped on its key or sign-in: the notice carries the failure lines' mark. */
 	failed?: true;
 }
@@ -199,12 +259,6 @@ function fmtCost(n: number): string {
 	return "$" + n.toFixed(2);
 }
 
-function compactModelLabel(label: string): string {
-	// currentModelLabel is already canonical for new sessions; historical
-	// "Provider — Name" strings still pass through here.
-	return modelDisplayName({ modelLabel: label }) || label;
-}
-
 function fmtContextTok(n: number): string {
 	if (n < 1000) return String(n);
 	if (n < 10_000) return `${(n / 1000).toFixed(1)}K`;
@@ -214,6 +268,23 @@ function fmtContextTok(n: number): string {
 
 function fmtExact(n: number): string {
 	return new Intl.NumberFormat("en-US").format(Math.round(n));
+}
+
+/**
+ * The context meter's ring: filled as far as the conversation has come
+ * towards the recommended context, in the zone's colour; empty when the
+ * reading is unknown, offline, or not in yet.
+ */
+function ContextRing({ percent }: { percent: number | null }) {
+	const radius = 5;
+	const circumference = 2 * Math.PI * radius;
+	const filled = percent == null ? 0 : Math.min(100, Math.max(0, percent)) / 100;
+	return (
+		<svg className="context-ring" width={14} height={14} viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+			<circle className="context-ring-track" cx="7" cy="7" r={radius} fill="none" strokeWidth={2} />
+			{filled > 0 && <circle className="context-ring-fill" cx="7" cy="7" r={radius} fill="none" strokeWidth={2} strokeLinecap="round" strokeDasharray={`${(filled * circumference).toFixed(2)} ${circumference.toFixed(2)}`} transform="rotate(-90 7 7)" />}
+		</svg>
+	);
 }
 
 function ContextPill({
@@ -239,22 +310,24 @@ function ContextPill({
 	const popoverId = useId();
 	const known = status.tokens != null && status.checkpointPercent != null;
 	const offline = !connected && !stopped;
-	const zone = offline ? "offline" : (status.zone ?? "unknown");
 	const reconnecting = offline && reconnectState === "reconnecting";
-	const label = offline
-		? (reconnecting ? "Reconnecting…" : "Offline")
-		: known
-			? `${Math.round(status.checkpointPercent!)}% of recommended context`
-			: "Measuring tokens";
+	// Its dot is red whenever the room is down, reconnecting too, as on main; the line in the working dot's place says the words.
+	const zone = offline ? "offline" : (status.zone ?? "unknown");
+	// While it reconnects, the line in the working dot's place says so.
+	const shownPercent = known && !(offline && !reconnecting) ? Math.round(status.checkpointPercent!) : null;
 	// Nothing here names plumbing the user did not install and cannot restart.
 	// While a retry is running, say so; once it has given up, the Reconnect
 	// button beside this pill is the next move, and restarting the app is the
-	// one after that.
+	// one after that. A shared server's room keeps trying until it is stopped
+	// on purpose, and nothing there is the person's to restart.
+	const { sharedServer } = useRemoteClientContext();
 	const title = !offline
 		? "Context and model details"
-		: reconnecting
-			? "This room lost its connection. Trying to pick it up again…"
-			: "This room lost its connection. Use Reconnect to try again, or restart the app if it keeps happening.";
+		: sharedServer
+			? (reconnectState === "failed" ? "This room lost its connection. Use Reconnect to try again." : "This room lost its connection. It keeps trying by itself.")
+			: reconnecting
+				? "This room lost its connection. Trying to pick it up again…"
+				: "This room lost its connection. Use Reconnect to try again, or restart the app if it keeps happening.";
 
 	useEscapeKey(() => setOpen(false), open);
 
@@ -277,26 +350,26 @@ function ContextPill({
 				type="button"
 				className={`composer-context-pill ${zone}`}
 				title={title}
+				aria-label={offline && !reconnecting ? "Offline" : shownPercent !== null ? `${shownPercent}% of recommended context` : "Context: appears after the next response"}
 				aria-expanded={open}
 				aria-haspopup="dialog"
 				aria-controls={open ? popoverId : undefined}
 				onClick={() => setOpen((v) => !v)}
 			>
-				<span className="context-health-dot" aria-hidden="true" />
+				<ContextRing percent={shownPercent} />
 				<span className="composer-context-pill-label">
-					{connected && known
-						// The phrase hides at the phone breakpoint: "10%" is the
-						// meter there, the full sentence is desktop room.
-						? <>{Math.round(status.checkpointPercent!)}%<span className="composer-context-pill-phrase"> of recommended context</span></>
-						: label}
+					{/* The number alone; the panel's first line says what it is of. An
+					    unknown reading (after a summary) is a dash until the next answer. */}
+					{offline && !reconnecting ? "Offline" : shownPercent !== null ? `${shownPercent}%` : "\u2013"}
 				</span>
 			</button>
 			{open && (
 				<div className="composer-context-popover" id={popoverId} role="dialog" aria-label="Context and model details">
+					{known && <p className="composer-context-popover-lead">{`${Math.round(status.checkpointPercent!)}% of recommended context`}</p>}
 					{currentModelLabel && (
 						<div className="composer-context-popover-row" title={`current chat model: ${formatModelWithProvider(currentModelLabel ?? "", currentModelProvider)}`}>
 							<span>model</span>
-							<strong>{compactModelLabel(currentModelLabel)}</strong>
+							<strong>{currentModelLabel}</strong>
 						</div>
 					)}
 					{known && (
@@ -331,7 +404,7 @@ function ContextPill({
 					</div>
 					<div className="composer-context-popover-row">
 						<span>connection</span>
-						<strong>{connected ? "online" : stopped ? "paused" : reconnecting ? "reconnecting…" : "offline"}</strong>
+						<strong>{connected ? "Online" : stopped ? "Paused" : reconnecting ? "Reconnecting…" : "Offline"}</strong>
 					</div>
 					<p className="composer-context-popover-note">
 						{zone === "red"
@@ -381,24 +454,17 @@ function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: {
 					{stopped.onReturnHome && <button type="button" className="rs-btn" onClick={stopped.onReturnHome}>Return Home</button>}
 					{stopped.onMemorize && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onMemorize}>Memorize</button>}
 					{stopped.onReload && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onReload}>Reload</button>}
+					{stopped.onOpenHere && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onOpenHere}>Open here</button>}
 				</div>
 			</div>
 		);
 	}
-	if (!lost || !shown) return null;
+	// While it reconnects, the line in the working dot's place says so.
+	if (!lost || !shown || reconnectState !== "failed") return null;
 	return (
 		<div className="connection-banner" role="status">
-			{reconnectState === "failed" ? (
-				<>
-					<span>Connection lost.</span>
-					{onReconnect && <button type="button" className="connection-banner-action" onClick={onReconnect}>Reconnect</button>}
-				</>
-			) : (
-				<>
-					<SpinnerIcon size={14} />
-					<span>Connection lost. Reconnecting…</span>
-				</>
-			)}
+			<span>Connection lost.</span>
+			{onReconnect && <button type="button" className="connection-banner-action" onClick={onReconnect}>Reconnect</button>}
 		</div>
 	);
 }
@@ -422,15 +488,23 @@ interface TranscriptItemsProps {
 	/** The user message whose turn holds the answer space (see groupIntoTurns). */
 	reservedTurnId: string | null;
 	failureLineActions?: FailureLineActions;
+	/** The answer a reconnect's replay drew in one paint: the blocks drawn then do not fade in. */
+	answerDrawnAtOnceId?: string | null;
+	/** A quiet line in the working dot's place, such as "Reconnecting…". */
+	turnStatusLine?: string | null;
+	/** Another window took the room: its running steps go on there. */
+	stepsElsewhere?: boolean;
+	/** The "Queued" bubbles, under everything else in the last turn. */
+	queuedSlot?: ReactNode;
+	edit?: LastMessageEdit;
 }
 
 /**
- * The default transcript render. Consecutive web_search / fetch_url calls of
- * the SAME tool collapse into one ToolBundle line (interleavings split the
- * run, in order); a single-call run renders exactly as today. Grouping is
- * purely positional over the live items array, so a streaming turn grows its
- * bundle in place as calls land. The reply copy buttons are decided over the
- * same raw array (reply-copy.ts), untouched by the bundling.
+ * The transcript: each run of thinking, steps and questions is one stretch,
+ * drawn as one work card that folds when something comes after it, or as
+ * its thinking rows when it only thought. A finished turn with several cards
+ * folds its work into one card above its answer. The reply
+ * copy buttons are decided over the raw array (reply-copy.ts).
  */
 function renderTranscript(
 	items: ChatItem[],
@@ -441,40 +515,92 @@ function renderTranscript(
 	onOpenTaskArtifact: TranscriptItemsProps["onOpenTaskArtifact"],
 	attachmentAccess: TranscriptItemsProps["attachmentAccess"],
 	failureLineActions: TranscriptItemsProps["failureLineActions"],
+	answerDrawnAtOnceId: string | null,
+	stepsElsewhere: boolean,
+	edit: LastMessageEdit | undefined,
+	messagesWaitBelow: boolean,
 ): IndexedNode[] {
 	const copyTargets = replyCopyTargets(items, busy);
+	// The conversation's last items: the last answer or message and the lines after it. Everything above them has
+	// something after it, and with queued or held messages under the transcript, so do they.
+	let lastFrom = items.length - 1;
+	while (lastFrom > 0 && items[lastFrom].kind === "system") lastFrom--;
+	const followedBefore = messagesWaitBelow ? items.length : lastFrom;
 	const keyboardApprovalId = soleKeyboardApproval(items)?.requestId ?? null;
 	const newestFailureId = newestFailureLineId(items);
-	const saidOnCards = declinesSaidOnCards(items);
 	const rendered: IndexedNode[] = [];
 	for (let index = 0; index < items.length; index++) {
 		const it = items[index];
-		if (isBundleableToolItem(it)) {
+		if (isWorkItem(it)) {
 			let end = index;
-			while (end + 1 < items.length) {
-				const next = items[end + 1];
-				if (next.kind === "tool" && next.name === it.name) end++;
-				else break;
-			}
-			if (end > index) {
-				rendered.push({ index, node: <ToolBundle key={it.id} items={items.slice(index, end + 1).filter(isBundleableToolItem)} /> });
+			while (end + 1 < items.length && isWorkItem(items[end + 1])) end++;
+			const run = items.slice(index, end + 1);
+			// An answer not written yet is no stretch of its own.
+			if (run.some((item) => item.kind !== "assistant")) {
+				const next = items[end + 1] as (ChatItem & { ts?: number }) | undefined;
+				rendered.push({
+					index,
+					stretch: run,
+					node: <WorkStretch key={it.id} items={run} live={busy && !next} endTs={next?.ts} elsewhere={stepsElsewhere} keyboardApprovalId={keyboardApprovalId} onResolve={onResolveApproval} onPreview={onApprovalPreview} />,
+				});
 				index = end;
 				continue;
 			}
 		}
 		rendered.push({ index, node:
-			it.kind === "approval" ? (
-				<Approval key={it.id} item={it} onResolve={onResolveApproval} onPreview={onApprovalPreview} keyboardHint={it.requestId === keyboardApprovalId} />
-			) : it.kind === "consult" ? (
+			it.kind === "consult" ? (
 				<ConsultThreadItem key={it.id} item={it} pending={pendingConsultIds?.has(it.id) ?? false} />
 			) : it.kind === "task" ? (
 				<TaskThreadItem key={it.id} item={it} onOpenTaskArtifact={onOpenTaskArtifact} />
+			) : it.kind === "user" && edit?.editing?.id === it.id ? (
+				<BubbleEditor key={`edit-${it.id}`} text={edit.editing.text} onCancel={edit.onCancel} onSend={edit.onSend} />
 			) : (
-				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} saidOnCard={saidOnCards.has(it.id)} newestFailure={it.id === newestFailureId} failureActions={it.id === newestFailureId ? failureLineActions : undefined} />
+				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} newestFailure={it.id === newestFailureId} failureActions={it.id === newestFailureId ? failureLineActions : undefined} drawnAtOnce={it.id === answerDrawnAtOnceId} elsewhere={stepsElsewhere} followed={index < followedBefore} onEdit={it.id === edit?.editableId && !edit.editing ? edit.onEdit : undefined} />
 			),
 		});
 	}
-	return rendered;
+	return foldLongTurns(items, rendered, busy);
+}
+
+/** A finished turn's cards, and the notes between them, as one card above its answer, when it had more than one card. */
+function foldLongTurns(items: ChatItem[], nodes: IndexedNode[], busy: boolean): IndexedNode[] {
+	const out: IndexedNode[] = [];
+	let turn: IndexedNode[] = [];
+	const closeTurn = (last: boolean) => {
+		const cards = turn.filter((node) => node.stretch?.some((item) => item.kind === "tool"));
+		let answerAt = -1;
+		for (let at = turn.length - 1; at >= 0; at--) {
+			const item = items[turn[at].index];
+			if (item.kind === "assistant" && item.text.trim() && !turn[at].stretch) {
+				answerAt = at;
+				break;
+			}
+		}
+		const firstCard = cards.length ? turn.indexOf(cards[0]) : -1;
+		const folding = firstCard >= 0 && answerAt > firstCard ? turn.slice(firstCard, answerAt) : [];
+		const foldId = folding.length ? `worked:${items[folding[0].index].id}` : "";
+		// A thought the person opened is hidden only by the person: no fold over it, unless they folded or opened this one themselves.
+		const overOpenThought = folding.some((node) => node.stretch?.some((item) => item.kind === "thinking" && isThoughtOpen(item.id)));
+		if ((last && busy) || cards.length < 2 || !folding.length || (foldChoiceOf(foldId) === undefined && overOpenThought)) {
+			out.push(...turn);
+			turn = [];
+			return;
+		}
+		const steps = folding.flatMap((node) => (node.stretch ? workPieces(node.stretch) : [])).filter((piece): piece is Extract<ReturnType<typeof workPieces>[number], { kind: "step" }> => piece.kind === "step");
+		const user = items[turn[0].index];
+		const answer = items[turn[answerAt].index] as ChatItem & { ts?: number };
+		const ms = user.kind === "user" && user.ts !== undefined && answer.ts !== undefined && answer.ts >= user.ts ? answer.ts - user.ts : undefined;
+		out.push(...turn.slice(0, firstCard));
+		out.push({ index: folding[0].index, node: <TurnCard key={foldId} foldId={foldId} steps={steps} ms={ms}>{folding.map((node) => node.node)}</TurnCard> });
+		out.push(...turn.slice(answerAt));
+		turn = [];
+	};
+	for (const node of nodes) {
+		if (items[node.index]?.kind === "user" && turn.length) closeTurn(false);
+		turn.push(node);
+	}
+	if (turn.length) closeTurn(true);
+	return out;
 }
 
 /**
@@ -502,7 +628,7 @@ function soleKeyboardApproval(items: ChatItem[]): Extract<ChatItem, { kind: "app
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
 		if (item.kind === "user") break;
-		if (item.kind !== "approval" || item.done || item.unanswered) continue;
+		if (item.kind !== "approval" || !approvalAsking(item)) continue;
 		if (found || item.uiKind !== "confirm") return null;
 		found = item;
 	}
@@ -513,6 +639,8 @@ interface IndexedNode {
 	/** Index of the first transcript item the node renders. */
 	index: number;
 	node: ReactNode;
+	/** The items of a stretch of work the node draws as one card. */
+	stretch?: ChatItem[];
 }
 
 /**
@@ -525,13 +653,15 @@ interface IndexedNode {
  * unwrapped. The trailing node (the thinking row) joins the last turn so the
  * reservation covers it too.
  */
-function groupIntoTurns(items: ChatItem[], nodes: IndexedNode[], trailing: ReactNode, reservedTurnId: string | null): ReactNode[] {
+function groupIntoTurns(items: ChatItem[], nodes: IndexedNode[], trailing: ReactNode, reservedTurnId: string | null, edit?: LastMessageEdit): ReactNode[] {
 	const out: ReactNode[] = [];
 	let turn: { id: string; nodes: ReactNode[] } | null = null;
+	// The edited message's answer is dimmed while its bubble is the box; all of its turn once the edit is sent.
+	const dimmed = (id: string) => (id === edit?.sentId ? " edit-dim-all" : id === edit?.editing?.id ? " edit-dim-answer" : "");
 	const closeTurn = () => {
 		if (!turn) return;
 		out.push(
-			<div key={`turn-${turn.id}`} className={`transcript-turn${turn.id === reservedTurnId ? " reserved" : ""}`}>
+			<div key={`turn-${turn.id}`} className={`transcript-turn${turn.id === reservedTurnId ? " reserved" : ""}${dimmed(turn.id)}`}>
 				{turn.nodes}
 			</div>,
 		);
@@ -539,7 +669,9 @@ function groupIntoTurns(items: ChatItem[], nodes: IndexedNode[], trailing: React
 	};
 	for (const { index, node } of nodes) {
 		const item = items[index];
-		if (item?.kind === "user") {
+		// A message the room took while it answered belongs to that answer's turn, unless it is being edited: its own answer dims on its own.
+		const edited = item?.kind === "user" && (item.id === edit?.sentId || item.id === edit?.editing?.id);
+		if (item?.kind === "user" && (edited || !(turn && item.steered === true))) {
 			closeTurn();
 			turn = { id: item.id, nodes: [] };
 		}
@@ -552,6 +684,32 @@ function groupIntoTurns(items: ChatItem[], nodes: IndexedNode[], trailing: React
 	}
 	closeTurn();
 	return out;
+}
+
+/**
+ * Sizes the sent message's reserved turn so the glide to the bottom stops
+ * with the bottom of what sits above the message (an answer's copy row, a
+ * failure line, a steps card) at the box's top edge, whatever gap that item
+ * keeps. At the box's top padding alone it would stop with the bottom of that
+ * item showing under the header, since items sit closer together than the
+ * padding. Measured on the turn's first layout, before any lift is set.
+ */
+function fitReservedTurn(box: HTMLElement): void {
+	const turn = box.querySelector<HTMLElement>(":scope > .transcript-turn.reserved");
+	const above = turn?.previousElementSibling;
+	if (!turn || !above) return;
+	// A scroll position is whole pixels and the browser rounds a fractional
+	// scroll range to the nearest one, so the stop is the position that brings
+	// the bottom of the item above to the top edge, rounded up, and the lift
+	// makes the range reach just under half a pixel past it: it still rounds
+	// to the stop when what is above settles by under a pixel after the send
+	// (the end of a steps card's fold). Worked out from the boxes' positions:
+	// the box's scroll sizes are rounded too.
+	const edges = box.getBoundingClientRect();
+	const paddingBottom = Number.parseFloat(getComputedStyle(box).paddingBottom) || 0;
+	const stop = Math.ceil(box.scrollTop + above.getBoundingClientRect().bottom - edges.top - 0.001);
+	const lift = edges.bottom + (stop - box.scrollTop) - turn.getBoundingClientRect().bottom - paddingBottom + 31 / 64;
+	turn.style.setProperty("--reserved-turn-lift", `${lift}px`);
 }
 
 const TranscriptItems = memo(function TranscriptItems({
@@ -568,17 +726,31 @@ const TranscriptItems = memo(function TranscriptItems({
 	busy,
 	reservedTurnId,
 	failureLineActions,
+	answerDrawnAtOnceId = null,
+	turnStatusLine = null,
+	stepsElsewhere = false,
+	queuedSlot = null,
+	edit,
 }: TranscriptItemsProps) {
-	const thinking = showThinkingIndicator ? (
+	// A live card or thinking row already says the room works: the dot shows only before anything has arrived.
+	const last = items[items.length - 1];
+	const cardSaysIt = !renderItem && !!last && (last.kind === "tool" || last.kind === "approval" || (last.kind === "thinking" && last.ms === undefined));
+	const thinking = turnStatusLine ? (
+		<div key="thinking-row" className="thinking-row turn-status-line" role="status">
+			<span className="thinking-dot" aria-hidden="true" />
+			<span>{turnStatusLine}</span>
+		</div>
+	) : showThinkingIndicator && !cardSaysIt ? (
 		<div key="thinking-row" className="thinking-row" role="status" aria-label="thinking">
 			<span className="thinking-dot" aria-hidden="true" />
 		</div>
 	) : null;
-	if (empty) return <>{emptySlot ?? null}{thinking}</>;
+	const trailing = thinking || queuedSlot ? <>{thinking}{queuedSlot}</> : null;
+	if (empty) return <>{emptySlot ?? null}{trailing}</>;
 	const nodes: IndexedNode[] = renderItem
 		? items.map((it, index) => ({ index, node: renderItem(it, index, items) }))
-		: renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess, failureLineActions);
-	return <>{groupIntoTurns(items, nodes, thinking, reservedTurnId)}</>;
+		: renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess, failureLineActions, answerDrawnAtOnceId, stepsElsewhere, edit, queuedSlot !== null);
+	return <>{groupIntoTurns(items, nodes, trailing, reservedTurnId, edit)}</>;
 });
 
 interface ComposerInputProps {
@@ -605,9 +777,48 @@ interface ComposerInputProps {
 	onPasteFiles?: (files: File[]) => void;
 	/** The sole pending yes/no card, answered by Enter and Escape while the composer is empty. */
 	keyboardApproval?: { approve: () => void; decline: () => void } | null;
+	onSendNow?: (text: string) => boolean;
+	onSendQueuedNow?: () => boolean;
+	queueRefusal?: (text: string) => string | null;
+	onEscapeStop?: () => boolean;
+	/** Whether the box holds text, which Cmd/Ctrl+Enter sends instead of the first queued message; told on each change. */
+	onBoxTextChange?: (hasText: boolean) => void;
 }
 
-function ComposerInput({
+/** Something else on the page takes Esc first: a dialog, a menu, a viewer. */
+function otherLayerOpen(): boolean {
+	return escapeLayerOpen() || !!document.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"], .diagram-zoom-overlay');
+}
+
+// What the layer over the message box copies from the box, so each letter it
+// draws sits where the box would draw it: whatever rule sizes the box, the
+// phone's larger type included.
+const MIRRORED_STYLES = [
+	"fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant", "fontStretch", "fontKerning", "fontFeatureSettings",
+	"lineHeight", "letterSpacing", "wordSpacing", "textTransform", "textIndent", "tabSize",
+	"whiteSpace", "wordBreak", "overflowWrap", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+] as const;
+
+// Who draws the message box's text while it starts with a known room's name:
+// the layer, so the name shows coloured; the box itself while text is
+// selected, so the selection keeps the system's colours; both while an input
+// method composes, the box keeping the composing word's underline (a Gboard
+// phone composes every word) and the layer adding only the name over it.
+type BoxText = "box" | "layer" | "box-and-name";
+
+function alignMirror(box: HTMLTextAreaElement, mirror: HTMLElement): void {
+	const style = box.ownerDocument.defaultView!.getComputedStyle(box);
+	for (const name of MIRRORED_STYLES) mirror.style[name] = style[name];
+	// The box's inner size leaves out its scrollbar, so the layer wraps at the same width.
+	mirror.style.left = `${box.clientLeft}px`;
+	mirror.style.top = `${box.clientTop}px`;
+	mirror.style.width = `${box.clientWidth}px`;
+	mirror.style.height = `${box.clientHeight}px`;
+	mirror.scrollTop = box.scrollTop;
+}
+
+/** The room's message box. Exported so a smoke can type into it and press its keys. */
+export function ComposerInput({
 	onSend,
 	onStop,
 	stopVisible = false,
@@ -626,8 +837,17 @@ function ComposerInput({
 	allowEmptySend = false,
 	onPasteFiles,
 	keyboardApproval = null,
+	onSendNow,
+	onSendQueuedNow,
+	queueRefusal,
+	onEscapeStop,
+	onBoxTextChange,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
+	const boxHasText = draft.trim() !== "";
+	useEffect(() => {
+		onBoxTextChange?.(boxHasText);
+	}, [boxHasText, onBoxTextChange]);
 	const [caret, setCaret] = useState(0);
 	const [mentionIndex, setMentionIndex] = useState(0);
 	// §8.3: the visible rejection when a composer @-mention is attempted while a
@@ -637,9 +857,28 @@ function ComposerInput({
 	// (onChange) clears this so it reopens.
 	const [mentionDismissed, setMentionDismissed] = useState(false);
 	const textareaNodeRef = useRef<HTMLTextAreaElement | null>(null);
+	const mirrorRef = useRef<HTMLDivElement | null>(null);
+	// Whether an input method composes and whether text is selected (see BoxText).
+	const [composing, setComposing] = useState(false);
+	const [selecting, setSelecting] = useState(false);
 	// Caret to restore after a programmatic draft edit (mention completion).
 	const pendingCaretRef = useRef<number | null>(null);
-	const sendDisabled = sendUnavailable || (!draft.trim() && !allowEmptySend);
+	// A leading mention of a known room routes the send to a consult. Skipped
+	// while busy (the draft goes as a normal send). With no question after the
+	// name yet, Send waits for one, files attached or not.
+	const leadingMention = mention && !mention.busy ? resolveLeadingMention(draft, mention.candidates, mention.currentRoomId) : null;
+	const awaitingQuestion = leadingMention?.kind === "awaiting-question";
+	const queueRefused = draft.trim() ? queueRefusal?.(draft) ?? null : null;
+	const sendDisabled = sendUnavailable || awaitingQuestion || !!queueRefused || (!draft.trim() && !allowEmptySend);
+	const sendButtonTitle = !sendUnavailable && awaitingQuestion ? "Type your question after the name" : !sendUnavailable && queueRefused ? queueRefused : sendTitle;
+	// A known room's name at the start shows in the effort dial's colour, as
+	// long as it routes the send to that room. A textarea draws its text in one
+	// colour, so a layer over it draws the text instead and the box's own text
+	// turns transparent; clicks, the caret and the selection stay the box's.
+	// The name is the room's id, the match ignoring only case, so it is the '@'
+	// and as many letters as the id has.
+	const boxText: BoxText = !leadingMention || selecting ? "box" : composing ? "box-and-name" : "layer";
+	const mentionLength = leadingMention && boxText !== "box" ? leadingMention.room.id.length + 1 : 0;
 
 	// Mention popover state. The interactive picker opens only when a trigger is
 	// active, the room is not busy, it has not been dismissed, and at least one
@@ -683,6 +922,7 @@ function ComposerInput({
 		const end = (initialDraftValue ?? "").length;
 		el.setSelectionRange(end, end);
 		setCaret(end);
+		setSelecting(false);
 	}, [draftResetKey]);
 
 	// Reset the highlighted row whenever the query changes.
@@ -711,10 +951,71 @@ function ComposerInput({
 		el.focus();
 		el.setSelectionRange(pos, pos);
 		setCaret(pos);
+		setSelecting(false);
 	}, [draft]);
+
+	// After the auto-grow above, so the layer takes the box's new height.
+	useLayoutEffect(() => {
+		const box = textareaNodeRef.current;
+		const mirror = mirrorRef.current;
+		if (!box || !mirror) return;
+		alignMirror(box, mirror);
+		const Observer = box.ownerDocument.defaultView?.ResizeObserver;
+		if (!Observer) return;
+		const observer = new Observer(() => alignMirror(box, mirror));
+		observer.observe(box);
+		return () => observer.disconnect();
+	}, [draft, mentionLength]);
+
+	// A click inside a selection clears it only after the click's own events,
+	// so the page's selection event says when text stops (or starts) being selected.
+	useEffect(() => {
+		const box = textareaNodeRef.current;
+		if (!box) return;
+		const page = box.ownerDocument;
+		const onSelectionChange = () => {
+			if (page.activeElement === box) setSelecting(box.selectionStart !== box.selectionEnd);
+		};
+		page.addEventListener("selectionchange", onSelectionChange);
+		return () => page.removeEventListener("selectionchange", onSelectionChange);
+	}, []);
+
+	useEffect(() => setComposerEmpty(draft === ""), [draft]);
+	useEffect(() => () => setComposerEmpty(true), []);
+
+	// Enter and Esc from anywhere on the page, one layer at a time: an open
+	// dialog, menu or viewer takes Esc first and that Esc does nothing else;
+	// a text field keeps its own keys. With nothing open and the box empty,
+	// Enter answers the one waiting question with yes and Esc with no, unless
+	// a button or link has the focus, since Enter presses it.
+	const pageKeyRef = useRef<(enter: boolean) => boolean>(() => false);
+	pageKeyRef.current = (enter) => {
+		if (keyboardApproval && draft === "") {
+			if (enter) keyboardApproval.approve();
+			else keyboardApproval.decline();
+			return true;
+		}
+		// Esc anywhere on the page stops the answer while it runs.
+		return !enter && !!onEscapeStop?.();
+	};
+	useEffect(() => {
+		const onKeyDown = (event: globalThis.KeyboardEvent) => {
+			const enter = event.key === "Enter" && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
+			if ((event.key !== "Escape" && !enter) || event.defaultPrevented || event.isComposing) return;
+			const target = event.target instanceof HTMLElement ? event.target : null;
+			if (target?.closest(".composer-box")) return;
+			if (isTextField(target)) return;
+			if (enter && target && !enterReachesQuestion(target)) return;
+			if (otherLayerOpen()) return;
+			if (pageKeyRef.current(enter)) event.preventDefault();
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, []);
 
 	const syncCaret = useCallback((el: HTMLTextAreaElement) => {
 		setCaret(el.selectionStart ?? el.value.length);
+		setSelecting(el.selectionStart !== el.selectionEnd);
 	}, []);
 
 	const selectMention = useCallback((room: MentionCandidateRoom) => {
@@ -728,38 +1029,35 @@ function ComposerInput({
 
 	const submitDraft = useCallback(() => {
 		if (sendDisabled) return;
-		// Submit routing: a leading mention of a known room consults it instead of
-		// sending normally. Skipped while busy (falls back to normal send).
-		if (mention && !mention.busy) {
-			const resolved = resolveLeadingMention(draft, mention.candidates, mention.currentRoomId);
-			if (resolved) {
-				// §8.3: a composer @-mention always means a FRESH consult, but while a
-				// card is docked that is rejected VISIBLY (the card is where you follow
-				// up) — no auto-dismiss (an affirmative keystroke must not drop an
-				// untransferred stack). The draft is kept so nothing is lost.
-				if (mention.activeConsultDisplayName) {
-					setConsultGateNotice(`a consult with @${mention.activeConsultDisplayName} is open. Follow up in the card, or dismiss it first.`);
-					return;
-				}
-				// Only clear the composer if the consult was actually accepted — if
-				// one is already active (or the socket is down) the request is
-				// rejected, and silently wiping the user's typed question would lose
-				// it with no feedback. Keep the draft so they can retry.
-				const accepted = mention.onConsultRequest(resolved.room.id, resolved.question);
-				if (accepted) {
-					setDraft("");
-					setMentionDismissed(false);
-				}
+		if (mention && leadingMention?.kind === "consult") {
+			// A mention here always means a fresh consult, so while a card is docked
+			// it is refused visibly: the card is where you follow up, and a keystroke
+			// must never drop a stack not yet added to the conversation. The draft
+			// is kept so nothing is lost.
+			if (mention.activeConsultDisplayName) {
+				setConsultGateNotice(`a consult with @${mention.activeConsultDisplayName} is open. Follow up in the card, or dismiss it first.`);
 				return;
 			}
+			// Only clear the composer if the consult was accepted. With one already
+			// active, or the socket down, the request is refused, and wiping the
+			// typed question would lose it with no feedback; the draft stays for a
+			// retry.
+			const accepted = mention.onConsultRequest(leadingMention.room.id, leadingMention.question);
+			if (accepted) {
+				setDraft("");
+				setMentionDismissed(false);
+			}
+			return;
 		}
 		const accepted = onSend(draft);
 		if (accepted) {
 			setDraft("");
 		}
-	}, [draft, onSend, sendDisabled, mention]);
+	}, [draft, onSend, sendDisabled, mention, leadingMention]);
 
 	function handleComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+		// Enter that confirms a Japanese, Chinese or Korean word is the input method's, never a send.
+		if (e.nativeEvent.isComposing || e.keyCode === 229) return;
 		if (mentionOpen) {
 			// Navigation and selection never submit the message (spec invariant).
 			if (e.key === "ArrowDown") { e.preventDefault(); setMentionIndex((i) => (Math.min(i, mentionMatches.length - 1) + 1) % mentionMatches.length); return; }
@@ -769,17 +1067,27 @@ function ComposerInput({
 		}
 		// An empty composer answers the one pending yes/no card; with text in
 		// it, Enter sends as always and the card stays.
-		if (keyboardApproval && draft === "" && !e.shiftKey && (e.key === "Enter" || e.key === "Escape")) {
+		// Cmd/Ctrl+Enter is never the card's: in an empty box it sends the first queued message now.
+		if (keyboardApproval && draft === "" && !e.shiftKey && !(e.key === "Enter" && chordHeld(e.nativeEvent)) && (e.key === "Enter" || e.key === "Escape")) {
 			e.preventDefault();
 			e.stopPropagation();
 			if (e.key === "Enter") keyboardApproval.approve();
 			else keyboardApproval.decline();
 			return;
 		}
+		// Cmd+Enter on a Mac, Ctrl+Enter elsewhere: now, even through the answer; in an empty box, the first queued message goes now.
+		if (e.key === "Enter" && !e.shiftKey && !e.altKey && chordHeld(e.nativeEvent) && (onSendNow || onSendQueuedNow)) {
+			e.preventDefault();
+			if (!boxHasText) onSendQueuedNow?.();
+			else if (!sendUnavailable && !queueRefused && onSendNow?.(draft)) setDraft("");
+			return;
+		}
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			submitDraft();
+			return;
 		}
+		if (e.key === "Escape" && onEscapeStop?.()) e.preventDefault();
 	}
 
 	// A pasted file stages as an attachment, through the exact path the
@@ -817,27 +1125,41 @@ function ComposerInput({
 			{mentionBusyActive && mention && <MentionConsultPopoverBusy title={mention.busyTitle} />}
 			{consultGateNotice && <div className="composer-consult-gate" role="status">{consultGateNotice}</div>}
 			{stagingSlot}
-			<textarea
-				ref={setTextareaNode}
-				value={draft}
-				onChange={(e) => { setMentionDismissed(false); setConsultGateNotice(null); setDraft(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); }}
-				onKeyUp={(e) => syncCaret(e.currentTarget)}
-				onClick={(e) => syncCaret(e.currentTarget)}
-				onSelect={(e) => syncCaret(e.currentTarget)}
-				onKeyDown={handleComposerKeyDown}
-				onPaste={handleComposerPaste}
-				placeholder={placeholder}
-				rows={2}
-				spellCheck={false}
-			/>
+			<div className="composer-input">
+				{mentionLength > 0 && (
+					<div className={boxText === "box-and-name" ? "composer-mirror name-only" : "composer-mirror"} ref={mirrorRef} aria-hidden="true">
+						<span className="composer-mention">{draft.slice(0, mentionLength)}</span>
+						{draft.slice(mentionLength)}
+						{/* The box shows a line after a final line break; an empty text node gives none. */}
+						{draft.endsWith("\n") && "\u200b"}
+					</div>
+				)}
+				<textarea
+					ref={setTextareaNode}
+					className={boxText === "layer" ? "has-mention" : undefined}
+					value={draft}
+					onChange={(e) => { setMentionDismissed(false); setConsultGateNotice(null); setDraft(e.target.value); syncCaret(e.target); }}
+					onKeyUp={(e) => syncCaret(e.currentTarget)}
+					onClick={(e) => syncCaret(e.currentTarget)}
+					onSelect={(e) => syncCaret(e.currentTarget)}
+					onKeyDown={handleComposerKeyDown}
+					onPaste={handleComposerPaste}
+					onScroll={(e) => { if (mirrorRef.current) mirrorRef.current.scrollTop = e.currentTarget.scrollTop; }}
+					onCompositionStart={() => setComposing(true)}
+					onCompositionEnd={() => setComposing(false)}
+					placeholder={placeholder}
+					rows={2}
+					spellCheck={false}
+				/>
+			</div>
 			<div className="composer-box-bottom">
 				<div className="composer-box-status">{statusSlot}</div>
 				<div className="composer-box-controls">
 					{rightActions && <div className="composer-actions">{rightActions}</div>}
-					{stopVisible ? (
+					{stopVisible && !draft.trim() ? (
 						<button className="send-btn stop-btn" onClick={onStop} disabled={stopDisabled} aria-label={stopLabel} title={stopLabel}><span aria-hidden="true">■</span></button>
 					) : (
-						<button className="send-btn" onClick={submitDraft} disabled={sendDisabled} aria-label="Send" title={sendTitle}>↑</button>
+						<button className="send-btn" onClick={submitDraft} disabled={sendDisabled} aria-label="Send" title={sendButtonTitle}>↑</button>
 					)}
 				</div>
 			</div>
@@ -858,6 +1180,9 @@ export function InRoomChatShellView({
 	currentModelProvider,
 	topbarActions,
 	composerRightActions,
+	composerAttachSlot,
+	composerRememberSlot,
+	composerModelSlot,
 	composerStagingSlot,
 	composerAllowEmptySend,
 	composerOnPasteFiles,
@@ -873,6 +1198,12 @@ export function InRoomChatShellView({
 	stopVisible,
 	stopDisabled,
 	stopLabel,
+	onSendNow,
+	onSendQueuedNow,
+	queueRefusal,
+	onEscapeStop,
+	queued,
+	queuedActions,
 	textareaRef,
 	composerPlaceholder,
 	sendUnavailable,
@@ -895,8 +1226,15 @@ export function InRoomChatShellView({
 	onOpenTaskArtifact,
 	attachmentAccess,
 	failureLineActions,
+	answerDrawnAtOnceId = null,
+	stepsElsewhere = false,
+	statusLine = null,
 	aboveComposerSlot,
+	edit,
 }: InRoomChatShellViewProps) {
+	const sharedServer = useRemoteClientContext().sharedServer;
+	// At the phone breakpoint the model moves to the header and the row under the box goes.
+	const phone = usePhoneWidth();
 	const messagesElRef = useRef<HTMLDivElement | null>(null);
 	const dockElRef = useRef<HTMLDivElement | null>(null);
 	// The column holding the dock and the composer, where the dock's height is
@@ -912,11 +1250,15 @@ export function InRoomChatShellView({
 	// A smooth programmatic scroll (the send, a pill click) is running until
 	// this time: the per-tick bottom pin must not cut it short.
 	const smoothScrollUntilRef = useRef(0);
+	// Where that smooth scroll lands: its scroll there ends it.
+	const glideTargetRef = useRef<number | null>(null);
 	// A glide the reader cut short: until it would have landed, reaching the
 	// bottom is the glide's leftover, not the reader coming back.
 	const glideInterruptedUntilRef = useRef(0);
 	// Gesture bookkeeping for the follow decision (see FOLLOW_RESUME_BOTTOM_PX).
 	const lastGestureAtRef = useRef(0);
+	const lastDownGestureAtRef = useRef(0);
+	const lastUpGestureAtRef = useRef(0);
 	const lastProgrammaticScrollAtRef = useRef(0);
 	const lastScrollHeightRef = useRef(0);
 	const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -927,7 +1269,11 @@ export function InRoomChatShellView({
 	// indicator vanished once anything followed the user's message; hide it
 	// only while assistant text is actually growing on screen.
 	const visiblyStreaming = lastItem?.kind === "assistant" && lastItem.streaming === true && !!lastItem.text;
-	const showThinkingIndicator = busy && items.length > 0 && !visiblyStreaming;
+	// The one "Reconnecting…" the page shows, in the working dot's place.
+	const turnStatusLine = !connected && reconnectState === "reconnecting" && !connectionStopped ? "Reconnecting…" : statusLine;
+	const showThinkingIndicator = Boolean(turnStatusLine) || (busy && items.length > 0 && !visiblyStreaming);
+	const [boxHasText, setBoxHasText] = useState(false);
+	const queuedSlot = useMemo(() => (queued && queued.length > 0 && queuedActions ? <QueuedBubbles key="queued" messages={queued} actions={queuedActions} boxHasText={boxHasText} /> : null), [queued, queuedActions, boxHasText]);
 	const soleApproval = soleKeyboardApproval(items);
 	const keyboardApproval = useMemo(() => {
 		if (!soleApproval) return null;
@@ -937,6 +1283,32 @@ export function InRoomChatShellView({
 			decline: () => onResolveApproval(soleApproval.requestId, false, labels.decline),
 		};
 	}, [soleApproval, onResolveApproval]);
+	// The context ring and Reconnect: under the box on wider screens, inside it
+	// on the phone. Before the room's first ready frame, an empty ring.
+	const offlineWord = !connected && !connectionStopped && reconnectState !== "reconnecting" ? "Offline" : null;
+	const contextSlot = (
+		<>
+			{contextHealth ? (
+				<ContextPill
+					status={contextHealth}
+					usage={usage}
+					currentModelLabel={currentModelLabel}
+					currentModelProvider={currentModelProvider}
+					connected={connected}
+					reconnectState={reconnectState}
+					stopped={!!connectionStopped}
+				/>
+			) : (
+				<span className={`composer-context-pill composer-context-waiting ${offlineWord ? "offline" : "unknown"}`} role="status" aria-label={offlineWord ?? "Context: appears when the room is ready"}>
+					<ContextRing percent={null} />
+					{offlineWord && <span className="composer-context-pill-label">{offlineWord}</span>}
+				</span>
+			)}
+			{!connected && reconnectState === "failed" && onReconnect && !connectionStopped && (
+				<button type="button" className="icon-btn composer-reconnect-btn" title={sharedServer ? "Try again now. If it keeps failing, reload the page or tell your admin." : "The automatic reconnect gave up. Try again now. If it keeps failing, restart exxperts."} onClick={onReconnect}>Reconnect</button>
+			)}
+		</>
+	);
 	const composerLayoutClass = [
 		"composer-layout",
 		composerRightActions ? "with-actions" : "",
@@ -973,10 +1345,18 @@ export function InRoomChatShellView({
 				else el.scrollTop = el.scrollTop;
 			}
 			smoothScrollUntilRef.current = 0;
+			glideTargetRef.current = null;
 		};
 		const onWheel = (event: WheelEvent) => {
-			lastGestureAtRef.current = performance.now();
-			if (event.deltaY < 0) stopFollowing();
+			const now = performance.now();
+			lastGestureAtRef.current = now;
+			if (event.deltaY > 0) lastDownGestureAtRef.current = now;
+			if (event.deltaY < 0) {
+				lastUpGestureAtRef.current = now;
+				// Whether the chat overflows, not scrollTop: the browser may have applied
+				// this wheel's scroll already, so a wheel that reached the top reads 0.
+				if (el.scrollHeight - el.clientHeight > FOLLOW_RESUME_BOTTOM_PX) stopFollowing();
+			}
 		};
 		let touchY: number | null = null;
 		const onTouchStart = (event: TouchEvent) => {
@@ -987,13 +1367,23 @@ export function InRoomChatShellView({
 			lastGestureAtRef.current = performance.now();
 			const y = event.touches[0]?.clientY;
 			// A finger moving down drags the content down: reading back up.
-			if (y !== undefined && touchY !== null && y > touchY) stopFollowing();
+			if (y !== undefined && touchY !== null && y > touchY) {
+				lastUpGestureAtRef.current = lastGestureAtRef.current;
+				stopFollowing();
+			} else if (y !== undefined && touchY !== null && y < touchY) lastDownGestureAtRef.current = lastGestureAtRef.current;
 			if (y !== undefined) touchY = y;
 		};
 		const onKeyDown = (event: globalThis.KeyboardEvent) => {
-			if (event.key !== "PageUp" && event.key !== "ArrowUp" && event.key !== "Home") return;
+			const up = event.key === "PageUp" || event.key === "ArrowUp" || event.key === "Home";
+			const down = event.key === "PageDown" || event.key === "ArrowDown" || event.key === "End";
+			if (!up && !down) return;
 			const target = event.target as HTMLElement | null;
 			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.tagName === "SELECT" || target.isContentEditable)) return;
+			if (down) {
+				lastDownGestureAtRef.current = performance.now();
+				return;
+			}
+			lastUpGestureAtRef.current = performance.now();
 			stopFollowing();
 		};
 		el.addEventListener("wheel", onWheel, { passive: true });
@@ -1016,22 +1406,46 @@ export function InRoomChatShellView({
 		const previousScrollHeight = lastScrollHeightRef.current;
 		lastScrollTopRef.current = el.scrollTop;
 		lastScrollHeightRef.current = el.scrollHeight;
+		// A glide that has landed: its own last step, and from here a scroll is the reader's again.
+		if (now < smoothScrollUntilRef.current && glideTargetRef.current !== null && Math.abs(el.scrollTop - glideTargetRef.current) <= 1) {
+			smoothScrollUntilRef.current = 0;
+			glideTargetRef.current = null;
+			lastProgrammaticScrollAtRef.current = now;
+			return;
+		}
 		// The app's own writes and glides decide nothing.
 		if (now < smoothScrollUntilRef.current || now - lastProgrammaticScrollAtRef.current < PROGRAMMATIC_SCROLL_WINDOW_MS) return;
 		// Content that shrank clamps scrollTop; that is not the reader either.
 		const shrank = el.scrollHeight < previousScrollHeight;
 		if (!shrank) {
-			// Moving up with no wheel or touch behind it: the scrollbar, or keys.
-			if (el.scrollTop < previousScrollTop - 1 && now - lastGestureAtRef.current > GESTURE_SCROLL_WINDOW_MS) {
+			// Moving with no wheel or touch behind it: the scrollbar, or keys.
+			const noGesture = now - lastGestureAtRef.current > GESTURE_SCROLL_WINDOW_MS;
+			if (el.scrollTop < previousScrollTop - 1 && noGesture) {
 				autoFollowRef.current = false;
 			}
 			// The reader reached the true bottom themselves: follow again.
 			if (!autoFollowRef.current && bottomDistance(el) <= FOLLOW_RESUME_BOTTOM_PX && now >= glideInterruptedUntilRef.current) {
 				autoFollowRef.current = true;
 			}
+			// Or scrolled down to just short of a bottom that keeps moving away.
+			const downOnPurpose = noGesture || now - lastDownGestureAtRef.current <= GESTURE_SCROLL_WINDOW_MS;
+			const caughtUp = el.scrollTop > previousScrollTop && bottomDistance(el) <= FOLLOW_CATCH_BOTTOM_PX && downOnPurpose && now - lastUpGestureAtRef.current > UP_GESTURE_QUIET_MS;
+			if (!autoFollowRef.current && caughtUp && now >= glideInterruptedUntilRef.current) {
+				autoFollowRef.current = true;
+			}
 		}
 		setShowJumpToLatest(!autoFollowRef.current && shouldShowJumpToLatest(el, empty));
 	}, [empty]);
+
+	/** Glides to the bottom; false when there is no glide to run (reduced motion, no smooth scroll, already there). */
+	const glideToBottom = useCallback((el: HTMLElement): boolean => {
+		const target = Math.max(0, el.scrollHeight - el.clientHeight);
+		if (prefersReducedMotion() || typeof el.scrollTo !== "function" || Math.abs(el.scrollTop - target) <= 1) return false;
+		smoothScrollUntilRef.current = performance.now() + SMOOTH_SCROLL_MAX_MS;
+		glideTargetRef.current = target;
+		el.scrollTo({ top: target, behavior: "smooth" });
+		return true;
+	}, []);
 
 	// The one animated scroll besides the send: the stream's own ticks never
 	// animate, and they hold off until this glide has landed.
@@ -1040,13 +1454,8 @@ export function InRoomChatShellView({
 		if (!el) return;
 		autoFollowRef.current = true;
 		setShowJumpToLatest(false);
-		if (!prefersReducedMotion() && typeof el.scrollTo === "function") {
-			smoothScrollUntilRef.current = performance.now() + SMOOTH_SCROLL_MS;
-			el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-			return;
-		}
-		pinToBottom(el);
-	}, [pinToBottom]);
+		if (!glideToBottom(el)) pinToBottom(el);
+	}, [pinToBottom, glideToBottom]);
 
 	// The above-composer dock (consult / task card) shares the column with the
 	// messages: when it mounts or grows it shrinks the scroll area from below,
@@ -1074,6 +1483,11 @@ export function InRoomChatShellView({
 			else setShowJumpToLatest(shouldShowJumpToLatest(el, empty));
 		};
 		const observer = new ResizeObserver(() => {
+			// The scrollbar gutter the messages keep (8px styled in Chromium,
+			// wider in a browser that draws its own): the topbar centres on
+			// what is left, so the room name starts where the answers do and
+			// the actions end where the person's message bubbles end.
+			column?.style.setProperty("--messages-gutter", `${el.offsetWidth - el.clientWidth}px`);
 			if (dock) {
 				setDockPresent(dock.offsetHeight > 0);
 				// The room's notices float above the composer; this keeps them
@@ -1092,15 +1506,16 @@ export function InRoomChatShellView({
 		const el = messagesElRef.current;
 		if (!el) return;
 
-		// A live send appends exactly one user message to the list as it was;
-		// anything else that changes the first item (a room switch, a fresh
-		// thread, a refetch after reattach) is a new list and drops the
-		// reservation, so those still open at the bottom as before.
+		// A live send appends exactly one user message to the list as it was
+		// (its last answer may get its unshown rest in the same render, so it
+		// is compared by id); anything else that changes the first item (a
+		// room switch, a fresh thread, a refetch after reattach) is a new list
+		// and drops the reservation, so those still open at the bottom as before.
 		const prevItems = prevItemsRef.current;
 		prevItemsRef.current = items;
 		const appendedSend = items.length === prevItems.length + 1
 			&& lastItem?.kind === "user"
-			&& (prevItems.length === 0 || items[items.length - 2] === prevItems[prevItems.length - 1]);
+			&& (prevItems.length === 0 || items[items.length - 2]?.id === prevItems[prevItems.length - 1]?.id);
 		if (appendedSend) {
 			if (lastItem.id !== reservedTurnId) {
 				// Render the reserved space first; this effect runs again for it.
@@ -1119,13 +1534,15 @@ export function InRoomChatShellView({
 			autoFollowRef.current = true;
 			if (lastItem.id === reservedTurnId) {
 				// The reserved turn is at least the box's height, so the bottom
-				// of the list is exactly the sent message at the top of the box.
-				if (!prefersReducedMotion() && typeof el.scrollTo === "function") {
-					smoothScrollUntilRef.current = performance.now() + SMOOTH_SCROLL_MS;
-					el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-					setShowJumpToLatest(false);
-					return;
-				}
+				// of the list is the sent message at the top of the box, with
+				// what sits above it just out of view (fitReservedTurn). The
+				// view stays where it lands: the answer grows below until the
+				// reader scrolls down to it.
+				fitReservedTurn(el);
+				if (!glideToBottom(el)) pinToBottom(el);
+				autoFollowRef.current = false;
+				setShowJumpToLatest(false);
+				return;
 			}
 		}
 
@@ -1140,7 +1557,7 @@ export function InRoomChatShellView({
 		// Each reveal tick commits one items change, so while not following
 		// this measures the growing reply once per tick and never per token.
 		setShowJumpToLatest(shouldShowJumpToLatest(el, empty));
-	}, [empty, items, lastItem, showThinkingIndicator, reservedTurnId, pinToBottom]);
+	}, [empty, items, lastItem, showThinkingIndicator, reservedTurnId, pinToBottom, glideToBottom, queued?.length]);
 
 	return (
 		<div className="app">
@@ -1159,10 +1576,10 @@ export function InRoomChatShellView({
 									</svg>
 								</button>
 							)}
-							<span className="agent-label">talking to</span>
 							<div className="title-stack">
 								<span className="title">{activeDisplay || "…"}</span>
 								{ownerSecondary && <span className="subtitle">{ownerSecondary}</span>}
+								{phone && composerModelSlot?.("header")}
 							</div>
 							{busy && <span className="spinner" />}
 						</div>
@@ -1186,6 +1603,11 @@ export function InRoomChatShellView({
 								busy={busy}
 								reservedTurnId={reservedTurnId}
 								failureLineActions={failureLineActions}
+								answerDrawnAtOnceId={answerDrawnAtOnceId}
+								turnStatusLine={turnStatusLine}
+								stepsElsewhere={stepsElsewhere}
+								queuedSlot={queuedSlot}
+								edit={edit}
 							/>
 						</div>
 						{showJumpToLatest && (
@@ -1207,6 +1629,7 @@ export function InRoomChatShellView({
 					<div className="composer">
 						{composerOverlaySlot}
 						<div className={composerLayoutClass}>
+							<div className="composer-stack">
 							<ComposerInput
 								onSend={onSend}
 								onStop={onStop}
@@ -1220,38 +1643,31 @@ export function InRoomChatShellView({
 								initialDraftValue={initialDraftValue}
 								draftResetKey={draftResetKey}
 								mention={mention}
-								statusSlot={<>
-									{contextHealth ? (
-										<ContextPill
-											status={contextHealth}
-											usage={usage}
-											currentModelLabel={currentModelLabel}
-											currentModelProvider={currentModelProvider}
-											connected={connected}
-											reconnectState={reconnectState}
-											stopped={!!connectionStopped}
-										/>
-									) : (
-										<div className="composer-status" aria-label="Chat status">
-											{currentModelLabel && <span title={`current chat model: ${formatModelWithProvider(currentModelLabel ?? "", currentModelProvider)}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
-											<span><strong>{usage.turns}</strong> turn{usage.turns === 1 ? "" : "s"}</span>
-											<span>↑ <strong>{fmtTok(allInput(usage))}</strong>{cacheWords(usage, fmtTok) && ` (${cacheWords(usage, fmtTok)})`}</span>
-											<span>↓ <strong>{fmtTok(usage.output)}</strong></span>
-											<span><strong>{fmtCost(usage.cost)}</strong></span>
-											{(usage.contextTokens ?? usage.totalTokens) > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.contextTokens ?? usage.totalTokens)}</strong></span>}
-											{!connectionStopped && <span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>}
-										</div>
-									)}
-									{!connected && reconnectState === "failed" && onReconnect && !connectionStopped && (
-										<button type="button" className="icon-btn composer-reconnect-btn" title="The automatic reconnect gave up. Try again now. If the server isn't running, start it with: exxperts web" onClick={onReconnect}>Reconnect</button>
-									)}
-								</>}
-								rightActions={composerRightActions}
+								statusSlot={phone ? contextSlot : composerAttachSlot && <div className="composer-actions">{composerAttachSlot}</div>}
+								rightActions={phone ? <>{composerAttachSlot}{composerRememberSlot}{composerRightActions}</> : composerRightActions}
 								stagingSlot={composerStagingSlot}
 								allowEmptySend={composerAllowEmptySend}
 								onPasteFiles={composerOnPasteFiles}
 								keyboardApproval={keyboardApproval}
+								onSendNow={onSendNow}
+								onSendQueuedNow={onSendQueuedNow}
+								queueRefusal={queueRefusal}
+								onEscapeStop={onEscapeStop}
+								onBoxTextChange={setBoxHasText}
 							/>
+							{/* Wider screens keep the box to the text, the paperclip and Send;
+							    the meter, Remember and the model sit on one quiet row under it.
+							    The phone has no such row: it would sit on the keyboard. */}
+							{!phone && (
+								<div className="composer-under-row">
+									<div className="composer-under-left">
+										{contextSlot}
+										{composerRememberSlot && <div className="composer-actions composer-under-actions">{composerRememberSlot}</div>}
+									</div>
+									<div className="composer-under-right">{composerModelSlot?.("row")}</div>
+								</div>
+							)}
+							</div>
 						</div>
 					</div>
 				</main>

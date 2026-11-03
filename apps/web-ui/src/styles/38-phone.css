@@ -1,0 +1,216 @@
+/* Phone mechanical correctness ------------------------------------
+   Everything here is media-scoped to the one phone breakpoint so desktop
+   rendering stays byte-identical. */
+@media (max-width: 760px) {
+	/* iOS Safari zooms the whole page when a focused field's font size is
+	   under 16px, and the zoom sticks after blur. Every text-entry control
+	   gets 16px at this width so no field can trigger it; !important
+	   because the desktop rules being overridden are more specific. */
+	input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+	textarea,
+	select {
+		font-size: 16px !important;
+	}
+	/* Controls respond to the first tap: no double-tap-zoom wait and no
+	   accidental zoom on fast taps. Content areas keep pinch zoom. */
+	button,
+	a,
+	label,
+	summary,
+	input,
+	textarea,
+	select,
+	[role="button"] {
+		touch-action: manipulation;
+	}
+	/* A pane that hits its scroll edge must not rubber-band the page. */
+	html,
+	body {
+		overscroll-behavior: none;
+	}
+	.messages,
+	.sidebar-body,
+	.sidebar-list,
+	.landing,
+	.creator-body,
+	.agent-details-body,
+	.room-settings-body,
+	.help-body,
+	.settings-dialog-nav,
+	.settings-dialog-pane,
+	.whats-new-entries,
+	.room-model-menu,
+	.configure-profile-model-list,
+	.composer textarea {
+		overscroll-behavior: contain;
+	}
+	/* Keyboard: phone-viewport.ts mirrors the keyboard's overlap into the
+	   lift variable while a text entry is focused. The composer and the
+	   dock above it ride up on the compositor - the transition smooths the
+	   resize-event steps into one glide that starts with the keyboard -
+	   and the transcript gains the same bottom padding (the module re-pins
+	   it), so its latest line rises with the composer. The shell itself
+	   never resizes: no relayout storm, and every composer popover is
+	   absolute inside it, so they all ride the transform. */
+	.above-composer-dock,
+	.composer {
+		transform: translateY(calc(-1 * var(--phone-keyboard-lift, 0px)));
+		/* Short and linear: just enough to soften the sparse viewport
+		   events into steps, without adding perceptible lag of its own. */
+		transition: transform 80ms linear;
+		will-change: transform;
+	}
+	.messages {
+		padding-bottom: calc(20px + var(--phone-keyboard-lift, 0px));
+	}
+	/* Safe areas (viewport-fit=cover): the bars along the top edge pad
+	   past the status bar / notch; the composer already respects the home
+	   indicator. Zero in a regular browser tab, real on a home-screen app
+	   and in landscape. */
+	.topbar {
+		padding-top: calc(8px + env(safe-area-inset-top, 0px));
+	}
+	.product-sidebar {
+		padding-top: env(safe-area-inset-top, 0px);
+	}
+	.app > .sidebar {
+		padding-top: env(safe-area-inset-top, 0px);
+		padding-left: env(safe-area-inset-left, 0px);
+	}
+	.sidebar-header .sidebar-toggle,
+	.sidebar-toggle-floating {
+		top: calc(8px + env(safe-area-inset-top, 0px));
+	}
+	/* A touch screen has no hover to show the drawer's button, so on the
+	   phone it keeps a resting square; wider screens show only its glyph. */
+	.sidebar-toggle-floating {
+		background: color-mix(in srgb, var(--fg) 6%, transparent);
+	}
+	.settings-dialog-head {
+		padding-top: calc(16px + env(safe-area-inset-top, 0px));
+	}
+}
+
+/* Composer on phones ----------------------------------------------
+   One bottom row in the box: the context ring left, the paperclip,
+   the command mode, Remember and Send right. The model sits under the
+   room's name in the header, so nothing sits under the box above the
+   keyboard. */
+@media (max-width: 760px) {
+	.composer-box-bottom .composer-actions {
+		gap: 8px;
+	}
+}
+
+/* In-room drawer backdrop (phone) --------------------------------
+   The rail overlays the chat at this width, so an open rail dims what it
+   covers - same backdrop treatment as the settings overlay. Tap closes;
+   the component itself only mounts at phone width. */
+@media (max-width: 760px) {
+	.sidebar-drawer-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 59;
+		background: color-mix(in srgb, var(--bg) 72%, transparent);
+		backdrop-filter: blur(10px);
+	}
+}
+@media (min-width: 761px) {
+	.sidebar-drawer-backdrop {
+		display: none;
+	}
+}
+
+/* Phone type scale ------------------------------------------------
+   Hero headings drop a step at the phone breakpoint, to the size the
+   settings dialogs use for their titles. */
+@media (max-width: 760px) {
+	.landing h1 {
+		font-size: 24px;
+	}
+}
+
+/* Gateway panel on phones -----------------------------------------
+   The bulk row's desktop one-liner cannot survive 393px; instead of an
+   accidental three-line wrap it becomes a deliberate stack: the approve
+   count with use detected beside it, then the capability toggles in
+   their own rows. Controls get comfortable tap sizes here too. */
+@media (max-width: 760px) {
+	.gateway-model-bulk-row {
+		row-gap: 10px;
+		padding-top: 10px;
+		padding-bottom: 10px;
+	}
+	.gateway-model-bulk-row .gateway-model-approve {
+		flex-basis: 100%;
+	}
+	.gateway-model-bulk-seg button,
+	.gateway-model-bulk-button {
+		padding: 8px 12px;
+	}
+	.gateway-model-adjust {
+		padding: 8px 12px;
+	}
+	.gateway-model-row {
+		row-gap: 10px;
+	}
+}
+
+/* Room settings strip on phones ------------------------------------ */
+@media (max-width: 760px) {
+	/* The create-room and configure-profile dialogs fill the phone edge to edge. */
+	.room-settings-overlay {
+		padding: 0;
+	}
+}
+
+/* Phone home button ------------------------------------------------
+   On desktop the persistent sidebar is the way home; on a phone the rail
+   is a drawer, so the room topbar carries a direct way back to the rooms
+   landing. Chromeless like the rail toggle beside it. Hidden above the
+   breakpoint, so desktop pixels stay untouched. */
+.topbar-home-btn {
+	display: none;
+}
+@media (max-width: 760px) {
+	/* Pinned to the same fixed coordinate system as the floating rail
+	   toggle beside it, same box, same vertical center - as a flow child
+	   of the topbar it sat visibly off the toggle's line. */
+	.topbar-home-btn {
+		position: fixed;
+		top: calc(8px + env(safe-area-inset-top, 0px));
+		left: 46px;
+		z-index: 40;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		padding: 0;
+		background: transparent;
+		border: 0;
+		border-radius: 9px;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.topbar-home-btn:hover,
+	.topbar-home-btn:focus-visible {
+		background: color-mix(in srgb, var(--fg) 10%, transparent);
+		color: var(--fg);
+		outline: none;
+	}
+	/* The mac app zoomed in to this width: the toggle sits right of the window
+	   buttons (in window points), and the home button keeps beside it. */
+	html.desktop-app-mac .topbar-home-btn {
+		top: var(--mac-toggle-top);
+		left: calc(var(--mac-toggle-left) + 36px);
+	}
+	/* The in-room topbar clears BOTH floating buttons now, not just the
+	   rail toggle's 52px. The second selector matches the collapsed-state
+	   rule that sets the 52px, so it wins on order at equal specificity. */
+	.app .topbar,
+	html.sidebar-collapsed:not(.desktop-app-mac) .app .topbar {
+		padding-left: 84px;
+	}
+}
+

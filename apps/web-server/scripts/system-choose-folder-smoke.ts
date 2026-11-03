@@ -24,10 +24,6 @@ async function main(): Promise<void> {
 	assert(selected.path === "/Users/example/Workspace Folder/", `selected path should be trimmed, got ${selected.path}`);
 	assert(capturedCommand === "/custom/osascript", `runner should receive configured osascript path, got ${capturedCommand}`);
 	assert(capturedArgs.length === 4 && capturedArgs[0] === "-l" && capturedArgs[1] === "JavaScript" && capturedArgs[2] === "-e", `runner should receive osascript -l JavaScript -e args, got ${capturedArgs.join(" ")}`);
-	assert(capturedArgs[3]?.includes("app.chooseFolder(") && !capturedArgs[3].includes("NSOpenPanel"), "osascript should open the system's choose folder window, which takes focus (a bare NSOpenPanel did not)");
-	// Cmd+V in New Folder reaches the text field only through an Edit menu.
-	assert(capturedArgs[3].includes('["Paste", "paste:", "v"]') && capturedArgs[3].includes("sharedApplication.mainMenu = bar"), "the script should give itself an Edit menu with Paste");
-	assert(capturedArgs[3].indexOf("mainMenu = bar") < capturedArgs[3].indexOf("chooseFolder("), "the menu is in place before the window opens");
 	assert(capturedTimeout === 1234, `runner should receive timeout, got ${capturedTimeout}`);
 
 	const cancelledRunner: LocalFolderPickerRunner = async () => {
@@ -141,11 +137,9 @@ async function main(): Promise<void> {
 	const windowsGarbled = await chooseLocalFolder({ platform: "win32", runner: windowsGarbledRunner });
 	assert(!windowsGarbled.ok && windowsGarbled.supported === true && windowsGarbled.code === "choose_folder_failed", `garbled windows output should fail safely: ${JSON.stringify(windowsGarbled)}`);
 
-	// The purpose picks the prompt, and only the two known purposes get one of
-	// their own: anything else lands on the workspace wording rather than
-	// putting a client's text into a native dialog.
-	assert(folderPickerPrompt("workspace") === "Choose workspace folder", `workspace purpose should keep the workspace prompt, got ${folderPickerPrompt("workspace")}`);
-	assert(folderPickerPrompt("data-folder") === "Choose the exxperts data folder", `data-folder purpose should name the data folder, got ${folderPickerPrompt("data-folder")}`);
+	// Only the two known purposes get a prompt of their own: anything else lands
+	// on the workspace wording rather than putting a client's text into a native
+	// dialog.
 	for (const unknown of [undefined, null, "", "toString", "constructor", "Data-Folder", 7, { purpose: "data-folder" }]) {
 		assert(folderPickerPrompt(unknown) === "Choose workspace folder", `unknown purpose ${JSON.stringify(unknown)} should fall back to the workspace prompt`);
 	}

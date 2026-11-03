@@ -8,11 +8,6 @@
     "pi-package"
   ],
   "type": "module",
-  "pi": {
-    "themes": [
-      "./themes"
-    ]
-  },
   "dependencies": {
     "typebox": "^1.1.24",
     "pi-mcp-adapter": "2.10.0"

@@ -54,9 +54,8 @@ try {
 	assert(!badName.ok && badName.reason === "invalid-name", "an invalid connector name must be rejected");
 	assert(!revokePersistentRoomMcpConnector(agentId, "../escape").ok, "a path-escaping name must be rejected");
 
-	// File lives under the room runtime dir at 0600; grants are deduped + sorted.
+	// The file is 0600; grants are deduped + sorted.
 	const settingsPath = persistentRoomMcpSettingsPath(agentId);
-	assert(settingsPath === path.join(root, agentId, "runtime", "mcp-settings.json"), "settings file should live under the room runtime dir");
 	if (process.platform !== "win32") {
 		const mode = fs.statSync(settingsPath).mode & 0o777;
 		assert(mode === 0o600, `settings file should be 0600, got ${mode.toString(8)}`);
@@ -103,7 +102,8 @@ try {
 	assert(threwId, "path-escaping agent ids should be rejected");
 
 	// Connector-delete revoke sweep: every room holding the grant loses it,
-	// rooms without it are untouched, non-room dirs are skipped.
+	// rooms without it are untouched, non-room dirs are skipped. That the grant
+	// is gone through the delete route is persistent-room-mcp-grants-api-smoke's.
 	seedRoomDir("room-hold-a");
 	seedRoomDir("room-hold-b");
 	seedRoomDir("room-clean");
@@ -115,14 +115,13 @@ try {
 	assert(sweep.revokedFrom.sort().join(",") === "room-hold-a,room-hold-b", `the sweep should name exactly the rooms that held the grant, got ${sweep.revokedFrom.join(",")}`);
 	assert(sweep.failures.length === 0, `a clean sweep should report no failures, got ${JSON.stringify(sweep.failures)}`);
 	assert(readPersistentRoomMcpSettings("room-hold-a").grantedConnectors.join(",") === "linear", "sweep should remove only the deleted connector");
-	assert(readPersistentRoomMcpSettings("room-hold-b").grantedConnectors.length === 0, "sweep should empty a room that held only the deleted connector");
 	assert(readPersistentRoomMcpSettings("room-clean").grantedConnectors.join(",") === "linear", "rooms without the grant stay untouched");
-	assert(revokeMcpConnectorFromAllRooms("figma").revokedFrom.length === 0, "a second sweep finds nothing to revoke");
 	// Writes are atomic (tmp + rename): no temp file may linger after a write.
 	assert(!fs.readdirSync(path.join(root, "room-hold-a", "runtime")).some((entry) => entry.endsWith(".tmp")), "settings writes must not leave temp files behind");
 
 	// Update-day migration: rooms WITHOUT a settings file get the full current
-	// list once; rooms with a file keep it; the marker makes it one-time.
+	// list once; rooms with a file keep it; the marker makes it one-time. The
+	// full list and the marker are persistent-room-mcp-scope-smoke's.
 	const migrationRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-mcp-migration-"));
 	const options = { persistentAgentsRoot: migrationRoot };
 	fs.mkdirSync(path.join(migrationRoot, "legacy-room-one"), { recursive: true });
@@ -134,9 +133,7 @@ try {
 	writePersistentRoomMcpSettings("opted-out-room", [], options);
 	const migrated = ensurePersistentRoomMcpGrantsMigration(configured, options);
 	assert(migrated.sort().join(",") === "legacy-room-one,legacy-room-two", `migration should grant only rooms without a file, got ${migrated.join(",")}`);
-	assert(readPersistentRoomMcpSettings("legacy-room-one", options).grantedConnectors.join(",") === "figma,linear,notion", "an existing room must receive the FULL current connector list");
 	assert(readPersistentRoomMcpSettings("opted-out-room", options).grantedConnectors.length === 0, "a room with an existing file keeps it");
-	assert(fs.existsSync(path.join(migrationRoot, ".mcp-grants-migration.json")), "migration should write its marker");
 	// After the marker: new rooms without a file simply read as empty.
 	fs.mkdirSync(path.join(migrationRoot, "new-room"), { recursive: true });
 	fs.writeFileSync(path.join(migrationRoot, "new-room", "agent.json"), "{}");

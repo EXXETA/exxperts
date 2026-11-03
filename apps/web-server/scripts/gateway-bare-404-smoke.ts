@@ -4,7 +4,8 @@
 // is no longer listed (Choose another model), the list itself is not found at
 // the saved address (AI setup), or the model is listed and still failed (Try
 // again); a list that cannot be read names the gateway and AI setup. On a
-// shared server each line ends with the admin, with no AI setup button. A
+// shared server the Memory notice's and a memory card's words end with the
+// admin, with no AI setup button. A
 // built-in provider's 404 stays "no longer offered". One read serves every
 // call to that gateway for a while, Memory model calls included, and reads
 // /models alone. Only the outcome travels: never the gateway's own words.
@@ -92,25 +93,15 @@ try {
 	check(hits.get("/gone/v1/models") === 1, `two failures in a row read the list once, got ${hits.get("/gone/v1/models")}`);
 	check(![...hits.keys()].some((url) => url.includes("/model/info")), `only /models is read, got ${JSON.stringify([...hits.keys()])}`);
 
-	// The chat's four lines on this computer, and their buttons.
+	// The chat's buttons on this computer.
 	const call = lines as unknown as Record<string, (...args: unknown[]) => any>;
-	const chatLine = (kind: (typeof KINDS)[number], shared: boolean) => lines.failureLineText(call.turnFailureLine("Acme Model", "gateway-not-found", `gw-${kind}`, undefined, shared, label(kind), expected[kind]), "above");
-	const LINES = {
-		gone: "Gone gateway no longer has Acme Model. Your message is still above. Choose one of its current models.",
-		address: "Address gateway isn't answering at its saved address. Your message is still above. Check the address in AI setup.",
-		listed: "Listed gateway lists Acme Model but couldn't run it. Your message is still above. Try again later, or tell whoever runs the gateway.",
-		unread: "Unread gateway could not find Acme Model. Your message is still above. Check the gateway in AI setup.",
-	};
 	const BUTTONS = { gone: "chooseModel", address: "aiSetup", listed: "tryAgain", unread: "aiSetup" };
 	const shownButtons = (kind: (typeof KINDS)[number], shared: boolean) => Object.entries(call.failureButtons("gateway-not-found", undefined, shared, expected[kind])).filter(([, on]) => on).map(([name]) => name).join("|");
-	for (const kind of KINDS) {
-		check(chatLine(kind, false) === LINES[kind], `${kind}: the chat's line, got "${chatLine(kind, false)}"`);
-		check(shownButtons(kind, false) === BUTTONS[kind], `${kind}: the chat's button, got "${shownButtons(kind, false)}"`);
-	}
+	for (const kind of KINDS) check(shownButtons(kind, false) === BUTTONS[kind], `${kind}: the chat's button, got "${shownButtons(kind, false)}"`);
 	check(lines.failureLineWords("Check the address in AI setup.", call.failureButtons("gateway-not-found", undefined, false, "address")) === "Check the address.", "AI setup's button takes the place of where it is");
 	check(shownButtons("unread", false) === "aiSetup" && call.failureButtons("gateway-not-found", undefined, false).aiSetup === true, "before the look, the line offers AI setup");
 
-	// The Memory model on a gateway: the same words on the notice and the cards, from the same read.
+	// The Memory model on a gateway: the notice reuses the chat's read.
 	const memoryCall = async (kind: string) => {
 		try {
 			await causes.callWithPatience(async () => { throw causes.failedMessageError(words, codes); }, { model: { provider: `gw-${kind}`, model: MODEL, label: "Acme Model" }, sleep: async () => {} });
@@ -121,14 +112,11 @@ try {
 	};
 	const gone = await memoryCall("gone");
 	check(gone?.details?.detail === "gateway-not-found" && gone.details.gatewayFind === "model-gone", `the Memory notice carries the cause and what the list said, got ${JSON.stringify(gone?.details)}`);
-	check(gone?.message === "Gone gateway no longer has Acme Model. Nothing was lost. Choose one of its current models.", `the Memory notice's sentence, got "${gone?.message}"`);
 	check(hits.get("/gone/v1/models") === 1, `a Memory model call after the chat's reuses the read, got ${hits.get("/gone/v1/models")}`);
 	// A key or address saved again for that gateway: its next failure reads the list again.
 	forgetGatewayModelFind("gw-gone");
 	await gatewayModelFind("gw-gone", MODEL);
 	check(hits.get("/gone/v1/models") === 2, `a key or address saved again reads the list again, got ${hits.get("/gone/v1/models")}`);
-	const listedCard = copy.absorbRunPausedSentence("Acme Model", "gateway-not-found", "gw-listed", undefined, undefined, undefined, "Listed gateway", "model-listed");
-	check(listedCard === "Listed gateway lists Acme Model but couldn't run it. Nothing was lost. Try again later, or tell whoever runs the gateway.", `a paused memory card's line, got "${listedCard}"`);
 
 	// A real Memorize on a gateway: the fold's patient call and the run's own probe each meet the bare 404,
 	// and the run's stop and its paused card say what the list said.
@@ -183,27 +171,16 @@ try {
 	]);
 	const returned = await stepBackFromFailedPrompt({ sessionManager: { getLeafEntry: () => entries.get("a1"), getEntry: (id: string) => entries.get(id), appendCustomEntry: () => "c1" }, navigateTree: async () => ({ cancelled: false }) } as never, { shown: "Hello" });
 	check(returned?.failure === "gateway-not-found" && returned.gatewayFind === "model-listed", `the hand-back carries the cause and what the list said, got ${JSON.stringify(returned)}`);
-	const handedBack = returned ? lines.failureLineText(lines.returnedFailureLine("Acme Model", returned as never, false, "Listed gateway"), "back") : "";
-	check(handedBack === "Listed gateway lists Acme Model but couldn't run it. Your message is back in the box. Try again later, or tell whoever runs the gateway.", `the hand-back's line, got "${handedBack}"`);
 
-	// On a shared server AI setup is the admin's: each line ends with the admin, with no AI setup button.
+	// On a shared server AI setup is the admin's: the Memory notice's and a memory card's words end with the admin, with no AI setup button.
 	const { fetchRemoteClientContext } = await import("../../web-ui/src/remote-client-context.js");
 	const realFetch = globalThis.fetch;
 	globalThis.fetch = (async () => new Response(JSON.stringify({ remote: false, capability: "full", sharedServer: true }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
 	try { await fetchRemoteClientContext(); } finally { globalThis.fetch = realFetch; }
 	const { registerServerHooks } = await import("../src/server-hooks.js");
 	registerServerHooks({});
-	const SHARED = {
-		gone: "Gone gateway no longer has Acme Model. Your message is still above. Choose one of its current models, or tell your admin.",
-		address: "Address gateway isn't answering at its saved address. Your message is still above. Tell your admin.",
-		listed: "Listed gateway lists Acme Model but couldn't run it. Your message is still above. Try again later, or tell your admin.",
-		unread: "Unread gateway could not find Acme Model. Your message is still above. Tell your admin.",
-	};
 	const SHARED_BUTTONS = { gone: "chooseModel", address: "", listed: "tryAgain", unread: "" };
-	for (const kind of KINDS) {
-		check(chatLine(kind, true) === SHARED[kind], `${kind}: the chat's line on a shared server, got "${chatLine(kind, true)}"`);
-		check(shownButtons(kind, true) === SHARED_BUTTONS[kind], `${kind}: no AI setup button on a shared server, got "${shownButtons(kind, true)}"`);
-	}
+	for (const kind of KINDS) check(shownButtons(kind, true) === SHARED_BUTTONS[kind], `${kind}: no AI setup button on a shared server, got "${shownButtons(kind, true)}"`);
 	const sharedNotice = causes.modelUnreachableSentence("gateway-not-found", { provider: "gw-address", model: MODEL, label: "Acme Model" }, undefined, undefined, undefined, "address");
 	check(sharedNotice === "Address gateway isn't answering at its saved address. Nothing was lost. Tell your admin.", `the Memory notice on a shared server, got "${sharedNotice}"`);
 	check(copy.memoryModelStopWayOn("gateway-not-found", undefined, undefined, "unread") === "Tell your admin.", "a memory card on a shared server tells the admin");

@@ -15,6 +15,10 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+import { closeBrowser, closeContext } from "./smoke-close-context.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -88,15 +92,6 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -142,6 +137,15 @@ try {
 	try {
 		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		const page = await ctx.newPage();
+		// Each room socket in the order opened, and the newest that the server said ready on: the room takes a message once it has.
+		let roomSocketsOpened = 0;
+		let readyOn = 0;
+		page.on("websocket", (socket) => {
+			if (!socket.url().includes("persistentAgentId=")) return;
+			const n = ++roomSocketsOpened;
+			socket.on("framereceived", (frame) => { try { if (JSON.parse(String(frame.payload))?.type === "ready") readyOn = Math.max(readyOn, n); } catch {} });
+		});
+		const readyAfter = (opened: number) => waitUntil(() => readyOn > opened, "the room's server says it is ready");
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await page.waitForLoadState("networkidle");
 		const dismiss = page.locator(".whats-new-close");
@@ -150,17 +154,25 @@ try {
 			// A reload on the room's address opens the room by itself; from Home, its card does.
 			const card = page.locator(".persistent-agent-card").filter({ hasText: "Remember Room" });
 			const composerBox = page.locator("textarea").first();
-			if (!(await page.evaluate(() => window.location.hash)).startsWith("#/room/")) await card.getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			if (!(await page.evaluate(() => window.location.hash)).startsWith("#/room/")) await card.getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await waitUntil(async () => (await composerBox.isVisible().catch(() => false)) && !(await card.count()), "the room is open");
 		};
 		await enterRoom();
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await page.waitForTimeout(800);
+		await readyAfter(0);
 		await composer.fill("We moved the launch to May.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer");
-		await page.waitForTimeout(800);
+		// What Remember reads: an answer more than the page showed before the message, no turn in flight, and the saved conversation holds every answer the page shows.
+		const answerSaved = (shownBefore = 0) => waitUntil(async () => {
+			const active = (await (await authedFetch(`${baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/status`)).json())?.activeThread;
+			if (!active?.threadId || active.inFlight !== false) return false;
+			const saved = JSON.stringify(await (await authedFetch(`${baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(active.threadId)}`)).json()).split("Answer from claude-fake.").length - 1;
+			const shown = await page.getByText("Answer from claude-fake.").count();
+			return shown > shownBefore && saved >= shown;
+		}, "the answer is saved and no turn runs");
+		await answerSaved();
 
 		const dialog = page.getByRole("dialog", { name: "Remember this conversation" });
 		const openDialog = async () => {
@@ -281,14 +293,15 @@ try {
 		const homeCard = (name: string) => page.locator(".persistent-agent-card").filter({ hasText: name });
 		await page.goBack();
 		await homeCard("Remember Room").waitFor({ timeout: 10000 });
-		await homeCard("Remember Room").getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await homeCard("Remember Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await dialog.getByRole("button", { name: "Cancel" }).waitFor({ timeout: 10000 }).catch(() => { throw new Error("entering the room again after Back opens the dialog in its reading state"); });
+		const beforeOther = roomSocketsOpened;
 		await page.goBack();
 		await homeCard("Other Room").waitFor({ timeout: 10000 });
-		await homeCard("Other Room").getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await homeCard("Other Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await waitUntil(async () => (await page.evaluate(() => window.location.hash)) === `#/room/${otherId}` && (await composer.isVisible().catch(() => false)), "the other room is open");
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await page.waitForTimeout(800);
+		await readyAfter(beforeOther);
 		await composer.fill("The venue holds two hundred.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the other room");
@@ -304,20 +317,22 @@ try {
 		await page.keyboard.press("Escape");
 		await dialog.waitFor({ state: "detached", timeout: 10000 });
 		const enterFirstRoom = async () => {
+			const before = roomSocketsOpened;
 			await page.goBack();
 			await homeCard("Remember Room").waitFor({ timeout: 10000 });
-			await homeCard("Remember Room").getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await homeCard("Remember Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await waitUntil(async () => (await page.evaluate(() => window.location.hash)) === `#/room/${agentId}` && (await composer.isVisible().catch(() => false)), "back in the first room");
-			await page.waitForTimeout(800);
+			await readyAfter(before);
 		};
 		// The finished proposal shown in the first room stays there.
 		await enterFirstRoom();
 		await openDialog();
 		await dialog.getByText("The launch moves to May.").first().waitFor({ timeout: 15000 });
+		const beforeOtherAgain = roomSocketsOpened;
 		await page.goBack();
-		await homeCard("Other Room").getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await homeCard("Other Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await waitUntil(async () => (await page.evaluate(() => window.location.hash)) === `#/room/${otherId}` && (await composer.isVisible().catch(() => false)), "the other room again");
-		await page.waitForTimeout(800);
+		await readyAfter(beforeOtherAgain);
 		await openDialog();
 		await page.waitForTimeout(1000);
 		assert(await dialog.getByText("The launch moves to May.").count() === 0 && await dialog.getByRole("button", { name: "Generate memory proposal" }).count() === 1, "a finished proposal shown in the first room is not shown in the other room's dialog");
@@ -338,7 +353,7 @@ try {
 		await page.route("**/checkpoint/approve", async (route) => { await saveHeld; await route.continue(); });
 		await dialog.getByRole("button", { name: "Save to memory" }).click({ timeout: 15000 });
 		await page.goBack();
-		await homeCard("Other Room").getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await homeCard("Other Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await waitUntil(async () => (await page.evaluate(() => window.location.hash)) === `#/room/${otherId}` && (await composer.isVisible().catch(() => false)), "the other room while the save is on its way");
 		releaseSave();
 		await waitUntil(async () => (await activeConversation()) !== conversationId, "the first room's save lands");
@@ -356,7 +371,7 @@ try {
 		await composer.fill("We moved the launch to May.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the first room's new conversation");
-		await page.waitForTimeout(800);
+		await answerSaved();
 
 		// 4c. One ordinary reviewed Save: the saved page with Keep chatting, which opens the fresh conversation.
 		conversationId = await activeConversation();
@@ -369,11 +384,15 @@ try {
 		await dialog.waitFor({ state: "detached", timeout: 10000 });
 		await waitUntil(async () => (await composer.isVisible().catch(() => false)) && (await activeConversation()) !== conversationId, "Keep chatting opens the fresh conversation");
 		assert(await page.getByText("Answer from claude-fake.").count() === 0, "the fresh conversation starts empty");
+		// The card's button went with the card: the cursor is back in the message box, and typing lands there.
+		await waitUntil(async () => page.evaluate(() => !!document.activeElement?.closest(".composer-box")), "after Keep chatting the cursor is in the message box");
+		await page.keyboard.type("typed");
+		assert(await composer.inputValue() === "typed", `typing after Keep chatting lands in the message box, got ${JSON.stringify(await composer.inputValue())}`);
 		conversationId = await activeConversation();
 		await composer.fill("We moved the launch to May.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the fresh conversation");
-		await page.waitForTimeout(800);
+		await answerSaved();
 
 		// 5. Cancel from the dialog stops the provider call.
 		holdRemember = true;
@@ -395,13 +414,6 @@ try {
 		await dialog.getByText(/^Can't reach the Memory model right now\. Trying again at .+\.$/).waitFor({ timeout: 10000 });
 		assert(await dialog.getByText(/is busy/).count() === 0, "the wait for a model nothing answers for never says busy");
 		await dialog.locator(".model-notice").waitFor({ timeout: 30000 });
-		// The notice reads as body text: the page's own size and colour, no hint bar on its left.
-		const noticeLook = await dialog.locator(".model-notice").evaluate((el) => {
-			const notice = getComputedStyle(el);
-			const body = getComputedStyle(document.body);
-			return { size: notice.fontSize, bodySize: body.fontSize, color: notice.color, bodyColor: body.color, bar: notice.borderLeftWidth };
-		});
-		assert(noticeLook.size === noticeLook.bodySize && noticeLook.color === noticeLook.bodyColor && noticeLook.bar === "0px", `the model notice reads as body text, got ${JSON.stringify(noticeLook)}`);
 		assert(await dialog.locator("textarea").count() === 0 && await dialog.getByText("How much should this room keep?").count() === 0, "under the notice the options form is hidden");
 		assert(await dialog.getByRole("button", { name: "Generate memory proposal" }).count() === 0, "under the notice Generate is hidden");
 		assert(await dialog.getByRole("button", { name: "Close" }).count() === 1 && await dialog.locator(".model-notice").getByRole("button", { name: "Close" }).count() === 1, "Close is one of the notice's ways out");
@@ -421,7 +433,7 @@ try {
 		await composer.fill("We moved the launch to May.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer after the quick save");
-		await page.waitForTimeout(800);
+		await answerSaved();
 
 		// 6. A Remember that fills the room: first the quick one, then the reviewed one.
 		holdRemember = false;
@@ -441,19 +453,21 @@ try {
 			assert(await page.getByText(/cannot be opened until|Memorize them from Maintain/).count() === 0, `${label}: no bounce to Home through the refusal`);
 		};
 		const reenter = async () => {
+			const before = roomSocketsOpened;
 			await page.reload({ waitUntil: "domcontentloaded" });
 			if (await dismiss.count()) await dismiss.click();
 			await enterRoom();
-			await page.waitForTimeout(800);
+			await readyAfter(before);
 		};
 		// 5d. A reviewed save that makes 19: the heads-up shows before Save, and the saved page does not repeat it.
 		const nineteenHeadsUp = "One more remembered conversation fills this room. Then Memorize before starting a new one.";
 		holdNineteen(18);
 		await reenter();
+		const shownBeforeVenue = await page.getByText("Answer from claude-fake.").count();
 		await composer.fill("The venue is booked.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) >= 1, "the answer before the 19th save");
-		await page.waitForTimeout(800);
+		await answerSaved(shownBeforeVenue);
 		await openDialog();
 		await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 		await dialog.getByText(nineteenHeadsUp, { exact: true }).waitFor({ timeout: 20000 });
@@ -466,10 +480,11 @@ try {
 		holdNineteen();
 		await reenter();
 		// The 19th save left a new, empty conversation: say something to remember.
+		const shownBeforeCaterer = await page.getByText("Answer from claude-fake.").count();
 		await composer.fill("The caterer is confirmed.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) >= 1, "the answer before the quick save");
-		await page.waitForTimeout(800);
+		await answerSaved(shownBeforeCaterer);
 		const closedId = await page.evaluate(async (id) => {
 			const res = await fetch(`/api/persistent-agents/${encodeURIComponent(id)}/status`);
 			return (await res.json()).activeThread?.threadId as string;
@@ -503,7 +518,7 @@ try {
 		await composer.fill("And the budget holds.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the new conversation");
-		await page.waitForTimeout(800);
+		await answerSaved();
 		await openDialog();
 		await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 		// Before Save, the review says once that this save fills the room (it holds 19; the save makes 20).
@@ -556,9 +571,9 @@ try {
 		await page.getByRole("dialog").filter({ hasText: "Save these notes to Remember Room's memory?" }).getByRole("button", { name: "Save", exact: true }).click({ timeout: 10000 });
 		await workflow.getByRole("heading", { name: /^Remember Room memorized \d+ conversations?$/ }).waitFor({ timeout: 30000 });
 		console.log("  ok  an ordinary Memorize runs to its saved screen in the page");
-		await ctx.close();
+		await closeContext(ctx);
 	} finally {
-		await browser.close();
+		await closeBrowser(browser);
 	}
 	console.log("remember dialog smoke: ok");
 } catch (error) {

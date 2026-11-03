@@ -120,7 +120,6 @@ try {
 	const l1bBeforeMemento = readL1b();
 	const memento = writePersistentAgentMementoBoundary(agentId, mementoOldThreadId, new Date("2026-06-27T10:00:00.000Z"), { runtimeCwd: tempCwd });
 	const postMementoThread = getPersistentAgentThread(agentId, memento.postMemento.activeThreadId);
-	assert(postMementoThread?.threadId.startsWith("postmem_"), "Memento should create postmem_ thread");
 	assert(postMementoThread!.origin === "memento", "Memento fresh thread should start with memento origin");
 	const postMementoSessionPath = runtimeSessionRelPath(postMementoThread!);
 	writePersistentAgentThread(agentId, postMementoThread!.threadId, { state: "active", origin: "unknown", model: modelA, items: [] });
@@ -167,7 +166,6 @@ try {
 	}, agentId);
 	const checkpoint = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date("2026-06-27T10:05:00.000Z"), { runtimeCwd: tempCwd });
 	const postCheckpointThread = getPersistentAgentThread(agentId, checkpoint.postCheckpoint.activeThreadId);
-	assert(postCheckpointThread?.threadId.startsWith("postcp_"), "checkpoint should create postcp_ thread");
 	assert(postCheckpointThread!.origin === "checkpoint", "checkpoint fresh thread should start with checkpoint origin");
 	assert(postCheckpointThread!.items.length === 0, "checkpoint fresh thread should have no user-visible turns before retirement");
 	assert(getPersistentAgentRuntimeState(agentId).activeThreadId === postCheckpointThread!.threadId, "checkpoint fresh thread should be the active runtime before retirement");
@@ -189,9 +187,9 @@ try {
 	assert(runtimeSessionRelPath(checkpointOldAfter) === checkpointOldSessionPath, "old checkpoint source runtime should not mutate");
 
 	// A conversation keeps the model it started on after that model leaves the
-	// active profile's list: writes to the existing thread land as they are (a
-	// scheduled run's paid answer, a resume), and only a NEW thread on the
-	// delisted model is refused.
+	// active profile's list: a scheduled run's paid answer lands as it is, and
+	// only a NEW thread on the delisted model is refused. The resume through the
+	// server is room-delisted-model-smoke's.
 	const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
 	const profileSwitchThreadId = "sched_profile_switch_0001";
 	writePiThread(profileSwitchThreadId, "standby", "home", modelA, [{ kind: "user", id: "sched-user", text: "scheduled prompt" }]);
@@ -213,8 +211,6 @@ try {
 	assert(getPersistentAgentThread(agentId, "c_new_on_delisted_model") === null, "the refused thread must not exist");
 	const landed = writePersistentAgentThread(agentId, profileSwitchThreadId, { state: "standby", origin: "home", model: modelA, items: finalWriteItems });
 	assert(landed.thread.items.some((item: any) => item.id === "sched-assistant"), "paid scheduled answer should land despite the profile switch");
-	const resumed = writePersistentAgentThread(agentId, profileSwitchThreadId, { state: "active", origin: "launcher", model: modelA, items: finalWriteItems });
-	assert(resumed.thread.state === "active" && resumed.runtime.model?.model === modelA.model, "the existing conversation resumes on its own model after the list change");
 	fs.writeFileSync(path.join(smokeAppDir, "openai-compatible-ai-profile.json"), fullProfileJson);
 	writePersistentAgentAiProfileState("openai-compatible");
 

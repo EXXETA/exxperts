@@ -802,7 +802,7 @@ function Install-FromArchive {
         Say ""
         Say "all set. Start exxperts with:"
         Say ""
-        Say "  exxperts web"
+        Say "  exxperts"
         Say ""
         $versionShown = if ($version) { $version } else { "unknown" }
         Say "Installed version: $versionShown (check anytime with: exxperts --version)"
@@ -917,7 +917,7 @@ function Install-FromSource {
     Say ""
     Say "all set. Start exxperts with:"
     Say ""
-    Say "  exxperts web"
+    Say "  exxperts"
     Say ""
     $versionShown = if ($script:InstalledVersion) { $script:InstalledVersion } else { "unknown" }
     Say "Installed version: $versionShown (check anytime with: exxperts --version)"

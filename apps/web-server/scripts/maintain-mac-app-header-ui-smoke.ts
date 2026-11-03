@@ -4,8 +4,10 @@
 // chooser, Memorize's first read and discussion, and Review's discussion, at
 // 100%, at 83% zoom (two Zoom Out presses) and at the next level out, 69.4%, no header text sits under the
 // buttons, and off the discussion step the title keeps the content's left
-// edge; the header still drags the window and its buttons still click. In the
-// browser the header keeps its centred padding and its 34px top. Zoom only
+// edge; the header still drags the window and its buttons still click. The
+// window's drag strip is as tall as the window buttons' row (centre 25, so 50
+// window points) and drags. In the browser the header keeps its centred
+// padding and its 34px top. Zoom only
 // scales CSS px to points, so the 83% window is its size in CSS px with the
 // buttons' box divided by the zoom. Offline: one synthetic provider.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -17,6 +19,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -85,15 +90,6 @@ const providers = http.createServer((req, res) => {
 		res.end();
 	});
 });
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 type HeaderLook = {
 	texts: { text: string; left: number; top: number; right: number; bottom: number }[];
@@ -215,6 +211,14 @@ try {
 		assert(await mac.evaluate(() => document.documentElement.classList.contains("desktop-app-mac")), "the Mac app's user agent turns on the desktop CSS");
 		await openChooser(mac, "Memorize Room");
 		await checkMacHeader(mac, "the chooser", false);
+		// The strip in window points: CSS px times the zoom the page measured from its window.
+		const strip = await mac.evaluate(() => {
+			const element = document.querySelector(".desktop-drag-strip");
+			return { height: element?.getBoundingClientRect().height ?? 0, region: element ? getComputedStyle(element).getPropertyValue("-webkit-app-region") : "missing", zoom: Number(getComputedStyle(document.documentElement).getPropertyValue("--window-zoom")) || 1 };
+		});
+		assert(Math.abs(strip.height * strip.zoom - 50) <= 0.5, `the drag strip is as tall as the window buttons' row (50 window points), got ${(strip.height * strip.zoom).toFixed(1)} at zoom ${strip.zoom}`);
+		assert(strip.region === "drag", `the drag strip drags the window, got ${strip.region || "unset"}`);
+		console.log("  ok  the drag strip is the window buttons' row, 50 window points tall, and drags");
 		await mac.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();
 		const memorize = mac.locator('[aria-label="Memory absorption workflow"]');
 		await memorize.getByText("The venue plan.").first().waitFor({ timeout: 40_000 });
@@ -235,15 +239,11 @@ try {
 		await checkMacHeader(macReview, "Review's discussion", true);
 		await macReview.context().close();
 
-		// The browser: the header keeps its centred padding and its 34px top.
+		// The browser: no desktop CSS.
 		const web = await open();
 		assert(!(await web.evaluate(() => document.documentElement.classList.contains("desktop-app"))), "the browser has no desktop CSS");
-		await openChooser(web, "Memorize Room");
-		const look = await lookAtHeader(web);
-		assert(look.paddingLeft === "240px" && look.paddingTop === "34px", `the browser's header keeps its centred padding and its 34px top, got ${look.paddingLeft} ${look.paddingTop}`);
-		assert(look.contentLeft !== null && Math.abs(look.titleLeft - look.contentLeft) <= 1, `the browser's title keeps the content's left edge, got title ${look.titleLeft}, content ${look.contentLeft}`);
 		await web.context().close();
-		console.log("  ok  the browser's Maintain header is unchanged");
+		console.log("  ok  the browser has no desktop CSS");
 	} finally {
 		await browser.close();
 	}

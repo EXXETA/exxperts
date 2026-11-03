@@ -323,7 +323,7 @@ export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlocke
 		? `The app restarted. ${nothingTidied ? "Nothing was lost." : "What was tidied is on this card; the rest is unchanged."}`
 		: reviewRunPausedSentence(modelDisplayName({ provider: stop.model.provider, model: stop.model.model }), stop, !nothingTidied);
 	// After the same failure twice another model leads, as its sentence names it first.
-	const ways = useMemoryWaysOn(stop?.cause, stop?.quotaWay, { onTryAgain, onChooseModel, onSignIn, provider: stop?.model.provider ?? "", chooseFirst: stop?.kind === "failing", gatewayFind: stop?.gatewayFind });
+	const ways = useMemoryWaysOn(stop?.cause, stop?.quotaWay, { onTryAgain, onChooseModel, onSignIn, provider: stop?.model.provider ?? "", key: stop?.key, chooseFirst: stop?.kind === "failing", gatewayFind: stop?.gatewayFind });
 	return (
 		<div className="checkpoint-proposal-page absorb-proposal-page absorb-run-card review-card">
 			<div className="checkpoint-input-heading checkpoint-proposal-heading">

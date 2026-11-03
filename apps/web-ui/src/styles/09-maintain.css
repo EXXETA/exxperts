@@ -1,0 +1,873 @@
+.absorb-workspace {
+	height: 100%;
+	min-height: 100vh;
+	background: var(--bg);
+	color: var(--fg);
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr);
+	overflow: hidden;
+}
+.absorb-workspace-header {
+	border-bottom: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+	padding: 18px 32px;
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 24px;
+	background: var(--panel);
+}
+.absorb-workspace-header h1 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: clamp(28px, 3.4vw, 44px);
+	line-height: 0.96;
+	letter-spacing: -0.02em;
+	margin: 0 0 8px;
+}
+.absorb-workspace-header p {
+	margin: 0;
+	max-width: 760px;
+	color: var(--muted);
+	line-height: 1.55;
+}
+.absorb-workspace-header .card-kicker {
+	margin-bottom: 10px;
+	color: var(--fg);
+}
+.absorb-workspace-header .rs-btn {
+	flex: 0 0 auto;
+	margin-top: 4px;
+}
+.absorb-workspace-header.compact {
+	padding: 12px 32px;
+	align-items: center;
+}
+.absorb-workspace-header.compact h1 {
+	font-size: 22px;
+	margin: 0;
+}
+.absorb-workspace-header.compact > div > p:not(.card-kicker) {
+	display: none;
+}
+.absorb-workspace-header.compact .card-kicker {
+	margin-bottom: 4px;
+}
+.absorb-workspace-header.compact .rs-btn {
+	margin-top: 0;
+}
+.absorb-workspace-main {
+	min-height: 0;
+	overflow: auto;
+	padding: 26px 32px 42px;
+}
+.absorb-workflow-card {
+	width: min(1120px, 100%);
+	max-height: none;
+	margin: 0 auto;
+	box-shadow: none;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	padding: clamp(12px, 2vw, 24px) 0;
+	gap: 28px;
+}
+/* Safe centering: auto margins center when there is room and collapse to
+ * normal flow on short viewports, so the top card never clips unscrollably. */
+.maintain-workspace-main {
+	display: flex;
+	align-items: flex-start;
+}
+.maintain-confirm-backdrop { z-index: 60; }
+/* The app's confirm question (confirm-dialog.tsx) answers for whatever layer
+   asked it, room settings and the settings overlay included, so it sits
+   above all of them. */
+.confirm-dialog-backdrop { z-index: 100; }
+.maintain-confirm-card {
+	max-width: 460px;
+	gap: 14px;
+}
+/* Three answers on a phone: one full-width column, the primary on top. */
+@media (max-width: 760px) {
+	.confirm-dialog-three .checkpoint-preview-actions {
+		flex-direction: column-reverse;
+		align-items: stretch;
+	}
+}
+.maintain-confirm-card h2 {
+	font-family: var(--exx-font-display);
+	font-size: 21px;
+	margin: 0;
+}
+.maintain-confirm-card p {
+	color: var(--fg-soft);
+	margin: 0;
+	line-height: 1.55;
+}
+/* Why the question's primary answer is greyed, under the buttons. */
+.maintain-confirm-card .confirm-dialog-hold {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+	text-align: right;
+	text-wrap: balance;
+}
+/* On a phone the primary answer is the top button, so the reason goes
+   right above it. */
+@media (max-width: 760px) {
+	.confirm-dialog-three .checkpoint-preview-actions:has(+ .confirm-dialog-hold) {
+		order: 1;
+	}
+	.maintain-confirm-card .confirm-dialog-hold {
+		text-align: left;
+	}
+}
+/* The header's text and button line up with the 900px column the cards use,
+ * instead of hugging the window edge while the cards sit in the middle. */
+/* The chooser is laid out like Home: one left-aligned column, the page title
+ * in the display face, one line under it, the content starting on the same
+ * left edge as the title. */
+.maintain-workspace .absorb-workspace-header,
+.maintain-workspace .absorb-workspace-main {
+	padding-inline: max(32px, calc((100% - 960px) / 2));
+}
+.maintain-workspace .absorb-workspace-header {
+	padding-block: 34px 26px;
+	align-items: center;
+}
+.maintain-workspace .absorb-workspace-header h1 {
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: clamp(32px, 4.2vw, 48px);
+	letter-spacing: -0.025em;
+	line-height: 1;
+	margin: 0 0 10px;
+}
+/* Inside the app shell the chooser reads as a page like Memory and Wallet:
+ * no band of its own, and the same page title. Memorize and Review keep their
+ * full-page header, so these rules name the chooser in the shell only. */
+.with-product-sidebar > .maintain-workspace .absorb-workspace-header {
+	padding-block: 34px 18px;
+	background: transparent;
+	border-bottom: 0;
+}
+/* A long room name in the kicker wraps instead of pushing the button out. */
+.with-product-sidebar > .maintain-workspace .absorb-workspace-header > div {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.with-product-sidebar > .maintain-workspace .absorb-workspace-header h1 {
+	font-variation-settings: "wght" 760;
+	font-size: 28px;
+	letter-spacing: -0.01em;
+	line-height: 1.15;
+	margin: 0 0 6px;
+}
+.with-product-sidebar > .maintain-workspace {
+	min-height: 0;
+}
+.maintain-workspace .absorb-workspace-header p:not(.card-kicker) {
+	max-width: none;
+	font-size: 15px;
+}
+.maintain-workspace .absorb-workspace-header .rs-btn {
+	margin-top: 0;
+}
+.maintain-workspace .absorb-workflow-card {
+	width: 100%;
+	padding-top: 0;
+}
+.absorb-workspace.maintain-workspace .checkpoint-proposal-heading h2,
+.absorb-workspace.maintain-workspace .checkpoint-generating-state h2 {
+	margin-top: 0;
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: 28px;
+	line-height: 1.1;
+	letter-spacing: -0.02em;
+}
+/* On the card, each conversation is one row that opens to its notes. */
+.absorb-run-conversation > summary {
+	list-style: none;
+	cursor: pointer;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 12px 0;
+}
+.absorb-run-conversation > summary::-webkit-details-marker { display: none; }
+.absorb-run-conversation > summary .absorb-run-session-head {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+}
+.absorb-run-conversation > summary .absorb-run-session-state::before {
+	content: "▸ ";
+	color: var(--muted);
+}
+.absorb-run-conversation[open] > summary .absorb-run-session-state::before {
+	content: "▾ ";
+}
+.absorb-run-conversation.plain {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 12px 0;
+}
+.absorb-run-conversation.plain .absorb-run-session-head {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+}
+.absorb-run-conversation-body {
+	padding: 0 0 12px;
+}
+.absorb-run-change.compact {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.absorb-run-change.compact .absorb-run-change-line {
+	color: var(--muted);
+	font-size: 13.5px;
+}
+/* An older value's line sits under its row, not beside it. */
+.absorb-run-change.compact .absorb-run-change-reason {
+	flex-basis: 100%;
+	margin: 0;
+}
+/* The archive section starts closed: one line and a Show. */
+.absorb-run-archive > summary {
+	list-style: none;
+	cursor: pointer;
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 16px;
+}
+.absorb-run-archive > summary::-webkit-details-marker { display: none; }
+.absorb-run-archive > summary h3 { margin: 0; }
+.absorb-run-archive-toggle {
+	font-family: var(--exx-font-display);
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--fg-soft);
+}
+.absorb-run-archive[open] .absorb-run-archive-toggle::after { content: ""; }
+.absorb-run-archive[open] > summary .absorb-run-archive-toggle { display: none; }
+.absorb-run-archive > p { margin-top: 12px; }
+/* Editing a note on the card: the same textarea and buttons as Room settings. */
+.absorb-run-note-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 6px 0;
+}
+.absorb-run-note-editor textarea {
+	width: 100%;
+	font: inherit;
+	font-size: 14px;
+	line-height: 1.5;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--panel-2);
+	color: var(--fg);
+	resize: vertical;
+}
+.absorb-run-change { text-align: left; }
+.absorb-run-change-edit {
+	display: inline-block;
+	margin-top: 4px;
+}
+/* The discussion: the first read on the left, the chat on the right, one
+ * wider column so both have room. */
+.maintain-workspace:has(.absorb-discussion-page) .absorb-workspace-header,
+.maintain-workspace .absorb-workspace-main:has(.absorb-discussion-page) {
+	padding-inline: 32px;
+}
+.maintain-workspace .absorb-discussion-page {
+	max-width: none;
+}
+.absorb-discussion-split {
+	flex: 1;
+	min-height: 0;
+	display: grid;
+	grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
+	gap: 40px;
+}
+/* The composer is the room's prompt box: one rounded panel with the text,
+ * the counter and the send arrow inside it, the two actions on a row below. */
+.absorb-discussion-composer {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 12px;
+}
+.absorb-discussion-box {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	padding: 12px 12px 10px;
+}
+.absorb-discussion-box:focus-within {
+	border-color: var(--fg);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 30%, transparent);
+}
+.absorb-discussion-box textarea {
+	width: 100%;
+	/* Text wraps, so a horizontal scrollbar can only be a rounding artefact at
+	   some zoom levels; never draw one. */
+	overflow-x: hidden;
+	color: var(--fg);
+	font: inherit;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	padding: 2px 6px;
+	font-size: 14px;
+	line-height: 1.45;
+	min-height: 46px;
+	max-height: 40vh;
+	resize: none;
+}
+.absorb-discussion-box textarea:focus {
+	border: none;
+	box-shadow: none;
+	outline: none;
+}
+.absorb-discussion-box-bottom {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+.absorb-discussion-box-bottom .absorb-discussion-counter {
+	grid-column: auto;
+	margin: 0;
+	font-size: 12px;
+}
+.absorb-discussion-actions {
+	display: flex;
+	flex-direction: row;
+	justify-content: flex-end;
+	gap: 10px;
+}
+.absorb-discussion-composer .absorb-discussion-actions .absorb-discussion-generate {
+	padding: 11px 16px;
+}
+.absorb-discussion-transcript .absorb-discussion-messages {
+	/* Full width of the panel, so the person's bubble sits at the right edge
+	   under the composer's edge, as in the room's chat. */
+	max-width: none;
+}
+/* The run card's heading and its step line run the full column, like the header's. */
+.absorb-workspace .absorb-run-card .checkpoint-proposal-heading,
+.absorb-workspace .absorb-run-card .checkpoint-proposal-heading p {
+	max-width: none;
+}
+.absorb-discussion-split .absorb-discussion-panel {
+	min-height: 0;
+}
+.absorb-discussion-aside {
+	min-height: 0;
+	overflow-y: auto;
+	padding: 10px 24px 0 0;
+	border-right: 1px solid var(--border-soft);
+	text-align: left;
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+.absorb-discussion-aside .absorb-assessment-section {
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+.absorb-discussion-aside .absorb-assessment-section h3 {
+	font-size: 12px;
+	color: var(--muted);
+	margin: 0 0 8px;
+}
+.absorb-discussion-aside li,
+.absorb-discussion-aside p {
+	font-size: 13.5px;
+	line-height: 1.5;
+}
+.absorb-discussion-aside-label {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--muted);
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--border-soft);
+}
+@media (max-width: 900px) {
+	/* The first read above the chat, whole: the page scrolls as one, so a scroll of its own would only hide its last
+	   items; a long unbroken word wraps rather than widening the page. The rest of the phone layout is in 10-memorize-run.css, after the chat geometry it changes. */
+	.absorb-discussion-aside { border-right: 0; padding-right: 0; overflow: visible; overflow-wrap: anywhere; }
+}
+.maintain-workspace .absorb-workspace-header.compact {
+	padding-block: 12px;
+}
+.maintain-workspace .absorb-workspace-header.compact h1 {
+	font-size: 22px;
+	margin: 0;
+}
+.maintain-chooser-column {
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin-top: 2px;
+}
+/* The room's state is the line under the title: the numbers are the only bold words. */
+.maintain-workspace .absorb-workspace-header p.maintain-status {
+	color: var(--fg-soft);
+	font-size: 16px;
+}
+.maintain-status strong {
+	color: var(--fg);
+	font-weight: 700;
+}
+/* The two actions are rows of one list, and each whole row is the button:
+ * nothing is drawn inside a row, the recommended one carries a tag and a
+ * filled "Start". */
+.maintain-actions {
+	border: 1px solid var(--border-soft);
+	border-radius: 16px;
+	background: color-mix(in srgb, var(--panel) 82%, transparent);
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+.maintain-action {
+	appearance: none;
+	font: inherit;
+	color: inherit;
+	text-align: left;
+	background: transparent;
+	border: 0;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 28px;
+	padding: 24px 26px;
+	transition: background 120ms ease;
+}
+.maintain-action + .maintain-action,
+.maintain-action-row + .maintain-action {
+	border-top: 1px solid var(--border-soft);
+}
+/* A card with a second way in beside it: Discuss first sits next to Start,
+   outside the card's own button. */
+.maintain-action-row {
+	display: flex;
+	align-items: center;
+	transition: background 120ms ease;
+}
+/* The whole row is the way in, so the whole row is shaded, once, except while
+   the pointer is on Discuss first, which shows only its own hover. */
+.maintain-action-row:has(> .maintain-action:not(:disabled)) {
+	cursor: pointer;
+}
+.maintain-action-row:hover:has(> .maintain-action:not(:disabled)):not(:has(.maintain-action-aside:hover)) {
+	background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.maintain-action-row > .maintain-action:hover:not(:disabled) {
+	background: transparent;
+}
+.maintain-action-row > .maintain-action {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding-right: 12px;
+}
+.maintain-action-aside {
+	flex: 0 0 auto;
+	height: 32px;
+	margin-right: 26px;
+}
+.maintain-action:hover:not(:disabled),
+.maintain-action:focus-visible {
+	background: color-mix(in srgb, var(--fg) 4%, transparent);
+	outline: none;
+}
+.maintain-action:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+.maintain-action-body {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+}
+.maintain-action-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.maintain-action-title {
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: 22px;
+	line-height: 1;
+	letter-spacing: -0.02em;
+}
+.maintain-action-text {
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1.5;
+	overflow-wrap: anywhere; /* the room's name sits in this sentence and may be one long word */
+}
+.maintain-action-tag {
+	font-family: var(--exx-font-display);
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--fg);
+	border: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
+	border-radius: 999px;
+	padding: 3px 9px;
+}
+/* Drawn like the one button (.rs-btn): sentence case, 32 px. */
+.maintain-action-go {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	box-sizing: border-box;
+	height: 32px;
+	font-weight: 700;
+	font-size: 12.5px;
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 0 12px;
+	white-space: nowrap;
+}
+.maintain-action.recommended .maintain-action-go {
+	background: var(--exx-action-primary-bg);
+	border-color: var(--exx-action-primary-bg);
+	color: var(--exx-action-primary-fg);
+}
+.maintain-footnote {
+	margin: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
+}
+.absorb-workspace .checkpoint-preview-actions {
+	position: sticky;
+	bottom: -1px;
+	z-index: 3;
+	margin: 12px 0 0;
+	padding: 18px 0 4px;
+	background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 0%, transparent), var(--bg) 38%);
+	border-top: 1px solid color-mix(in srgb, var(--border) 22%, transparent);
+}
+.absorb-workspace .checkpoint-input-heading,
+.absorb-workspace .checkpoint-proposal-heading {
+	max-width: 780px;
+}
+.absorb-workspace .checkpoint-proposal-page,
+.absorb-workspace .checkpoint-generating-state {
+	gap: 28px;
+}
+.absorb-workspace .checkpoint-proposal-heading h2,
+.absorb-workspace .checkpoint-generating-state h2 {
+	font-size: clamp(34px, 4.4vw, 56px);
+}
+/* Long-wait screens: the rotating whimsy IS the big headline (deliberate);
+ * the stage, duration and nothing-saved facts live in stable sublines below.
+ * The headline slot reserves a line so swaps do not shift the block. */
+.absorb-workspace .absorb-loading-state { gap: 14px; }
+.absorb-workspace .absorb-loading-state h2 { min-height: 1.05em; }
+.absorb-loading-state .spinner-lg { width: 26px; height: 26px; border-width: 3px; }
+.absorb-assessment-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	text-align: left;
+}
+.absorb-bullet-list li p {
+	display: inline;
+	margin: 0;
+}
+.absorb-count-delta {
+	display: block;
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 11.5px;
+	font-family: var(--exx-font-mono);
+}
+.absorb-assessment-flow {
+	grid-template-columns: 1fr;
+}
+.absorb-assessment-section {
+	border: 0;
+	border-top: 1px solid color-mix(in srgb, var(--border) 38%, transparent);
+	border-radius: 0;
+	padding: 18px 0;
+	background: transparent;
+	display: grid;
+	gap: 8px;
+}
+.absorb-assessment-section.wide {
+	grid-column: 1 / -1;
+}
+.absorb-assessment-flow .absorb-assessment-section {
+	padding: 24px 0;
+}
+.absorb-workspace .absorb-assessment-page {
+	max-width: 980px;
+	margin: 0 auto;
+	width: 100%;
+}
+.absorb-workspace .absorb-assessment-flow {
+	gap: 16px;
+}
+.absorb-assessment-section h3 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 18px;
+	line-height: 1.1;
+	margin: 0;
+}
+.absorb-assessment-section ul {
+	margin: 0;
+	padding-left: 20px;
+	line-height: 1.62;
+	font-size: 15px;
+}
+.absorb-assessment-section li + li {
+	margin-top: 5px;
+}
+.absorb-assessment-section p {
+	margin: 0;
+	color: var(--muted);
+	line-height: 1.5;
+}
+.absorb-change-block {
+	display: grid;
+	gap: 5px;
+}
+.absorb-change-block + .absorb-change-block {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 34%, transparent);
+	padding-top: 12px;
+}
+.absorb-change-block strong {
+	font-size: 12px;
+}
+.absorb-review-strip {
+	display: flex;
+	justify-content: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.absorb-review-status {
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 9px 13px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	text-align: left;
+	background: var(--panel);
+}
+.absorb-review-status span {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--muted);
+}
+.absorb-review-status strong {
+	font-size: 13px;
+	line-height: 1.1;
+}
+.absorb-review-status.ok strong { color: var(--success); }
+.absorb-review-status.error strong { color: var(--danger); }
+.absorb-result-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 10px;
+	text-align: left;
+}
+.absorb-result-card {
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	padding: 13px 14px;
+	background: var(--panel);
+	display: grid;
+	gap: 5px;
+}
+.absorb-result-card span {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--muted);
+}
+.absorb-result-card strong {
+	font-size: 14px;
+	line-height: 1.2;
+}
+.absorb-proposal-sections {
+	display: grid;
+	gap: 16px;
+	text-align: left;
+}
+.absorb-workspace .absorb-proposal-page {
+	max-width: 1040px;
+	margin: 0 auto;
+	width: 100%;
+}
+.absorb-proposal-section,
+.absorb-candidate-disclosure {
+	border: 0;
+	border-top: 1px solid color-mix(in srgb, var(--border) 38%, transparent);
+	border-radius: 0;
+	padding: 22px 0;
+	background: transparent;
+}
+.absorb-proposal-section h3 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 20px;
+	line-height: 1.1;
+	margin: 0 0 10px;
+}
+.absorb-proposal-section p {
+	margin: 0;
+	white-space: pre-wrap;
+	line-height: 1.55;
+}
+.absorb-proposal-section pre {
+	margin: 0;
+	max-height: 220px;
+	overflow: auto;
+	white-space: pre-wrap;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	padding: 10px;
+	font: 12px/1.45 var(--exx-font-mono);
+}
+.absorb-candidate-disclosure summary {
+	cursor: pointer;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 13px;
+	font-weight: 700;
+	list-style-position: outside;
+}
+.absorb-detail-disclosure[open],
+.absorb-candidate-disclosure[open] {
+	display: grid;
+	gap: 12px;
+}
+.absorb-markdown-preview {
+	display: grid;
+	gap: 10px;
+	line-height: 1.62;
+	font-size: 15px;
+}
+/* Document-flow reading on the assessment and proposal pages: headings, chips
+ * and actions align left with the content instead of zigzagging between
+ * centered and left-aligned blocks; running text keeps a readable measure;
+ * long generated previews scroll inside their disclosure. */
+.absorb-assessment-page .checkpoint-input-heading,
+.absorb-proposal-page .checkpoint-input-heading,
+.absorb-saved-state .checkpoint-input-heading,
+.absorb-error-state .checkpoint-input-heading,
+.absorb-unavailable-state .checkpoint-input-heading {
+	text-align: left;
+	max-width: none;
+	margin: 0;
+}
+.absorb-proposal-page .absorb-review-strip,
+.absorb-saved-state .absorb-review-strip {
+	justify-content: flex-start;
+}
+.absorb-assessment-page .checkpoint-preview-actions,
+.absorb-proposal-page .checkpoint-preview-actions,
+.absorb-saved-state .checkpoint-preview-actions,
+.absorb-error-state .checkpoint-preview-actions,
+.absorb-unavailable-state .checkpoint-preview-actions {
+	justify-content: flex-end;
+}
+/* Terminal states share the report layout of the assessment/proposal pages. */
+.absorb-workspace .absorb-saved-state,
+.absorb-workspace .absorb-error-state,
+.absorb-workspace .absorb-unavailable-state {
+	max-width: 980px;
+	margin: 0 auto;
+	width: 100%;
+}
+.absorb-saved-state .absorb-result-grid {
+	grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.absorb-change-table tbody tr:nth-child(even) td {
+	background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.absorb-candidate-disclosure .absorb-markdown-preview {
+	max-height: 480px;
+	overflow: auto;
+	padding-right: 6px;
+}
+.absorb-markdown-preview h4,
+.absorb-markdown-preview h5,
+.absorb-markdown-preview h6,
+.absorb-markdown-preview p,
+.absorb-markdown-preview ul {
+	margin: 0;
+}
+.absorb-markdown-preview ul {
+	padding-left: 18px;
+}
+.absorb-table-wrap {
+	overflow: auto;
+}
+.absorb-change-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+	line-height: 1.45;
+}
+.absorb-change-table th,
+.absorb-change-table td {
+	border: 1px solid var(--border-soft);
+	padding: 11px 12px;
+	vertical-align: top;
+}
+.absorb-change-table th {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	color: var(--muted);
+	background: color-mix(in srgb, var(--panel) 84%, var(--fg) 4%);
+}
+.absorb-action-pill {
+	display: inline-flex;
+	border-radius: 999px;
+	padding: 2px 8px;
+	font-size: 12px;
+	font-weight: 700;
+}
+.absorb-action-pill.drop {
+	color: var(--exx-pill-drop);
+	background: color-mix(in srgb, var(--exx-pill-drop) 16%, transparent);
+}
+.absorb-action-pill.promote {
+	color: var(--success);
+	background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.absorb-action-pill.update {
+	color: var(--exx-pill-update);
+	background: color-mix(in srgb, var(--exx-pill-update) 16%, transparent);
+}
+.absorb-action-pill.neutral {
+	color: var(--muted);
+	background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.absorb-raw-markdown-disclosure {
+	border-top: 1px solid var(--border-soft);
+	padding-top: 10px;
+}
+

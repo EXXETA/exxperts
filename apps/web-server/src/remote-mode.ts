@@ -26,7 +26,7 @@ const REMOTE_STATE_FILE = () => productAppStatePath("remote-mode.json");
 // the listener lifecycle can be exercised without a real tunnel. ::1 is the
 // usual choice, since the primary listener binds 127.0.0.1 IPv4 only and the
 // same port stays free on IPv6 loopback. Also unlocks the drop-listener test
-// route in index.ts. Never set outside tests.
+// route in remote-routes.ts. Never set outside tests.
 const TEST_ADDRESS_ENV = "EXXPERTS_REMOTE_TEST_ADDRESS";
 
 export type RemoteStateFileKind = "absent" | "valid" | "malformed";
@@ -524,7 +524,7 @@ export function createRemoteModeManager(options: {
 			if (state.kind === "malformed") {
 				// Fail to OFF, never to a failed boot: local use must survive a
 				// corrupt remote state file.
-				degradedReason = `state file malformed (${state.reason}); remote stays off. Run exxperts remote enable to rewrite it.`;
+				degradedReason = `state file malformed (${state.reason}); remote stays off. Turn it on again in Settings, Remote access to rewrite it.`;
 				log.warn(`remote mode: ${degradedReason}`);
 				return;
 			}

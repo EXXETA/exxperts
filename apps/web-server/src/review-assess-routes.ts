@@ -9,7 +9,7 @@
 // The room's own plumbing comes in as deps, the way the entries API takes
 // them: the usable-room check, the error envelope, the maintenance model and
 // the one worker seam every maintenance call goes through. That keeps this
-// file about the Review and leaves index.ts with one registration line.
+// file about the Review and leaves room-fold-routes.ts with one registration line.
 
 import type { FastifyInstance } from "fastify";
 import {

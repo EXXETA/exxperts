@@ -67,7 +67,7 @@ const DISABLED_400 = new Error(
 );
 
 // Sonnet 5.5 words its refusal differently: it names between_tools, its own
-// lowest setting, which this app does not send.
+// lowest setting, which only its row on Anthropic's own API sends.
 const SONNET_5_5_DISABLED_400 = new Error(
 	'400 {"type":"error","error":{"type":"invalid_request_error","message":"\\"thinking.type.disabled\\" is not supported for this model. Use \\"thinking.type.between_tools\\" for the lowest thinking setting, or \\"thinking.type.adaptive\\" and \\"output_config.effort\\" to control thinking behavior."}}',
 );
@@ -129,8 +129,9 @@ describe("anthropic self-healing for a model that rejects thinking off", () => {
 		expect(healed[0].details).toEqual({ model: "claude-opus-5-5" });
 	});
 
-	it("heals Sonnet 5.5's wording of the refusal with adaptive thinking at low, never between_tools", async () => {
-		const model = getModel("anthropic", "claude-sonnet-5-5")!;
+	it("heals Sonnet 5.5's wording of the refusal with adaptive thinking at low on a row that does not map off", async () => {
+		// As on a gateway's Sonnet 5.5 row: off is not mapped to between_tools there.
+		const model = { ...getModel("anthropic", "claude-sonnet-5-5")!, thinkingLevelMap: { xhigh: "xhigh", max: "max", off: null } };
 		const { client, calls } = createSequencedClient([SONNET_5_5_DISABLED_400, doneResponse()]);
 		const result = await streamAnthropic(model, makeContext(), { client, thinkingEnabled: false } as any).result();
 

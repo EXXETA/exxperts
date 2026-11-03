@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { fetchPersistentRoomBashSettings, updatePersistentRoomBashSettings } from "../persistent-room-management-api";
 import { useRemoteClientContext } from "../remote-client-context";
 import type { PersistentAgentId } from "../types";
-import { TerminalIcon } from "./icons";
 
 /**
- * The chat header's bash-mode chip: visible only in rooms whose workspace
- * policy has Bash enabled, it names the one fact worth glancing at up here —
- * whether commands run only after an approval card ("Bash: asks") or without
- * asking ("Bash: auto"). Clicking it opens a two-option menu that applies the
- * choice immediately (product decision: no confirmation step in either
- * direction), through the same endpoint the Room Settings toggle uses.
+ * The room's command-mode chip: under the message box beside the model
+ * control, or inside the box before Remember on the phone. Visible only in
+ * rooms whose workspace policy has Bash enabled, it names whether commands
+ * run only after an approval card ("Ask first") or without asking ("Auto").
+ * Clicking it opens a two-option menu, upwards, that applies the choice
+ * immediately (product decision: no confirmation step in either direction),
+ * through the same endpoint the Room Settings toggle uses.
  *
  * Staleness: the chip refetches on agentId change and whenever the settings
  * modal closes (the `settingsOpen` prop is the cheap hook App already holds —
@@ -18,7 +18,7 @@ import { TerminalIcon } from "./icons";
  * also refetches on menu OPEN, because that is the moment a stale answer
  * would misdirect a click.
  *
- * A failed load quietly shows "asks" — the fail-closed truth, matching the
+ * A failed load quietly shows "Ask first": the fail-closed truth, matching the
  * approval guard's own default when nothing is stored.
  *
  * On a remote client the chip still tells the truth, but the options are
@@ -133,17 +133,15 @@ export function BashModeChip({ agentId, bashEnabled, settingsOpen = false }: {
 				type="button"
 				className={`bash-mode-chip${autoApprove ? " auto" : ""}`}
 				title={autoApprove ? "This room runs commands without asking. Click to change" : "This room asks before each command. Click to change"}
-				aria-label={autoApprove ? "Bash: auto" : "Bash: asks"}
+				aria-label={autoApprove ? "Commands: run without asking" : "Commands: ask first"}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onClick={toggleMenu}
 			>
-				{/* Phone width shows the icon alone; the words ride the title and the label. */}
-				<span className="bash-mode-chip-icon"><TerminalIcon size={16} /></span>
-				<span className="bash-mode-chip-label">{autoApprove ? "Bash: auto" : "Bash: asks"}</span>
+				<span className="bash-mode-chip-label">{autoApprove ? "Auto" : "Ask first"}</span>
 			</button>
 			{open && (
-				<div className="bash-mode-menu" role="menu" aria-label="Bash approval mode">
+				<div className="bash-mode-menu" role="menu" aria-label="Commands">
 					<button
 						type="button"
 						role="menuitemradio"

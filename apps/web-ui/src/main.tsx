@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AppErrorBoundary } from "./components/app-error-boundary";
 import { ConfirmDialogHost } from "./components/confirm-dialog";
+import { KeysList } from "./components/keys-list";
 import { SidebarCollapsedAffordance } from "./sidebar-collapse";
 import { installPhoneViewportTracking } from "./phone-viewport";
 
@@ -29,6 +30,7 @@ createRoot(document.getElementById("root")!).render(
 			<SidebarCollapsedAffordance />
 			<App />
 			<ConfirmDialogHost />
+			<KeysList />
 		</AppErrorBoundary>
 	</React.StrictMode>,
 );

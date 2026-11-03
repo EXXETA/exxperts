@@ -1,4 +1,6 @@
 import { useMemo, type ReactNode } from "react";
+import { CloseIcon } from "./icons";
+import { PLAIN_TEXT_PREVIEW_EXTENSIONS } from "../../../web-server/src/plain-text-preview";
 
 export interface ArtifactRef {
 	relativePath: string;
@@ -89,6 +91,18 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 	// "artifact" stays reserved for room-made task outputs.
 	const isUserFile = taskId.startsWith("file:");
 	const noun = isUserFile ? "file" : "artifact";
+	// The kicker is a template's short id or the noun, both lower case; in sentence
+	// case it starts with a capital. The bare noun says nothing the file's own
+	// name does not; the mac app hides it so the head fits its top row
+	// (34-desktop-app.css).
+	const kickerIsNoun = !(assetTitle && !isUserFile);
+	const kickerWords = kickerIsNoun ? noun : templateLabel;
+	const kicker = kickerWords.charAt(0).toUpperCase() + kickerWords.slice(1);
+	// One file on show: the title is its full name, extension included, so a
+	// file that cannot be previewed says what it is. Several files keep the
+	// row's title; their tabs name each file.
+	const shownFileName = artifact.relativePath.split("/").pop() ?? "";
+	const title = assetTitle && shownFileName && (!files || files.length <= 1) ? shownFileName : (assetTitle ?? templateLabel);
 	const resolved = useMemo(() => resolveRouteUrl(taskId, artifact.relativePath, roomId), [taskId, artifact.relativePath, roomId]);
 	const routeUrl = "url" in resolved ? resolved.url : null;
 
@@ -141,19 +155,23 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 				</div>
 			);
 		}
-		if (extension === ".html" || extension === ".md" || extension === ".txt" || extension === ".csv" || extension === ".json") {
+		if (extension === ".html" || extension === ".md" || PLAIN_TEXT_PREVIEW_EXTENSIONS.has(extension)) {
 			// sandbox="" is DELIBERATE and intentionally stricter than the route's CSP
 			// (which allows scripts): every v1 template's HTML is static by construction
 			// (deterministic decks are script-free; charts/documents are declared no-JS),
 			// so no capability needs granting here. NEVER add allow-same-origin — that
 			// would hand the frame this origin's cookies/storage and same-origin fetch.
-			// .md (and the plain-text user-file types .txt/.csv/.json) are served as
-			// text/plain, so they render as inert source in the frame.
+			// .md (and the plain-text user-file types: .txt, .csv, .py and the rest of
+			// the server's plain-text-preview.ts) are served as text/plain, so they render as inert
+			// source in the frame. A text/plain
+			// page draws in the browser's own ink for the theme, so it sits on the
+			// page's paper, not on the dark plate HTML gets.
+			const plainText = extension !== ".html";
 			return (
 				<div className="artifact-viewer-body artifact-viewer-body-frame">
 					<iframe
 						key={frameKey}
-						className="artifact-viewer-frame"
+						className={`artifact-viewer-frame${plainText ? " artifact-viewer-frame-text" : ""}`}
 						sandbox=""
 						src={routeUrl}
 						title={`${templateLabel} artifact`}
@@ -180,11 +198,11 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 					{/* The sandbox assertion moved from a visible badge into this tooltip:
 					    it is provenance for the curious, not action-relevant status. The
 					    hidden span keeps it announced for assistive tech. */}
-					<div className="artifact-viewer-kicker" title="Rendered inside a locked-down sandbox">
-						{assetTitle ? templateLabel : noun}
+					<div className={`artifact-viewer-kicker${kickerIsNoun ? " artifact-viewer-kicker-noun" : ""}`} title="Rendered inside a locked-down sandbox">
+						{kicker}
 						<span className="artifact-viewer-sr-note">, rendered inside a locked-down sandbox</span>
 					</div>
-					<div className="artifact-viewer-template" title={assetTitle ?? templateLabel}>{assetTitle ?? templateLabel}</div>
+					<div className="artifact-viewer-template" title={title}>{title}</div>
 					{originLine && <div className="artifact-viewer-origin">{originLine}</div>}
 				</div>
 				<div className="artifact-viewer-head-right">
@@ -193,7 +211,7 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 						    maximize — file ACTIONS live in the footer. */}
 						<button
 							type="button"
-							className="artifact-viewer-icon"
+							className="artifact-viewer-icon artifact-viewer-open-tab"
 							onClick={openInTab}
 							disabled={!routeUrl}
 							aria-label="Open in a new tab"
@@ -217,7 +235,7 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 							onClick={onClose}
 							aria-label={isUserFile ? "Close file viewer" : "Close artifact viewer"}
 						>
-							✕
+							<CloseIcon size={16} />
 						</button>
 					</div>
 				</div>

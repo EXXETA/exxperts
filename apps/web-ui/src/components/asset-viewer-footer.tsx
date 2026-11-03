@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { resolveRouteUrl, type ArtifactRef } from "./ArtifactViewer";
 import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
+import { DownloadIcon, SaveIcon } from "./icons";
 
 interface Props {
 	taskId: string;
@@ -17,7 +18,7 @@ interface Props {
 	iteratePending: boolean;
 	/** Server-side refusal for the last change request — rendered inline here. */
 	iterateNotice?: string | null;
-	/** 💾 Save… — export a snapshot to a folder the user picks. Absent = not saveable (legacy store rows). */
+	/** Save…: export a snapshot to a folder the user picks. Absent = not saveable (legacy store rows). */
 	onSaveTo?: () => void;
 	/** Orphan rows only (contract §4): manual per-task delete of the files. */
 	onDelete?: () => void;
@@ -27,7 +28,7 @@ interface Props {
  * The viewer's action footer, split by weight (files UI slice, mockup):
  * on the LEFT the one primary verb — Ask for changes, room-made files only
  * (a user's own file is reference material; derivation happens in chat);
- * on the RIGHT the quiet take-away actions — ⬇ Download and 💾 Save… are
+ * on the RIGHT the quiet take-away actions: Download and Save… are
  * SNAPSHOTS (the Google-Docs export rule: nothing syncs back), then Details.
  * Add to conversation and Save to workspace are gone: the room has eyes on
  * its shelf now (manifest + read tools), and snapshots replaced the
@@ -95,11 +96,11 @@ export function AssetViewerFooter({ taskId, artifact, userFileName, roomId, canI
 				)}
 				<span className="asset-viewer-footer-spacer" aria-hidden="true" />
 				<button type="button" className="artifact-viewer-quiet" disabled={!downloadUrl} onClick={downloadSnapshot} title="Download a snapshot of this file to your Downloads folder">
-					⬇ Download
+					<DownloadIcon size={14} /> Download
 				</button>
 				{onSaveTo && showsComputerOnlyControls(remoteClient) && (
 					<button type="button" className="artifact-viewer-quiet" onClick={onSaveTo} title="Save a snapshot of this file into a folder you pick">
-						💾 Save…
+						<SaveIcon size={14} /> Save…
 					</button>
 				)}
 				{onDelete && (

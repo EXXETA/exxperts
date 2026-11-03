@@ -11,6 +11,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -43,15 +46,6 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 
 const ROOM = "Budget Room";
 const NARROW = { provider: "fake-gpt", model: "narrow-fake" };
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -114,7 +108,7 @@ try {
 		const dismiss = page.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
 
-		await page.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: "Enter →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: "Enter" }).click();
 		await page.locator("textarea").first().waitFor({ timeout: 15000 });
 		await page.getByRole("button", { name: "Room settings" }).click();
 		await page.waitForSelector(".settings-dialog", { timeout: 10000 });

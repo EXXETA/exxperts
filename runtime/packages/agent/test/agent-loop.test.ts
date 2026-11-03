@@ -1304,6 +1304,155 @@ describe("agentLoop with AgentMessage", () => {
 	});
 });
 
+describe("agentLoop after Stop in a tool batch", () => {
+	const STOPPED_TEXT = "the turn was stopped before it ran";
+	type StopScene = {
+		toolExecution: "sequential" | "parallel";
+		// Which call ends the batch's run: in its before-hook (the person's card) or in its own execute.
+		abortIn: "beforeToolCall" | "execute";
+		// The call (1, 2 or 3) whose step presses Stop.
+		abortAt: number;
+		// Whether that before-hook refuses its call, as the card does, or lets it through.
+		hookLetsThrough?: boolean;
+	};
+
+	async function runStopScene(scene: StopScene) {
+		const toolSchema = Type.Object({});
+		const controller = new AbortController();
+		const executed: string[] = [];
+		const hooked: string[] = [];
+		const makeTool = (name: string): AgentTool<typeof toolSchema, undefined> => ({
+			name,
+			label: name,
+			description: name,
+			parameters: toolSchema,
+			async execute() {
+				executed.push(name);
+				if (scene.abortIn === "execute" && name === `tool_${scene.abortAt}`) controller.abort();
+				return { content: [{ type: "text", text: `${name} ran` }], details: undefined };
+			},
+		});
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [makeTool("tool_1"), makeTool("tool_2"), makeTool("tool_3")],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			toolExecution: scene.toolExecution,
+			beforeToolCall: async ({ toolCall }) => {
+				hooked.push(toolCall.name);
+				if (scene.abortIn === "beforeToolCall" && toolCall.name === `tool_${scene.abortAt}`) {
+					// As the room's command card does: Stop aborts the signal and answers the card with a refusal.
+					controller.abort();
+					if (scene.hookLetsThrough) return undefined;
+					return { block: true, reason: "The person pressed Stop before answering." };
+				}
+				return undefined;
+			},
+		};
+		let llmCalls = 0;
+		const streamFn = (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				llmCalls++;
+				if (options?.signal?.aborted) {
+					stream.push({ type: "error", reason: "aborted", error: createAssistantMessage([], "aborted") });
+					return;
+				}
+				if (llmCalls > 1) {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage([{ type: "text", text: "done" }]) });
+					return;
+				}
+				const message = createAssistantMessage(
+					[1, 2, 3].map((n) => ({ type: "toolCall" as const, id: `call-${n}`, name: `tool_${n}`, arguments: {} })),
+					"toolUse",
+				);
+				stream.push({ type: "done", reason: "toolUse", message });
+			});
+			return stream;
+		};
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("run three tools")], context, config, controller.signal, streamFn as never);
+		for await (const event of stream) events.push(event);
+		const textOf = (id: string) => {
+			const end = events.find((e) => e.type === "tool_execution_end" && e.toolCallId === id);
+			if (end?.type !== "tool_execution_end") return { text: "", isError: false };
+			const text = end.result.content.find((c: { type: string }) => c.type === "text");
+			return { text: text && "text" in text ? String(text.text) : "", isError: end.isError };
+		};
+		const resultIds = events.flatMap((e) => (e.type === "message_end" && e.message.role === "toolResult" ? [e.message.toolCallId] : []));
+		const startIds = events.flatMap((e) => (e.type === "tool_execution_start" ? [e.toolCallId] : []));
+		return { executed, hooked, textOf, resultIds, startIds, llmCalls, messages: await stream.result() };
+	}
+
+	for (const toolExecution of ["sequential", "parallel"] as const) {
+		it(`${toolExecution}: a Stop in the first call's before-hook runs none of the batch and calls no later before-hook`, async () => {
+			const run = await runStopScene({ toolExecution, abortIn: "beforeToolCall", abortAt: 1 });
+			expect(run.hooked).toEqual(["tool_1"]);
+			expect(run.executed).toEqual([]);
+			expect(run.textOf("call-1")).toEqual({ text: "The person pressed Stop before answering.", isError: true });
+			for (const id of ["call-2", "call-3"]) {
+				expect(run.textOf(id).isError).toBe(true);
+				expect(run.textOf(id).text).toContain(STOPPED_TEXT);
+			}
+			// Every call keeps exactly one start and one result, in source order.
+			expect(run.startIds).toEqual(["call-1", "call-2", "call-3"]);
+			expect(run.resultIds).toEqual(["call-1", "call-2", "call-3"]);
+			expect(run.messages.filter((m) => m.role === "toolResult")).toHaveLength(3);
+		});
+
+		it(`${toolExecution}: a call ahead of the Stop keeps today's run, the calls after it never run`, async () => {
+			const run = await runStopScene({ toolExecution, abortIn: "beforeToolCall", abortAt: 2 });
+			expect(run.hooked).toEqual(["tool_1", "tool_2"]);
+			expect(run.textOf("call-2").text).toBe("The person pressed Stop before answering.");
+			expect(run.textOf("call-3").text).toContain(STOPPED_TEXT);
+			expect(run.resultIds).toEqual(["call-1", "call-2", "call-3"]);
+			if (toolExecution === "sequential") {
+				// It ran before the Stop.
+				expect(run.executed).toEqual(["tool_1"]);
+				expect(run.textOf("call-1")).toEqual({ text: "tool_1 ran", isError: false });
+			} else {
+				// It was only prepared when the Stop came, so it never starts.
+				expect(run.executed).toEqual([]);
+				expect(run.textOf("call-1").text).toContain(STOPPED_TEXT);
+			}
+		});
+	}
+
+	it("a call whose before-hook lets it through after the Stop never starts", async () => {
+		for (const toolExecution of ["sequential", "parallel"] as const) {
+			const run = await runStopScene({ toolExecution, abortIn: "beforeToolCall", abortAt: 1, hookLetsThrough: true });
+			expect(run.hooked).toEqual(["tool_1"]);
+			expect(run.executed).toEqual([]);
+			for (const id of ["call-1", "call-2", "call-3"]) expect(run.textOf(id).text).toContain(STOPPED_TEXT);
+			expect(run.resultIds).toEqual(["call-1", "call-2", "call-3"]);
+		}
+	});
+
+	it("a first call that aborts while it runs keeps its own result, and the later calls never run", async () => {
+		for (const toolExecution of ["sequential", "parallel"] as const) {
+			const run = await runStopScene({ toolExecution, abortIn: "execute", abortAt: 1 });
+			expect(run.executed).toEqual(["tool_1"]);
+			expect(run.textOf("call-1")).toEqual({ text: "tool_1 ran", isError: false });
+			for (const id of ["call-2", "call-3"]) {
+				expect(run.textOf(id).isError).toBe(true);
+				expect(run.textOf(id).text).toContain(STOPPED_TEXT);
+			}
+			expect(run.resultIds).toEqual(["call-1", "call-2", "call-3"]);
+		}
+	});
+
+	it("without a Stop all three calls run, each through its before-hook", async () => {
+		for (const toolExecution of ["sequential", "parallel"] as const) {
+			const run = await runStopScene({ toolExecution, abortIn: "beforeToolCall", abortAt: 0 });
+			expect(run.hooked).toEqual(["tool_1", "tool_2", "tool_3"]);
+			expect(run.executed).toEqual(["tool_1", "tool_2", "tool_3"]);
+		}
+	});
+});
+
 describe("agentLoopContinue with AgentMessage", () => {
 	it("should throw when context has no messages", () => {
 		const context: AgentContext = {

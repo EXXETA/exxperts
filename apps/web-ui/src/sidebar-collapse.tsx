@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { useEscapeKey } from "./components/use-escape-key";
+import { PHONE_MEDIA } from "./phone-viewport";
 
 // Sidebar collapse state, shared by the in-header toggles (one per sidebar
 // variant) and the collapsed-only floating affordance. A module store instead
@@ -7,9 +8,9 @@ import { useEscapeKey } from "./components/use-escape-key";
 // class on <html> is what the CSS keys off, and localStorage persists it.
 const STORAGE_KEY = "exxperts.sidebarCollapsed";
 // Phone width: the rail overlays the content (see the mobile block in
-// styles.css), so there it is a drawer that starts closed and is never
+// styles/35-sidebar-remote.css), so there it is a drawer that starts closed and is never
 // remembered; the stored choice is the wide screen's.
-const phoneQuery = window.matchMedia("(max-width: 760px)");
+const phoneQuery = window.matchMedia(PHONE_MEDIA);
 function storedCollapsed(): boolean {
 	try {
 		return localStorage.getItem(STORAGE_KEY) === "1";
@@ -43,6 +44,27 @@ export function closeSidebarOnPhone(): void {
 // Narrowing to phone width closes the drawer; widening gives back the wide screen's choice.
 phoneQuery.addEventListener("change", () => setCollapsed(phoneQuery.matches || storedCollapsed()));
 
+// The mac app's window buttons keep their size under page zoom while the page
+// scales, so the toggle beside them needs the zoom (--window-zoom in
+// styles/35-sidebar-remote.css). The window has no frame there, so its outer size in points over
+// the page's size in CSS pixels is the zoom; DevTools docked in the window
+// shrinks the page along one axis only, so the smaller ratio is the zoom. A
+// zoom change is a resize. Early in a page load the window reports its outer
+// size as 0 and fills it in without a resize, so until then it looks again on
+// the next frame.
+function trackWindowZoom(): void {
+	if (!document.documentElement.classList.contains("desktop-app-mac")) return;
+	if (!window.outerWidth || !window.outerHeight) {
+		requestAnimationFrame(trackWindowZoom);
+		return;
+	}
+	const zoom = Math.min(window.outerWidth / window.innerWidth, window.outerHeight / window.innerHeight);
+	document.documentElement.style.setProperty("--window-zoom", String(zoom));
+}
+window.addEventListener("resize", trackWindowZoom);
+// After the entry module has set the desktop classes.
+queueMicrotask(trackWindowZoom);
+
 function subscribe(cb: () => void): () => void {
 	listeners.add(cb);
 	return () => listeners.delete(cb);
@@ -58,7 +80,7 @@ function subscribePhone(cb: () => void): () => void {
 	phoneQuery.addEventListener("change", cb);
 	return () => phoneQuery.removeEventListener("change", cb);
 }
-function usePhoneWidth(): boolean {
+export function usePhoneWidth(): boolean {
 	return useSyncExternalStore(subscribePhone, () => phoneQuery.matches);
 }
 
@@ -71,10 +93,10 @@ function PanelIcon() {
 	);
 }
 
-// The in-header toggle: lives in the sidebar header flow (right-aligned at
-// the sidebar's edge), so it scales with layout under zoom and sits outside
-// any fixed drag strip. The headers' existing no-drag rules cover it in the
-// desktop app.
+// The in-header toggle: first in the sidebar header, before the logo, but
+// fixed on exactly the floating affordance's spot (styles/35-sidebar-remote.css), so hiding and
+// showing the sidebar are two clicks in one place. The headers' existing
+// no-drag rules cover it in the desktop app.
 export function SidebarToggleButton() {
 	const isCollapsed = useSidebarCollapsed();
 	return (
@@ -103,9 +125,9 @@ export function SidebarDrawerBackdrop() {
 }
 
 // The collapsed-state home: the header toggle disappears with the sidebar,
-// so a small floating affordance takes over at the top-left. Rendered only
-// while collapsed; in the desktop app it sits BELOW the drag strip so the
-// drag region can never eat its clicks (the round-S1 lesson).
+// so a small floating affordance takes over on the same spot. Rendered only
+// while collapsed; in the mac app it paints above the drag strip and opts out
+// of it, or the drag region would eat its clicks.
 export function SidebarCollapsedAffordance() {
 	const isCollapsed = useSidebarCollapsed();
 	if (!isCollapsed) return null;

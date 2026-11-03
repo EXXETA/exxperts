@@ -77,12 +77,9 @@ try {
 	const effectiveAfterDrift = effectiveEnabledSkills(readPersistentRoomSkillSettings(agentId).enabledSkills, resolveBody);
 	assert(effectiveAfterDrift.length === 1 && effectiveAfterDrift[0].name === "summarize-first", "a mismatched skill must be dropped from the effective set");
 
-	// Re-enabling (re-review) re-pins the new hash and clears the mismatch.
-	const repinned = enablePersistentRoomSkill(agentId, "cite-sources", resolveBody);
-	assert(repinned.ok, "re-enabling should succeed");
-	const cleared = computeSkillStatuses(readPersistentRoomSkillSettings(agentId).enabledSkills, resolveBody);
-	assert(cleared.find((s) => s.name === "cite-sources")?.status === "ok", "re-enabling should re-pin the new hash and clear the mismatch");
-	assert(effectiveEnabledSkills(readPersistentRoomSkillSettings(agentId).enabledSkills, resolveBody).length === 2, "re-pinned skill returns to the effective set");
+	// Re-enabling (re-review) re-pins the new hash; that the re-pinned skill reads
+	// again is persistent-room-skill-tool-smoke's.
+	enablePersistentRoomSkill(agentId, "cite-sources", resolveBody);
 
 	// Delete from the library → the enabled skill reports missing and is excluded.
 	library.delete("summarize-first");

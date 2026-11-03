@@ -1,0 +1,349 @@
+/* Desktop app (Electron shell) -------------------------------------- */
+/* macOS hidden title bar: one top row, the window buttons' (centre y 25 in
+   window points, so 50 tall), holds the window buttons and the sidebar
+   toggle, and beside the sidebar the room name with its actions and the right
+   pane's header, all centred on it. The row drags the window; its controls
+   opt back out. The window buttons keep their place under page zoom, so the
+   row is set in window points too, as the toggle's spot is
+   (35-sidebar-remote.css). The sidebar header doubles as the window drag
+   region (interactive children opt back out); the logo gets a row of its own
+   under the strip, its left edge on the list text's (12px list padding + 1px
+   border + 14px item padding), and the list follows. The list keeps out of
+   the strip, where a click would drag the window. Gated by the shell's UA
+   token via the classes set in index.html; the browser app is untouched. */
+html.desktop-app-mac {
+	--sidebar-text-left: 27px;
+	--mac-row-centre: calc(25px / var(--window-zoom, 1));
+	--mac-row-height: calc(2 * var(--mac-row-centre));
+}
+html.desktop-app-mac .sidebar-header,
+html.desktop-app-mac .product-sidebar-header {
+	-webkit-app-region: drag;
+	display: block;
+	min-height: 0;
+	padding: 62px 12px 20px var(--sidebar-text-left);
+}
+html.desktop-app-mac .brand img.logo {
+	height: 20px;
+}
+/* The header's own bottom padding is the air above the list; the list steps
+   28px, as a native mac sidebar does. */
+html.desktop-app-mac .sidebar-primary-nav,
+html.desktop-app-mac .product-nav {
+	padding-top: 0;
+	gap: 0;
+}
+html.desktop-app-mac .sidebar-primary-nav .list-btn,
+html.desktop-app-mac .product-nav .list-btn {
+	padding-top: 4px;
+	padding-bottom: 4px;
+}
+html.desktop-app-mac .sidebar-header a,
+html.desktop-app-mac .sidebar-header button,
+html.desktop-app-mac .sidebar-header input,
+html.desktop-app-mac .product-sidebar-header a,
+html.desktop-app-mac .product-sidebar-header button,
+html.desktop-app-mac .product-sidebar-header input {
+	-webkit-app-region: no-drag;
+}
+html.desktop-app-mac .sidebar-header img,
+html.desktop-app-mac .product-sidebar-header img {
+	-webkit-user-drag: none;
+}
+
+/* Desktop app, mac: draggable strip across the whole window top. The landing
+   pages clear it with padding (below, their heroes breathe anyway), but the
+   chat column, the right pane and the overlays sit flush at the top — those
+   surfaces layer ABOVE the strip instead, and their interactive pieces punch
+   precise no-drag holes (drag regions follow paint order: whatever paints
+   last at a point decides). z 20 slots into the deliberate gap in the app's
+   scale: in-flow content tops out at 6, composer-anchored popovers start at
+   30, overlays run 40-85 — so the strip covers plain page background yet
+   stays under everything that must stay clickable. */
+.desktop-drag-strip { display: none; }
+html.desktop-app-mac .desktop-drag-strip {
+	display: block;
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: var(--mac-row-height);
+	-webkit-app-region: drag;
+	z-index: 20;
+}
+/* The landing's content starts 10px under the strip, which grows as the page
+   zooms out. */
+html.desktop-app-mac .landing:not(.settings-dialog .landing) { padding-top: max(60px, calc(var(--mac-row-height) + 10px)); }
+/* Chat column: the topbar is the row's stretch over the chat, flush like the
+   pane header beside it, with the same lift over the strip and the same
+   bar-drags/controls-click split. Only the bar is lifted (not the whole
+   column): .main must not become a stacking context, its fixed overlays and
+   popovers keep their place on the app scale. */
+html.desktop-app-mac .topbar {
+	position: relative;
+	z-index: 21;
+	-webkit-app-region: drag;
+	/* The bar is as tall as its 30px actions, so they centre 15px under this
+	   padding, on the row. Past about 167% zoom the row is shorter than the
+	   actions and they keep to the window's top. The bar covers the whole
+	   strip: under its bottom edge the strip would be the top layer, and a
+	   click on the chat there would drag the window. */
+	padding-top: max(0px, calc(var(--mac-row-centre) - 15px));
+	min-height: var(--mac-row-height);
+}
+/* The row stays one line: a long name ends in an ellipsis rather than
+   wrapping or pushing the actions under it. The name's side is padded by
+   half of 30px less its 16.8px line (16px at a 1.05 line height), less the
+   1px its ink sits under its line's centre, so its ink centres where the
+   actions do. */
+html.desktop-app-mac .topbar {
+	align-items: flex-start;
+	flex-wrap: nowrap;
+}
+html.desktop-app-mac .topbar .left {
+	padding-top: 5.6px;
+	flex: 1 1 auto;
+	flex-wrap: nowrap;
+	min-width: 0;
+}
+html.desktop-app-mac .topbar .title-stack {
+	min-width: 0;
+}
+html.desktop-app-mac .topbar .title {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+html.desktop-app-mac .topbar a,
+html.desktop-app-mac .topbar button,
+html.desktop-app-mac .topbar input {
+	-webkit-app-region: no-drag;
+}
+/* Collapsed sidebar: the chat column becomes the window's left edge, and the
+   window buttons and the sidebar toggle share the row with the room name.
+   The name starts on the reading column's edge, or 12px past the toggle's
+   28px when the column is so narrow that its edge lies left of that. At
+   phone width the home button sits beside the toggle (38-phone.css), so the
+   floor moves past it too. The browser's collapsed clearance for the
+   floating toggle stays a separate :not(.desktop-app-mac) rule, in
+   35-sidebar-remote.css. */
+html.desktop-app-mac.sidebar-collapsed .topbar {
+	padding-left: max(calc(var(--mac-toggle-left) + 40px), var(--topbar-column-edge));
+}
+@media (max-width: 760px) {
+	html.desktop-app-mac .app .topbar {
+		padding-left: calc(var(--mac-toggle-left) + 76px);
+	}
+}
+/* Maintain workspaces: Memorize and Review are full-page takeovers with no
+   sidebar, and the chooser sits beside the product sidebar, which can be
+   hidden. Their header carries the exit button under the strip, so without
+   the lift the strip eats its clicks. Same pattern: header
+   above the strip, bar drags, controls opt out. The content starts below the
+   traffic lights (x 18-78, y 18-32 at 100%), as Home does, so the title keeps
+   the content's left edge. The text starts at 52px (48px on the discussion
+   step), which clears the buttons down to about 67% zoom: Electron's 69.4% too. */
+html.desktop-app-mac .absorb-workspace-header {
+	position: relative;
+	z-index: 21;
+	-webkit-app-region: drag;
+}
+html.desktop-app-mac .maintain-workspace .absorb-workspace-header { padding-top: 52px; }
+html.desktop-app-mac .maintain-workspace .absorb-workspace-header.compact { padding-top: 48px; }
+html.desktop-app-mac .absorb-workspace-header a,
+html.desktop-app-mac .absorb-workspace-header button,
+html.desktop-app-mac .absorb-workspace-header input {
+	-webkit-app-region: no-drag;
+}
+/* Right pane (artifact/file viewer, task run view, approval preview): lift
+   the pane above the strip so its header paints last, then mirror the
+   sidebar-header pattern — the header bar itself drags the window, its
+   controls opt back out. Empty header stretches stay grabbable. */
+html.desktop-app-mac .workbench > .artifact-viewer,
+html.desktop-app-mac .workbench > .preview-pane {
+	position: relative;
+	z-index: 21;
+}
+html.desktop-app-mac .artifact-viewer-head,
+html.desktop-app-mac .preview-head {
+	-webkit-app-region: drag;
+}
+/* Both heads are the row's stretch over the pane: their text and buttons
+   centre on the row. The file viewer's bare "File" or "Artifact" kicker
+   goes (still read by screen readers), so a file's head is its name on one
+   line; a template's kicker stays, set tight so its two lines fit the row
+   down to 125% zoom. Their ink sits high in the block (the kicker's line
+   is its letters, the name's has air above them), so the block starts 4px
+   lower to centre their ink on the row. A third line (where an earlier
+   conversation made the file) makes the head taller, so the file viewer's
+   icons keep their own place on the row: half a pixel above its centre, as
+   centring them over the head's 1px bottom border puts them. */
+html.desktop-app-mac .artifact-viewer-head,
+html.desktop-app-mac .preview-head {
+	min-height: var(--mac-row-height);
+	padding-top: 0;
+	padding-bottom: 0;
+}
+html.desktop-app-mac .artifact-viewer-provenance {
+	gap: 0;
+}
+html.desktop-app-mac .artifact-viewer-kicker {
+	line-height: 1;
+}
+html.desktop-app-mac .artifact-viewer-provenance:has(.artifact-viewer-kicker:not(.artifact-viewer-kicker-noun)) {
+	padding-top: 4px;
+}
+html.desktop-app-mac .artifact-viewer-provenance:has(.artifact-viewer-kicker:not(.artifact-viewer-kicker-noun)) .artifact-viewer-template {
+	line-height: 1.2;
+}
+html.desktop-app-mac .artifact-viewer-head-right {
+	align-self: flex-start;
+	margin-top: calc(var(--mac-row-centre) - 14.5px);
+}
+/* The open-in-a-new-tab glyph (⧉) draws 1px above its line's centre, so
+   its button's content box starts 2px lower to put the glyph's ink on the
+   row with its neighbours. */
+html.desktop-app-mac .artifact-viewer-open-tab {
+	padding-top: 2px;
+}
+/* The preview's kicker line has more air above its letters than its title
+   line has below, so their ink sits 1.75px above the block's centre: the
+   block starts 3.5px lower to put it on the row. */
+html.desktop-app-mac .preview-head > div {
+	padding-top: 3.5px;
+}
+html.desktop-app-mac .artifact-viewer-kicker-noun {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+html.desktop-app-mac .artifact-viewer-head a,
+html.desktop-app-mac .artifact-viewer-head button,
+html.desktop-app-mac .artifact-viewer-head input,
+html.desktop-app-mac .preview-head a,
+html.desktop-app-mac .preview-head button,
+html.desktop-app-mac .preview-head input {
+	-webkit-app-region: no-drag;
+}
+/* Full-screen overlays already paint above the strip (z 40-85), but paint
+   order alone does not clear a drag region — only an explicit no-drag does.
+   Without it, a modal head or a close button under the strip would move
+   the window instead of clicking (bites on short windows with tall modals).
+   The whole overlay goes no-drag: while one is open the window drags by its
+   title-bar inset only, and the backdrop stays a click-to-dismiss surface. */
+html.desktop-app-mac .checkpoint-preview-backdrop,
+html.desktop-app-mac .mermaid-viewer-overlay,
+html.desktop-app-mac .creator-overlay,
+html.desktop-app-mac .agent-details-overlay,
+html.desktop-app-mac .room-settings-overlay,
+html.desktop-app-mac .help-overlay,
+html.desktop-app-mac .skill-upload-overlay,
+html.desktop-app-mac .ai-profile-menu-backdrop,
+html.desktop-app-mac .settings-dialog-backdrop,
+html.desktop-app-mac .mem-fullscreen {
+	-webkit-app-region: no-drag;
+}
+
+/* Checkpoint modal format: the proposal modal family reads
+   like the room-settings dialogs - compact left-aligned header, meta and the
+   full-entry affordance on one quiet row (chips left, control right), action
+   row left-aligned with the primary first. Scoped to the modal card so the
+   Maintain screens keep their deliberate big headlines. */
+.checkpoint-input-card .checkpoint-input-heading,
+.checkpoint-input-card .checkpoint-proposal-page {
+	text-align: left;
+	max-width: none;
+	margin: 0;
+}
+.checkpoint-input-card .checkpoint-input-heading h2 {
+	font-size: 24px;
+	line-height: 1.15;
+	margin: 6px 0 8px;
+}
+.checkpoint-input-card:not(.maintain-confirm-card) .checkpoint-preview-actions {
+	justify-content: flex-start;
+}
+.checkpoint-input-card .checkpoint-density-options {
+	justify-content: flex-start;
+}
+
+/* The gate surfaces of the Memorize/Review flows join the
+   compact modal language (the Maintain landing keeps its own big headlines -
+   different markup, untouched). Footnote pattern replaces explainer boxes:
+   one quiet line below the action row. */
+.absorb-workspace .checkpoint-proposal-page .checkpoint-input-heading {
+	text-align: left;
+	max-width: none;
+	margin: 0;
+}
+.absorb-workspace .checkpoint-proposal-page .checkpoint-input-heading h2 {
+	font-size: 24px;
+	line-height: 1.15;
+	margin: 6px 0 8px;
+}
+.checkpoint-footnote {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+	margin: 2px 0 0;
+	text-align: left;
+}
+.checkpoint-input-card .checkpoint-proposal-page {
+	gap: 14px;
+}
+.checkpoint-input-card .checkpoint-proposal-result.standalone {
+	margin-top: 4px;
+}
+
+/* The disclosure rows carry the modal family's own
+   text-control pattern (the SHOW FULL ENTRY treatment): a quiet right-aligned
+   DETAILS control that reads HIDE when open. Purely visual - the whole summary
+   row stays the native disclosure (keyboard and screen-reader semantics
+   untouched, expanded state announced by details itself). */
+.absorb-candidate-disclosure > summary,
+.absorb-raw-markdown-disclosure > summary {
+	list-style: none;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+.absorb-candidate-disclosure > summary::-webkit-details-marker,
+.absorb-raw-markdown-disclosure > summary::-webkit-details-marker {
+	display: none;
+}
+.absorb-candidate-disclosure > summary::after,
+.absorb-raw-markdown-disclosure > summary::after {
+	content: "Details";
+	background: var(--exx-action-secondary-bg);
+	border: 1px solid var(--exx-action-secondary-border);
+	border-radius: var(--exx-radius-control);
+	color: var(--exx-action-secondary-fg);
+	font-family: var(--exx-font-display);
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1;
+	padding: 8px 10px;
+	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.absorb-candidate-disclosure[open] > summary::after,
+.absorb-raw-markdown-disclosure[open] > summary::after {
+	content: "Hide";
+}
+.absorb-candidate-disclosure > summary:hover::after,
+.absorb-raw-markdown-disclosure > summary:hover::after {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border);
+	color: var(--fg);
+}
+@media (prefers-reduced-motion: reduce) {
+	.absorb-candidate-disclosure > summary::after,
+	.absorb-raw-markdown-disclosure > summary::after {
+		transition: none;
+	}
+}
+

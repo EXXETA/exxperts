@@ -1,20 +1,23 @@
-import { memo, useEffect, useId, useReducer, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { ChatItem } from "../types";
 import { formatAbsoluteTime, formatRelativeTime } from "../message-time";
 import { CopyButton } from "./CopyButton";
+import { CloseIcon, PencilIcon } from "./icons";
 import { ImageActions } from "./ImageActions";
 import { MarkdownRenderer, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
 import { MEMORY_RECALL_STEP, memoryRecallDisplayText } from "../memory-recall-display";
-import { failureButtons, failureLineParts, failureLineWords } from "../turn-failure-line";
-import { commandAborted, commandDeclined, lastName, missingToolName, nobodyToApprove, readableToolName, stepOutcome, stoppedBeforeAsking } from "../step-lines";
+import { answerStopNote, failureButtons, failureLineParts, failureLineWords, isStopLine, withoutSendAgain } from "../turn-failure-line";
+import { commandAborted, commandDeclined, lastName, missingToolName, nobodyToApprove, readableToolName, stepOutcome, stoppedBeforeAnswer, stoppedBeforeAsking } from "../step-lines";
 import { SPECIALIST_TEMPLATE_LABELS } from "../../../web-server/src/specialist-template-labels";
 import { useRemoteClientContext } from "../remote-client-context";
+import { WAITING_CAPTION, type QueuedBubble } from "../outgoing-messages";
+import { isMacPlatform } from "../platform";
 
 // The message copy control (CopyButton.tsx): on assistant replies it sits
 // permanently below the text (the thing people quote); on the user's own
 // messages it is revealed on hover of the row (occasional need, quiet at
-// rest) via the .bubble-row:hover rule in styles.css.
+// rest) via the .bubble-row:hover rule in styles/12-messages.css.
 
 /**
  * Compact, single-line preview of a tool call's key argument. Used as
@@ -31,7 +34,7 @@ function pathSummary(raw: string): string {
 	return name && folder ? `${name} · ${folder}` : raw;
 }
 
-function domainOf(url: string): string {
+export function domainOf(url: string): string {
 	try {
 		return new URL(url).hostname.replace(/^www\./, "");
 	} catch {
@@ -44,7 +47,7 @@ function domainOf(url: string): string {
  * so the raw call reads as "mcp {json}". Surface what actually happened
  * instead: which remote tool, connect, search, or auth step.
  */
-function mcpChipView(args: any, details: any): { name: string; summary: string } {
+export function mcpChipView(args: any, details: any): { name: string; summary: string } {
 	const a = args && typeof args === "object" ? args : {};
 	if (a.tool) {
 		// The connector's name, never the call's raw arguments.
@@ -67,7 +70,7 @@ function mcpChipView(args: any, details: any): { name: string; summary: string }
  * terms, never the internal tool name. Running gets the in-flight form, done
  * the finished form, and an error says the step did not happen.
  */
-const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: string; failed: string }> = {
+export const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: string; failed: string }> = {
 	bash: { icon: "⌨️", running: "Running command", done: "Ran command", failed: "Couldn't run command" },
 	read: { icon: "📄", running: "Reading file", done: "Read file", failed: "Couldn't read file" },
 	write: { icon: "✏️", running: "Writing file", done: "Wrote file", failed: "Couldn't write file" },
@@ -100,7 +103,7 @@ function genericChipName(name: string, status: ToolChatItem["status"]): string {
 	return `🛠️ ${readableToolName(name)}`;
 }
 
-function summariseToolArgs(name: string, args: any): string {
+export function summariseToolArgs(name: string, args: any): string {
 	if (!args || typeof args !== "object") return "";
 	if (name === "bash") return clip(String(args.command ?? ""));
 	if (name === "read" || name === "write" || name === "edit" || name === "ls") return clip(pathSummary(String(args.path ?? "")));
@@ -146,7 +149,7 @@ const MARKDOWN_FILE = /\.(?:md|markdown|mdx)$/i;
 const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 
 /** Only a Markdown document renders as one: a .md file read, or a page read as Markdown. Everything else is shown as written. */
-function isMarkdownResult(item: ToolChatItem): boolean {
+export function isMarkdownResult(item: ToolChatItem): boolean {
 	if (item.status !== "done") return false;
 	if (item.name === "read" || item.name === "read_file") return MARKDOWN_FILE.test(String(item.args?.path ?? item.args?.name ?? ""));
 	return item.name === "fetch_url" && item.details?.format === "markdown";
@@ -163,7 +166,7 @@ function plainDoneLine(item: ToolChatItem): string | null {
 	return null;
 }
 
-function ResultBody({ text, markdown }: { text: string; markdown: boolean }) {
+export function ResultBody({ text, markdown }: { text: string; markdown: boolean }) {
 	const unwrapped = markdown ? unwrapOuterMarkdownFence(text).replace(FRONT_MATTER, "") : text;
 	const trimmed = unwrapped.length > 20000 ? unwrapped.slice(0, 20000) + "\n\n…(truncated)" : unwrapped;
 	if (markdown) {
@@ -175,6 +178,71 @@ function ResultBody({ text, markdown }: { text: string; markdown: boolean }) {
 	}
 	return <pre className="raw-result">{trimmed}</pre>;
 }
+
+/** What a queued bubble's buttons do, by the message's id. */
+export interface QueuedBubbleActions {
+	/** Stops the answer at the words on screen and sends the queued messages; a held message goes on its own. */
+	onSendNow: (id: string) => void;
+	/** The message back into the box. */
+	onEdit: (id: string) => void;
+	onRemove: (id: string) => void;
+}
+
+/**
+ * The messages the room has not taken, under the answer, oldest first, each
+ * filled like a sent message. With a mouse, Edit, Copy and Remove show to its
+ * left on hover; on a touch screen they sit in the row under it, beside Send
+ * now. Copy is on every one; Edit and Remove on the ones nothing is sending
+ * right now (QueuedBubble.takeBack). Under each, a quiet "Queued", then Send
+ * now, with the chord's keys on the one Cmd/Ctrl+Enter sends; with text in
+ * the message box the chord sends that text instead (`boxHasText`), so the
+ * keys go. When the room takes one it becomes the conversation's own bubble
+ * in the same place.
+ */
+export const QueuedBubbles = memo(function QueuedBubbles({ messages, actions, boxHasText }: { messages: ReadonlyArray<QueuedBubble>; actions: QueuedBubbleActions; boxHasText: boolean }) {
+	const mac = isMacPlatform();
+	return (
+		<div className="queued-messages">
+			{messages.map((message) => {
+				const chord = message.chord && !boxHasText;
+				return (
+					<div key={message.id} className="bubble-row user queued" data-queued-id={message.id} data-held={message.held || undefined}>
+						<div className="queued-col">
+							<div className="queued-tools">
+								{message.takeBack && (
+									<button type="button" className="queued-tool" title="Edit" aria-label="Edit" onClick={() => actions.onEdit(message.id)}>
+										<PencilIcon size={15} />
+									</button>
+								)}
+								<CopyButton text={message.text} className="queued-tool" />
+								{message.takeBack && (
+									<button type="button" className="queued-tool" title="Remove" aria-label="Remove" onClick={() => actions.onRemove(message.id)}>
+										<CloseIcon size={15} />
+									</button>
+								)}
+							</div>
+							<div className="bubble user queued">
+								<UserMessageText text={message.text} />
+							</div>
+							<div className="bubble-queued-caption">
+								<span className="bubble-queued-word">{WAITING_CAPTION}</span>
+								<button type="button" className="bubble-queued-action" aria-keyshortcuts={chord ? (mac ? "Meta+Enter" : "Control+Enter") : undefined} onClick={() => actions.onSendNow(message.id)}>
+									Send now
+									{chord && (
+										<span className="queued-keys" aria-hidden="true">
+											<kbd>{mac ? "\u2318" : "Ctrl"}</kbd>
+											<kbd>{"\u21b5"}</kbd>
+										</span>
+									)}
+								</button>
+							</div>
+						</div>
+					</div>
+				);
+			})}
+		</div>
+	);
+});
 
 function UserMessageText({ text }: { text: string }) {
 	const contentId = useId();
@@ -438,8 +506,8 @@ function stateLabel(item: ToolChatItem, summary: string): { name: string; summar
 	if (item.status !== "error") return null;
 	const missing = missingToolName(item.result);
 	if (missing) return { name: `${GENERIC_TOOL_VIEWS[item.name]?.icon ?? "🛠️"} No such tool`, summary: readableToolName(missing), labelOnly: true };
-	if (item.name === "bash" && (commandDeclined(item.result) || nobodyToApprove(item.result) || stoppedBeforeAsking(item.result))) return { name: "⌨️ Not run", summary };
-	if (item.name === "delegate_task" && (nobodyToApprove(item.result) || stoppedBeforeAsking(item.result))) return { name: "🤝 Not handed off", summary };
+	if (item.name === "bash" && (commandDeclined(item.result) || nobodyToApprove(item.result) || stoppedBeforeAsking(item.result) || stoppedBeforeAnswer(item.result))) return { name: "⌨️ Not run", summary };
+	if (item.name === "delegate_task" && (nobodyToApprove(item.result) || stoppedBeforeAsking(item.result) || stoppedBeforeAnswer(item.result))) return { name: "🤝 Not handed off", summary };
 	if (item.name === "mcp") {
 		const args = item.args && typeof item.args === "object" ? item.args : {};
 		const error = String(item.details?.error ?? "");
@@ -456,12 +524,19 @@ function stateWord(status: ToolChatItem["status"], refused: boolean): string {
 	return refused ? "Refused" : status === "error" ? "Failed" : status === "stopped" ? "Stopped" : status === "done" ? "Done" : "";
 }
 
+/** The label of a step another window took over: it goes on there. */
+function elsewhereLabel(name: string): string {
+	return `${GENERIC_TOOL_VIEWS[name]?.icon ?? "🛠️"} Continued in another window`;
+}
+
 /**
  * The single collapsed tool chip. Rendered standalone for every tool call, and
  * nested (unchanged) inside a ToolBundle for consecutive web_search/fetch_url
  * runs. `saidOnCard`: the card beside a declined command already says so.
+ * `elsewhere`: another window took the room, so a running step goes on there;
+ * such a step is never saved by this window, so it is shown here only.
  */
-function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; saidOnCard?: boolean }) {
+function ToolChip({ item: shown, saidOnCard = false, elsewhere = false }: { item: ToolChatItem; saidOnCard?: boolean; elsewhere?: boolean }) {
 	// A command ended by Stop comes back as an error; the person stopped it, so it reads as stopped.
 	const item: ToolChatItem = shown.name === "bash" && shown.status === "error" && commandAborted(shown.result) ? { ...shown, status: "stopped", result: undefined } : shown;
 	// Read through the hook, so a card shown before the server answered takes its words once it does.
@@ -471,7 +546,8 @@ function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; sai
 	const outcome = failed && typeof item.result === "string" ? stepOutcome(item.result, item, sharedServer) : null;
 	const refused = outcome?.refused === true;
 	const summary = summariseToolArgs(item.name, item.args);
-	const icon = item.status === "running" ? "…" : refused ? "⊘" : failed ? "✗" : item.status === "stopped" ? "■" : "✓";
+	const goesOnElsewhere = elsewhere && item.status === "running";
+	const icon = goesOnElsewhere ? "↗" : item.status === "running" ? "…" : refused ? "⊘" : failed ? "✗" : item.status === "stopped" ? "■" : "✓";
 	// fetch_url reads as a source: show the page title + domain (from the
 	// result details) instead of the raw tool name and URL argument.
 	const isFetchUrl = item.name === "fetch_url";
@@ -481,7 +557,7 @@ function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; sai
 	// web_search reads as a lookup: show the query itself, not the tool name.
 	const isWebSearch = item.name === "web_search";
 	const searchQuery = isWebSearch ? String(item.args?.query ?? "").slice(0, 160) : "";
-	const state = stateLabel(item, mcpView ? mcpView.summary : summary);
+	const state = goesOnElsewhere ? { name: elsewhereLabel(item.name), summary: mcpView ? mcpView.summary : summary } : stateLabel(item, mcpView ? mcpView.summary : summary);
 	const chipName = state
 		? state.name
 		: isFetchUrl
@@ -494,7 +570,7 @@ function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; sai
 	const plainLine = outcome?.line ?? plainDoneLine(item);
 	// Nothing to open: "You declined this command." stands on the card beside it, or the label already says there is no such tool.
 	const labelOnly = state?.labelOnly === true || (saidOnCard && failed && commandDeclined(item.result));
-	const word = stateWord(item.status, refused);
+	const word = goesOnElsewhere ? "Continued in another window" : stateWord(item.status, refused);
 	const head = (
 		<>
 			<span className="icon" aria-hidden="true">{icon}</span>
@@ -503,11 +579,11 @@ function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; sai
 			{state && chipSummary && <span className="sep" aria-hidden="true">·</span>}
 			{/* A command cut at 160 characters, with nothing to open, can still be read in full. */}
 			{chipSummary && <span className="summary" title={labelOnly && item.name === "bash" ? String(item.args?.command ?? "") || undefined : undefined}>{chipSummary}</span>}
-			{item.status === "running" && item.name === "bash" && <RunningFor since={item.startedAt} />}
-			{item.status === "running" && <span className="spinner" />}
+			{!goesOnElsewhere && item.status === "running" && item.name === "bash" && <RunningFor since={item.startedAt} />}
+			{item.status === "running" && !goesOnElsewhere && <span className="spinner" />}
 		</>
 	);
-	const look = `tool-chip ${refused ? "refused" : item.status}`;
+	const look = `tool-chip ${goesOnElsewhere ? "elsewhere" : refused ? "refused" : item.status}`;
 	if (labelOnly) {
 		return (
 			<div className={look}>
@@ -524,13 +600,13 @@ function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; sai
 						<div className="chip-line">{plainLine}</div>
 					) : (
 						<div className="chip-result">
-							<span className="label">{failed ? "error" : "result"}</span>
+							<span className="label">{failed ? "Error" : "Result"}</span>
 							<ResultBody markdown={isMarkdownResult(item)} text={item.name === "memory_recall" ? memoryRecallDisplayText(item.result) : item.result} />
 						</div>
 					)
 				) : (
 					<div className="chip-empty">
-						{item.status === "running" ? "Working…" : item.status === "stopped" ? "Stopped before it finished." : "No output."}
+						{goesOnElsewhere ? "It goes on in the window that has the room now." : item.status === "running" ? "Working…" : item.status === "stopped" ? "Stopped before it finished." : "No output."}
 					</div>
 				)}
 			</div>
@@ -550,11 +626,14 @@ function ToolChip({ item: shown, saidOnCard = false }: { item: ToolChatItem; sai
  * muted swapping tail. Expanded, the individual chips nest unchanged — each
  * still opens to its result body.
  */
-export function ToolBundle({ items }: { items: ToolChatItem[] }) {
+export function ToolBundle({ items, elsewhere = false }: { items: ToolChatItem[]; elsewhere?: boolean }) {
 	const isSearch = items[0]?.name === "web_search";
 	const succeeded = items.filter((call) => call.status === "done").length;
 	const failed = items.filter((call) => call.status === "error").length;
-	const active = items.find((call) => call.status === "running");
+	const running = items.find((call) => call.status === "running");
+	// Another window took the room: the run goes on there.
+	const goesOnElsewhere = elsewhere && !!running;
+	const active = goesOnElsewhere ? undefined : running;
 	const stopped = items.filter((call) => call.status === "stopped").length;
 	const allFailed = !active && succeeded === 0 && failed > 0;
 	// Stopped only speaks for the whole bundle when nothing in it got anywhere;
@@ -563,10 +642,12 @@ export function ToolBundle({ items }: { items: ToolChatItem[] }) {
 	// Every call that did not work was refused (web search switched off, say): the run reads as a refusal, as each call does.
 	const refused = items.filter((call) => call.status === "error" && typeof call.result === "string" && stepOutcome(call.result, call)?.refused).length;
 	const allRefused = allFailed && refused === failed;
-	const status = active ? "running" : allStopped ? "stopped" : allRefused ? "refused" : allFailed ? "error" : "done";
-	const icon = active ? "…" : allStopped ? "■" : allRefused ? "⊘" : allFailed ? "✗" : "✓";
-	const word = active ? "" : allStopped ? "Stopped" : allRefused ? "Refused" : allFailed ? "Failed" : "Done";
-	const label = active
+	const status = goesOnElsewhere ? "elsewhere" : active ? "running" : allStopped ? "stopped" : allRefused ? "refused" : allFailed ? "error" : "done";
+	const icon = goesOnElsewhere ? "↗" : active ? "…" : allStopped ? "■" : allRefused ? "⊘" : allFailed ? "✗" : "✓";
+	const word = goesOnElsewhere ? "Continued in another window" : active ? "" : allStopped ? "Stopped" : allRefused ? "Refused" : allFailed ? "Failed" : "Done";
+	const label = goesOnElsewhere
+		? elsewhereLabel(running.name)
+		: active
 		? (isSearch ? "🔍 Searching the web" : "🌐 Reading pages")
 		: allStopped
 			? (isSearch ? "🔍 Web search stopped" : "🌐 Stopped reading pages")
@@ -595,7 +676,7 @@ export function ToolBundle({ items }: { items: ToolChatItem[] }) {
 				</summary>
 				<div className="bundle-body">
 					{items.map((call) => (
-						<ToolChip key={call.id} item={call} />
+						<ToolChip key={call.id} item={call} elsewhere={elsewhere} />
 					))}
 				</div>
 			</details>
@@ -730,6 +811,60 @@ function FailureLine({ item, newest, actions }: { item: SystemChatItem; newest: 
 }
 
 /**
+ * The newest message, edited where it stands: its bubble becomes a box with
+ * Cancel and Send. Esc cancels and Enter sends, as in the message box; Send
+ * waits for a change.
+ */
+export function BubbleEditor({ text, onCancel, onSend }: { text: string; onCancel: () => void; onSend: (text: string) => void }) {
+	const [draft, setDraft] = useState(text);
+	const boxRef = useRef<HTMLTextAreaElement | null>(null);
+	const fit = () => {
+		const box = boxRef.current;
+		if (!box) return;
+		box.style.height = "auto";
+		// The border counts in the height (border-box), so a box as tall as its text shows no scrollbar until the cap.
+		const wanted = box.scrollHeight + box.offsetHeight - box.clientHeight;
+		box.style.height = `${Math.min(wanted, 320)}px`;
+		box.style.overflowY = wanted > 320 ? "auto" : "hidden";
+	};
+	useLayoutEffect(() => {
+		const box = boxRef.current;
+		if (!box) return;
+		fit();
+		box.focus();
+		box.setSelectionRange(box.value.length, box.value.length);
+	}, []);
+	const changed = draft.trim() !== "" && draft.trim() !== text.trim();
+	return (
+		<div className="bubble-row user editing">
+			<div className="bubble-col user bubble-edit-col">
+				<textarea
+					ref={boxRef}
+					className="bubble-edit-box"
+					aria-label="Edit your message"
+					value={draft}
+					rows={1}
+					onChange={(event) => { setDraft(event.target.value); fit(); }}
+					onKeyDown={(event) => {
+						// Enter that confirms a Japanese, Chinese or Korean word is the input method's, never a send.
+						if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+						if (event.key === "Escape") { event.preventDefault(); onCancel(); return; }
+						if (event.key === "Enter" && !event.shiftKey) {
+							event.preventDefault();
+							if (changed) onSend(draft.trim());
+						}
+					}}
+				/>
+				<div className="bubble-edit-actions">
+					<button type="button" className="rs-btn" onClick={onCancel}>Cancel</button>
+					<button type="button" className="rs-btn rs-btn-primary" disabled={!changed} onClick={() => onSend(draft.trim())}>Send</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/**
  * `copyText` is set by the transcript on exactly one assistant item per reply
  * (see reply-copy.ts): the whole reply's text, ready to copy. Absent on every
  * other assistant item, which then shows no copy button. `copyTs` rides with
@@ -739,12 +874,30 @@ function FailureLine({ item, newest, actions }: { item: SystemChatItem; newest: 
  * it is drawn in full, with `failureActions` for its buttons. Plain
  * primitives keep the memo working.
  */
-function MessageImpl({ item, attachmentAccess, copyText, copyTs, saidOnCard, newestFailure, failureActions }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess; copyText?: string; copyTs?: number; saidOnCard?: boolean; newestFailure?: boolean; failureActions?: FailureLineActions }) {
+/**
+ * `drawnAtOnce`: an answer a reconnect's replay drew in one paint: the blocks
+ * it shows then do not fade in, and the ones that come after them do.
+ * `elsewhere`: another window took the room, so a running step goes on there.
+ * `followed`: a message, an answer or a queued or held message comes after
+ * this item, so the server stop's line is shown without its last sentence
+ * (`withoutSendAgain`). `onEdit`: this is the newest message and may be
+ * edited, so its row shows the pencil.
+ */
+function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCard, newestFailure, failureActions, drawnAtOnce, elsewhere, followed, onEdit }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess; copyText?: string; copyTs?: number; saidOnCard?: boolean; newestFailure?: boolean; failureActions?: FailureLineActions; drawnAtOnce?: boolean; elsewhere?: boolean; followed?: boolean; onEdit?: (id: string) => void }) {
 	// Bumped on every hover of the row so the relative time is recomputed.
 	const [, refreshTime] = useReducer((n: number) => n + 1, 0);
+	const markdownRef = useRef<HTMLDivElement>(null);
+	// Before the paint, so a block the replay drew never starts its fade.
+	useLayoutEffect(() => {
+		if (!drawnAtOnce) return;
+		for (const block of markdownRef.current?.children ?? []) block.setAttribute("data-drawn-at-once", "");
+	}, [drawnAtOnce]);
+	const item: ChatItem = followed && (saved.kind === "system" || saved.kind === "assistant") ? { ...saved, text: withoutSendAgain(saved.text) } : saved;
 	if (item.kind === "system") {
 		// Keyed by whether it is the newest, so a line that folds closes its Details.
 		if (item.level === "error") return <FailureLine key={newestFailure ? "newest" : "folded"} item={item} newest={newestFailure === true} actions={failureActions} />;
+		// Stop before any words: the answer's muted line stands alone.
+		if (isStopLine(item.text)) return <div className="bubble-row"><div className="answer-stop-line">{answerStopNote(item.text).stopLine}</div></div>;
 		return (
 			<div className="system-line">
 				<span className="system-line-text">{item.text}</span>
@@ -754,13 +907,14 @@ function MessageImpl({ item, attachmentAccess, copyText, copyTs, saidOnCard, new
 	if (item.kind === "tool") {
 		return (
 			<div className="bubble-row">
-				<ToolChip item={item} saidOnCard={saidOnCard} />
+				<ToolChip item={item} saidOnCard={saidOnCard} elsewhere={elsewhere} />
 			</div>
 		);
 	}
 
 	const isUser = item.kind === "user";
-	const assistantText = isUser ? "" : String((item as any).text ?? "");
+	// Stop's note ends the answer's text as saved; it is drawn as the answer's own muted line.
+	const { answer: assistantText, stopLine } = isUser ? { answer: "", stopLine: null } : answerStopNote(String((item as any).text ?? ""));
 	const assistantStreaming = !isUser && Boolean((item as any).streaming);
 	const userTs = isUser && typeof item.ts === "number" && Number.isFinite(item.ts) ? item.ts : undefined;
 	const replyTs = !isUser && typeof copyTs === "number" && Number.isFinite(copyTs) ? copyTs : undefined;
@@ -838,13 +992,14 @@ function MessageImpl({ item, attachmentAccess, copyText, copyTs, saidOnCard, new
 							)}
 						</>
 					) : (
-						<div className="md assistant-markdown">
+						<div ref={markdownRef} className="md assistant-markdown" data-streaming={assistantStreaming || undefined}>
 							{/* A picture the reply shows from the room's shelf opens the
 							    viewer through the same onOpen the attachment chips use. */}
-							<MarkdownRenderer answer renderMermaid={!assistantStreaming} onOpenRoomFile={attachmentAccess?.onOpen}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>
+							<MarkdownRenderer answer streaming={assistantStreaming} onOpenRoomFile={attachmentAccess?.onOpen}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>
 						</div>
 					)}
 				</div>
+				{stopLine && <div className="answer-stop-line">{stopLine}</div>}
 				{/* Action row under the bubble: the user's sits right-aligned, time
 				    before the button, all revealed on hover; the reply's sits under
 				    its last segment (one per reply, once it has settled) with the
@@ -854,6 +1009,7 @@ function MessageImpl({ item, attachmentAccess, copyText, copyTs, saidOnCard, new
 					? item.text && (
 						<div className="message-actions user">
 							{userTs !== undefined && <MessageTime ts={userTs} />}
+							{onEdit && <button type="button" className="message-edit-user" title="Edit" aria-label="Edit" onClick={() => onEdit(item.id)}><PencilIcon size={15} /></button>}
 							<CopyButton text={item.text} className="message-copy-user" />
 						</div>
 					)

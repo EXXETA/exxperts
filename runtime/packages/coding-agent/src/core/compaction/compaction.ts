@@ -13,6 +13,7 @@ import {
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
+	isRoomStateMessage,
 } from "../messages.js";
 import { buildSessionContext, type CompactionEntry, type SessionEntry } from "../session-manager.js";
 import {
@@ -90,6 +91,15 @@ function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 		return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
 	}
 	return undefined;
+}
+
+/**
+ * A room-state copy belongs to the user turn it follows: it is never a cut point
+ * or a turn start of its own, and its tokens count toward the kept tail.
+ */
+function isRoomStateEntry(entry: SessionEntry): boolean {
+	const message = entry.type === "custom_message" ? getMessageFromEntry(entry) : undefined;
+	return message !== undefined && isRoomStateMessage(message);
 }
 
 function getMessageFromEntryForCompaction(entry: SessionEntry): AgentMessage | undefined {
@@ -344,7 +354,7 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 		}
 
 		// branch_summary and custom_message are user-role messages, valid cut points
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		if (entry.type === "branch_summary" || (entry.type === "custom_message" && !isRoomStateEntry(entry))) {
 			cutPoints.push(i);
 		}
 	}
@@ -360,7 +370,7 @@ export function findTurnStartIndex(entries: SessionEntry[], entryIndex: number, 
 	for (let i = entryIndex; i >= startIndex; i--) {
 		const entry = entries[i];
 		// branch_summary and custom_message are user-role messages, can start a turn
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		if (entry.type === "branch_summary" || (entry.type === "custom_message" && !isRoomStateEntry(entry))) {
 			return i;
 		}
 		if (entry.type === "message") {
@@ -416,10 +426,11 @@ export function findCutPoint(
 
 	for (let i = endIndex - 1; i >= startIndex; i--) {
 		const entry = entries[i];
-		if (entry.type !== "message") continue;
+		const message = entry.type === "message" ? entry.message : isRoomStateEntry(entry) ? getMessageFromEntry(entry) : undefined;
+		if (!message) continue;
 
 		// Estimate this message's size
-		const messageTokens = estimateTokens(entry.message);
+		const messageTokens = estimateTokens(message);
 		accumulatedTokens += messageTokens;
 
 		// Check if we've exceeded the budget
@@ -430,6 +441,12 @@ export function findCutPoint(
 					cutIndex = cutPoints[c];
 					break;
 				}
+			}
+			// A budget crossed at a room-state copy cuts at the user message the copy follows, as a
+			// budget crossed at that message would, so the two are never split into a turn prefix
+			if (isRoomStateEntry(entry)) {
+				const turnStart = findTurnStartIndex(entries, i, startIndex);
+				if (turnStart !== -1) cutIndex = turnStart;
 			}
 			break;
 		}
@@ -442,8 +459,8 @@ export function findCutPoint(
 		if (prevEntry.type === "compaction") {
 			break;
 		}
-		if (prevEntry.type === "message") {
-			// Stop if we hit any message
+		if (prevEntry.type === "message" || isRoomStateEntry(prevEntry)) {
+			// Stop if we hit any message; a room-state copy stays with its user message
 			break;
 		}
 		// Include this non-message entry (bash, settings change, etc.)
@@ -783,7 +800,7 @@ export async function compact(
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
 		// Generate both summaries in parallel
 		const [historyResult, turnPrefixResult] = await Promise.all([
-			messagesToSummarize.length > 0
+			messagesToSummarize.length > 0 || previousSummary
 				? generateSummary(
 						messagesToSummarize,
 						model,

@@ -10,12 +10,12 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
  * carries that moment (a turn's start time lives in memory only, and a
  * conversation's `updatedAt` also moves on cache writes, handoffs and
  * maintenance), so this small file in the room's runtime folder is the only
- * source. A turn has two writers, one per process that can run one: the
- * server (`beginPersistentAgentTurn`, which the browser, the phone, detached
- * turns and scheduled runs all go through) and the terminal door (cli-rooms).
- * Each already holds the room when it writes, so a turn's stamp replaces
- * whatever is there, with no guard and no shared file; both call the ONE
- * `recordPersistentRoomLastUsed` below.
+ * source. Its writer is the server (`beginPersistentAgentTurn`, which the
+ * browser, the phone, detached turns and scheduled runs all go through). It
+ * already holds the room when it writes, so a turn's stamp replaces whatever
+ * is there, with no guard and no shared file, through the ONE
+ * `recordPersistentRoomLastUsed` below. The door "cli" is still read: the
+ * removed terminal app wrote it.
  *
  * The stamp is a courtesy to the home screen and must never cost a turn
  * anything: recording cannot throw, whatever the disk does. A failure is
@@ -23,9 +23,8 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
  *
  * A room that was in use before the stamp existed is given one once, from
  * the newest change of any conversation somebody spoke in, closed ones
- * included (persistent-agents.ts, the status builder): door "estimate", so it
- * reads as what it is. That third writer holds no room, and the status is
- * built by the server and by the terminal alike, so it goes through
+ * included (persistent-agent-status.ts, the status builder): door "estimate", so it
+ * reads as what it is. That second writer holds no room, so it goes through
  * `recordPersistentRoomLastUsedIfAbsent`: it never replaces a stamp, whoever
  * wrote it in between. The room's first turn replaces the estimate.
  */

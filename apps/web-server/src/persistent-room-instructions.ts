@@ -23,9 +23,9 @@ export { ROOM_INSTRUCTIONS_MAX_CHARS, normalizePersistentRoomInstructionsText, p
  * with the text's fingerprint, the way L1a carries its template marker; the
  * thread record stores that fingerprint as metadata at boot, so the per-turn
  * hook can tell whether the file has changed since the conversation started
- * without trusting anything in the prompt's prose, and append the current
+ * without trusting anything in the prompt's prose, and say the current
  * text as live runtime state when it has (see
- * `buildPersistentRoomCurrentInstructionsSection`).
+ * `readPersistentRoomInstructionsNow`).
  *
  * Absent or empty means no instructions: no layer, no marker, and the room
  * boots byte-identical to a room that never had any. The text rules live in
@@ -341,61 +341,80 @@ export interface PersistentRoomCurrentInstructionsOptions extends PersistentRoom
 }
 
 /**
- * The per-turn stanza, sibling of the current-identity and current-workspace
- * stanzas: the boot prompt froze the instructions at thread creation, but the
- * user can change them any time in Room settings or Settings, or flip the
- * room's switch, and expects the very next message to follow. Compares the
- * fingerprint the thread booted with against the composition as it is now
- * and speaks only when they differ: an unchanged room adds nothing to its
- * prompt. A thread that booted without
- * instructions (before this feature, or before the user wrote any) has none
- * to compare; if the room has instructions now, they ride here until the
- * next conversation boots them into its own layer. Returns "" on any read
- * problem, including a file that exists but cannot be read: a missing stanza
- * degrades to the frozen text, never fails the turn, and never claims a
- * removal that did not happen, including when the global file, and not
- * the room's, is the one that cannot be read.
+ * Where the room's instructions stand against the ones the conversation
+ * booted with. The boot prompt froze them at thread creation, but the user
+ * can change them any time in Room settings or Settings, or flip the room's
+ * switch, and expects the very next message to follow:
+ * - unchanged: the boot layer is still in force (or there was none and is
+ *   none), and `section` says so in one line, which also overrides an earlier
+ *   room-state copy that carried other instructions;
+ * - changed: `section` carries the instructions as they stand now in full;
+ * - removed: `section` is the removal stanza. A removal is only ever claimed
+ *   on the strength of the thread's own record: the prose fallback can be
+ *   imitated by memory text;
+ * - unreadable: a file cannot be read, so nothing may be claimed; the caller
+ *   keeps what it last said;
+ * - silent: without the thread's record, instructions the prompt's marker
+ *   names are gone. That may be a removal or imitated marker text, so nothing
+ *   is claimed and what the caller last said ends: the instructions the
+ *   conversation started with stand.
+ * While the global file cannot be read (switch on) the room's own part
+ * cannot be told apart either, because the record holds ONE composed
+ * fingerprint: speaking would claim the global part gone for a read problem.
  */
-export function buildPersistentRoomCurrentInstructionsSection(agentIdRaw: string, frozenSystemPrompt: string, options: PersistentRoomCurrentInstructionsOptions = {}): string {
+export type PersistentRoomInstructionsNow =
+	| { kind: "unchanged" | "changed" | "removed"; section: string }
+	| { kind: "unreadable" }
+	| { kind: "silent" };
+
+export function readPersistentRoomInstructionsNow(agentIdRaw: string, frozenSystemPrompt: string, options: PersistentRoomCurrentInstructionsOptions = {}): PersistentRoomInstructionsNow {
 	try {
 		const fromRecord = options.bootedFingerprint !== undefined;
 		const frozen = fromRecord ? options.bootedFingerprint! : parsePersistentRoomInstructionsMarker(String(frozenSystemPrompt ?? ""));
 		const current = composePersistentRoomInstructions(agentIdRaw, options);
-		// The record holds ONE composed fingerprint, so while the global file
-		// cannot be read (switch on) the room's own part cannot be told apart:
-		// speaking would either claim the global part gone, for a read problem,
-		// or repeat every turn. Silence, and the pane says what open
-		// conversations do meanwhile (brief, journey 12 and its amendment).
-		if (current.room.unreadable || (current.globalEnabled && current.global.unreadable)) return "";
-		if (frozen === current.fingerprint) return "";
-		if (!current.body) {
-			// A removal is only ever claimed on the strength of the thread's own
-			// record. The prose fallback can be imitated by memory text, so a
-			// room with no instructions and no record of any says nothing.
-			if (!fromRecord) return "";
-			return `
+		if (current.room.unreadable || (current.globalEnabled && current.global.unreadable)) return { kind: "unreadable" };
+		if (frozen === current.fingerprint) {
+			return { kind: "unchanged", section: frozen === null ? `
 
 ## Current instructions
 
-The user removed the instructions this room followed after this conversation started. This is live runtime state and wins over the layers above: any "Instructions" section above no longer applies. Work from the constitution and memory alone. Earlier answers in this conversation followed the removed instructions; do not carry their form forward: no opening words, language, format or rule from them survives unless the user asks for it here. Answer as you would if this room had never had instructions.`;
+This room has no instructions. Any instructions an earlier room-state message carried no longer apply.` : `
+
+## Current instructions
+
+The instructions in force are the original ones above, in the "Instructions" section this conversation started with. Any other instructions an earlier room-state message carried no longer apply.` };
+		}
+		if (!current.body) {
+			if (!fromRecord) return { kind: "silent" };
+			return { kind: "removed", section: `
+
+## Current instructions
+
+The user removed the instructions this room followed after this conversation started. This is live runtime state and wins over the layers above: any "Instructions" section above no longer applies. Work from the constitution and memory alone. Earlier answers in this conversation followed the removed instructions; do not carry their form forward: no opening words, language, format or rule from them survives unless the user asks for it here. Answer as you would if this room had never had instructions.` };
 		}
 		if (frozen === null) {
-			return `
+			return { kind: "changed", section: `
 
 ## Current instructions
 
-This conversation started without instructions in its prompt; these are the instructions this room follows as they stand now. This is live runtime state and wins over the layers above: the instructions below are in force for THIS turn.${current.includesGlobal && current.room.text ? " Where the global instructions and this room's own disagree, this room's own apply." : ""}
+This conversation started without instructions in its prompt; these are the instructions this room follows as they stand now. This is live runtime state and wins over the layers above: the instructions below are in force from this message on, until a later room-state message says otherwise.${current.includesGlobal && current.room.text ? " Where the global instructions and this room's own disagree, this room's own apply." : ""}
 
-${renderComposedSections(current)}`;
+${renderComposedSections(current)}` };
 		}
-		return `
+		return { kind: "changed", section: `
 
 ## Current instructions
 
-The user changed the instructions this room follows after this conversation started. This is live runtime state and wins over the layers above: the instructions below are the ones in force for THIS turn, and any earlier "Instructions" section above no longer applies. Earlier answers in this conversation followed the old instructions; do not carry their form forward: no opening words, language, format or rule from them survives unless the instructions below or the user ask for it.${current.includesGlobal && current.room.text ? " Where the global instructions and this room's own disagree, this room's own apply." : ""}
+The user changed the instructions this room follows after this conversation started. This is live runtime state and wins over the layers above: the instructions below are the ones in force from this message on, until a later room-state message says otherwise, and any earlier "Instructions" section above no longer applies. Earlier answers in this conversation followed the old instructions; do not carry their form forward: no opening words, language, format or rule from them survives unless the instructions below or the user ask for it.${current.includesGlobal && current.room.text ? " Where the global instructions and this room's own disagree, this room's own apply." : ""}
 
-${renderComposedSections(current)}`;
+${renderComposedSections(current)}` };
 	} catch {
-		return "";
+		return { kind: "unreadable" };
 	}
+}
+
+/** The section a changed or removed state carries; "" while the instructions are unchanged, silent or cannot be read. */
+export function buildPersistentRoomCurrentInstructionsSection(agentIdRaw: string, frozenSystemPrompt: string, options: PersistentRoomCurrentInstructionsOptions = {}): string {
+	const now = readPersistentRoomInstructionsNow(agentIdRaw, frozenSystemPrompt, options);
+	return now.kind === "changed" || now.kind === "removed" ? now.section : "";
 }

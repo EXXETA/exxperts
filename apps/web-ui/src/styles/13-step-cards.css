@@ -1,0 +1,25 @@
+/* A step's result as its work card row opens to it (42-work-card.css). Markdown gets the assistant-style render. */
+
+.md-result {
+	margin-top: 6px;
+	padding: 10px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 6px;
+	overflow-wrap: anywhere;
+}
+/* A long word (a path, a link, a hash) wraps inside the box, as in the plain
+   result; a table keeps its own sideways scroll. */
+.md-result table { overflow-wrap: normal; }
+.raw-result {
+	margin: 6px 0 0;
+	padding: 8px 10px;
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	white-space: pre-wrap;
+	word-break: break-word;
+	border: 1px solid var(--border-soft);
+	border-radius: 4px;
+	max-height: 480px;
+	overflow: auto;
+}
+

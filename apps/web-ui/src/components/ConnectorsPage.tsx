@@ -14,6 +14,7 @@ import {
 import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from "../connector-catalog";
 import { CONNECTOR_ICONS } from "../connector-icons";
 import { fetchRemoteClientContext, SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
+import { CloseIcon } from "./icons";
 import { GroupHeader } from "./pane-header";
 import { isServiceUnreachableLine } from "../api";
 
@@ -68,6 +69,40 @@ const ROW_TYPE_LABELS: Record<ConnectorCatalogEntry["kind"], string> = {
 interface RowOutcome {
 	text: string;
 	tone: "ok" | "error" | "progress";
+	/** The server's own words, folded behind "Details". */
+	details?: string;
+}
+
+/** A failed Test, kept on the row so its status says so until the next Test. */
+interface FailedTest {
+	httpStatus?: number;
+	message: string;
+}
+
+/** The tools a connector can be imported from, as people know them; the adapter names them by these ids. */
+const IMPORT_TOOL_NAMES: Record<string, string> = { cursor: "Cursor", "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", codex: "Codex", windsurf: "Windsurf", vscode: "VS Code" };
+
+/**
+ * The next step after a failed Test. Only a status the address answered with
+ * says what went wrong; any other failure leaves it to the server's own words
+ * under "Details". A connector cannot be edited, so changing its address or
+ * command means removing it and adding it again, unless it is imported from
+ * another tool: Remove cannot remove that one, so the change is made in that
+ * tool's own file.
+ */
+export function failedTestNextStep({ httpStatus }: FailedTest, server: Pick<McpConnectorStatus, "transport" | "source">): string {
+	const importKind = server.source?.importKind ?? "";
+	const inFile = server.source?.importFile ? `${IMPORT_TOOL_NAMES[importKind] ?? importKind}'s file ${server.source.importFile}` : null;
+	const change = (what: "address" | "command") => (inFile ? `To change its ${what}, edit it in ${inFile}.` : `To change its ${what}, remove this connector and add it again.`);
+	const checkAddress = inFile ? `Check the address in ${inFile}.` : "Check the address; to change it, remove this connector and add it again.";
+	if (server.transport !== "http") return `The program did not answer as a connector. ${change("command")}`;
+	if (httpStatus === undefined) return `The server did not answer as a connector. ${change("address")}`;
+	if (httpStatus === 404) return `The address answered "not found". ${checkAddress}`;
+	if (httpStatus === 401 || httpStatus === 403) return `The server refused the token or headers saved with this connector. ${inFile ? `Change them in ${inFile}.` : "Remove it and add it again with valid ones."}`;
+	// A timeout (408) and "too early" (425) pass like a busy server (429): the same Test later can succeed.
+	if (httpStatus === 408 || httpStatus === 425 || httpStatus === 429) return "The server is busy. Test again in a little while.";
+	if (httpStatus >= 500) return "The server answered with an error of its own. Test again later.";
+	return `The server turned the connection down. ${checkAddress}`;
 }
 
 function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnly }: { server: McpConnectorStatus; expanded: boolean; onToggle: () => void; onChanged: () => Promise<void>; onNotice: (text: string) => void; readOnly: boolean }) {
@@ -75,6 +110,7 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 	const [confirmRemove, setConfirmRemove] = useState(false);
 	// One outcome line per row: each action replaces the previous result.
 	const [outcome, setOutcome] = useState<RowOutcome | null>(null);
+	const [failedTest, setFailedTest] = useState<FailedTest | null>(null);
 	const [needsAuthSeen, setNeedsAuthSeen] = useState(false);
 	// Tool chips render capped at 8; this opens the full set for this row.
 	const [showAllTools, setShowAllTools] = useState(false);
@@ -87,8 +123,9 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 	const knownOpen = CONNECTOR_CATALOG.some((entry) => entry.kind === "open" && entry.url === server.target);
 	const auth = authView(server, knownOpen);
 	const catalogEntry = CONNECTOR_CATALOG.find((entry) => entry.id === server.name || (entry.url !== undefined && entry.url === server.target));
-	const typeLabel = server.transport !== "http" ? "local process" : catalogEntry ? ROW_TYPE_LABELS[catalogEntry.kind] : server.auth.mode === "bearer" ? "API token" : "";
-	const rowStatus = auth.state === "missing" ? "not connected" : server.tools || server.auth.hasStoredTokens ? "connected" : "not tested";
+	const local = server.transport !== "http";
+	const typeLabel = local ? "local process" : catalogEntry ? ROW_TYPE_LABELS[catalogEntry.kind] : server.auth.mode === "bearer" ? "API token" : "";
+	const rowStatus = failedTest ? "test failed" : auth.state === "missing" ? "not connected" : server.tools || server.auth.hasStoredTokens ? "connected" : "not tested";
 	// Offer login only when it can plausibly matter: never for servers a
 	// connection already succeeded against without tokens or that the
 	// directory knows are public, always after a test reported "needs
@@ -172,7 +209,7 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 			    it into a single dot-separated hint line under the name. */}
 			<span className="connector-table-facts">
 				<span className="connector-table-type">{typeLabel}</span>
-				<span className="connector-table-status">{rowStatus}</span>
+				<span className={`connector-table-status${failedTest ? " connector-status-failed" : ""}`}>{rowStatus}</span>
 			</span>
 			{!readOnly && (
 				<div className="connector-row-actions">
@@ -183,6 +220,8 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 							onClick={() => void run("test", async () => {
 								const result = await testMcpServer(server.name);
 								setBusy(null);
+								const failed = result.ok || result.needsAuth ? null : { httpStatus: result.httpStatus, message: result.error ?? "" };
+								setFailedTest(failed);
 								if (result.ok && server.auth.explicit && !server.auth.hasStoredTokens) {
 									setOutcome({ text: "Reachable, but not logged in yet. Use Log in below.", tone: "error" });
 									await onChanged();
@@ -194,8 +233,8 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 									setNeedsAuthSeen(true);
 									setOutcome({ text: "This connector needs a login. Use Log in below.", tone: "error" });
 									await onChanged();
-								} else {
-									setOutcome({ text: `Connection failed: ${result.error}`, tone: "error" });
+								} else if (failed) {
+									setOutcome({ text: failedTestNextStep(failed, server), tone: "error", details: failed.message || undefined });
 								}
 							})}
 						>
@@ -266,7 +305,15 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 				</div>
 			)}
 			{outcome && (
-				<span className={`connector-row-outcome${outcome.tone === "error" ? " connector-outcome-error" : ""}`}>{outcome.text}</span>
+				<div className={`connector-row-outcome${outcome.tone === "error" ? " connector-outcome-error" : ""}`}>
+					{outcome.text}
+					{outcome.details && (
+						<details className="remote-fold connector-outcome-details">
+							<summary>Details</summary>
+							<p className="cli-note">{outcome.details}</p>
+						</details>
+					)}
+				</div>
 			)}
 			{expanded && (
 				<div className="connector-row-expansion">
@@ -415,7 +462,7 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 										<div className="connector-form-field">
 											<input type="password" aria-label={`Header ${index + 1} value`} value={row.value} placeholder="value" onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
 										</div>
-										<button type="button" className="connector-header-remove" aria-label={`Remove header ${index + 1}`} onClick={() => setHeaderRows((rows) => (rows.length > 1 ? rows.filter((_, i) => i !== index) : [{ name: "", value: "" }]))}>×</button>
+										<button type="button" className="connector-header-remove" aria-label={`Remove header ${index + 1}`} onClick={() => setHeaderRows((rows) => (rows.length > 1 ? rows.filter((_, i) => i !== index) : [{ name: "", value: "" }]))}><CloseIcon size={14} /></button>
 									</div>
 								))}
 								<button type="button" className="connector-header-add" onClick={() => setHeaderRows((rows) => [...rows, { name: "", value: "" }])}>+ Add header</button>
@@ -456,11 +503,11 @@ function ConnectorAvatar({ id, name, size = 34 }: { id: string; name: string; si
 }
 
 const KIND_LABELS: Record<ConnectorCatalogEntry["kind"], string> = {
-	open: "no login",
-	oauth: "one-click login",
+	open: "No login",
+	oauth: "One-click login",
 	token: "API token",
 	"oauth-client": "OAuth app",
-	guided: "needs setup",
+	guided: "Needs setup",
 };
 
 /** Prefill for the custom form when a directory card routes into it. */
@@ -620,7 +667,7 @@ function ConnectorDirectory({ status, onChanged, onNotice, customFor, onOpenCust
 					<div className="settings-row connector-dir-row">
 						<span className="connector-avatar" style={{ width: 32, height: 32 }}>+</span>
 						<div className="settings-row-main">
-							<span className="settings-row-label">Custom connector<span className="connector-dir-kind">custom</span></span>
+							<span className="settings-row-label">Custom connector<span className="connector-dir-kind">Custom</span></span>
 							<span className="settings-row-sub">Add any connector that isn't in the list.</span>
 						</div>
 						<button className="rs-btn" onClick={() => openCustom()} disabled={customFor === ""} title={customFor === "" ? "Fill in the form below" : "Add a custom connector"} aria-label="Add a custom connector">Add</button>
@@ -773,8 +820,7 @@ export function ConnectorsPage({ serviceBack }: { /** Counts the page's reconnec
 							)}
 						</p>
 						<p className="cli-note">
-							In the CLI, <code>/mcp</code> shows the same list with live connection state; project folders can add their
-							own via a local <code>.mcp.json</code>. Full reference: <code>docs/mcp.md</code>.
+							Full reference: <code>docs/mcp.md</code>.
 						</p>
 					</details>
 					<p className="cli-note">All product names and logos are trademarks of their respective owners, used for identification only.</p>

@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { countPersistentRoomInstructionsControlCharacters, normalizePersistentRoomInstructionsText } from "../../../web-server/src/persistent-room-instructions-text";
+import { fmtMemoryMoment } from "../memory-surface-copy";
 
 /**
  * What the two Instructions panes (Settings → Instructions for the global text,
@@ -24,30 +26,66 @@ export async function readInstructionsReply<T>(response: Response, fallback: str
 	return payload as T;
 }
 
-export function savedAtLabel(iso: string | null | undefined): string | null {
+const JUST_NOW_MS = 60_000;
+
+/** When the text was saved, in the app's one date format: "just now" for the first minute, then "1 Nov, 14:47". */
+export function savedAtLabel(iso: string | null | undefined, now = Date.now()): string | null {
 	if (!iso) return null;
-	const date = new Date(iso);
-	if (Number.isNaN(date.getTime())) return null;
-	return date.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+	const at = new Date(iso).getTime();
+	if (Number.isNaN(at)) return null;
+	return now - at < JUST_NOW_MS ? "just now" : fmtMemoryMoment(at);
+}
+
+/** savedAtLabel, rendered again once "just now" has run out, so the line never keeps it longer than a minute. */
+export function useSavedAtLabel(iso: string | null | undefined): string | null {
+	const [, setTick] = useState(0);
+	const label = savedAtLabel(iso);
+	useEffect(() => {
+		if (label !== "just now" || !iso) return;
+		const left = JUST_NOW_MS - (Date.now() - new Date(iso).getTime());
+		const timer = setTimeout(() => setTick((tick) => tick + 1), Math.max(0, left) + 50);
+		return () => clearTimeout(timer);
+	}, [iso, label]);
+	return label;
+}
+
+/**
+ * What the pane's foot shows beside the counter. Save and Discard appear only
+ * once there is something to save: an edited box, or a stored file that cannot
+ * be read (an empty Save replaces it). Discard needs an edit to put back. With
+ * nothing to save the line says when the text was saved.
+ */
+export function instructionsSaveFoot(state: { loaded: boolean; dirty: boolean; unreadable: boolean; savedAt: string | null }): { save: boolean; discard: boolean; line: string | null } {
+	if (!state.loaded) return { save: false, discard: false, line: null };
+	if (state.dirty) return { save: true, discard: true, line: "Unsaved changes" };
+	return { save: state.unreadable, discard: false, line: state.savedAt ? `Saved · ${state.savedAt}` : null };
 }
 
 /**
  * Measured the way the server measures: the normalized text, not the raw box.
  * The same text is what Save sends and what "unsaved" is judged against, so a
  * stray trailing newline is neither a change nor a longer text.
+ *
+ * The counter is always there, "142 / 8,000", red once `over` is above zero;
+ * `counterSpoken` is what a screen reader hears instead. Control characters
+ * are a refusal a count cannot show, so they get a sentence of their own.
  */
-export function measureInstructionsDraft(draft: string, maxChars: number): { measured: string; over: number; controls: number; count: string } {
+export function measureInstructionsDraft(draft: string, maxChars: number): { measured: string; over: number; controls: number; counter: string; counterSpoken: string; controlsLine: string | null } {
 	const measured = normalizePersistentRoomInstructionsText(draft);
 	const over = Math.max(0, measured.length - maxChars);
 	const controls = countPersistentRoomInstructionsControlCharacters(draft);
-	// The control-character sentence comes first: it is the refusal the server
-	// would give first, and shortening the text does not clear it.
-	const count = controls > 0
-		? `${controls.toLocaleString()} invisible control ${controls === 1 ? "character" : "characters"}, usually from a paste. Remove ${controls === 1 ? "it" : "them"} to save.`
-		: over > 0
-			? `${measured.length.toLocaleString()} characters, ${over.toLocaleString()} over the limit of ${maxChars.toLocaleString()}. Shorten them to save.`
-			: `${measured.length.toLocaleString()} of ${maxChars.toLocaleString()} characters`;
-	return { measured, over, controls, count };
+	const length = measured.length.toLocaleString();
+	const max = maxChars.toLocaleString();
+	return {
+		measured,
+		over,
+		controls,
+		counter: `${length} / ${max}`,
+		counterSpoken: `${length} of ${max} characters${over > 0 ? `, ${over.toLocaleString()} over the limit` : ""}`,
+		controlsLine: controls > 0
+			? `${controls.toLocaleString()} invisible control ${controls === 1 ? "character" : "characters"}, usually from a paste. Remove ${controls === 1 ? "it" : "them"} to save.`
+			: null,
+	};
 }
 
 /**

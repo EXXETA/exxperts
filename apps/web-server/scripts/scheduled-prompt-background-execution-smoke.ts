@@ -139,6 +139,10 @@ try {
 	const foregroundBlockedChecked = new Set<string>();
 	const failRuns = new Set<string>();
 	const slowRuns = new Set<string>();
+	// Runs whose fake turn waits until it is ended, then fails with the end's reason, as the real turn does.
+	const endlessRuns = new Set<string>();
+	const longRuns = new Set<string>();
+	const signals = new Map<string, AbortSignal>();
 
 	function createRoom(displayName: string): string {
 		const created = createPersistentAgentFromScaffoldInput({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
@@ -189,6 +193,11 @@ try {
 			slowHeartbeatChecked.add(runId);
 		}
 		if (failRuns.has(runId)) throw new Error("synthetic fake execution failure");
+		if (endlessRuns.has(runId)) {
+			await new Promise((_resolve, reject) => input.signal.addEventListener("abort", () => reject(input.signal.reason), { once: true }));
+		}
+		signals.set(runId, input.signal);
+		if (longRuns.has(runId)) await sleep(300);
 
 		const model = input.target.model;
 		assert(model?.provider && model?.model, `${runId}: fake execution requires target model`);
@@ -477,6 +486,61 @@ try {
 	const slowSummary = await processOne("slow-heartbeat");
 	assert(slowSummary.processed.some((item: any) => item.runId === slowRun.runId && item.finalStatus === "succeeded"), "slow fake execution should succeed");
 	assert(slowHeartbeatChecked.has(slowRun.runId), "slow fake execution should verify heartbeat extension");
+
+	// The time limit, given directly as a shared server's hook gives it: the turn is ended and the run fails with time_limit and
+	// the sentence; without a limit (the desktop) a run longer than that limit still finishes.
+	const limitRoom = createRoom("Execution Time Limit Room");
+	const limitRun = preflight(limitRoom, addSchedule(limitRoom, "limit job").id, "2026-01-01T00:30:00.000Z");
+	endlessRuns.add(limitRun.runId);
+	const limitSummary = await processOne("time-limit", { runLimitMs: 100 });
+	const limitAfter = readBackgroundRun(limitRun.runId);
+	assert(limitSummary.processed.some((item: any) => item.runId === limitRun.runId && item.finalStatus === "failed" && item.reason === "time_limit"), `a run past the limit fails with time_limit, got ${JSON.stringify(limitSummary.processed)}`);
+	assert(limitAfter.message === "exxperts stopped this scheduled task after 1 minute, this server's limit. Split it into smaller tasks, or ask your admin to raise the limit." && limitAfter.error?.code === "time_limit" && !limitAfter.lease, `the run says why it stopped, got ${limitAfter.message}`);
+	const longRoom = createRoom("Execution No Limit Room");
+	const longRun = preflight(longRoom, addSchedule(longRoom, "long job").id, "2026-01-01T00:30:00.000Z");
+	longRuns.add(longRun.runId);
+	await processOne("no-limit");
+	// The desktop registers no hook, so the tick reads no limit and no ending for an interrupted run.
+	const { serverHooks } = await import("../src/server-hooks.js");
+	assert(serverHooks().scheduledRunLimitMs === undefined && serverHooks().retriesInterruptedScheduledRuns === undefined, "the desktop has neither rule");
+	assert(signals.get(longRun.runId)?.aborted === false, "without a limit the turn's signal never ends it");
+	assert(readBackgroundRun(longRun.runId).status === "succeeded", `without a limit a run longer than 100 ms finishes, got ${readBackgroundRun(longRun.runId).status}/${readBackgroundRun(longRun.runId).reason}`);
+	const limitedLongRoom = createRoom("Execution Limited Long Room");
+	const limitedLongRun = preflight(limitedLongRoom, addSchedule(limitedLongRoom, "limited long job").id, "2026-01-01T00:30:00.000Z");
+	longRuns.add(limitedLongRun.runId);
+	await processOne("limit-not-reached", { runLimitMs: 60_000 });
+	assert(readBackgroundRun(limitedLongRun.runId).status === "succeeded", "a run inside its limit finishes");
+
+	// A run whose lease ran out (the server ended while it ran). On a shared server it ends interrupted_by_restart and is not
+	// run again, its next occurrence runs, and a run whose answer had landed still ends already_completed; on the desktop it
+	// is run again, as before.
+	const interruptedAt = later(200);
+	function interrupt(roomId: string, label: string, dueAt: string) {
+		const run = preflight(roomId, addSchedule(roomId, label).id, dueAt);
+		assert(backgroundRuns.claimBackgroundRunLease({ runId: run.runId, workerId: "scheduler-execution:smoke:crashed", now: interruptedAt, leaseMs: 1_000 }), `${label}: claimed by the server that crashed`);
+		return run;
+	}
+	const sharedRoom = createRoom("Execution Interrupted Shared Room");
+	const sharedRun = interrupt(sharedRoom, "interrupted shared", "2026-01-01T00:30:00.000Z");
+	const sharedSummary = await processOne("interrupted-shared", { now: later(210), retriesInterrupted: false });
+	const sharedAfter = readBackgroundRun(sharedRun.runId);
+	assert(sharedSummary.recovered.some((item: any) => item.runId === sharedRun.runId && item.finalStatus === "cancelled" && item.reason === "interrupted_by_restart"), `a shared server ends the interrupted run, got ${JSON.stringify(sharedSummary.recovered)}`);
+	assert(sharedAfter.status === "cancelled" && sharedAfter.message === "exxperts stopped unexpectedly before this scheduled task finished, so it was not run again. Ask in this room if you still need it." && !sharedAfter.lease && !fakeCalls.has(sharedRun.runId), `it is not run again and says why, got ${sharedAfter.status}/${sharedAfter.reason}`);
+	await processOne("interrupted-shared-again", { now: later(215), retriesInterrupted: false });
+	assert(readBackgroundRun(sharedRun.runId).status === "cancelled" && !fakeCalls.has(sharedRun.runId), "a later tick leaves it ended");
+	const nextRun = preflight(sharedRoom, String(sharedRun.source.schedulerJobId), "2026-01-01T00:45:00.000Z");
+	await processOne("interrupted-shared-next", { now: later(220), retriesInterrupted: false });
+	assert(readBackgroundRun(nextRun.runId).status === "succeeded" && fakeCalls.get(nextRun.runId) === 1, `its next occurrence runs, got ${readBackgroundRun(nextRun.runId).status}`);
+	const landedRun = readBackgroundRun(nextRun.runId);
+	updateBackgroundRunStatus(nextRun.runId, "deferred", { reason: "lease_expired", artifacts: landedRun.artifacts, target: landedRun.target, now: later(225) });
+	assert(backgroundRuns.claimBackgroundRunLease({ runId: nextRun.runId, workerId: "scheduler-execution:smoke:crashed", now: later(225), leaseMs: 1_000 }), "the landed run is claimed again by the server that crashed");
+	const landedSummary = await processOne("interrupted-landed", { now: later(230), retriesInterrupted: false });
+	assert(landedSummary.processed.some((item: any) => item.runId === nextRun.runId && item.finalStatus === "succeeded" && item.reason === "already_completed") && fakeCalls.get(nextRun.runId) === 1, `a run whose answer had landed still ends already_completed, got ${JSON.stringify(landedSummary)}`);
+	const desktopRoom = createRoom("Execution Interrupted Desktop Room");
+	const desktopRun = interrupt(desktopRoom, "interrupted desktop", "2026-01-01T00:30:00.000Z");
+	const desktopSummary = await processOne("interrupted-desktop", { now: later(210) });
+	assert(desktopSummary.recovered.some((item: any) => item.runId === desktopRun.runId && item.finalStatus === "deferred" && item.reason === "lease_expired"), `the desktop defers the interrupted run, got ${JSON.stringify(desktopSummary.recovered)}`);
+	assert(readBackgroundRun(desktopRun.runId).status === "succeeded" && fakeCalls.get(desktopRun.runId) === 1, `and runs it again, got ${readBackgroundRun(desktopRun.runId).status}`);
 
 	const allRuns = listBackgroundRuns({ kind: "scheduled-prompt", limit: 1000 });
 	for (const run of allRuns) assertRunNoPromptLeak(run, `stored run ${run.runId}`);

@@ -697,60 +697,6 @@ try {
 		assert(grantRefusal.includes(REFUSAL), `${grantCase.label}: the app's data must stay refused, got ${JSON.stringify(grantRefusal)}`);
 	}
 
-	// ---- the terminal: cli-rooms registers the same floor -----------------
-	writePersistentRoomDefaultCapabilityPolicy(createPersistentRoomCapabilityPolicy({
-		agentId: "localfiles-secret-floor-smoke-room",
-		conversationId: PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID,
-		repoRoot,
-		persistentAgentsRoot,
-		exxetaStateRoot,
-		root: project,
-		workspaceAccessMode: "localFiles",
-		source: "manual",
-		now: new Date("2026-07-01T00:00:00.000Z"),
-	}));
-	const roomEnvNames = ["EXXETA_PERSISTENT_ROOM_AGENT", "EXXETA_PERSISTENT_ROOM_THREAD", "EXXETA_PERSISTENT_ROOM_MODEL_PROVIDER", "EXXETA_PERSISTENT_ROOM_MODEL_ID", "EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS"] as const;
-	const cliRoomsModule = "../../../pi-package/extensions/cli-rooms/index.js";
-	const cliRooms = (await import(cliRoomsModule)).default;
-	const loadCliRoom = (agentId: string): Map<string, any> => {
-		const realRoomEnv = roomEnvNames.map((name) => process.env[name]);
-		Object.assign(process.env, { EXXETA_PERSISTENT_ROOM_AGENT: agentId, EXXETA_PERSISTENT_ROOM_THREAD: "c_localfiles_secret_floor_smoke_cli", EXXETA_PERSISTENT_ROOM_MODEL_PROVIDER: "openai-compatible", EXXETA_PERSISTENT_ROOM_MODEL_ID: "gpt-5.5", EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: "read,ls,find,grep,write,edit" });
-		const registered = new Map<string, any>();
-		try {
-			cliRooms({ registerCommand: () => {}, on: () => {}, registerTool: (definition: any) => { registered.set(String(definition.name), definition); }, registerShortcut: () => {}, registerFlag: () => {}, getFlag: () => undefined, sendMessage: () => {} } as any);
-		} finally {
-			roomEnvNames.forEach((name, index) => {
-				if (realRoomEnv[index] === undefined) delete process.env[name];
-				else process.env[name] = realRoomEnv[index];
-			});
-		}
-		return registered;
-	};
-	const cliTools = loadCliRoom("localfiles-secret-floor-smoke-room");
-	if (links) {
-		const boundedSwapped = path.join(home, "bounded-swapped");
-		fs.mkdirSync(boundedSwapped);
-		storeRoomDefault("floor-bounded-swap-room", boundedSwapped, "bounded");
-		fs.rmSync(boundedSwapped, { recursive: true });
-		fs.symlinkSync(project, boundedSwapped, "dir");
-		let cliMismatch = "";
-		try {
-			loadCliRoom("floor-bounded-swap-room");
-		} catch (error) {
-			cliMismatch = (error as Error).message;
-		}
-		assert(cliMismatch.includes("workspace tool policy mismatch"), `a terminal room whose launched file tools cannot be wrapped must not start, got ${JSON.stringify(cliMismatch)}`);
-	}
-	assert([...cliTools.keys()].join(",") === "ls,find,grep,read,write,edit", `a Full access room in the terminal must load cli-rooms with the six wrapped file tools, got ${[...cliTools.keys()].join(",")}`);
-	let cliRefusal = "";
-	try {
-		await cliTools.get("read").execute("smoke-cli-env", { path: ".env" }, undefined, undefined, atProject);
-	} catch (error) {
-		cliRefusal = (error as Error).message;
-	}
-	assert(cliRefusal.includes(REFUSAL), "the terminal's read must refuse a .env");
-	assert(toolOutput(await cliTools.get("read").execute("smoke-cli-notes", { path: "notes.md" }, undefined, undefined, atProject)).includes("hi needle"), "the terminal's read must open a normal file");
-
 	// ---- bounded rooms: templates open, credential files closed -----------
 	const boundedTools = (root: string) => new Map(createPersistentRoomWorkspaceTools(createPersistentRoomCapabilityPolicy({
 		agentId: "localfiles-secret-floor-smoke-room",

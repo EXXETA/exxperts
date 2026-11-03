@@ -185,7 +185,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -431,7 +431,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5.5,
@@ -745,7 +745,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5.5,
@@ -1009,7 +1009,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -1467,7 +1467,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5.5,
@@ -2590,7 +2590,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5.5,
@@ -3306,7 +3306,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -3448,7 +3448,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","max":"max","off":null},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max","off":"between_tools"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -3710,7 +3710,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null},
+			thinkingLevelMap: {"off":null,"minimal":null,"low":null,"medium":null},
 			input: ["text", "image"],
 			cost: {
 				input: 15,
@@ -3728,7 +3728,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null},
+			thinkingLevelMap: {"off":"none","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -3746,7 +3746,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null},
+			thinkingLevelMap: {"off":null,"minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -3764,7 +3764,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null},
+			thinkingLevelMap: {"off":null,"minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -3782,7 +3782,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -3800,7 +3800,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -3818,7 +3818,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":null,"low":null},
 			input: ["text", "image"],
 			cost: {
 				input: 21,
@@ -3836,7 +3836,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: false,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -3854,7 +3854,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -3872,7 +3872,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -3890,7 +3890,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.5,
@@ -3908,7 +3908,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.75,
@@ -3926,7 +3926,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.2,
@@ -3944,7 +3944,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":null,"low":null},
 			input: ["text", "image"],
 			cost: {
 				input: 30,
@@ -3962,7 +3962,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -3980,7 +3980,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":null,"low":null},
 			input: ["text", "image"],
 			cost: {
 				input: 30,
@@ -3998,7 +3998,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 4,
@@ -4016,7 +4016,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.2,
@@ -4034,7 +4034,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 4,
@@ -4052,7 +4052,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -4088,7 +4088,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.1,
@@ -4106,7 +4106,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -4131,6 +4131,24 @@ export const MODELS = {
 				output: 10,
 				cacheRead: 0.1,
 				cacheWrite: 2.5,
+			},
+			contextWindow: 1050000,
+			maxTokens: 128000,
+		} satisfies Model<"azure-openai-responses">,
+		"gpt-6.1-terra": {
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "azure-openai-responses",
+			provider: "azure-openai-responses",
+			baseUrl: "",
+			reasoning: true,
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
+			input: ["text", "image"],
+			cost: {
+				input: 1,
+				output: 5,
+				cacheRead: 0.05,
+				cacheWrite: 1.25,
 			},
 			contextWindow: 1050000,
 			maxTokens: 128000,
@@ -4193,6 +4211,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 15,
@@ -4210,6 +4229,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 150,
@@ -4227,6 +4247,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -4244,6 +4265,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text"],
 			cost: {
 				input: 1.1,
@@ -4261,6 +4283,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 20,
@@ -4278,6 +4301,7 @@ export const MODELS = {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 1.1,
@@ -6008,7 +6032,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -6027,7 +6051,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.5,
@@ -6046,7 +6070,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.75,
@@ -6065,7 +6089,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.2,
@@ -6084,7 +6108,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -6103,7 +6127,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.2,
@@ -6122,7 +6146,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 4,
@@ -6141,7 +6165,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -6224,6 +6248,25 @@ export const MODELS = {
 				output: 10,
 				cacheRead: 0.1,
 				cacheWrite: 2.5,
+			},
+			contextWindow: 1050000,
+			maxTokens: 128000,
+		} satisfies Model<"openai-responses">,
+		"gpt-6.1-terra": {
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "openai-responses",
+			provider: "github-copilot",
+			baseUrl: "https://api.individual.githubcopilot.com",
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			reasoning: true,
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max","minimal":"low"},
+			input: ["text", "image"],
+			cost: {
+				input: 1,
+				output: 5,
+				cacheRead: 0.05,
+				cacheWrite: 1.25,
 			},
 			contextWindow: 1050000,
 			maxTokens: 128000,
@@ -9560,7 +9603,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null},
+			thinkingLevelMap: {"off":null,"minimal":null,"low":null,"medium":null},
 			input: ["text", "image"],
 			cost: {
 				input: 15,
@@ -9578,7 +9621,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":"none"},
+			thinkingLevelMap: {"off":"none","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -9596,7 +9639,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null},
+			thinkingLevelMap: {"off":null,"minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -9614,7 +9657,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null},
+			thinkingLevelMap: {"off":null,"minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -9632,7 +9675,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":"none","xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -9650,7 +9693,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -9668,7 +9711,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":null,"low":null},
 			input: ["text", "image"],
 			cost: {
 				input: 21,
@@ -9686,7 +9729,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: false,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -9704,7 +9747,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":"none","xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -9722,7 +9765,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -9740,7 +9783,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":"none","xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.5,
@@ -9758,7 +9801,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":"none","xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.75,
@@ -9776,7 +9819,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":"none","xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.2,
@@ -9794,7 +9837,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":null,"low":null},
 			input: ["text", "image"],
 			cost: {
 				input: 30,
@@ -9812,7 +9855,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":"none","xhigh":"xhigh"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -9830,7 +9873,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
+			thinkingLevelMap: {"off":null,"xhigh":"xhigh","minimal":null,"low":null},
 			input: ["text", "image"],
 			cost: {
 				input: 30,
@@ -9848,7 +9891,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 4,
@@ -9866,7 +9909,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.2,
@@ -9884,7 +9927,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 4,
@@ -9902,7 +9945,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
-			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -9985,6 +10028,24 @@ export const MODELS = {
 			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
+		"gpt-6.1-terra": {
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "openai-responses",
+			provider: "openai",
+			baseUrl: "https://api.openai.com/v1",
+			reasoning: true,
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
+			input: ["text", "image"],
+			cost: {
+				input: 1,
+				output: 5,
+				cacheRead: 0.05,
+				cacheWrite: 1.25,
+			},
+			contextWindow: 1050000,
+			maxTokens: 128000,
+		} satisfies Model<"openai-responses">,
 		"gpt-daybreak-blue-latest": {
 			id: "gpt-daybreak-blue-latest",
 			name: "Daybreak Blue",
@@ -10043,6 +10104,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 15,
@@ -10060,6 +10122,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 150,
@@ -10077,6 +10140,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -10094,6 +10158,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text"],
 			cost: {
 				input: 1.1,
@@ -10111,6 +10176,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 20,
@@ -10128,6 +10194,7 @@ export const MODELS = {
 			provider: "openai",
 			baseUrl: "https://api.openai.com/v1",
 			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null},
 			input: ["text", "image"],
 			cost: {
 				input: 1.1,
@@ -10147,6 +10214,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
+			thinkingLevelMap: {"off":"none","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -10164,6 +10232,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
+			thinkingLevelMap: {"minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.25,
@@ -10199,7 +10268,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -10235,7 +10304,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.75,
@@ -10271,7 +10340,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.5,
@@ -10289,7 +10358,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.75,
@@ -10307,7 +10376,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -10325,7 +10394,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","max":"max","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 1,
@@ -10343,7 +10412,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","max":"max","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 4,
@@ -10361,7 +10430,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","max":"max","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.5,
@@ -10397,7 +10466,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","max":"max","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.1,
@@ -10415,7 +10484,7 @@ export const MODELS = {
 			provider: "openai-codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh","max":"max","minimal":"low"},
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -10439,6 +10508,24 @@ export const MODELS = {
 				input: 2,
 				output: 10,
 				cacheRead: 0.1,
+				cacheWrite: 0,
+			},
+			contextWindow: 272000,
+			maxTokens: 128000,
+		} satisfies Model<"openai-codex-responses">,
+		"gpt-6.1-terra": {
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			thinkingLevelMap: {"off":"none","xhigh":"xhigh","max":"max","minimal":"low"},
+			input: ["text", "image"],
+			cost: {
+				input: 1,
+				output: 5,
+				cacheRead: 0.05,
 				cacheWrite: 0,
 			},
 			contextWindow: 272000,

@@ -16,8 +16,7 @@
 // - a 429 in the backend's own rate-limit words is not asked again either:
 //   the client's own tries are the only requests, no retry note, then
 //   "still busy";
-// - 413 keeps the plain line, as a request too large does in the chat;
-// - the server's log line names each kind and its status.
+// - 413 keeps the plain line, as a request too large does in the chat.
 //
 // Offline: the backend is a local fake. The rooms run side by side.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -29,6 +28,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -69,20 +69,20 @@ const UNKNOWN = "Something unusual happened on our side.";
 const PLAIN = `${NAME} could not answer this message.`;
 const STILL_BUSY = `${NAME} is still busy after several tries.`;
 
-type Expected = { status: number; worded?: true; cause?: string; notice?: true; retry?: "busy" | "provider-error"; logged: string };
+type Expected = { status: number; worded?: true; cause?: string; notice?: true; retry?: "busy" | "provider-error" };
 const cases: Expected[] = [
-	{ status: 401, notice: true, logged: "unreachable:signed-out" },
-	{ status: 402, cause: `${NAME} has reached your plan's usage limit.`, logged: "unreachable:quota" },
-	{ status: 403, cause: `${NAME} refused this request: it may not be offered in your region or on your plan.`, logged: "unreachable:region-or-plan" },
-	{ status: 404, cause: `This room's model, ${NAME} on ChatGPT Plus/Pro, is no longer offered.`, logged: "unreachable:not-offered" },
-	{ status: 413, cause: PLAIN, logged: "too-large" },
-	{ status: 429, cause: STILL_BUSY, logged: "busy:too-many-requests" },
-	{ status: 500, cause: PLAIN, logged: "busy:server-error" },
-	{ status: 502, cause: PLAIN, logged: "busy:server-error" },
-	{ status: 503, cause: PLAIN, logged: "busy:server-error" },
-	{ status: 504, cause: PLAIN, logged: "busy:server-error" },
-	{ status: 529, cause: STILL_BUSY, retry: "busy", logged: "busy:overload" },
-	{ status: 429, worded: true, cause: STILL_BUSY, logged: "busy:rate-limit" },
+	{ status: 401, notice: true },
+	{ status: 402, cause: `${NAME} has reached your plan's usage limit.` },
+	{ status: 403, cause: `${NAME} refused this request: it may not be offered in your region or on your plan.` },
+	{ status: 404, cause: `This room's model, ${NAME} on ChatGPT Plus/Pro, is no longer offered.` },
+	{ status: 413, cause: PLAIN },
+	{ status: 429, cause: STILL_BUSY },
+	{ status: 500, cause: PLAIN },
+	{ status: 502, cause: PLAIN },
+	{ status: 503, cause: PLAIN },
+	{ status: 504, cause: PLAIN },
+	{ status: 529, cause: STILL_BUSY, retry: "busy" },
+	{ status: 429, worded: true, cause: STILL_BUSY },
 ];
 const caseKey = (expected: Expected) => `${expected.status}${expected.worded ? " worded" : ""}`;
 const roomName = (expected: Expected) => `Status ${caseKey(expected)} Room`;
@@ -112,14 +112,7 @@ const backend = http.createServer((req, res) => {
 const base64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64").replace(/=+$/, "");
 const syntheticToken = `${base64({ alg: "none" })}.${base64({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })}.synthetic`;
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 200));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(200);
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -141,7 +134,7 @@ async function roomShows(browser: Browser, expected: Expected): Promise<void> {
 		await page.waitForLoadState("networkidle");
 		const dismiss = page.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
-		await page.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: "Resume →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: "Resume" }).click();
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
@@ -210,12 +203,6 @@ try {
 		await browser.close();
 	}
 	console.log("  ok  words that name nothing: each status shows its kind's line in the room, the sign-in notice for a 401; a 529 is asked again with its note, and the statuses the client already asked again are not asked on top, whatever their words");
-
-	// The log line per failed call names the kind the status gave, and the status.
-	const logged = serverOutput.join("").split("\n").filter((line) => line.includes("provider call failed")).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean) as Array<{ cause?: string; status?: number; callKind?: string }>;
-	const misLogged = cases.filter((expected) => !logged.some((line) => line.callKind === "chat" && line.status === expected.status && line.cause === expected.logged)).map((expected) => `${expected.status} as ${expected.logged}`);
-	assert(misLogged.length === 0, `the log names each kind and its status; missing ${misLogged.join(", ")}; got ${JSON.stringify(logged.map((line) => [line.status, line.cause]))}`);
-	console.log("  ok  the log line names each kind and its status");
 	console.log("room-failure-status smoke: ok");
 } catch (error) {
 	console.error(serverOutput.join("").split("\n").filter((line) => !line.includes("token=")).join("\n").slice(-6000));

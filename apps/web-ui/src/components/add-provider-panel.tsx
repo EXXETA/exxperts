@@ -4,6 +4,7 @@ import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, Provide
 import { useEscapeKey } from "./use-escape-key";
 import { ApiRequestError, apiFetch, fetchJson, withoutServiceLine } from "../api";
 import { distinctModelNames } from "../model-names";
+import { useRemoteClientContext } from "../remote-client-context";
 import { nameEndsInKey } from "../../../web-server/src/model-not-offered";
 import { applyToApproved, approvedCount, detectionAnswers, draftEffective, isNonChatMode, setAllApproved, trustDetected, type BulkDetection } from "../gateway-model-bulk";
 
@@ -1264,6 +1265,9 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	/** Counts the page's reconnects after an outage: an open panel reads its lists again. */
 	serviceBack?: number;
 }) {
+	// A shared server holds the organisation's keys and gateways, not a
+	// person's own subscription: sign-in and removing a key are not offered.
+	const { sharedServer } = useRemoteClientContext();
 	const [providers, setProviders] = useState<LoginProviderCatalogEntry[] | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [apiKeyProvider, setApiKeyProvider] = useState<LoginProviderCatalogEntry | null>(null);
@@ -1389,9 +1393,9 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	const filterText = filter.trim().toLowerCase();
 	const matchesFilter = (provider: LoginProviderCatalogEntry) =>
 		!filterText || provider.name.toLowerCase().includes(filterText) || provider.id.toLowerCase().includes(filterText);
-	const oauthProviders = addable.filter((provider) => provider.authTypes.includes("oauth")).filter(matchesFilter);
+	const oauthProviders = sharedServer ? [] : addable.filter((provider) => provider.authTypes.includes("oauth")).filter(matchesFilter);
 	const apiKeyProviders = addable
-		.filter((provider) => !provider.authTypes.includes("oauth"))
+		.filter((provider) => sharedServer ? provider.authTypes.includes("api_key") : !provider.authTypes.includes("oauth"))
 		.filter(matchesFilter)
 		.sort((a, b) => {
 			const aRank = POPULAR_PROVIDER_ORDER.indexOf(a.id);
@@ -1407,7 +1411,7 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 				<div className="settings-group add-provider-block">
 					<GroupHeader
 						kicker="Add a provider"
-						line="Sign in or add a key, then pick the models it may use."
+						line={sharedServer ? "Add a key, then pick the models it may use." : "Sign in or add a key, then pick the models it may use."}
 						actions={providers && addable.length > 6 && (
 							<input
 								className="launcher-path-input add-provider-filter"
@@ -1477,7 +1481,7 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 												{keyFormOpen !== provider.id && (
 													<button className="rs-quiet" onClick={() => openApiKeyProvider(provider)}>Replace key</button>
 												)}
-												<button className="rs-quiet" onClick={() => void removeKey(provider)}>Remove key</button>
+												{!sharedServer && <button className="rs-quiet" onClick={() => void removeKey(provider)}>Remove key</button>}
 											</>
 										) : (
 											keyFormOpen !== provider.id && (
@@ -1495,7 +1499,7 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 							</div>
 						))}
 					</div>
-					{apiKeyProviders.length > 0 && <p className="settings-help">Keys stay on this device.</p>}
+					{apiKeyProviders.length > 0 && !sharedServer && <p className="settings-help">Keys stay on this device.</p>}
 				</div>
 			)}
 			{gatewayEdit && (

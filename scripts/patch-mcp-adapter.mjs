@@ -3,9 +3,9 @@
 //
 // Patches against the exactly-pinned 2.10.0 sources. The cosmetic ones warn
 // instead of failing if a future version changes the surrounding code, so
-// installs never break; patches 6 and 7 (a room's startup config read, the
-// sign-in binding) fail the install instead, because rooms and sign-ins
-// depend on them:
+// installs never break; patches 6, 7 and 9 (a room's startup config read, the
+// sign-in binding, a shared server's connectors) fail the install instead,
+// because rooms, sign-ins and a shared server depend on them:
 //
 // 1. Rebrand the OAuth callback pages. The adapter serves hard-coded
 //    Pi-branded pages from its OAuth loopback server with no customization
@@ -192,8 +192,8 @@ try {
 // --- Patch 3: exxeta palette for the /mcp panels ---------------------------
 // The panels hard-code generic ANSI colors (cyan selection, green success,
 // rainbow progress dots) and ignore the TUI theme. Recolor with the exxeta
-// CLI palette (pi-package/themes/exxeta.json): lila accent/success, yellow
-// warnings, red errors, grays for chrome. Truecolor, like the launcher banner.
+// palette: lila accent/success, yellow warnings, red errors, grays for
+// chrome. Truecolor.
 
 const LILA = "38;2;140;165;255";
 const LILA_DIM = "38;2;111;134;216";
@@ -451,4 +451,122 @@ try {
 	}
 } catch (e) {
 	console.warn(`patch-mcp-adapter: registration name skipped (${e.message})`);
+}
+
+// --- Patch 9: a shared server's connectors ---------------------------------
+// With EXXPERTS_MCP_SHARED_SERVER=1 (read at each call; any other value or
+// none changes nothing) connectors are reached by web address only, and none
+// signs in: one stored sign-in would serve every person given the connector.
+// A program entry is left out where every reader gets its config and refused
+// where every connect starts, before the npm lookup; supportsOAuth answers
+// false, so every caller refuses a sign-in in its own words; startAuth and the
+// sign-in provider refuse beneath them; and a connector that would ask for a
+// sign-in says so instead of the SSE fallback's error, and the call path's
+// two back-off answers and its failed connect carry that refusal, so every
+// answer about such a connector reads as the sign-in it is. The nine places
+// apply together or not at all, and this one must apply: when it cannot, the
+// install fails.
+
+const SHARED_SERVER_IS_ON = 'process.env.EXXPERTS_MCP_SHARED_SERVER === "1"';
+const sharedServerPatches = [
+	[
+		"config.ts",
+		[
+			[
+				"    config = mergeConfigs(config, expandImports(loaded, cwd));\n  }\n\n  return config;\n}\n",
+				`    config = mergeConfigs(config, expandImports(loaded, cwd));\n  }\n\n  if (${SHARED_SERVER_IS_ON}) return withoutLocalProgramEntries(config);\n  return config;\n}\n\n// On a shared server connectors are reached by web address only. Every reader\n// gets its config here, so an entry that names a local program, or that is no\n// object at all, is left out before anything lists, describes or connects it.\n// The kept entries are built into a new map as own keys, so a connector named\n// __proto__ stays listed, as it is without this filter.\nfunction withoutLocalProgramEntries(config: McpConfig): McpConfig {\n  const kept = Object.entries(config.mcpServers).filter(\n    ([, entry]) => entry !== null && typeof entry === "object" && !Array.isArray(entry) && !entry.command,\n  );\n  return { ...config, mcpServers: Object.fromEntries(kept) };\n}\n`,
+			],
+		],
+	],
+	[
+		"server-manager.ts",
+		[
+			[
+				'import { extractOAuthConfig, supportsOAuth } from "./mcp-auth-flow.ts";\n',
+				'import { extractOAuthConfig, supportsOAuth, supportsOAuthWithoutSwitch } from "./mcp-auth-flow.ts";\n',
+			],
+			[
+				"    // Dedupe concurrent connection attempts\n",
+				`    // A shared server reaches connectors by web address only: a definition\n    // that names a local program starts nothing, the npm lookup included.\n    if (${SHARED_SERVER_IS_ON} && definition.command) {\n      throw new Error(\`Connector "\${name}" is a local program, and this server runs connectors by web address only.\`);\n    }\n\n    // Dedupe concurrent connection attempts\n`,
+			],
+			[
+				"      if (error instanceof UnauthorizedError) {\n        throw error;\n      }\n",
+				`      if (error instanceof UnauthorizedError) {\n        throw error;\n      }\n\n      // A shared server keeps no connector sign-in: a connector that would ask\n      // for one says so, in place of the SSE fallback's own refusal. One that\n      // carries a bearer token or any header keeps that error, since every\n      // header counts as a possible key: a key in a header the add does not\n      // recognise looks like any other header, and a refused key is no\n      // sign-in. The sentence holds "requires OAuth authentication", the words\n      // a sign-in refusal is recognised by, and is kept on this manager for\n      // the call path's later answers about the connector.\n      const status = (error as { code?: unknown } | null)?.code;\n      const carriesKey = Object.keys(definition.headers ?? {}).length > 0 || Boolean(definition.bearerToken) || Boolean(definition.bearerTokenEnv);\n      if (${SHARED_SERVER_IS_ON} && (status === 401 || status === 403) && !carriesKey && supportsOAuthWithoutSwitch(definition)) {\n        const refusal = \`Connector "\${serverName}" requires OAuth authentication, and connector sign-ins are off on this server.\`;\n        ((this as unknown as { signInRefusals?: Map<string, string> }).signInRefusals ??= new Map()).set(serverName, refusal);\n        throw new Error(refusal);\n      }\n`,
+			],
+		],
+	],
+	[
+		"mcp-auth-flow.ts",
+		[
+			[
+				"export function supportsOAuth(definition: ServerEntry): boolean {\n  // OAuth requires a URL\n",
+				`export function supportsOAuth(definition: ServerEntry): boolean {\n  // A shared server keeps no connector sign-in, so no caller starts one there.\n  if (${SHARED_SERVER_IS_ON}) return false\n  return supportsOAuthWithoutSwitch(definition)\n}\n\n// What supportsOAuth answers where connector sign-ins are allowed.\nexport function supportsOAuthWithoutSwitch(definition: ServerEntry): boolean {\n  // OAuth requires a URL\n`,
+			],
+			[
+				"): Promise<{ authorizationUrl: string }> {\n  const config = definition ? extractOAuthConfig(definition) : {}\n",
+				`): Promise<{ authorizationUrl: string }> {\n  // Beneath supportsOAuth: no flow, callback listener or browser on a shared server.\n  if (${SHARED_SERVER_IS_ON}) throw new Error("Connector sign-ins are off on this server.")\n  const config = definition ? extractOAuthConfig(definition) : {}\n`,
+			],
+		],
+	],
+	[
+		"mcp-oauth-provider.ts",
+		[
+			[
+				"  ) {\n    this.redirectUrlSnapshot = config.grantType === \"client_credentials\"\n",
+				`  ) {\n    // Every registration, token request and refresh passes this constructor,\n    // so on a shared server none starts.\n    if (${SHARED_SERVER_IS_ON}) throw new Error("Connector sign-ins are off on this server.")\n    this.redirectUrlSnapshot = config.grantType === "client_credentials"\n`,
+			],
+		],
+	],
+	[
+		"proxy-modes.ts",
+		[
+			[
+				'          return {\n            content: [{ type: "text" as const, text: `Server "${serverName}" not available (last failed ${failedAgo}s ago)` }],\n',
+				`          // Once the connector has asked this session for a sign-in, which a\n          // shared server never gives, every back-off for it carries that\n          // refusal, so whoever reads it sees the sign-in, not a server that is\n          // down. The refusal is kept on this session's own manager, so another\n          // session's tries change nothing here.\n          const remembered = ${SHARED_SERVER_IS_ON} && (state.manager as unknown as { signInRefusals?: Map<string, string> }).signInRefusals?.get(serverName);\n          return {\n            content: [{ type: "text" as const, text: \`Server "\${serverName}" not available (last failed \${failedAgo}s ago)\${remembered ? \`: \${remembered}\` : ""}\` }],\n`,
+			],
+			[
+				// The line alone is the tail of the one above, so the line before it is taken too.
+				'      return {\n        content: [{ type: "text" as const, text: `Server "${serverName}" not available (last failed ${failedAgo}s ago)` }],\n',
+				`      // As in the back-off above: a refused sign-in, carried.\n      const remembered = ${SHARED_SERVER_IS_ON} && (state.manager as unknown as { signInRefusals?: Map<string, string> }).signInRefusals?.get(serverName);\n      return {\n        content: [{ type: "text" as const, text: \`Server "\${serverName}" not available (last failed \${failedAgo}s ago)\${remembered ? \`: \${remembered}\` : ""}\` }],\n`,
+			],
+			[
+				'        details: { mode: "call", error: "connect_failed", message },\n',
+				`        // As in the back-off above: a failed connect that is the refused sign-in names its connector.\n        details: { mode: "call", error: "connect_failed", message, ...(${SHARED_SERVER_IS_ON} && message === (state.manager as unknown as { signInRefusals?: Map<string, string> }).signInRefusals?.get(serverName) ? { server: serverName } : {}) },\n`,
+			],
+		],
+	],
+];
+
+try {
+	const files = sharedServerPatches.map(([file, replacements]) => {
+		const filePath = path.join(adapterDir, file);
+		return { file, filePath, replacements, source: fs.readFileSync(filePath, "utf-8") };
+	});
+	if (files.every(({ source, replacements }) => replacements.every(([, to]) => source.includes(to)))) {
+		console.log("patch-mcp-adapter: shared-server connectors already patched");
+	} else {
+		// Each file named by what its anchors are (a file can be named twice):
+		// not found once, not yet patched beside patched ones, already patched.
+		const filesWhere = (test) => [...new Set(files.filter(({ source, replacements }) => replacements.some(([from, to]) => test(source, from, to))).map(({ file }) => file))];
+		const patched = filesWhere((source, from, to) => source.includes(to));
+		const notFound = filesWhere((source, from, to) => !source.includes(to) && source.split(from).length !== 2);
+		const pending = patched.length > 0 ? filesWhere((source, from, to) => !source.includes(to) && source.split(from).length === 2) : [];
+		if (patched.length > 0 || notFound.length > 0) {
+			const named = [
+				[notFound, "not found once in"],
+				[pending, "not yet patched in"],
+				[patched, "already patched in"],
+			].filter(([list]) => list.length > 0).map(([list, words]) => `${words} ${list.join(", ")}`);
+			console.error(`patch-mcp-adapter: ERROR shared-server connector anchors ${named.join("; ")} (adapter changed, or partly patched?); a shared server would run program connectors and sign-ins`);
+			process.exitCode = 1;
+		} else {
+			for (const { filePath, source, replacements } of files) {
+				fs.writeFileSync(filePath, replacements.reduce((text, [from, to]) => text.replace(from, () => to), source));
+			}
+			console.log("patch-mcp-adapter: a shared server's connectors are reached by web address only, with no sign-in");
+		}
+	}
+} catch (e) {
+	console.error(`patch-mcp-adapter: ERROR shared-server connector patch failed (${e.message})`);
+	process.exitCode = 1;
 }

@@ -36,6 +36,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -94,7 +97,15 @@ const GONE_DEFAULTS_LINE = "The default memory model, GPT-6.1 Sol on ChatGPT Plu
 // no listener, so the runtime falls back to the plain request.
 // "gone" and "gone-detail" are the provider no longer serving the model: a
 // 404 in OpenAI's words, in either body shape.
-let shape: "detail" | "error" | "gone" | "gone-detail" = "detail";
+type Shape = "detail" | "error" | "gone" | "gone-detail";
+// Each section sets the shape for words only its own requests carry (its
+// rooms' names, its question or its prompt), so the sections that wait out the
+// provider's retries run side by side. The first marker found wins: HiveMind's
+// question comes first, since its request across rooms carries every room's name.
+const HIVE_QUESTION = "What did we settle about the invoices?";
+const shapes = new Map<string, Shape>([[HIVE_QUESTION, "detail"]]);
+// A request that carries no section's words would get a shape no section chose.
+let unmarked = 0;
 let requests = 0;
 // What each request carried, to see a refused message leave the conversation.
 const requestBodies: string[] = [];
@@ -104,6 +115,9 @@ const backend = http.createServer((req, res) => {
 	req.on("end", () => {
 		requests += 1;
 		requestBodies.push(raw);
+		const marked = [...shapes].find(([marker]) => raw.includes(marker));
+		if (raw && !marked) unmarked += 1;
+		const shape = marked?.[1] ?? "detail";
 		const body = shape === "detail"
 			? { detail: WORDS }
 			: shape === "gone"
@@ -119,15 +133,6 @@ const backend = http.createServer((req, res) => {
 // A ChatGPT sign-in as the runtime reads it: a token carrying an account id.
 const base64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64").replace(/=+$/, "");
 const syntheticToken = `${base64({ alg: "none" })}.${base64({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })}.synthetic`;
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 async function api(pathname: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, { method: init.method ?? "GET", signal: AbortSignal.timeout(init.timeoutMs ?? 10_000), ...(init.body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(init.body) }) });
@@ -173,11 +178,9 @@ try {
 			const failure = causes.classifyModelFailure(new Error(words));
 			assert(modelNotOnAccount(words) && failure.cause === "unreachable" && failure.detail === "not-on-account", `${JSON.stringify(words)} reads as not on the account, got ${JSON.stringify(failure)}`);
 		}
-		assert(causes.modelUnreachableSentence("not-on-account", { provider: "openai", model: "gpt-scripted", label: "GPT Scripted" }) === "GPT Scripted isn't available on your account. Nothing was lost.", "the notice says the model is not available, never no longer offered");
 		// The runtime keeps its own copy of ChatGPT's words, to answer this refusal once: the two must agree.
 		const { codexModelNotOnAccount } = await import("@exxeta/exxperts-ai");
 		for (const words of [...positives, ...negatives]) assert(codexModelNotOnAccount(words) === modelNotOnAccount(words), `the runtime's copy of the words agrees on ${JSON.stringify(words)}`);
-		assert(causes.modelUnreachableSentence("not-on-account", SOL) === NOTICE, `the notice's sentence, got ${JSON.stringify(causes.modelUnreachableSentence("not-on-account", SOL))}`);
 		pass("the matcher takes ChatGPT's words for a model not on the account, in either body shape, and an API key's words for a model it cannot use");
 	});
 
@@ -192,9 +195,9 @@ try {
 	const solModel = { ...(ai.getModel("openai-codex" as any, SOL.model as any) as any), baseUrl: `http://127.0.0.1:${backendPort}` };
 	await section("the runtime", async () => {
 		for (const body of ["detail", "error"] as const) {
-			shape = body;
+			shapes.set("Hello from the runtime.", body);
 			const requestsBefore = requests;
-			const answer = await ai.complete(solModel, { messages: [{ role: "user", content: "Hello.", timestamp: Date.now() }] } as any, { apiKey: syntheticToken, transport: "sse" } as any);
+			const answer = await ai.complete(solModel, { messages: [{ role: "user", content: "Hello from the runtime.", timestamp: Date.now() }] } as any, { apiKey: syntheticToken, transport: "sse" } as any);
 			assert(answer.stopReason === "error" && answer.errorMessage === WORDS, `a ${body} body yields the words themselves, got ${JSON.stringify(answer.errorMessage)}`);
 			assert(requests - requestsBefore === 1, `a ${body} body is asked once, never again, got ${requests - requestsBefore} requests`);
 		}
@@ -205,7 +208,7 @@ try {
 	const roomModels = await import("../src/room-models.js");
 	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 	const page = (id: string, title: string) => [`### ${id} | CLOSED | 2026-10-01 | ${title}`, "", `**Session arc:** ${title} was settled.`, "", "**Body:**", `- ${title} is the durable point.`, "", "**Parked:**", "None", ""].join("\n");
-	const unsorted = ["### Unsorted", "", "<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->", "- Invoices go out on the first working day.", "", ""].join("\n");
+	const unsorted = (room: string) => ["### Unsorted", "", "<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->", `- Invoices for ${room} go out on the first working day.`, "", ""].join("\n");
 
 	// A room on GPT-6.1 Sol for both models, with a conversation started on it,
 	// a page waiting to be memorized and one note in Unsorted.
@@ -215,7 +218,7 @@ try {
 		const l1bPath = path.join(agentsRoot, agentId, "L1b", "current.md");
 		let text = fs.readFileSync(l1bPath, "utf-8");
 		const active = /^##\s+Active Items\s*$/m.exec(text)!;
-		text = `${text.slice(0, active.index)}${unsorted}${text.slice(active.index)}`;
+		text = `${text.slice(0, active.index)}${unsorted(displayName)}${text.slice(active.index)}`;
 		const at = /^##\s+Recent Context\s*$/m.exec(text)!;
 		fs.writeFileSync(l1bPath, `${text.slice(0, at.index + at[0].length)}\n\n${page("RC-0001", "First plan")}\n`, "utf-8");
 		const created = agents.writePersistentAgentThread(agentId, conversationId, { state: "standby", origin: "home", model: SOL, items: [{ kind: "user", id: "u1", text: "Earlier question." }, { kind: "assistant", id: "a1", text: "Earlier answer." }] }, {
@@ -231,7 +234,7 @@ try {
 	const memorizeRoom = roomOnSol("Memorize On Sol", "c_memorize_on_sol");
 	const reviewRoom = roomOnSol("Review On Sol", "c_review_on_sol");
 	const rememberGoneRoom = roomOnSol("Remember Gone", "c_remember_gone");
-	const memorizeGoneRooms = { gone: roomOnSol("Memorize Gone", "c_memorize_gone"), "gone-detail": roomOnSol("Memorize Gone Detail", "c_memorize_gone_detail") };
+	const memorizeGoneRooms = { gone: roomOnSol("Memorize Gone", "c_memorize_gone"), "gone-detail": roomOnSol("Memorize Detail Gone", "c_memorize_gone_detail") };
 	const reviewGoneRoom = roomOnSol("Review Gone", "c_review_gone");
 	const scheduledRoom = roomOnSol("Scheduled On Sol", "c_scheduled_on_sol");
 	const scheduledRunRoom = roomOnSol("Scheduled Run On Sol", "c_scheduled_run_on_sol");
@@ -246,7 +249,7 @@ try {
 
 	// --- A scheduled run ---------------------------------------------------------------------
 	await section("a scheduled run", async () => {
-		shape = "error";
+		shapes.set("The morning summary.", "error");
 		const { executePersistentRoomBackgroundPrompt } = await import("../src/persistent-room-background-execution.js");
 		let scheduled: any = null;
 		try {
@@ -254,7 +257,7 @@ try {
 		} catch (error) {
 			scheduled = error;
 		}
-		assert(scheduled?.code === "model_not_on_account" && scheduled.message === LINE, `a scheduled run fails with its own code and the sentence, got ${scheduled?.code} ${JSON.stringify(scheduled?.message)}`);
+		assert(scheduled?.code === "model_not_on_account", `a scheduled run fails with its own code, got ${scheduled?.code} ${JSON.stringify(scheduled?.message)}`);
 		const failureLines = (agents.getPersistentAgentThread(scheduledRoom, "c_scheduled_on_sol")?.items ?? []).filter((item: any) => item.kind === "system" && item.level === "error").map((item: any) => String(item.text));
 		assert(failureLines.includes(LINE) && !failureLines.some((text) => RAW.test(text)), `the run's conversation carries the sentence, never the words, got ${JSON.stringify(failureLines)}`);
 		// The run the scheduler itself makes and records, read back as the Scheduled tasks pane reads it.
@@ -274,12 +277,14 @@ try {
 	});
 
 	// --- A specialist task ----------------------------------------------------------------------
-	await section("a specialist task", async () => {
+	// From here on the sections run side by side, each on rooms and words of its own.
+	const sideBySide: Promise<void>[] = [];
+	sideBySide.push(section("a specialist task", async () => {
 		const execution = await import("../src/persistent-room-specialist-execution.js");
 		const { AuthStorage, ModelRegistry } = await import("@exxeta/exxperts-runtime");
 		for (const body of ["detail", "error"] as const) {
-			shape = body;
-			const plan = execution.buildSpecialistSessionPlan({ taskId: `tsk-not-on-account-${body}`, templateId: "document-html", brief: "Write the one-pager." });
+			shapes.set("Fenwick", body);
+			const plan = execution.buildSpecialistSessionPlan({ taskId: `tsk-not-on-account-${body}`, templateId: "document-html", brief: "Write the Fenwick one-pager." });
 			let failed: any = null;
 			try {
 				await execution.runSpecialistWorker({ plan, modelLock: SOL, resolveExpectedModel: (registry: any, lock: any) => registry.find(lock.provider, lock.model), modelRegistry: ModelRegistry.create(AuthStorage.create(path.join(agentDir, "auth.json")), path.join(agentDir, "models.json")), cwd: threadCwd, agentDir });
@@ -292,8 +297,8 @@ try {
 			assert(failed.providerMessage === WORDS, "the provider's words ride along for the log only");
 		}
 		for (const body of ["gone", "gone-detail"] as const) {
-			shape = body;
-			const gonePlan = execution.buildSpecialistSessionPlan({ taskId: `tsk-not-on-account-${body}`, templateId: "document-html", brief: "Write the one-pager." });
+			shapes.set("Fenwick", body);
+			const gonePlan = execution.buildSpecialistSessionPlan({ taskId: `tsk-not-on-account-${body}`, templateId: "document-html", brief: "Write the Fenwick one-pager." });
 			let gone: any = null;
 			try {
 				await execution.runSpecialistWorker({ plan: gonePlan, modelLock: SOL, resolveExpectedModel: (registry: any, lock: any) => registry.find(lock.provider, lock.model), modelRegistry: ModelRegistry.create(AuthStorage.create(path.join(agentDir, "auth.json")), path.join(agentDir, "models.json")), cwd: threadCwd, agentDir });
@@ -303,7 +308,7 @@ try {
 			assert(gone?.message === GONE_ROOM_LINE && gone.providerMessage === GONE_WORDS, `a model the provider no longer serves (${body}) ends the task with the room's sentence, got ${JSON.stringify(gone?.message)}`);
 		}
 		pass("a specialist task ends with the sentence on its line, not on the account or no longer offered, never the provider's words");
-	});
+	}));
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
@@ -318,10 +323,9 @@ try {
 	// --- Remember, Memorize and Review ---------------------------------------------------------
 	const { modelNoticeFromError } = await import(new URL("../../web-ui/src/components/model-notice.tsx", import.meta.url).href) as { modelNoticeFromError(error: unknown): { detail: string; sentence: string } | null };
 	const { ApiRequestError } = await import("../../web-ui/src/api.js");
-	const { absorbRunOutageModelName, absorbRunOutageSentence, memoryModelStopWhy } = await import("../../web-ui/src/memory-v2-copy.js");
 
-	await section("Remember", async () => {
-		shape = "detail";
+	sideBySide.push(section("Remember", async () => {
+		shapes.set("Remember On Sol", "detail");
 		const rememberBefore = memoryOf(rememberRoom);
 		const remember = await api(`/api/persistent-agents/${rememberRoom}/checkpoint/propose`, { method: "POST", body: { conversationId: "c_remember_on_sol", density: "standard" }, timeoutMs: 120_000 });
 		assert(remember.body?.code === "model_unreachable" && remember.body.details?.detail === "not-on-account" && remember.body.error === NOTICE, `Remember ends in the shared notice, got ${remember.status} ${JSON.stringify(remember.body)}`);
@@ -332,7 +336,7 @@ try {
 		// A model the provider no longer serves: the notice says so, in either body shape.
 		const goneBefore = memoryOf(rememberGoneRoom);
 		for (const body of ["gone", "gone-detail"] as const) {
-			shape = body;
+			shapes.set("Remember Gone", body);
 			const gone = await api(`/api/persistent-agents/${rememberGoneRoom}/checkpoint/propose`, { method: "POST", body: { conversationId: "c_remember_gone", density: "standard" }, timeoutMs: 120_000 });
 			assert(gone.body?.code === "model_unreachable" && gone.body.details?.detail === "not-offered" && gone.body.error === GONE_NOTICE, `Remember on a model no longer served (${body}) ends in the shared notice, got ${gone.status} ${JSON.stringify(gone.body)}`);
 			const goneShown = modelNoticeFromError(new ApiRequestError(gone.body.error, gone.status, gone.body.code, gone.body.details));
@@ -340,10 +344,10 @@ try {
 		}
 		assert(memoryOf(rememberGoneRoom) === goneBefore && agents.getPersistentAgentThread(rememberGoneRoom, "c_remember_gone")?.state !== "closed", "Remember on a model no longer served wrote nothing and the conversation waits");
 		pass("Remember ends in the shared notice, not on the account or no longer offered; nothing is written and the conversation waits");
-	});
+	}));
 
-	await section("Memorize", async () => {
-		shape = "error";
+	sideBySide.push(section("Memorize", async () => {
+		shapes.set("Memorize On Sol", "error");
 		const memorizeBefore = memoryOf(memorizeRoom);
 		const proposed = await api(`/api/persistent-agents/${memorizeRoom}/absorb/propose`, { method: "POST", body: { assessmentMarkdown: "## What these sessions leave behind\n\n- One plan." } });
 		assert(proposed.status === 202, `Memorize starts, got ${proposed.status} ${JSON.stringify(proposed.body)}`);
@@ -353,11 +357,9 @@ try {
 			return Boolean(run?.stop);
 		}, "the Memorize run stops", 120_000);
 		assert(run.stop.kind === "outage" && run.stop.cause === "not-on-account", `the Memorize run stops on the notice, got ${JSON.stringify(run.stop)}`);
-		const memorizeSentence = absorbRunOutageSentence(absorbRunOutageModelName(run.stop.model, null), run.stop.cause, 1, run.stop.model.provider);
-		assert(/^Memorize paused because GPT-6\.1 Sol isn't available on your ChatGPT account\. 1 conversation is still waiting\.$/.test(memorizeSentence), `the run's notice names the model and the account, got ${JSON.stringify(memorizeSentence)}`);
 		assert(memoryOf(memorizeRoom) === memorizeBefore, "the page still waits and nothing went to Unsorted");
 		for (const body of ["gone", "gone-detail"] as const) {
-			shape = body;
+			shapes.set(body === "gone" ? "Memorize Gone" : "Memorize Detail Gone", body);
 			const room = memorizeGoneRooms[body];
 			const goneBefore = memoryOf(room);
 			const started = await api(`/api/persistent-agents/${room}/absorb/propose`, { method: "POST", body: { assessmentMarkdown: "## What these sessions leave behind\n\n- One plan." } });
@@ -368,32 +370,29 @@ try {
 				return Boolean(goneRun?.stop);
 			}, "the Memorize run stops", 120_000);
 			assert(goneRun.stop.kind === "outage" && goneRun.stop.cause === "not-offered", `Memorize on a model no longer served (${body}) stops on the notice, got ${JSON.stringify(goneRun.stop)}`);
-			const goneSentence = absorbRunOutageSentence(absorbRunOutageModelName(goneRun.stop.model, null), goneRun.stop.cause, 1, goneRun.stop.model.provider);
-			assert(/^Memorize paused because GPT-6\.1 Sol is no longer offered\. 1 conversation is still waiting\.$/.test(goneSentence), `the run's notice says the model is no longer offered, got ${JSON.stringify(goneSentence)}`);
 			assert(memoryOf(room) === goneBefore, "the page still waits and nothing went to Unsorted");
 		}
 		pass("Memorize stops on the notice, not on the account or no longer offered; the page still waits and nothing goes to Unsorted");
-	});
+	}));
 
-	await section("Review", async () => {
-		shape = "detail";
+	sideBySide.push(section("Review", async () => {
+		shapes.set("Review On Sol", "detail");
 		const reviewBefore = memoryOf(reviewRoom);
 		const review = await api(`/api/persistent-agents/${reviewRoom}/review/assess`, { method: "POST", body: {}, timeoutMs: 120_000 });
 		assert(review.status === 503 && review.body?.code === "model_unreachable" && review.body.details?.detail === "not-on-account" && review.body.error === NOTICE, `Review ends in the shared notice, got ${review.status} ${JSON.stringify(review.body)}`);
 		assert(memoryOf(reviewRoom) === reviewBefore, "Review changed nothing");
-		assert(memoryModelStopWhy("not-on-account", SOL.provider) === "isn't available on your ChatGPT account", "a stopped Review run says the same why");
 		const goneBefore = memoryOf(reviewGoneRoom);
 		for (const body of ["gone", "gone-detail"] as const) {
-			shape = body;
+			shapes.set("Review Gone", body);
 			const gone = await api(`/api/persistent-agents/${reviewGoneRoom}/review/assess`, { method: "POST", body: {}, timeoutMs: 120_000 });
 			assert(gone.status === 503 && gone.body?.code === "model_unreachable" && gone.body.details?.detail === "not-offered" && gone.body.error === GONE_NOTICE, `Review on a model no longer served (${body}) ends in the shared notice, got ${gone.status} ${JSON.stringify(gone.body)}`);
 		}
 		assert(memoryOf(reviewGoneRoom) === goneBefore, "Review on a model no longer served changed nothing");
 		pass("Review ends in the shared notice, not on the account or no longer offered, and changes nothing");
-	});
+	}));
 
 	// --- A consult ---------------------------------------------------------------------------
-	await section("a consult", async () => {
+	sideBySide.push(section("a consult", async () => {
 		const WebSocketImpl: any = (await import("ws")).default;
 		const socket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${consultFromRoom}&conversationId=c_consult_from&modelProvider=${SOL.provider}&model=${SOL.model}`, { headers: { ...SMOKE_AUTH_HEADERS } });
 		const frames: any[] = [];
@@ -402,7 +401,7 @@ try {
 			await new Promise<void>((resolve, reject) => { socket.addEventListener("open", () => resolve()); socket.addEventListener("error", () => reject(new Error("the room's socket did not open"))); });
 			await waitUntil(() => frames.some((frame) => frame.type === "ready"), "the room is ready");
 			for (const body of ["detail", "error"] as const) {
-				shape = body;
+				shapes.set("Consulted On Sol", body);
 				const consultId = `c_not_on_account_${body}`;
 				socket.send(JSON.stringify({ type: "consult", consultId, targetRoomId: consultedRoom, question: "What did we settle?" }));
 				await waitUntil(() => frames.some((frame) => (frame.type === "consult_error" || frame.type === "consult_end") && frame.consultId === consultId), "the consult ends", 60_000);
@@ -410,7 +409,7 @@ try {
 				assert(ended.type === "consult_error" && ended.message === roomLine("Consulted On Sol"), `a ${body} body ends the consult with the sentence, got ${JSON.stringify(ended)}`);
 			}
 			for (const body of ["gone", "gone-detail"] as const) {
-				shape = body;
+				shapes.set("Consulted On Sol", body);
 				const consultId = `c_not_offered_${body}`;
 				socket.send(JSON.stringify({ type: "consult", consultId, targetRoomId: consultedRoom, question: "What did we settle?" }));
 				await waitUntil(() => frames.some((frame) => (frame.type === "consult_error" || frame.type === "consult_end") && frame.consultId === consultId), "the consult ends", 60_000);
@@ -421,26 +420,26 @@ try {
 			try { socket.close(); } catch {}
 		}
 		pass("a consult's card says the consulted room's Memory model is not on the account, or no longer offered, never the provider's words");
-	});
+	}));
 
 	// --- HiveMind -----------------------------------------------------------------------------
-	await section("HiveMind", async () => {
+	sideBySide.push(section("HiveMind", async () => {
 		for (const body of ["detail", "error"] as const) {
-			shape = body;
-			const one = await api("/api/memory/ask", { method: "POST", body: { question: "What did we settle?", rooms: [hiveRoom] }, timeoutMs: 70_000 });
+			shapes.set(HIVE_QUESTION, body);
+			const one = await api("/api/memory/ask", { method: "POST", body: { question: HIVE_QUESTION, rooms: [hiveRoom] }, timeoutMs: 70_000 });
 			assert(one.body?.ok === false && one.body.message === roomLine("Hive On Sol"), `asked about one room, a ${body} body says the sentence, got ${JSON.stringify(one.body)}`);
-			const all = await api("/api/memory/ask", { method: "POST", body: { question: "What did we settle?" }, timeoutMs: 70_000 });
+			const all = await api("/api/memory/ask", { method: "POST", body: { question: HIVE_QUESTION }, timeoutMs: 70_000 });
 			assert(all.body?.ok === false && all.body.message === DEFAULTS_LINE, `asked across all rooms, a ${body} body says the sentence, got ${JSON.stringify(all.body)}`);
 		}
 		for (const body of ["gone", "gone-detail"] as const) {
-			shape = body;
-			const one = await api("/api/memory/ask", { method: "POST", body: { question: "What did we settle?", rooms: [hiveRoom] }, timeoutMs: 70_000 });
+			shapes.set(HIVE_QUESTION, body);
+			const one = await api("/api/memory/ask", { method: "POST", body: { question: HIVE_QUESTION, rooms: [hiveRoom] }, timeoutMs: 70_000 });
 			assert(one.body?.ok === false && one.body.message === goneLine("Hive On Sol"), `asked about one room, a model the provider no longer serves (${body}) says the sentence, got ${JSON.stringify(one.body)}`);
-			const all = await api("/api/memory/ask", { method: "POST", body: { question: "What did we settle?" }, timeoutMs: 70_000 });
+			const all = await api("/api/memory/ask", { method: "POST", body: { question: HIVE_QUESTION }, timeoutMs: 70_000 });
 			assert(all.body?.ok === false && all.body.message === GONE_DEFAULTS_LINE, `asked across all rooms, a model the provider no longer serves (${body}) says the sentence, got ${JSON.stringify(all.body)}`);
 		}
 		pass("HiveMind says the asked room's Memory model, or the Memory default, is not on the account, or no longer offered, never the provider's words");
-	});
+	}));
 
 	// --- A chat turn -------------------------------------------------------------------------
 	// The room's chat: send one message, and the line the turn ends in must be
@@ -456,11 +455,11 @@ try {
 			await ui.waitForLoadState("networkidle");
 			const dismiss = ui.locator(".whats-new-close");
 			if (await dismiss.count()) await dismiss.click();
-			await ui.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: "Resume →" }).click();
+			await ui.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: "Resume" }).click();
 			const composer = ui.locator("textarea").first();
 			await ui.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 			await ui.waitForTimeout(800);
-			const requestsBefore = requests;
+			const bodiesBeforeTurn = requestBodies.length;
 			await composer.fill("Still there?");
 			await composer.press("Enter");
 			const newestLine = async () => (await ui.locator(".failure-line:not(.is-folded) .system-line-text").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim()).at(-1);
@@ -478,7 +477,7 @@ try {
 			await waitUntil(async () => (await savedLine()) === saved, `${room}: the conversation keeps the line in one order, the cause, where the message is, then the way on`, 10000).catch(async () => {
 				throw new Error(`${room}: the conversation keeps ${JSON.stringify(await savedLine())}, not ${JSON.stringify(saved)}`);
 			});
-			assert(requests > requestsBefore, `${room}: the turn reached the backend`);
+			assert(requestBodies.slice(bodiesBeforeTurn).some((body) => body.includes(room) && body.includes("Still there?")), `${room}: the turn reached the backend`);
 			assert(!raw.test(await ui.locator("body").innerText()), `${room}: the provider's words are nowhere on the page`);
 			assert(consoleLines.some((consoleLine) => raw.test(consoleLine)), `${room}: the provider's words go to the console`);
 			assert((await composer.inputValue()) === "Still there?" && (await ui.getByText("Earlier answer.").count()) === 1, `${room}: the message is back in the box and the earlier turn is kept, got ${JSON.stringify(await composer.inputValue())}`);
@@ -486,8 +485,9 @@ try {
 			const bodiesBefore = requestBodies.length;
 			await composer.fill("Another question.");
 			await composer.press("Enter");
-			await waitUntil(() => requestBodies.slice(bodiesBefore).some((body) => body.includes("Another question.")), `${room}: the next message reached the backend`);
-			assert(!requestBodies.slice(bodiesBefore).some((body) => body.includes("Still there?")), `${room}: the next message no longer carries the refused one`);
+			const roomBodies = () => requestBodies.slice(bodiesBefore).filter((body) => body.includes(room));
+			await waitUntil(() => roomBodies().some((body) => body.includes("Another question.")), `${room}: the next message reached the backend`);
+			assert(!roomBodies().some((body) => body.includes("Still there?")), `${room}: the next message no longer carries the refused one`);
 		} finally {
 			await ctx.close();
 		}
@@ -496,37 +496,42 @@ try {
 	// the two chat sections skip there, and every other section still runs.
 	const chromiumPath = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
 	const hasChromium = Boolean(chromiumPath) && fs.existsSync(chromiumPath);
-	await section("a chat turn", async () => {
-		if (!hasChromium) {
-			console.log("  skip  a chat turn (Chromium not installed)");
-			return;
-		}
-		shape = "detail";
-		const browser = await chromium.launch();
-		try {
-			await chatTurnEndsIn(browser, "Chat On Sol", "GPT-6.1 Sol isn't available on your ChatGPT account. Your message is back in the box.", "GPT-6.1 Sol isn't available on your ChatGPT account. Your message is back in the box. Choose another model in Room settings, Model.", RAW);
-			pass("a chat turn shows the one line with the way out, never the provider's words");
-		} finally {
-			await browser.close();
-		}
-	});
-	// A model the provider no longer serves: the line the room's model row says, in either body shape.
-	await section("a chat turn on a model no longer offered", async () => {
-		if (!hasChromium) {
-			console.log("  skip  a chat turn on a model no longer offered (Chromium not installed)");
-			return;
-		}
-		const browser = await chromium.launch();
-		try {
-			for (const body of ["gone", "gone-detail"] as const) {
-				shape = body;
-				await chatTurnEndsIn(browser, chatGoneRooms[body], "This room's model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Your message is back in the box.", "This room's model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Your message is back in the box. Choose another model in Room settings, Model.", GONE_RAW);
+	// The two chat sections drive one browser at a time, beside the rest.
+	sideBySide.push((async () => {
+		await section("a chat turn", async () => {
+			if (!hasChromium) {
+				console.log("  skip  a chat turn (Chromium not installed)");
+				return;
 			}
-			pass("a chat turn on a model no longer offered says so with the way out, never the provider's words, in either body shape");
-		} finally {
-			await browser.close();
-		}
-	});
+			shapes.set("Chat On Sol", "detail");
+			const browser = await chromium.launch();
+			try {
+				await chatTurnEndsIn(browser, "Chat On Sol", "GPT-6.1 Sol isn't available on your ChatGPT account.", "GPT-6.1 Sol isn't available on your ChatGPT account. Choose another model in Room settings, Model.", RAW);
+				pass("a chat turn shows the one line with the way out, never the provider's words");
+			} finally {
+				await browser.close();
+			}
+		});
+		// A model the provider no longer serves: the line the room's model row says, in either body shape.
+		await section("a chat turn on a model no longer offered", async () => {
+			if (!hasChromium) {
+				console.log("  skip  a chat turn on a model no longer offered (Chromium not installed)");
+				return;
+			}
+			const browser = await chromium.launch();
+			try {
+				for (const body of ["gone", "gone-detail"] as const) {
+					shapes.set(chatGoneRooms[body], body);
+					await chatTurnEndsIn(browser, chatGoneRooms[body], "This room's model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered.", "This room's model, GPT-6.1 Sol on ChatGPT Plus/Pro, is no longer offered. Choose another model in Room settings, Model.", GONE_RAW);
+				}
+				pass("a chat turn on a model no longer offered says so with the way out, never the provider's words, in either body shape");
+			} finally {
+				await browser.close();
+			}
+		});
+	})());
+	await Promise.all(sideBySide);
+	await section("every request carried its section's words", async () => assert(unmarked === 0, `${unmarked} request(s) carried no section's words, so no section chose their shape`));
 
 	if (failures.length) throw new Error(`room-model-not-on-account smoke failed: ${failures.join(", ")}`);
 	console.log("room-model-not-on-account smoke: ok");

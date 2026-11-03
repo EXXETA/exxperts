@@ -24,6 +24,18 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
 
 /**
+ * The custom type of the hidden message that carries a room's live state.
+ * convertToLlm marks the user message it becomes (`roomState`), Try again
+ * passes over it, and both Try again and the overflow retry send the copy a
+ * before_agent_start handler returns.
+ */
+export const ROOM_STATE_CUSTOM_TYPE = "room-state";
+
+export function isRoomStateMessage(message: AgentMessage): boolean {
+	return message.role === "custom" && message.customType === ROOM_STATE_CUSTOM_TYPE;
+}
+
+/**
  * Message type for bash executions via the ! command.
  */
 export interface BashExecutionMessage {
@@ -165,6 +177,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						role: "user",
 						content,
 						timestamp: m.timestamp,
+						...(isRoomStateMessage(m) ? { roomState: true as const } : {}),
 					};
 				}
 				case "branchSummary":

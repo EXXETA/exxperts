@@ -82,6 +82,9 @@ try {
 	plant(path.join(room, "runtime", "threads", `${threadId}.json.tmp-1-2`), `{"items":["${WORD}"]}`);
 	plant(path.join(room, "runtime", "remember", threadId, "parts.json"), `{"notes":["${WORD}"]}`);
 	plant(path.join(room, "runtime", "workspace-policies", `${threadId}.json`), JSON.stringify({ conversationId: threadId, folders: [] }));
+	plant(path.join(room, "runtime", "held-messages", `${threadId}.json`), JSON.stringify({ schemaVersion: 1, messages: [{ id: "h1", text: `Ask about ${WORD} later.` }] }));
+	plant(path.join(room, "runtime", "held-messages", `${threadId}.json.1.2.tmp`), `{"messages":[{"text":"${WORD}"}]}`);
+	plant(path.join(room, "runtime", "held-messages", "c_other.json"), JSON.stringify({ schemaVersion: 1, messages: [{ id: "h2", text: "Another conversation's held message." }] }));
 	plant(path.join(room, "runtime", "task-ledger", "t_forget1.json"), JSON.stringify({ taskId: "t_forget1", conversationId: threadId, title: `Write up ${WORD}` }));
 	plant(path.join(room, "runtime", "task-ledger", "t_other1.json"), JSON.stringify({ taskId: "t_other1", conversationId: "c_other", title: "Another conversation's task" }));
 	plant(path.join(appDir, "artifacts", "tasks", "t_forget1", "inputs", "brief.md"), `Brief: ${WORD}`);
@@ -92,7 +95,7 @@ try {
 	plant(path.join(runDir, "output.md"), `The answer names ${WORD}`);
 	plant(path.join(appDir, "stream-traces", agentId, `${threadId}.jsonl`), `{"text":"${WORD}"}\n`);
 	plant(path.join(room, "files", "report.md"), "A report the task wrote onto the shelf: it stays.");
-	assert(filesHolding(WORD).length >= 9, `the word is planted in every store, got ${JSON.stringify(filesHolding(WORD))}`);
+	assert(filesHolding(WORD).length >= 11, `the word is planted in every store, got ${JSON.stringify(filesHolding(WORD))}`);
 
 	// A specialist task still running from the conversation, and one from another.
 	const runningTask = (taskId: string, conversationId: string) => registry.registerSpecialistTask(agentId, { taskId, conversationId, templateId: "deck", templateVersion: 1, templateLabel: "Slide deck", title: "A deck", model: MODEL, abortController: new AbortController() });
@@ -111,6 +114,7 @@ try {
 	assert(event.runtimeBoundary.closedThreadId === threadId && !("oldSessionFileRelPath" in event.runtimeBoundary), `the memento event stays, naming no transcript path, got ${JSON.stringify(event.runtimeBoundary)}`);
 	assert(fs.existsSync(path.join(runDir, "run.json")) && fs.existsSync(path.join(room, "files", "report.md")), "the run's status line and the shelf file stay");
 	assert(fs.existsSync(path.join(room, "runtime", "task-ledger", "t_other1.json")) && fs.existsSync(path.join(appDir, "artifacts", "tasks", "t_other1")), "another conversation's task stays");
+	assert(fs.existsSync(path.join(room, "runtime", "held-messages", "c_other.json")), "another conversation's held messages stay");
 	// A turn that outlived the 5 s quiesce streamed into the deleted transcript: its end erases it again.
 	plant(path.join(room, "runtime", "pi-sessions", `${threadId}.jsonl`), `{"text":"Late words about ${WORD}"}\n`);
 	agents.finishPersistentAgentTurn(agentId, threadId, { terminalReason: "completed" });
@@ -132,6 +136,14 @@ try {
 	agents.finishPersistentAgentTurn(agentId, threadId, { terminalReason: "completed" });
 	const reborn = filesHolding(REBORN);
 	assert(reborn.some((file) => file.endsWith(`pi-sessions/${threadId}.jsonl`)) && reborn.some((file) => file.endsWith(`threads/${threadId}.json`)), `an open conversation that reuses a forgotten id keeps its transcript and items, got ${JSON.stringify(reborn)}`);
+	// Deleting a conversation takes its held messages with its other files; another conversation's stay.
+	const HELD = "QUILLBRAMBLE";
+	converse(agentId, "c_deleted", HELD);
+	agents.finishPersistentAgentTurn(agentId, "c_deleted", { terminalReason: "completed" });
+	plant(path.join(room, "runtime", "held-messages", "c_deleted.json"), JSON.stringify({ schemaVersion: 1, messages: [{ id: "h3", text: `Ask about ${HELD} later.` }] }));
+	agents.deletePersistentAgentThread(agentId, "c_deleted");
+	assert(filesHolding(HELD).length === 0, `deleting a conversation removes its held messages, got ${JSON.stringify(filesHolding(HELD))}`);
+	assert(fs.existsSync(path.join(room, "runtime", "held-messages", "c_other.json")), "another conversation's held messages stay after a delete");
 	console.log("ok forget erases every store");
 
 	// --- The sweep: conversations forgotten before this release -------------------

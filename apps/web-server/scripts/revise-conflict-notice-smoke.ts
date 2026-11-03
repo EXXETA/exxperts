@@ -35,15 +35,12 @@ const storage = { persistentAgentsRoot: agentsRoot } as const;
 // ── 1. The one sentence ──────────────────────────────────────────────────────
 {
 	const sentence = notice.reviseConflictSentence({ name: "deck.html", savedAs: "deck (2).html" });
-	// The three facts a user needs: which file, that it was NOT overwritten,
-	// and where the work actually went.
+	// The facts a user needs: which file, and where the work actually went.
 	assert(sentence.includes("“deck.html”"), "the sentence names the target file");
-	assert(sentence.includes("not overwritten"), "the sentence says the overwrite was refused");
 	assert(sentence.includes("“deck (2).html”"), "the sentence says where the revision landed");
-	assert(sentence.includes("in Files"), "the sentence points at Files, the place the user can look");
 	// A conflict with nowhere to point still tells the truth it has.
 	const bare = notice.reviseConflictSentence({ name: "deck.html" });
-	assert(bare.includes("not overwritten") && !bare.includes("Files as"), "a conflict without a saved-as claims only what it knows");
+	assert(!bare.includes("Files as"), "a conflict without a saved-as claims only what it knows");
 	// A junk record must not render as a sentence about a file called "".
 	assert(notice.reviseConflictSentence({ name: "  " }).startsWith("“The file”"), "a nameless conflict degrades to a generic subject");
 	// Multi-conflict: one sentence per line, no run-on.

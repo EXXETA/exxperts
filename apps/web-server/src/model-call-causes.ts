@@ -305,7 +305,7 @@ export function classifyModelFailure(error: unknown, options: { signal?: AbortSi
  * show a line, not the notice: a consult, a specialist task, HiveMind.
  */
 export function notOnAccountLine(error: unknown, model: ModelNoticeModel, where?: NotOnAccountWayOut): string | undefined {
-	return modelNotOnAccount(failureWords(error)) ? modelNotOnAccountSentence(rememberSentenceModelName(model), model.provider, where) : undefined;
+	return modelNotOnAccount(failureWords(error)) ? modelNotOnAccountSentence(rememberSentenceModelName(model), model.provider, where, isSharedServer()) : undefined;
 }
 
 /**
@@ -524,7 +524,8 @@ export function modelUnreachableSentence(detail: UnreachableDetail, model: Model
 	const name = rememberSentenceModelName(model);
 	if (detail === "not-answering" && unreached) return `${name} ${unreachedCause(unreached)}. Nothing was lost. ${unreachedWayOn(unreached, isSharedServer())}`;
 	switch (detail) {
-		case "signed-out": return `${name} ${credentialGoneWhy(credentialGoneOf(key))}. Nothing was lost.`;
+		// On a shared server only the admin can bring the key back, and nobody signs in there.
+		case "signed-out": return `${name} ${credentialGoneWhy(credentialGoneOf(key), isSharedServer())}. Nothing was lost.${isSharedServer() ? " Tell your admin." : ""}`;
 		case "quota": {
 			const way = quotaWay ?? quotaWayOf(model.provider);
 			// A plan's reset ahead is a time of day: the page words it from the details' quotaWay, in the person's own zone and clock, never the server's.
@@ -532,7 +533,7 @@ export function modelUnreachableSentence(detail: UnreachableDetail, model: Model
 			return `${name} ${quotaCause(way)}. Nothing was lost.${wayOn ? ` ${wayOn}` : ""}`;
 		}
 		case "not-offered": return `${name} is no longer offered. Nothing was lost.`;
-		case "not-on-account": return `${name} ${notOnAccountWhy(model.provider)}. Nothing was lost.`;
+		case "not-on-account": return `${name} ${notOnAccountWhy(model.provider, isSharedServer())}. Nothing was lost.`;
 		case "region-or-plan": return `${name} ${REGION_OR_PLAN_CAUSE}. Nothing was lost.`;
 		case "gateway-refused": return `${name} ${GATEWAY_REFUSED_CAUSE}. Nothing was lost.${isSharedServer() ? ` ${gatewayRefusedWayOn(true)}.` : ""}`;
 		case "gateway-not-found": {
@@ -579,6 +580,10 @@ export const PATIENCE_STALL_RETRIES = 2;
 export const PATIENCE_TIMEOUT_RETRIES = 1;
 /** The short pause before a stalled or timed-out call is asked again. */
 export const PATIENCE_RETRY_PAUSE_MS = 2_000;
+// Test-only (EXXPERTS_TEST_PATIENCE_WAIT_MS): every wait of the patience lasts
+// this many milliseconds, so a smoke through the real server does not sit out
+// 15 s; the schedule itself is proved on a fake clock. Unset in normal use.
+const TEST_PATIENCE_WAIT_MS = Number(process.env.EXXPERTS_TEST_PATIENCE_WAIT_MS) > 0 ? Number(process.env.EXXPERTS_TEST_PATIENCE_WAIT_MS) : undefined;
 
 /** What a screen shows while a call is waited out: busy, or not reached yet (a first call that could not connect, before the probe), which try comes next, and when. */
 export interface PatienceWait {
@@ -814,7 +819,7 @@ export async function callWithPatience<T>(call: () => Promise<T>, options: Patie
 			// the notice; an answer makes it a blip, waited out as busy from the next try.
 			const connectProbe = options.connectProbe ?? options.probe;
 			if (calls === 1 && connectProbe && connectionNeverOpened(failureWords(error))) {
-				const ms = PATIENCE_WAITS_MS[0]!;
+				const ms = TEST_PATIENCE_WAIT_MS ?? PATIENCE_WAITS_MS[0]!;
 				retries.set("busy", 1);
 				waited = true;
 				options.onWait?.({ cause: "unreached", detail: failure.detail, attempt: 2, nextTryAt: new Date(now().getTime() + ms).toISOString() });
@@ -852,7 +857,7 @@ export async function callWithPatience<T>(call: () => Promise<T>, options: Patie
 			const used = retries.get(budget) ?? 0;
 			if (used < retriesAllowed(budget)) {
 				retries.set(budget, used + 1);
-				const ms = busyWaitMs(failure, used);
+				const ms = TEST_PATIENCE_WAIT_MS ?? busyWaitMs(failure, used);
 				waited = true;
 				options.onWait?.({ cause: "busy", detail: failure.detail, attempt: calls + 1, nextTryAt: new Date(now().getTime() + ms).toISOString(), ...(busySaid ? { again: true as const } : {}), ...(failure.detail === "server-error" ? { provider: providerNameOf(options.model.provider) } : {}) });
 				if (budget === "busy" && failure.detail !== "connection") busySaid = true;

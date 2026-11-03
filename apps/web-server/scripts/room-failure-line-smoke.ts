@@ -6,8 +6,8 @@
 //   the balance line, and any other 400 the plain "could not answer" line;
 //   neither shows the provider's JSON or sign-in advice; the provider's
 //   words go to the console, and its sentence, keys masked, to a closed Details;
-// - the line is a row on the answers' left edge: a red mark, the cause in
-//   bold, the rest under it, a button for each way on that can work (the
+// - the line is a row: the cause, the rest under it, a button for each way
+//   on that can work (the
 //   words then leave out the place the button opens), and "Show details",
 //   which opens the provider's words under "From Anthropic";
 // - Try again sends what is in the box;
@@ -43,8 +43,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
+import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { chromium, type Locator } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -122,7 +124,9 @@ function scripted(lastUserText: string): { status: number; body: unknown } | "dr
 
 function lastUserText(body: any): string {
 	const messages = Array.isArray(body?.messages) ? body.messages : [];
-	const last = [...messages].reverse().find((message: any) => message?.role === "user");
+	// A room-state copy sent as user text after the person's message (a model off the system-message list) is the app's, not the message.
+	const textOf = (content: unknown) => (typeof content === "string" ? content : Array.isArray(content) ? content.map((part: any) => (typeof part?.text === "string" ? part.text : "")).join("") : "");
+	const last = [...messages].reverse().find((message: any) => message?.role === "user" && !textOf(message.content).startsWith(ROOM_STATE_HEADING));
 	const content = last?.content;
 	if (typeof content === "string") return content;
 	return Array.isArray(content) ? content.map((part: any) => (typeof part?.text === "string" ? part.text : "")).join("") : "";
@@ -172,14 +176,7 @@ const endpoint = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(150);
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -192,10 +189,13 @@ try {
 		[SMALL_PROVIDER]: { name: "Small Provider", baseUrl: endpointUrl, api: "anthropic-messages", models: [{ id: ON_SMALL.model, name: "Small Model", input: ["text"], contextWindow: SMALL_WINDOW, maxTokens: 4000, cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } }] },
 	} }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ [KEY_PROVIDER]: { type: "api_key", key: "synthetic-anthropic-key" }, [SMALL_PROVIDER]: { type: "api_key", key: "synthetic-small-key" } }, null, 2), { mode: 0o600 });
-	// Short waits between the runtime's own retries, so the smoke does not sit
-	// through 2, 4 and 8 seconds, and no SDK retries under them, so each runtime
-	// attempt is one request.
-	fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ retry: { baseDelayMs: 1000, provider: { maxRetries: 0 } } }, null, 2), { mode: 0o600 });
+	// The runtime waits 2, 4 and 8 seconds between its own retries by default. A
+	// room's connection reads its waits when it opens: scenes that only wait a
+	// retry out run on waits of 50 ms; a scene that looks at the retry note opens
+	// the room on waits of 1, 2 and 4 seconds first. No SDK retries under them, so
+	// each runtime attempt is one request.
+	const retryWaits = (baseDelayMs: number) => fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ retry: { baseDelayMs, provider: { maxRetries: 0 } } }, null, 2), { mode: 0o600 });
+	retryWaits(50);
 	const agents = await import("../src/persistent-agents.js");
 	const agentId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Failure Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 	// A remembered conversation in the room's memory, so Review has something to open on.
@@ -257,14 +257,23 @@ try {
 		// In the page's own order: each retry frame as it arrives, before the page reads it, and each failure line mounted in full (an older line folding is not a new one).
 		await page.addInitScript({ content: 'window.__turnLog = []; var Socket = window.WebSocket; window.WebSocket = class extends Socket { constructor(a, b) { super(a, b); this.addEventListener("message", function (e) { try { var d = JSON.parse(String(e.data)); if (d && d.event && d.event.type === "auto_retry_start") window.__turnLog.push({ retry: true }); } catch (x) {} }); } }; var seen = new WeakSet(); new MutationObserver(function () { document.querySelectorAll(".failure-line").forEach(function (el) { if (!seen.has(el)) { seen.add(el); if (!el.classList.contains("is-folded")) window.__turnLog.push({ line: el.innerText.replace(/\\s+/g, " ").trim().slice(0, 120) }); } }); }).observe(document, { childList: true, subtree: true });' });
 		const warnings: string[] = [];
-		// Every retry frame the page receives, on every socket it opens.
+		// Every retry frame the page receives, and the text of every prompt it sends, on every socket it opens.
 		const retryFrames: any[] = [];
-		page.on("websocket", (socket) => socket.on("framereceived", (frame) => {
-			try {
-				const data = JSON.parse(String(frame.payload));
-				if (data?.event?.type === "auto_retry_start") retryFrames.push(data.event);
-			} catch {}
-		}));
+		const promptsSent: string[] = [];
+		page.on("websocket", (socket) => {
+			socket.on("framereceived", (frame) => {
+				try {
+					const data = JSON.parse(String(frame.payload));
+					if (data?.event?.type === "auto_retry_start") retryFrames.push(data.event);
+				} catch {}
+			});
+			socket.on("framesent", (frame) => {
+				try {
+					const data = JSON.parse(String(frame.payload));
+					if (data?.type === "prompt") promptsSent.push(String(data.text));
+				} catch {}
+			});
+		});
 		page.on("console", (message) => { if (message.type() === "warning") warnings.push(message.text()); });
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await page.waitForLoadState("networkidle");
@@ -312,7 +321,7 @@ try {
 		};
 
 		// The saved raw line shows as the plain line, folded under the saved overflow line, the newest.
-		await page.locator(".persistent-agent-card").filter({ hasText: "Failure Room" }).getByRole("button", { name: "Resume →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Failure Room" }).getByRole("button", { name: "Resume" }).click();
 		await page.getByText("Earlier question.").first().waitFor({ timeout: 15000 });
 		// Folded, the saved line shows its cause; it never said which model failed.
 		await waitUntil(async () => (await errorTexts()).includes("The model could not answer this message."), `the saved raw line shows as the plain line, folded to its cause, got ${JSON.stringify(await errorTexts())}`, 10000);
@@ -328,15 +337,31 @@ try {
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		const settled = () => waitUntil(async () => (await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/status`)).json())?.activeThread?.inFlight === false, "the turn settled", 30000);
+		// Send keeps its title while the room cannot take a message yet (its link not live, a turn or a model change still pending),
+		// and Enter then does nothing: the message goes once Send is enabled, and counts as sent once the page put it on the socket.
+		const sendButton = page.locator('button[title="Send"]').first();
 		const send = async (text: string) => {
 			await composer.fill(text);
+			await waitUntil(() => sendButton.isEnabled(), `Send is enabled for ${JSON.stringify(text.slice(0, 60))}`, 15000);
+			const promptsBefore = promptsSent.length;
 			await composer.press("Enter");
+			await waitUntil(() => promptsSent.slice(promptsBefore).some((sent) => sent.endsWith(text.trim())), `the page sends ${JSON.stringify(text.slice(0, 60))}`, 10000);
+		};
+		// Opens the room again from its card on the waits just written, with the lines it showed before.
+		const reopen = async (baseDelayMs: number) => {
+			retryWaits(baseDelayMs);
+			const shown = (await errorTexts()).length;
+			await page.goto(`${baseUrl}/`);
+			await page.waitForLoadState("networkidle");
+			await page.locator(".persistent-agent-card").filter({ hasText: "Failure Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
+			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
+			await waitUntil(async () => (await errorTexts()).length === shown, `the room shows its ${shown} lines again, got ${JSON.stringify(await errorTexts())}`, 10000);
 		};
 
 		// A spent credit balance on a Claude API key.
 		const linesBefore = (await errorTexts()).length;
 		await send("A question with no credit left.");
-		const quotaLine = `${MODEL_NAME} has reached its usage limit or run out of credit. Your message is back in the box. Check the balance at console.anthropic.com, or choose another model.`;
+		const quotaLine = `${MODEL_NAME} has reached its usage limit or run out of credit. Check the balance at console.anthropic.com, or choose another model.`;
 		await waitUntil(async () => (await errorTexts()).length > linesBefore, "the credit failure shows a line");
 		await settled();
 		await waitUntil(async () => (await errorTexts()).at(-1) === quotaLine, `a spent credit balance shows the usage-limit line with the balance line, and the button for another model in place of where it is, got ${JSON.stringify((await errorTexts()).at(-1))}`, 10000);
@@ -344,35 +369,10 @@ try {
 		assert(warnings.some((text) => text.includes("credit balance is too low")), `the provider's words go to the console, got ${JSON.stringify(warnings)}`);
 		console.log("  ok  a spent credit balance shows the usage-limit line and the balance line; the provider's words go to the console");
 
-		// The row: on the answers' left edge, a red mark, the cause in bold, the rest under it.
+		// The row: the cause, then the rest.
 		assert((await newest().count()) === 1, `one newest line, got ${await newest().count()}`);
-		assert((await newest().locator(":scope > .failure-mark[aria-hidden='true']").count()) === 1, "the line starts with a mark, hidden from screen readers");
 		assert((await newest().locator(".failure-cause").innerText()).trim() === `${MODEL_NAME} has reached its usage limit or run out of credit.`, `the cause comes first, got ${JSON.stringify(await newest().locator(".failure-cause").innerText())}`);
-		assert((await newest().locator(".failure-next").innerText()).trim() === "Your message is back in the box. Check the balance at console.anthropic.com, or choose another model.", `then where the message is and the way on, got ${JSON.stringify(await newest().locator(".failure-next").innerText())}`);
-		// No named functions inside: the page cannot run the helper the smoke's compiler wraps them in.
-		const layout = await page.evaluate(() => {
-			const row = document.querySelector(".failure-line:not(.is-folded)")!;
-			const mark = row.querySelector(".failure-mark")!;
-			const cause = getComputedStyle(row.querySelector(".failure-cause")!);
-			return {
-				markLeft: mark.getBoundingClientRect().left,
-				railLeft: document.querySelector(".bubble-row")!.getBoundingClientRect().left,
-				bodyRight: row.querySelector(".failure-body")!.getBoundingClientRect().right,
-				align: getComputedStyle(row).textAlign,
-				causeWeight: Number(cause.fontWeight),
-				causeSize: cause.fontSize,
-				nextSize: getComputedStyle(row.querySelector(".failure-next")!).fontSize,
-				markFill: getComputedStyle(mark).backgroundColor,
-				causeWrap: cause.textWrapStyle,
-				nextWrap: getComputedStyle(row.querySelector(".failure-next")!).textWrapStyle,
-			};
-		});
-		assert(Math.abs(layout.markLeft - layout.railLeft) <= 1, `the row starts on the answers' left edge, got the mark at ${layout.markLeft} and the column at ${layout.railLeft}`);
-		assert(layout.bodyRight - layout.railLeft <= 702, `the row is at most about 700px wide, got ${layout.bodyRight - layout.railLeft}`);
-		assert(/^(left|start)$/.test(layout.align), `the row is never centred, got ${layout.align}`);
-		assert(layout.causeWeight >= 600 && layout.causeSize === "14px" && layout.nextSize === "14px", `the cause is semi-bold at 14px and the rest 14px, got ${JSON.stringify(layout)}`);
-		assert(layout.markFill !== "rgba(0, 0, 0, 0)", `the newest line's mark is filled, got ${layout.markFill}`);
-		assert(layout.causeWrap === "pretty" && layout.nextWrap === "pretty", `the cause and the rest wrap with no word left alone on their last line, got ${layout.causeWrap} and ${layout.nextWrap}`);
+		assert((await newest().locator(".failure-next").innerText()).trim() === "Check the balance at console.anthropic.com, or choose another model.", `then where the message is and the way on, got ${JSON.stringify(await newest().locator(".failure-next").innerText())}`);
 		// One button: Try again cannot help with credit; the words name the balance, and the button the other way on.
 		assert((await buttonsOf(newest())) === "Choose another model", `credit offers only Choose another model, got ${JSON.stringify(await buttonsOf(newest()))}`);
 		// Details: a button, closed, that opens the provider's own words under its name.
@@ -381,17 +381,17 @@ try {
 		assert(creditDetails.from === "From Anthropic", `the words are headed with the provider's name, got ${JSON.stringify(creditDetails.from)}`);
 		assert(creditDetails.words === CREDIT_WORDS, `Details holds the provider's sentence, without its JSON, got ${JSON.stringify(creditDetails.words)}`);
 		await newest().getByRole("button", { name: "Choose another model" }).click();
-		await page.locator(".room-model-section").waitFor({ timeout: 10000 });
+		await page.getByRole("dialog", { name: "Model and effort" }).waitFor({ timeout: 10000 });
 		await page.keyboard.press("Escape");
-		await page.locator(".room-model-section").waitFor({ state: "detached", timeout: 10000 });
-		console.log("  ok  the line is a row on the answers' edge: a mark, the cause, then the rest, one button for the way on, and the provider's words under Show details");
+		await page.getByRole("dialog", { name: "Model and effort" }).waitFor({ state: "detached", timeout: 10000 });
+		console.log("  ok  the line is a row: the cause, then the rest, one button for the way on, and the provider's words under Show details");
 
 		// Any other 400.
 		await composer.fill("");
 		await send("An odd request, please.");
 		await waitUntil(async () => (await errorTexts()).length > linesBefore + 1, "the odd request shows a line");
 		await settled();
-		const plainOther = `${MODEL_NAME} could not answer this message. Your message is back in the box. Try again; if it repeats, choose another model.`;
+		const plainOther = `${MODEL_NAME} could not answer this message. Try again; if it repeats, choose another model.`;
 		await waitUntil(async () => (await errorTexts()).at(-1) === plainOther, `any other failure shows the plain line, got ${JSON.stringify((await errorTexts()).at(-1))}`, 10000);
 		await noRawWords("any other failure");
 		assert((await buttonsOf(newest())) === "Try again|Choose another model", `any other failure offers Try again and Choose another model, got ${JSON.stringify(await buttonsOf(newest()))}`);
@@ -401,7 +401,6 @@ try {
 		const creditFolded = page.locator(".failure-line.is-folded", { hasText: `${MODEL_NAME} has reached its usage limit or run out of credit.` });
 		assert((await creditFolded.count()) === 1, `the credit line folds once another failure follows, got ${await creditFolded.count()}`);
 		assert((await creditFolded.locator(".system-line-text").innerText()).trim() === `${MODEL_NAME} has reached its usage limit or run out of credit.` && (await creditFolded.locator(".rs-btn").count()) === 0, `a folded line shows only its cause, with no buttons, got ${JSON.stringify(await creditFolded.innerText())}`);
-		assert((await creditFolded.locator(":scope > .failure-mark").evaluate((mark) => getComputedStyle(mark).backgroundColor)) === "rgba(0, 0, 0, 0)", "a folded line's mark is hollow");
 		const foldedDetails = await openDetails(creditFolded);
 		assert(foldedDetails?.closed.label === "Details" && foldedDetails.words === CREDIT_WORDS && foldedDetails.from === "From Anthropic", `a folded line keeps its Details, got ${JSON.stringify(foldedDetails)}`);
 		console.log("  ok  the next failure folds the first to its cause, without buttons, and its Details stay");
@@ -434,7 +433,7 @@ try {
 		await send("Always dropped, sorry.");
 		await waitUntil(async () => (await errorTexts()).length > linesBeforeDrop, "the dropped connection shows a line", 30000);
 		await settled();
-		assert((await errorTexts()).at(-1) === `${MODEL_NAME} could not be reached on this computer. Your message is back in the box. Check that the app running it is open, then try again.`, `a connection that never reached the provider on this computer says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
+		assert((await errorTexts()).at(-1) === `${MODEL_NAME} could not be reached on this computer. Check that the app running it is open, then try again.`, `a connection that never reached the provider on this computer says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		await noRawWords("a dropped connection");
 		assert((await buttonsOf(newest())) === "Try again", `a connection that may come back offers Try again, got ${JSON.stringify(await buttonsOf(newest()))}`);
 		assert((await newest().locator(".failure-details-toggle").count()) === 0, `no connection was made, so no Details, got ${JSON.stringify(await newest().innerText())}`);
@@ -442,6 +441,7 @@ try {
 
 		// The retry notes say what happened, and a retried attempt draws no line.
 		await composer.fill("");
+		await reopen(1000);
 		await turnLog();
 		await send("A server error once, then an answer.");
 		await page.getByText(`${MODEL_NAME} hit an error at its provider. Trying again…`).waitFor({ timeout: 15000 });
@@ -463,34 +463,11 @@ try {
 		await page.getByText(`${MODEL_NAME} is busy. Trying again…`).waitFor({ timeout: 15000 });
 		await waitUntil(async () => (await errorTexts()).length > linesBeforeBusy, "the busy failure shows a line", 30000);
 		await settled();
-		assert((await errorTexts()).at(-1) === `${MODEL_NAME} is still busy after several tries. Your message is back in the box. Try again in a minute.`, `a model busy after the retries says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
+		assert((await errorTexts()).at(-1) === `${MODEL_NAME} is still busy after several tries. Try again in a minute.`, `a model busy after the retries says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		assert((await page.getByText(/Trying again…|Retrying…/).count()) === 0, "the retry note is gone once the retries end");
 		await noRawWords("busy after the retries");
 		linesOnlyAtTheEnd(await turnLog(), "busy through every retry", `${MODEL_NAME} is still busy after several tries.`);
 		console.log("  ok  while retrying, the note says the model is busy; after the retries, the line says it is still busy");
-
-		// An error at the provider through every retry: Try again and Choose another model, and Try again sends what is in the box.
-		await composer.fill("");
-		const linesBeforeServer = (await errorTexts()).length;
-		await turnLog();
-		await send("A server error until healed, please.");
-		await waitUntil(async () => (await errorTexts()).length > linesBeforeServer, "the server error shows a line", 40000);
-		await settled();
-		linesOnlyAtTheEnd(await turnLog(), "a server error through every retry", `${MODEL_NAME} could not answer this message.`);
-		await waitUntil(async () => (await composer.inputValue()) === "A server error until healed, please.", `the message is back in the box, got ${JSON.stringify(await composer.inputValue())}`, 10000);
-		assert((await errorTexts()).at(-1) === `${MODEL_NAME} could not answer this message. Your message is back in the box. Try again; if it repeats, choose another model.`, `an error at the provider says the model could not answer, got ${JSON.stringify((await errorTexts()).at(-1))}`);
-		assert((await buttonsOf(newest())) === "Try again|Choose another model", `a server error offers Try again and Choose another model, got ${JSON.stringify(await buttonsOf(newest()))}`);
-		healed = true;
-		await composer.fill("A server error until healed, asked again.");
-		const sentBefore = sentTexts.length;
-		const answersBefore = await page.getByText("Answer from claude-haiku-5-5.").count();
-		await newest().getByRole("button", { name: "Try again" }).click();
-		await waitUntil(() => sentTexts.slice(sentBefore).includes("A server error until healed, asked again."), `Try again sends what is in the box, got ${JSON.stringify(sentTexts.slice(sentBefore))}`, 15000);
-		await waitUntil(async () => (await page.getByText("Answer from claude-haiku-5-5.").count()) > answersBefore, "the message sent again is answered", 20000);
-		await settled();
-		assert((await composer.inputValue()) === "", `the box is empty once its text is sent, got ${JSON.stringify(await composer.inputValue())}`);
-		assert((await newest().count()) === 0, "with the answer after it, the line folds");
-		console.log("  ok  a server error offers Try again and Choose another model; Try again sends what is in the box");
 
 		// A page that comes back while the runtime retries names the model from the retry itself.
 		await send("Busy for a while, then an answer.");
@@ -505,6 +482,30 @@ try {
 		assert(retryFrames.length > 0 && retryFrames.every((frame) => frame.model?.provider === "anthropic-api-key" && frame.model?.model === "claude-haiku-5-5"), `every retry frame carries the model it retries, got ${JSON.stringify(retryFrames.map((frame) => frame.model ?? null))}`);
 		console.log("  ok  a reload mid-retry: the note still names the model, which every retry frame carries");
 
+		// An error at the provider through every retry: Try again and Choose another model, and Try again sends what is in the box.
+		await reopen(50);
+		await composer.fill("");
+		const linesBeforeServer = (await errorTexts()).length;
+		await turnLog();
+		await send("A server error until healed, please.");
+		await waitUntil(async () => (await errorTexts()).length > linesBeforeServer, "the server error shows a line", 40000);
+		await settled();
+		linesOnlyAtTheEnd(await turnLog(), "a server error through every retry", `${MODEL_NAME} could not answer this message.`);
+		await waitUntil(async () => (await composer.inputValue()) === "A server error until healed, please.", `the message is back in the box, got ${JSON.stringify(await composer.inputValue())}`, 10000);
+		assert((await errorTexts()).at(-1) === `${MODEL_NAME} could not answer this message. Try again; if it repeats, choose another model.`, `an error at the provider says the model could not answer, got ${JSON.stringify((await errorTexts()).at(-1))}`);
+		assert((await buttonsOf(newest())) === "Try again|Choose another model", `a server error offers Try again and Choose another model, got ${JSON.stringify(await buttonsOf(newest()))}`);
+		healed = true;
+		await composer.fill("A server error until healed, asked again.");
+		const sentBefore = sentTexts.length;
+		const answersBefore = await page.getByText("Answer from claude-haiku-5-5.").count();
+		await newest().getByRole("button", { name: "Try again" }).click();
+		await waitUntil(() => sentTexts.slice(sentBefore).includes("A server error until healed, asked again."), `Try again sends what is in the box, got ${JSON.stringify(sentTexts.slice(sentBefore))}`, 15000);
+		await waitUntil(async () => (await page.getByText("Answer from claude-haiku-5-5.").count()) > answersBefore, "the message sent again is answered", 20000);
+		await settled();
+		assert((await composer.inputValue()) === "", `the box is empty once its text is sent, got ${JSON.stringify(await composer.inputValue())}`);
+		assert((await newest().count()) === 0, "with the answer after it, the line folds");
+		console.log("  ok  a server error offers Try again and Choose another model; Try again sends what is in the box");
+
 		// The two lines for too much at once, each checked to the end so every miss is named.
 		const sizeFailures: string[] = [];
 		const expect = (condition: unknown, message: string) => { if (!condition) sizeFailures.push(message); };
@@ -514,7 +515,7 @@ try {
 		const stateAfterReload = await composerState();
 		await page.goto(`${baseUrl}/`);
 		await page.waitForLoadState("networkidle");
-		await page.locator(".persistent-agent-card").filter({ hasText: "Failure Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Failure Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
 		await composer.fill("");
@@ -522,7 +523,7 @@ try {
 		await send("Too much to read at once, with memory.");
 		await waitUntil(async () => (await errorTexts()).length > linesBeforeOverflow, `the overflow shows a line (the room after the reload: ${stateAfterReload}; now ${await composerState()})`);
 		await settled();
-		const overflowShown = `${MODEL_NAME} can't read this conversation and the room's memory at once. Your message is back in the box. Shrink memory with Review, or continue on a model that can read more at once.`;
+		const overflowShown = `${MODEL_NAME} can't read this conversation and the room's memory at once. Shrink memory with Review, or continue on a model that can read more at once.`;
 		await waitUntil(async () => (await errorTexts()).at(-1) === overflowShown, "the overflow line", 10000).catch(() => {});
 		expect((await errorTexts()).at(-1) === overflowShown, `the overflow line names memory and Review, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		expect((await buttonsOf(newest())) === "Review memory|Choose another model", `an overflow offers Review memory and Choose another model, got ${JSON.stringify(await buttonsOf(newest()))}`);
@@ -539,16 +540,15 @@ try {
 		// A message larger than the model's whole window by itself: shrinking memory cannot help, so the line says so.
 		await page.goto(`${baseUrl}/`);
 		await page.waitForLoadState("networkidle");
-		await page.locator(".persistent-agent-card").filter({ hasText: "Small Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Small Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
 		// About 35,000 tokens by the app's estimate, over the small model's 32,000.
 		const huge = `Too much to read at once, pasted. ${"A long pasted line of notes. ".repeat(4900)}`;
-		await composer.fill(huge);
-		await composer.press("Enter");
+		await send(huge);
 		await waitUntil(async () => (await errorTexts()).length > 0, "the large message shows a line", 30000);
 		await waitUntil(async () => (await (await authedFetch(`${baseUrl}/api/persistent-agents/${smallRoomId}/status`)).json())?.activeThread?.inFlight === false, "the small room's turn settled", 30000);
-		const overWindowShown = "Small Model can't read this message at once. Your message is back in the box. Shorten it, or continue on a model that can read more at once.";
+		const overWindowShown = "Small Model can't read this message at once. Shorten it, or continue on a model that can read more at once.";
 		await waitUntil(async () => (await errorTexts()).at(-1) === overWindowShown, "the large message's line", 10000).catch(() => {});
 		expect((await errorTexts()).at(-1) === overWindowShown, `a message over the window by itself says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		expect((await buttonsOf(newest())) === "Choose another model", `a message over the window offers Choose another model only, got ${JSON.stringify(await buttonsOf(newest()))}`);
@@ -571,14 +571,14 @@ try {
 		// An overflow in a room with nothing in memory yet, the message short: no memory advice and no Review, which has nothing there to shrink.
 		await page.goto(`${baseUrl}/`);
 		await page.waitForLoadState("networkidle");
-		await page.locator(".persistent-agent-card").filter({ hasText: "New Room" }).getByRole("button", { name: /^(Enter|Resume|Start) →$/ }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "New Room" }).getByRole("button", { name: /^(Enter|Resume|Start)$/ }).click();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
 		await composer.fill("");
 		await send("Too much to read at once, in a new room.");
 		await waitUntil(async () => (await errorTexts()).length > 0, "the new room's overflow shows a line", 30000);
 		await waitUntil(async () => (await (await authedFetch(`${baseUrl}/api/persistent-agents/${newRoomId}/status`)).json())?.activeThread?.inFlight === false, "the new room's turn settled", 30000);
-		const newRoomShown = `${MODEL_NAME} can't read this conversation at once. Your message is back in the box. Continue on a model that can read more at once.`;
+		const newRoomShown = `${MODEL_NAME} can't read this conversation at once. Continue on a model that can read more at once.`;
 		await waitUntil(async () => (await errorTexts()).at(-1) === newRoomShown, "the new room's line", 10000).catch(() => {});
 		expect((await errorTexts()).at(-1) === newRoomShown, `an overflow in a room with nothing in memory, the message short, names the conversation, not memory or the message, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		expect((await buttonsOf(newest())) === "Choose another model", `an overflow in a room with nothing in memory offers Choose another model only, got ${JSON.stringify(await buttonsOf(newest()))}`);
@@ -586,14 +586,14 @@ try {
 		// A gateway's model that reads less than the window set for it in AI setup, in a room with memory: the number is the cause.
 		await page.goto(`${baseUrl}/`);
 		await page.waitForLoadState("networkidle");
-		await page.locator(".persistent-agent-card").filter({ hasText: "Gateway Room" }).getByRole("button", { name: /^(Enter|Resume|Start) →$/ }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Gateway Room" }).getByRole("button", { name: /^(Enter|Resume|Start)$/ }).click();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
 		await composer.fill("");
 		await send("A question this model reads less of.");
 		await waitUntil(async () => (await errorTexts()).length > 0, "the gateway room's overflow shows a line", 30000);
 		await waitUntil(async () => (await (await authedFetch(`${baseUrl}/api/persistent-agents/${gatewayRoomId}/status`)).json())?.activeThread?.inFlight === false, "the gateway room's turn settled", 30000);
-		const readsLess = /^(.+) can read only 8,192 tokens at once, less than the context window set in AI setup \(32,768\)\. Your message is back in the box\. Correct it in AI setup, or choose another model\.$/;
+		const readsLess = /^(.+) can read only 8,192 tokens at once, less than the context window set in AI setup \(32,768\)\. Correct it in AI setup, or choose another model\.$/;
 		await waitUntil(async () => readsLess.test((await errorTexts()).at(-1) ?? ""), "the gateway room's line", 10000).catch(() => {});
 		expect(readsLess.test((await errorTexts()).at(-1) ?? ""), `a gateway's model that reads less than its window in AI setup says so, before memory, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		expect((await buttonsOf(newest())) === "Choose another model", `a model that reads less than its window offers Choose another model only, got ${JSON.stringify(await buttonsOf(newest()))}`);
@@ -605,21 +605,22 @@ try {
 		console.log("  ok  so does a short message whose text file is larger than the window; an overflow in a room with nothing in memory names the conversation");
 		console.log("  ok  a gateway's model that reads less than the window set in AI setup names both numbers, before memory, with Choose another model");
 		assert(retryLineFailures.length === 0, `a retried attempt drew a line:\n  ${retryLineFailures.join("\n  ")}`);
+		assert(retryFrames.every((frame) => frame.model?.provider === "anthropic-api-key" && frame.model?.model === "claude-haiku-5-5"), `every retry frame of the run carries the model it retries, got ${JSON.stringify(retryFrames.map((frame) => frame.model ?? null))}`);
 		console.log("  ok  an attempt the runtime asks again draws no failure line; the attempt that ends the turn does");
 		await ctx.close();
 
 		// A saved gateway's bare 404: the line says what the gateway's list found, on this computer and then on a shared server.
 		const NOT_FOUND_LINES = {
-			gone: ["Gone gateway no longer has Acme Reader. Your message is back in the box. Choose one of its current models.", "Choose another model"],
-			address: ["Address gateway isn't answering at its saved address. Your message is back in the box. Check the address.", "Open AI setup"],
-			listed: ["Listed gateway lists Acme Reader but couldn't run it. Your message is back in the box. Try again later, or tell whoever runs the gateway.", "Try again"],
-			unread: ["Unread gateway could not find Acme Reader. Your message is back in the box. Check the gateway.", "Open AI setup"],
+			gone: ["Gone gateway no longer has Acme Reader. Choose one of its current models.", "Choose another model"],
+			address: ["Address gateway isn't answering at its saved address. Check the address.", "Open AI setup"],
+			listed: ["Listed gateway lists Acme Reader but couldn't run it. Try again later, or tell whoever runs the gateway.", "Try again"],
+			unread: ["Unread gateway could not find Acme Reader. Check the gateway.", "Open AI setup"],
 		};
 		const NOT_FOUND_SHARED = {
-			gone: ["Gone gateway no longer has Acme Reader. Your message is back in the box. Choose one of its current models, or tell your admin.", "Choose another model"],
-			address: ["Address gateway isn't answering at its saved address. Your message is back in the box. Tell your admin.", ""],
-			listed: ["Listed gateway lists Acme Reader but couldn't run it. Your message is back in the box. Try again later, or tell your admin.", "Try again"],
-			unread: ["Unread gateway could not find Acme Reader. Your message is back in the box. Tell your admin.", ""],
+			gone: ["Gone gateway no longer has Acme Reader. Choose one of its current models, or tell your admin.", "Choose another model"],
+			address: ["Address gateway isn't answering at its saved address. Tell your admin.", ""],
+			listed: ["Listed gateway lists Acme Reader but couldn't run it. Try again later, or tell your admin.", "Try again"],
+			unread: ["Unread gateway could not find Acme Reader. Tell your admin.", ""],
 		};
 		const notFoundFailures: string[] = [];
 		const framesSeen: string[] = [];
@@ -640,7 +641,7 @@ try {
 				const [line, buttons] = (shared ? NOT_FOUND_SHARED : NOT_FOUND_LINES)[kind];
 				await notFoundPage.goto(`${baseUrl}/`);
 				await notFoundPage.waitForLoadState("networkidle");
-				await notFoundPage.locator(".persistent-agent-card").filter({ hasText: `Not Found ${kind} Room` }).getByRole("button", { name: /^(Enter|Resume|Start) →$/ }).click();
+				await notFoundPage.locator(".persistent-agent-card").filter({ hasText: `Not Found ${kind} Room` }).getByRole("button", { name: /^(Enter|Resume|Start)$/ }).click();
 				await notFoundPage.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 				await notFoundPage.waitForTimeout(800);
 				const box = notFoundPage.locator("textarea").first();
@@ -664,7 +665,8 @@ try {
 		// Only the outcome and the room's model travel: none of the gateway's words, and never its list.
 		if (framesSeen.some((frame) => frame.includes("internal-route") || frame.includes("Shh") || frame.includes("another-reader"))) notFoundFailures.push("a frame carried the gateway's own words or its list");
 		const findFrames = framesSeen.map((frame) => { try { return JSON.parse(frame); } catch { return null; } }).filter((frame) => frame?.type === "gateway_not_found");
-		if (findFrames.length < NOT_FOUND_KINDS.length * 2 || findFrames.some((frame) => JSON.stringify(Object.keys(frame).sort()) !== JSON.stringify(["find", "model", "type"]))) notFoundFailures.push(`each failure's look is one frame with the outcome and the model only, got ${JSON.stringify(findFrames)}`);
+		// seq is the turn frame's own number, not the gateway's.
+		if (findFrames.length < NOT_FOUND_KINDS.length * 2 || findFrames.some((frame) => JSON.stringify(Object.keys(frame).filter((key) => key !== "seq").sort()) !== JSON.stringify(["find", "model", "type"]))) notFoundFailures.push(`each failure's look is one frame with the outcome and the model only, got ${JSON.stringify(findFrames)}`);
 		assert(notFoundFailures.length === 0, `a saved gateway's bare 404:\n  ${notFoundFailures.join("\n  ")}`);
 		console.log("  ok  a saved gateway's bare 404 says what its model list found, with its button, on this computer and on a shared server; two failures read the list once; none of the gateway's words reach the page");
 	} finally {

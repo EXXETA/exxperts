@@ -239,13 +239,8 @@ export function startSearxngSetup(repoRoot: string, command: Run["command"] = "s
 		current = null;
 		return last;
 	}
-	// EXXPERTS_SETUP stays unset on purpose: it only changes which command name
-	// the helper prints at people, and nothing here shows them a command.
-	const env = { ...process.env };
-	delete env.EXXPERTS_SETUP;
 	const child = spawn(process.execPath, [script, command], {
 		cwd: repoRoot,
-		env,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	const run: Run = { child, command, phase: "checking-docker", baseUrl: null, message: null, output: [] };

@@ -5,7 +5,15 @@
 // resolved command card says what the person decided; the captions and the
 // closed card stay readable; a step that did not run names its state, and a
 // failed one what went wrong; an opened step says its reason once, as a plain
-// line; a refusal reads calm and apart from a failure; a declined command is
+// line; a finished card of one step opens straight to what the step shows,
+// and one with nothing to show does not open; a command that chains several
+// things is named by itself in code wherever its step shows, and its question
+// reads one line whole and a script, or a clipped command, by its first line
+// over the server's text; a question shows no Details for a command (a
+// specialist's keeps them), a command's box of six whole lines, and its
+// answers under everything at the right; at phone width a folded card's
+// sentence takes a second line, and a folded turn is the same card; a
+// refusal reads calm and apart from a failure; a declined command is
 // said once on the screen; a screen reader hears each step's state in words;
 // and a running command counts on from when it began, after a reload too,
 // even with the browser's clock ahead of the server's.
@@ -19,6 +27,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
 import { STOP_QUESTIONS_SENTENCE } from "../src/server-stop.js";
+import { STOPPED_BEFORE_ANSWER_SENTENCE } from "../src/turn-ended-by.js";
+import { readPageStyles } from "./page-styles.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -37,6 +47,7 @@ const { renderToStaticMarkup } = pageRequire("react-dom/server");
 // Page components (.tsx): loaded at run time, as the server build compiles scripts without JSX.
 const message: any = await import(new URL("../../web-ui/src/components/Message.tsx", import.meta.url).href);
 const approval: any = await import(new URL("../../web-ui/src/components/Approval.tsx", import.meta.url).href);
+const workCard: any = await import(new URL("../../web-ui/src/components/work-card.tsx", import.meta.url).href);
 
 const chip = (item: Record<string, unknown>, props: Record<string, unknown> = {}): string => renderToStaticMarkup(createElement(message.Message, { item: { kind: "tool", id: "t1", args: {}, ...item }, ...props }));
 const chipName = (html: string) => /<span class="name">([^<]*)<\/span>/.exec(html)?.[1] ?? "";
@@ -49,6 +60,22 @@ const bodyText = (html: string) => decode((/<div class="chip-line">([\s\S]*?)<\/
 const dotted = (html: string) => /<span class="name">[^<]*<\/span><span class="sep" aria-hidden="true">·<\/span><span class="summary"[^>]*>/.test(html);
 // A step with nothing to open: its label alone.
 const labelOnly = (html: string) => html.includes('<div class="chip-head">') && !html.includes("<details") && !html.includes("chip-body");
+// The room draws its steps in a work card: one stretch of items, as the room's chat passes them.
+// Drawn once, as a string: React's note that a layout effect does not run there is not the card's.
+// `markup` is as React writes it, for a browser to read; `card` decoded, for a check to read.
+const markup = (items: Record<string, unknown>[], props: Record<string, unknown> = {}): string => {
+	const error = console.error;
+	console.error = (...args: unknown[]) => { if (!String(args[0]).includes("useLayoutEffect does nothing on the server")) error(...args); };
+	try {
+		return renderToStaticMarkup(createElement(workCard.WorkStretch, { items, live: false, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined, ...props }));
+	} finally {
+		console.error = error;
+	}
+};
+const card = (items: Record<string, unknown>[], props: Record<string, unknown> = {}): string => decode(markup(items, props));
+// Each row of a card: its state and its words, tags dropped.
+const cardRows = (html: string) => [...html.matchAll(/<div class="wk-row[^"]*" data-s="([^"]+)">([\s\S]*?)<span class="wk-mk">/g)].map((match) => ({ state: match[1], words: match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() }));
+const toolItem = (id: string, item: Record<string, unknown>) => ({ kind: "tool", id, args: {}, ...item });
 
 await check("a step's result shows as written unless it is a Markdown document", () => {
 	const output = "# Totals\nline a\nline b\nline c\n- item x";
@@ -140,14 +167,6 @@ await check("a running command says how long it has run", () => {
 	assert(/item\.status === "running" && item\.name === "bash" && <RunningFor since=\{item\.startedAt\} \/>/.test(source), "a running command's card shows the time");
 });
 
-await check("captions and the closed card stay readable", () => {
-	const css = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
-	const label = /\.tool-chip \.chip-result \.label \{[^}]*\}/.exec(css)?.[0] ?? "";
-	assert(label.includes("color: var(--muted);"), `the ERROR and RESULT captions use the muted text colour (4.5:1 or more in both themes), got ${label}`);
-	const chipRule = /\.tool-chip \{[^}]*\}/.exec(css)?.[0] ?? "";
-	assert(chipRule.includes("min-width: 0;") && chipRule.includes("max-width: min(760px, 100%);"), `a card never grows past its bubble, so a long summary ends with "…", got ${chipRule}`);
-});
-
 await check("a specialist's notes keep their single line breaks", () => {
 	const source = fs.readFileSync(new URL("../../web-ui/src/components/Message.tsx", import.meta.url), "utf8");
 	assert(source.includes("<MarkdownRenderer answer>{summary}</MarkdownRenderer>"), "the notes render as an answer");
@@ -156,7 +175,7 @@ await check("a specialist's notes keep their single line breaks", () => {
 await check("the approval questions have one source", async () => {
 	const titles = await import("../src/room-approval-titles.js");
 	assert(titles.handOffApprovalTitle("an SVG chart") === "Have a specialist create an SVG chart?" && titles.handOffApprovalSubject("Have a specialist create an SVG chart?") === "an SVG chart" && titles.handOffApprovalSubject("Run this command?") === null, "the hand-off question is built and read in one place");
-	for (const file of ["../src/persistent-room-delegate-tool.ts", "../src/persistent-agents.ts", "../../web-ui/src/components/Approval.tsx", "../src/persistent-room-bash-approval.ts"]) {
+	for (const file of ["../src/persistent-room-delegate-tool.ts", "../src/thread-items-by-id.ts", "../../web-ui/src/components/Approval.tsx", "../src/persistent-room-bash-approval.ts"]) {
 		const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
 		assert(source.includes("room-approval-titles") && !/[`/^]Have a specialist create/.test(source) && !source.includes('"Run this command?"'), `${file} takes the questions from room-approval-titles.ts`);
 	}
@@ -178,8 +197,6 @@ await check("a question nobody was there to answer never offers its buttons or c
 		const ended = card(title, false);
 		assert(ended.includes(title) && ended.includes("approval-unanswered") && !/Not run|Not handed off|Not answered|nobody was there/.test(ended) && !ended.includes("<button") && !ended.includes("You approved"), `a card whose question ended shows only its question, greyed, got ${ended}`);
 	}
-	const styles = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
-	assert(/\.approval-unanswered[^{]*\{[^}]*color:\s*var\(--muted\)/.test(styles), "the ended question is greyed");
 	assert(card("Run this command?", true).includes("<button"), "a question still open keeps its buttons");
 	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
 	assert(/items=\{shownItems\}/.test(app) && /withUnansweredApprovals\(items, liveApprovalIds\)/.test(app), "the room's chat shows its items with ended questions resolved");
@@ -206,6 +223,52 @@ await check("a step that did not run, or was stopped, names its state, a dot, th
 	const read = decode(chip({ name: "read", status: "done", args: { path: "notes.txt" }, result: "x" }));
 	const page = decode(chip({ name: "fetch_url", status: "error", args: { url: "http://127.0.0.1:9078/missing" }, result: "Couldn't read page: the site answered 404 Not Found." }));
 	assert(!dotted(read) && !dotted(page) && chipName(page) === "🌐 Couldn't read page" && chipSummary(page) === "127.0.0.1", `verb labels keep no dot, got ${chipName(read)} / ${chipName(page)} ${chipSummary(page)}`);
+});
+
+await check("a step whose card Stop closed reads Not run, or Not handed off, in the person's words", () => {
+	const stopAnswered = decode(chip({ name: "bash", status: "error", args: { command: "rm report-old.txt" }, result: STOPPED_BEFORE_ANSWER_SENTENCE }));
+	assert(chipName(stopAnswered) === "⌨️ Not run" && chipSummary(stopAnswered) === "rm report-old.txt" && dotted(stopAnswered) && chipIcon(stopAnswered) === "⊘" && bodyText(stopAnswered) === "You pressed Stop before answering.", `a command whose card Stop closed reads Not run, got ${chipName(stopAnswered)} / ${chipIcon(stopAnswered)} / ${bodyText(stopAnswered)}`);
+	const stopAnsweredHandOff = decode(chip({ name: "delegate_task", status: "error", args: { template: "diagram-svg" }, result: STOPPED_BEFORE_ANSWER_SENTENCE }));
+	assert(chipName(stopAnsweredHandOff) === "🤝 Not handed off", `a hand-off whose card Stop closed reads Not handed off, got ${chipName(stopAnsweredHandOff)}`);
+});
+
+await check("Stop's note under an answer, new or saved in the older words, is the answer's muted line", () => {
+	const stopLine = (html: string) => /<div class="answer-stop-line">([^<]*)<\/div>/.exec(html)?.[1] ?? null;
+	for (const note of ["You stopped this answer.", "Response interrupted by Stop."]) {
+		const answered = decode(renderToStaticMarkup(createElement(message.Message, { item: { kind: "assistant", id: "a1", text: `Half an answer.\n\n_${note}_` } })));
+		assert(stopLine(answered) === "You stopped this answer." && answered.includes("Half an answer.") && !answered.includes("Response interrupted by Stop."), `an answer ending in "${note}" draws the stop line, got ${answered}`);
+		const alone = decode(renderToStaticMarkup(createElement(message.Message, { item: { kind: "system", id: "s1", text: note } })));
+		assert(stopLine(alone) === "You stopped this answer.", `Stop before any words, "${note}", is the same line, got ${alone}`);
+	}
+	const other = decode(renderToStaticMarkup(createElement(message.Message, { item: { kind: "assistant", id: "a2", text: "An answer.\n\n_Response interrupted: the connection was lost._" } })));
+	assert(stopLine(other) === null, "another note under an answer stays in the answer");
+});
+
+await check("in a window another took the room from, a running step reads Continued in another window", () => {
+	const elsewhere = decode(chip({ name: "bash", status: "running", args: { command: "sleep 25; echo never" } }, { elsewhere: true }));
+	assert(chipName(elsewhere) === "⌨️ Continued in another window" && chipSummary(elsewhere) === "sleep 25; echo never" && dotted(elsewhere) && chipIcon(elsewhere) === "↗" && !elsewhere.includes('class="spinner"') && !elsewhere.includes("Stopped") && !elsewhere.includes("Running"), `a step another window took reads Continued in another window, got ${chipName(elsewhere)} / ${chipIcon(elsewhere)}`);
+	// A finished step keeps its own state there, and a running one here still runs.
+	const finished = decode(chip({ name: "bash", status: "done", args: { command: "echo done" }, result: "done" }, { elsewhere: true }));
+	assert(chipName(finished) === "⌨️ Ran command", `a finished step keeps its state in that window, got ${chipName(finished)}`);
+	const here = decode(chip({ name: "bash", status: "running", args: { command: "sleep 25; echo never" } }));
+	assert(here.includes('class="spinner"') && !here.includes("another window"), "a running step in the window that has the room still runs");
+	const bundle = decode(renderToStaticMarkup(createElement(message.ToolBundle, { items: [{ kind: "tool", id: "w1", name: "web_search", status: "done", args: { query: "a" }, result: "x" }, { kind: "tool", id: "w2", name: "web_search", status: "running", args: { query: "b" } }], elsewhere: true })));
+	assert(bundle.includes("Continued in another window") && !bundle.includes('class="spinner"'), "a running search run reads Continued in another window there");
+	// The room's card: the running row reads so, with no spinner; a finished row keeps its own words.
+	const there = card([toolItem("c1", { name: "bash", status: "done", args: { command: "echo done" }, result: "done" }), toolItem("c2", { name: "bash", status: "running", args: { command: "sleep 25; echo never" } })], { live: true, elsewhere: true });
+	const rows = cardRows(there);
+	assert(rows.length === 2 && rows[0].state === "done" && rows[1].state === "elsewhere" && rows[1].words.startsWith("Continued in another window") && !there.includes("wk-spin"), `in the card, a running step another window took reads Continued in another window, got ${JSON.stringify(rows)}`);
+	const stillHere = cardRows(card([toolItem("c2", { name: "bash", status: "running", args: { command: "sleep 25; echo never" } })], { live: true }));
+	assert(stillHere[0]?.state === "running", `in the window that has the room the card's step still runs, got ${JSON.stringify(stillHere)}`);
+});
+
+await check("a step being written shows in the card from its first frame: a command reads Command, a file its size so far", () => {
+	const rows = cardRows(card([toolItem("w1", { name: "bash", status: "writing", args: { command: "git status" } }), toolItem("w2", { name: "write", status: "writing", args: { path: "/p/docs/report.md", sizeSoFar: 4300 } })], { live: true }));
+	assert(rows[0]?.state === "writing" && rows[0].words === "Command git status", `a command being written reads Command and the command, got ${JSON.stringify(rows[0])}`);
+	assert(rows[1]?.state === "writing" && rows[1].words === "Writing report.md4.2 KB", `a file being written names it and its size so far, got ${JSON.stringify(rows[1])}`);
+	// Once it runs it says what it does, and its time.
+	const running = cardRows(card([toolItem("w1", { name: "bash", status: "running", args: { command: "git status" }, startedAt: Date.now() - 3_200 })], { live: true }));
+	assert(running[0]?.state === "running" && !running[0].words.startsWith("Command") && running[0].words.endsWith("3 s"), `a command that runs says what it does and for how long, got ${JSON.stringify(running[0])}`);
 });
 
 await check("connector and tool failures say what went wrong", () => {
@@ -240,13 +303,11 @@ await check("an opened step says its fact once, as a plain line", () => {
 	for (const [result, line] of others) assert(bodyText(page(result)) === line, `${result.slice(0, 40)}: want ${line}, got ${bodyText(page(result))}`);
 	// Real output keeps its caption and its box.
 	const failed = decode(chip({ name: "bash", status: "error", args: { command: "npm test" }, result: "npm ERR! missing script: test\nCommand exited with code 1" }));
-	assert(failed.includes('<span class="label">error</span>') && failed.includes('<pre class="raw-result">npm ERR! missing script: test'), `a failed command's output keeps its caption and box, got ${failed}`);
+	assert(failed.includes('<span class="label">Error</span>') && failed.includes('<pre class="raw-result">npm ERR! missing script: test'), `a failed command's output keeps its caption and box, got ${failed}`);
 	const contents = decode(chip({ name: "read", status: "done", args: { path: "notes.txt" }, result: "line one" }));
-	assert(contents.includes('<span class="label">result</span>') && contents.includes('<pre class="raw-result">line one</pre>'), "a file's contents keep theirs");
+	assert(contents.includes('<span class="label">Result</span>') && contents.includes('<pre class="raw-result">line one</pre>'), "a file's contents keep theirs");
 	const saved = decode(chip({ name: "write", status: "done", args: { path: "/Users/x/docs/report.md" }, result: "Successfully wrote 37 bytes to /Users/x/docs/report.md" }));
 	assert(bodyText(saved) === "Saved report.md." && saved.includes('<div class="chip-line">') && !saved.includes('<span class="label">'), `a write's plain line has no caption or box either, got ${saved}`);
-	const css = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
-	assert(/\.tool-chip \.chip-line \{[^}]*color: var\(--fg\);/.test(css), "the plain line reads in the text colour");
 });
 
 await check("a refusal is calm and reads apart from a failure", () => {
@@ -290,38 +351,25 @@ await check("a refusal is calm and reads apart from a failure", () => {
 		const html = decode(chip({ status: "error", ...item }));
 		assert(html.includes('class="tool-chip error"') && chipIcon(html) === "✗" && !html.includes("⊘"), `${what} ran and failed: red, with ✗, got ${chipIcon(html)} / ${/class="(tool-chip[^"]*)"/.exec(html)?.[1]}`);
 	}
-	const css = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
-	const calm = /\.tool-chip\.refused \{[^}]*\}/.exec(css)?.[0] ?? "";
-	const ink = /\.tool-chip\.refused > summary \.icon,[^{]*\.tool-chip\.refused > summary \.name[^{]*\{[^}]*\}/.exec(css)?.[0] ?? "";
-	assert(calm && !calm.includes("--error") && calm.includes("background: transparent;"), `a refusal's card is neutral, got ${calm || "no rule"}`);
-	assert(ink.includes("color: var(--muted);") && !ink.includes("--error"), `a refusal's mark and label are in the muted ink, got ${ink || "no rule"}`);
-	assert(css.includes(".tool-chip.error > summary .icon, .tool-chip.error > summary .name { color: var(--error); }"), "a failure stays red");
-	assert(css.includes(".tool-chip.error > .chip-head .icon, .tool-chip.error > .chip-head .name { color: var(--error); }"), "a failure with nothing to open (no such tool) stays red too");
 });
 
 await check("a declined command says so once on the screen", () => {
-	assert(typeof approval.declinesSaidOnCards === "function", "the page knows which declines their card already says");
 	const declinedResult = "The user declined this command. Do not run it or retry variants of it unless the user asks.";
-	const step = (id: string, status = "error", result = declinedResult) => ({ kind: "tool", id, name: "bash", args: { command: "rm notes.txt" }, status, result });
-	const card = (id: string, done?: string) => ({ kind: "approval", id, requestId: `r-${id}`, uiKind: "confirm", title: "Run this command?", ...(done ? { done } : {}) });
-	const items = [
-		{ kind: "user", id: "u1", text: "Remove the notes." }, step("t1"), card("a1", "Decline"),
-		{ kind: "user", id: "u2", text: "Remove both." }, step("t2"), step("t3"), card("a2", "Decline"), card("a3", "No"),
-		{ kind: "user", id: "u3", text: "Run one, not the other." }, step("t4", "done", "ok"), step("t5"), card("a4", "Approve"), card("a5", "Decline"),
-		{ kind: "user", id: "u4", text: "A step with no card." }, step("t6"),
-		{ kind: "user", id: "u5", text: "A card nobody answered." }, step("t7"), card("a7"),
-	];
-	const said = approval.declinesSaidOnCards(items);
-	assert(["t1", "t2", "t3", "t5"].every((id) => said.has(id)) && !["t4", "t6", "t7"].some((id) => said.has(id)), `each declined step whose turn has its declined card, got ${JSON.stringify([...said])}`);
-	const beside = decode(chip(step("t1"), { saidOnCard: true }));
-	assert(chipName(beside) === "⌨️ Not run" && chipSummary(beside) === "rm notes.txt" && chipIcon(beside) === "⊘" && !beside.includes("<details") && !beside.includes("You declined") && !beside.includes("Nothing ran"), `beside its card, the step is its label alone, with nothing to open, got ${beside}`);
-	const long = `find ~/Documents/reports -name '*.csv' -mtime +30 -print0 | xargs -0 rm -v ${"--interactive=never ".repeat(8)}# old exports`;
-	const longBeside = decode(chip({ ...step("t8"), args: { command: long } }, { saidOnCard: true }));
-	assert(labelOnly(longBeside) && chipSummary(longBeside).endsWith("…") && longBeside.includes(`<span class="summary" title="${long}">`), `a long declined command can still be read in full on its label, got ${longBeside}`);
-	const alone = decode(chip(step("t6")));
-	assert(alone.includes("<details") && bodyText(alone) === "You declined this command.", `with no card beside it, the step says it when opened, got ${bodyText(alone)}`);
+	const step = (id: string, status = "error", result = declinedResult) => toolItem(id, { name: "bash", args: { command: "rm notes.txt" }, status, result });
+	// The command question as the room's server asks it, the command under its fence.
+	const ask = (id: string, done?: string) => ({ kind: "approval", id, requestId: `r-${id}`, uiKind: "confirm", title: "Run this command?", message: "Runs in: /work\n\n─── Command (written by the room's model; the app has not verified it) ───\nrm notes.txt", ...(done ? { done } : {}) });
+	// The step and its question are one row of the card, which says it once.
+	const one = card([step("t1"), ask("a1", "Decline")]);
+	const rows = cardRows(one);
+	assert(rows.length === 1 && rows[0].state === "denied" && rows[0].words.startsWith("Not run · you said no · rm") && !one.includes("You declined"), `a declined command is one row that says so once, got ${JSON.stringify(rows)}`);
+	// Two declined, one run: each its own row, each said once.
+	const mixed = cardRows(card([step("t4", "done", "ok"), step("t5"), ask("a4", "Approve"), ask("a5", "Decline")]));
+	assert(mixed.length === 2 && mixed[0].state === "done" && mixed[1].words.startsWith("Not run · you said no"), `an approved and a declined command, one row each, got ${JSON.stringify(mixed)}`);
+	// With no question beside it, the declined step still says it did not run.
+	const alone = cardRows(card([step("t6")]));
+	assert(alone.length === 1 && alone[0].words.startsWith("Not run · you said no"), `a declined step with no question, got ${JSON.stringify(alone)}`);
 	const room = fs.readFileSync(new URL("../../web-ui/src/components/in-room-chat.tsx", import.meta.url), "utf8");
-	assert(/declinesSaidOnCards\(items\)/.test(room) && /<Message [^>]*saidOnCard=\{/.test(room), "the room's chat tells each step whether its card says it");
+	assert(/<WorkStretch [^>]*items=\{run\}/.test(room), "the room's chat draws its steps as work cards");
 });
 
 await check("a screen reader hears the state in words, not the mark's name", () => {
@@ -343,8 +391,6 @@ await check("a screen reader hears the state in words, not the mark's name", () 
 		const html = decode(renderToStaticMarkup(createElement(message.ToolBundle, { items: statuses.map((status, n) => ({ ...page(status), id: `p-${n}` })) })));
 		assert(html.startsWith(`<div class="bubble-row"><details class="tool-chip tool-bundle`) && html.includes(`<summary><span class="icon" aria-hidden="true">${mark}</span><span class="sr-only">${word}</span>`), `a bundle's mark too (${word}), got ${html.slice(0, 300)}`);
 	}
-	const css = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
-	assert(/\.sr-only \{[^}]*position: absolute;[^}]*clip: rect\(0, 0, 0, 0\);/.test(css), "the words are for assistive technology only: nothing visible changes");
 });
 
 await check("a group of steps that were all refused reads as a refusal; a real failure or a step that worked keeps the group's look", () => {
@@ -378,17 +424,19 @@ await check("a formatted .md read wraps a long word inside its box, so the conve
 		console.log("  (Chromium not installed: the layout part of this section is skipped)");
 		return;
 	}
-	const css = fs.readFileSync(new URL("../../web-ui/src/styles.css", import.meta.url), "utf8");
+	const css = readPageStyles();
 	// A long word (a path, a link, a hash) wraps; a code line wraps too, as code in a step always has; a wide table keeps its own sideways scroll.
-	const read = chip({ name: "read", status: "done", args: { path: `docs/${"b".repeat(120)}.md` }, result: "a".repeat(300) });
-	const wide = chip({ name: "read", status: "done", args: { path: "docs/wide.md" }, result: ["```", `x=${"y".repeat(400)}`, "```", "", `| ${Array.from({ length: 12 }, (_, n) => `column-${n}-${"z".repeat(20)}`).join(" | ")} |`, `|${" --- |".repeat(12)}`, `| ${Array.from({ length: 12 }, () => "v".repeat(30)).join(" | ")} |`].join("\n") });
+	const result = (text: string) => renderToStaticMarkup(createElement(message.ResultBody, { markdown: true, text }));
+	const read = result("a".repeat(300));
+	const wide = result(["```", `x=${"y".repeat(400)}`, "```", "", `| ${Array.from({ length: 12 }, (_, n) => `column-${n}-${"z".repeat(20)}`).join(" | ")} |`, `|${" --- |".repeat(12)}`, `| ${Array.from({ length: 12 }, () => "v".repeat(30)).join(" | ")} |`].join("\n"));
 	const browser = await chromium.launch();
 	const measured: Array<{ width: number; scroll: number; shown: number; preWraps: boolean; tableScrolls: boolean }> = [];
 	try {
 		for (const width of [1280, 390]) {
 			const page = await browser.newPage({ viewport: { width, height: 800 } });
-			await page.setContent(`<!doctype html><html data-theme="light"><head><style>${css}</style></head><body><div class="bubble-row">${read}</div><div class="bubble-row">${wide}</div></body></html>`);
-			await page.evaluate(() => document.querySelectorAll("details").forEach((d) => { d.open = true; }));
+			// What a step's row opens to in the room's card: its result in the card's box.
+			const opened = (body: string) => `<div class="bubble-row"><div class="wk-card" data-open="1" data-live="0"><div class="wk-body"><div class="wk-in"><div class="wk-rows"><div class="wk-out">${body}</div></div></div></div></div></div>`;
+			await page.setContent(`<!doctype html><html data-theme="light"><head><style>${css}</style></head><body><div class="messages">${opened(read)}${opened(wide)}</div></body></html>`);
 			measured.push({ width, ...(await page.evaluate(() => {
 				const root = document.scrollingElement!;
 				const pre = document.querySelector(".md-result pre")!;
@@ -405,10 +453,410 @@ await check("a formatted .md read wraps a long word inside its box, so the conve
 	assert(measured.every((m) => m.preWraps && m.tableScrolls), `a long code line wraps inside the box and a wide table scrolls inside its own frame, got ${JSON.stringify(measured)}`);
 });
 
+// Opening one is a click: thinking-open-smoke and memory-recall-chip-smoke open one in a room.
+await check("a finished card of one step says its step's sentence once and opens straight to what the step shows", () => {
+	const rows = (html: string) => (html.match(/class="wk-row"/g) ?? []).length;
+	const label = (html: string) => /<span class="wk-lbl ?[^"]*">([^<]*)<\/span>/.exec(html)?.[1] ?? "";
+	const command = card([toolItem("o1", { name: "bash", status: "done", args: { command: "npm test" }, result: "12 passed", startedAt: 1_000, endedAt: 2_200 })], { endTs: 3_000 });
+	assert(rows(command) === 0 && command.includes('class="wk-rows wk-solo"') && label(command) === "Ran npm test", `one command: its own sentence on the head, no row repeating it, got ${command}`);
+	assert(/<button type="button" class="wk-head" aria-expanded="false">[\s\S]*wk-caret/.test(command) && !command.includes("12 passed"), `one command: the head opens it, with its arrow; folded, its output is not drawn yet, got ${command}`);
+	const file = card([toolItem("o2", { name: "read", status: "done", args: { path: "notes.txt" }, result: "first line\nsecond line" })], { endTs: 3_000 });
+	assert(rows(file) === 0 && label(file) === "Read notes.txt" && file.includes("wk-caret"), `one file read: its name on the head, no row, got ${file}`);
+	// The provider's own search keeps no pages yet: nothing to show, so no arrow and nothing to click.
+	const search = card([toolItem("o3", { name: "web_search", status: "done", args: { query: "node lts release" } })], { endTs: 3_000 });
+	assert(!search.includes("<button") && !search.includes("wk-caret") && search.includes('<div class="wk-head">') && search.includes("Searched the web for node lts release") && search.includes('data-open="0"'), `one search with nothing to show: no arrow, does not open, got ${search}`);
+	// One that failed says so on its head, with the failed mark, and opens the same way.
+	const failed = card([toolItem("o6", { name: "bash", status: "error", args: { command: "npm test" }, result: "exit 1: 3 tests failed" })], { endTs: 3_000 });
+	assert(rows(failed) === 0 && label(failed) === "Couldn't run npm test" && failed.includes("wk-bad") && !failed.includes("wk-ok") && failed.includes("wk-caret"), `one failed command: its own sentence, the failed mark, no row, got ${failed}`);
+	// Its neighbours keep their rows: two steps; one that did not run, whose row says why; one still running.
+	const two = cardRows(card([toolItem("o4", { name: "bash", status: "done", args: { command: "ls" }, result: "a" }), toolItem("o5", { name: "read", status: "done", args: { path: "a.ts" }, result: "x" })], { endTs: 3_000 }));
+	assert(two.length === 2, `two steps: two rows as before, got ${JSON.stringify(two)}`);
+	const declined = card([toolItem("o8", { name: "bash", status: "error", args: { command: "rm notes.txt" }, result: "The user declined this command. Do not run it or retry variants of it unless the user asks." })], { endTs: 3_000 });
+	assert(cardRows(declined).length === 1 && cardRows(declined)[0].state === "denied" && !declined.includes("wk-bad"), `one declined command keeps its calm row and no failed mark, got ${declined}`);
+	const live = cardRows(card([toolItem("o7", { name: "bash", status: "running", args: { command: "sleep 9" } })], { live: true }));
+	assert(live.length === 1 && live[0].state === "running", `one running step keeps its row while it runs, got ${JSON.stringify(live)}`);
+});
+
+await check("a chained command is named by itself, in code, wherever its step shows; one program keeps its plain words", () => {
+	const chained = "cd src && npm test";
+	const code = `<code class="wk-code">${chained}</code>`;
+	const bash = (id: string, status: string, extra: Record<string, unknown> = {}) => toolItem(id, { name: "bash", status, args: { command: chained }, ...extra });
+	// Each row of a card with its markup: its state and what its words are drawn with.
+	const rowsOf = (html: string) => [...html.matchAll(/<div class="wk-row[^"]*" data-s="([^"]+)">([\s\S]*?)<span class="wk-mk">/g)].map((match) => ({ state: match[1], html: match[2], words: match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() }));
+	const headOfCard = (html: string) => /<(button|div)[^>]*class="wk-head"[\s\S]*?<\/\1>/.exec(html)?.[0] ?? "";
+	const several = rowsOf(card([bash("c1", "done", { result: "ok" }), toolItem("c2", { name: "bash", status: "done", args: { command: "npm test" }, result: "ok" })], { endTs: 3_000 }));
+	assert(several.length === 2 && several[0].html.includes(code) && several[0].words.startsWith(`Ran ${chained}`), `a row in a card of several steps: Ran and the command in code, got ${JSON.stringify(several[0])}`);
+	assert(several[1].html.includes("<b>npm test</b>") && !several[1].html.includes("wk-code"), `one program keeps its plain words, got ${JSON.stringify(several[1])}`);
+	const sole = headOfCard(card([bash("c3", "done", { result: "ok" })], { endTs: 3_000 }));
+	assert(/class="wk-lbl[^"]*">Ran <code class="wk-code">cd src && npm test<\/code><\/span>/.test(sole), `the head of a one-step card: Ran and the command in code, got ${sole}`);
+	const soleFailed = headOfCard(card([bash("c4", "error", { result: "exit 1" })], { endTs: 3_000 }));
+	assert(/class="wk-lbl[^"]*">Couldn't run <code class="wk-code">cd src && npm test<\/code><\/span>/.test(soleFailed), `the head of a one-step card that failed, got ${soleFailed}`);
+	const plainHead = headOfCard(card([toolItem("c5", { name: "bash", status: "done", args: { command: "npm test" }, result: "ok" })], { endTs: 3_000 }));
+	assert(/class="wk-lbl[^"]*">Ran npm test<\/span>/.test(plainHead), `one program's head stays plain words, got ${plainHead}`);
+	const notRun = rowsOf(card([bash("c6", "error", { result: "The user declined this command. Do not run it or retry variants of it unless the user asks." })]));
+	assert(notRun[0]?.state === "denied" && notRun[0].html.includes(code) && notRun[0].words.startsWith("Not run · you said no · "), `a not-run row, got ${JSON.stringify(notRun)}`);
+	const stopped = rowsOf(card([bash("c7", "stopped")]));
+	assert(stopped[0]?.state === "stopped" && stopped[0].html.includes(code) && stopped[0].words === `Stopped · Running ${chained}`, `a stopped row, got ${JSON.stringify(stopped)}`);
+	const elsewhere = rowsOf(card([bash("c8", "running")], { live: true, elsewhere: true }));
+	assert(elsewhere[0]?.state === "elsewhere" && elsewhere[0].html.includes(code), `a row another window goes on with, got ${JSON.stringify(elsewhere)}`);
+	const running = rowsOf(card([bash("c9", "running")], { live: true }));
+	assert(running[0]?.state === "running" && running[0].html.includes(`class="wk-tx wk-sweep">Running ${code}`), `a running row sweeps over the command too, got ${JSON.stringify(running)}`);
+	const dated = rowsOf(card([toolItem("c10", { name: "bash", status: "done", args: { command: 'echo "$(date)"' }, result: "x" }), toolItem("c11", { name: "bash", status: "done", args: { command: "echo '$(date)'" }, result: "x" })], { endTs: 3_000 }));
+	assert(dated[0]?.html.includes('<code class="wk-code">echo "$(date)"</code>') && dated[1]?.words.startsWith("Ran echo") && !dated[1].html.includes("wk-code"), `a second program in double quotes is named in code, one in single quotes is not, got ${JSON.stringify(dated)}`);
+});
+
+// One command waiting for the person, its question as the room's server asks it (`asked`: the server's text, when it differs).
+const askingItems = (command: string, asked = command) => [toolItem("q1", { name: "bash", status: "running", args: { command } }), { kind: "approval", id: "a1", requestId: "r1", uiKind: "confirm", title: "Run this command?", message: `Runs in: /work\nYou can auto-approve bash for this room in Room settings, Folder.\n\n─── Command (written by the room's model; the app has not verified it) ───\n${asked}` }];
+const asking = (command: string, asked = command) => card(askingItems(command, asked), { live: true });
+
+await check("the question before a chained command: one line is its title whole; a script or a clipped command keeps a one-line title over the server's text", () => {
+	const question = (html: string) => ({ title: /<div class="(wk-tx[^"]*)">([\s\S]*?)<\/div>/.exec(html), sub: /<div class="wk-ask-sub">([\s\S]*?)<\/div>/.exec(html)?.[1] ?? null });
+	const codeOf = (title: RegExpExecArray | null) => /<code class="wk-code">([\s\S]*?)<\/code>/.exec(title?.[2] ?? "")?.[1] ?? null;
+	// One line: the whole command, never cut, and not said again under it.
+	const oneLine = question(asking("cd src && npm test"));
+	assert(oneLine.title?.[1] === "wk-tx" && oneLine.title[2] === 'Run <code class="wk-code">cd src && npm test</code>' && oneLine.sub === null, `a one-line chained question, got ${JSON.stringify(oneLine)}`);
+	const longLine = `${"npm run build && ".repeat(40)}npm test`;
+	const long = question(asking(longLine));
+	assert(longLine.length > 300 && longLine.length < 1_200 && codeOf(long.title) === longLine && long.sub === null, `a long one-line chained question is its title whole, got ${JSON.stringify(long)}`);
+	// One program: as before, its plain words over the command.
+	const plain = question(asking("npm test"));
+	assert(plain.title?.[2] === "Run <b>npm test</b>" && plain.sub === "npm test", `one program's question, got ${JSON.stringify(plain)}`);
+	// A script: its first line on one line, the server's text under it.
+	const script = "python3 - <<'PY'\nimport json\nprint(1)\nPY";
+	const many = question(asking(script));
+	assert(many.title?.[1] === "wk-tx wk-one" && codeOf(many.title) === "python3 - <<'PY' …" && many.sub === script, `a script's question, got ${JSON.stringify(many)}`);
+	// Over 1,200 characters the server clips it and says so: the script's form, with its clip line, one line or many.
+	const clip = (text: string) => `${text.slice(0, 1_200)}\n[command preview clipped]`;
+	const hugeLine = `echo start && echo ${"x".repeat(1_500)}`;
+	const clippedLine = question(asking(hugeLine, clip(hugeLine)));
+	assert(clippedLine.title?.[1] === "wk-tx wk-one" && codeOf(clippedLine.title) === `${hugeLine.slice(0, 300)} …` && clippedLine.sub === clip(hugeLine), `a clipped one-line question, got ${JSON.stringify({ title: clippedLine.title?.[1], code: codeOf(clippedLine.title), subEnd: clippedLine.sub?.slice(-40) })}`);
+	const hugeScript = `cat <<'EOF' > notes.txt\n${"a line of notes\n".repeat(100)}EOF`;
+	const clippedScript = question(asking(hugeScript, clip(hugeScript)));
+	assert(clippedScript.title?.[1] === "wk-tx wk-one" && codeOf(clippedScript.title) === "cat <<'EOF' > notes.txt …" && clippedScript.sub?.endsWith("\n[command preview clipped]"), `a clipped script's question, got ${JSON.stringify({ title: clippedScript.title?.[1], code: codeOf(clippedScript.title), subEnd: clippedScript.sub?.slice(-40) })}`);
+	const hugePlain = `echo ${"x".repeat(1_500)}`;
+	const clippedPlain = question(asking(hugePlain, clip(hugePlain)));
+	assert(clippedPlain.title?.[1] === "wk-tx wk-one" && clippedPlain.sub?.endsWith("\n[command preview clipped]"), `a clipped one-program question keeps the clip line under a one-line title, got ${JSON.stringify({ title: clippedPlain.title?.[1], subEnd: clippedPlain.sub?.slice(-40) })}`);
+});
+
+await check("a one-line chained question's title keeps the command's own spaces and wraps whole; a script's stays on one line", async () => {
+	const { chromium } = await import("playwright");
+	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
+	if (!executable || !fs.existsSync(executable)) {
+		console.log("  (Chromium not installed: this section is skipped)");
+		return;
+	}
+	const spaced = "printf '%s' 'a  b\tc' && pwd";
+	const longLine = `${"npm run build && ".repeat(12)}npm test`;
+	const script = "python3 - <<'PY'\nimport json\nprint(1)\nPY";
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
+		// The markup as React writes it (not decoded): the browser reads its escapes.
+		const cards = [spaced, longLine, script].map((command) => markup(askingItems(command), { live: true }));
+		await page.setContent(`<!doctype html><html data-theme="light"><head><meta charset="utf-8"><style>${readPageStyles()}</style></head><body><div class="messages">${cards.map((html, n) => `<div id="c${n}">${html}</div>`).join("")}</div></body></html>`);
+		const got: Array<{ code: string; whole: boolean; lines: number }> = await page.evaluate(`[0, 1, 2].map((n) => {
+			const title = document.querySelector("#c" + n + " .wk-ask .wk-tx");
+			const code = title.querySelector(".wk-code");
+			const line = parseFloat(getComputedStyle(title).lineHeight);
+			return { code: code.innerText, whole: title.scrollWidth <= title.clientWidth + 1, lines: Math.round(title.getBoundingClientRect().height / line) };
+		})`);
+		assert(got[0].code === spaced, `the title shows the command's doubled space and tab as the server sends them, got ${JSON.stringify(got[0])}`);
+		assert(got[1].code === longLine && got[1].whole && got[1].lines > 1, `a long one-line command wraps whole at 390 px, never cut, got ${JSON.stringify(got[1])}`);
+		assert(got[2].code === "python3 - <<'PY' …" && got[2].lines === 1, `a script's title stays on one line, got ${JSON.stringify(got[2])}`);
+	} finally {
+		await browser.close();
+	}
+});
+
+// The questions a person meets: five commands, a typed answer (no room tool asks one yet; memory's edit asks with this placeholder) and a specialist's.
+const sixLineScript = "python3 - <<'PY'\nimport json\ndata = {\"a\": 1}\nprint(json.dumps(data))\nprint(\"done\")\nPY";
+const clipped = (text: string) => `${text.slice(0, 1_200)}\n[command preview clipped]`;
+const longScript = `cat <<'EOF' > release-notes.md\n${"- Item: a line of release notes\n".repeat(80)}EOF`;
+const questionCommands: Array<[string, string, string?]> = [
+	["short chain", "cd src && npm test"],
+	["long chain", `${"npm run build && ".repeat(12)}npm test`],
+	["six-line script", sixLineScript],
+	["clipped", longScript, clipped(longScript)],
+	["npm test", "npm test"],
+];
+const typedAnswer = [{ kind: "approval", id: "a-typed", requestId: "r-typed", uiKind: "input", title: "Edit the fact", placeholder: "The fact as it should read" }];
+const specialistAsk = [toolItem("d1", { name: "delegate_task", status: "running", args: { template: "chart-html", brief: "Chart the totals." } }), {
+	kind: "approval", id: "a-spec", requestId: "r-spec", uiKind: "confirm", title: "Have a specialist create a chart?",
+	message: "A separate specialist runs this task in isolation: no memory access, no web access, no shell.\n\nIt can only write into one new folder made for this task: tasks/chart/ (at most 10 files). Approving starts it and grants that folder write access.\n\n─── Brief it will receive (written by the room's model; the app has not verified anything below this line) ───\nChart the totals.",
+}];
+
+await check("a command question shows no Details and none of the app's facts; a specialist's keeps its Details", () => {
+	for (const [name, command, asked] of questionCommands) {
+		const html = asking(command, asked);
+		const ask = /<div class="wk-row wk-ask"[\s\S]*$/.exec(html)?.[0] ?? "";
+		assert(ask.includes("Allow") && !ask.includes("wk-ask-more") && !ask.includes("Details") && !ask.includes("wk-ask-facts") && !ask.includes("Runs in") && !ask.includes("auto-approve"), `the ${name} question shows no Details, no "Runs in" and no auto-approve line, got ${ask}`);
+	}
+	const specialist = card(specialistAsk, { live: true });
+	assert(/<button type="button" class="wk-ask-more" aria-expanded="false">Details<\/button>/.test(specialist) && !specialist.includes("wk-ask-facts"), `the specialist's question keeps Details, closed, got ${specialist}`);
+});
+
+await check("a question's answers sit under everything at its right, and a command's box holds six whole lines", async () => {
+	const { chromium } = await import("playwright");
+	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
+	if (!executable || !fs.existsSync(executable)) {
+		console.log("  (Chromium not installed: this section is skipped)");
+		return;
+	}
+	const cards = [...questionCommands.map(([, command, asked]) => markup(askingItems(command, asked), { live: true })), markup(typedAnswer, { live: true }), markup(specialistAsk, { live: true })];
+	const names = [...questionCommands.map(([name]) => name), "typed answer", "specialist"];
+	const browser = await chromium.launch();
+	try {
+		for (const width of [1280, 390]) {
+			const page = await browser.newPage({ viewport: { width, height: 900 } });
+			// Each card at the room's column width, as the page lays it out, not shrunk to its words.
+			await page.setContent(`<!doctype html><html data-theme="light"><head><meta charset="utf-8"><style>${readPageStyles()}</style></head><body><div class="messages">${cards.map((html, n) => `<div id="c${n}" style="width: 100%">${html}</div>`).join("")}</div></body></html>`);
+			const rowWidth = await page.locator("#c0 .wk-ask").evaluate((row) => row.getBoundingClientRect().width);
+			assert(rowWidth > (width === 1280 ? 700 : 300), `at ${width} px the question spans the card, got ${rowWidth} px`);
+			const got: Array<{ below: boolean; right: boolean; order: string; lines: number | null; scrolls: boolean | null }> = await page.evaluate(`[${cards.map((_, n) => n).join(",")}].map((n) => {
+				const row = document.querySelector("#c" + n + " .wk-ask");
+				const buttons = row.querySelector(".wk-ask-btns").getBoundingClientRect();
+				// Every part of the question but its icon and its answers: its title, the command's box, the facts, a text box.
+				const above = [...row.querySelectorAll(".wk-tx, .wk-ask-sub, .wk-ask-meta, .wk-ask-more, .wk-ask-facts, .wk-ask-input")].map((el) => el.getBoundingClientRect().bottom);
+				const style = getComputedStyle(row);
+				const inner = row.getBoundingClientRect().right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
+				const box = row.querySelector(".wk-ask-sub");
+				const line = box ? parseFloat(getComputedStyle(box).lineHeight) : 0;
+				return {
+					below: above.length > 0 && buttons.top >= Math.max(...above) - 0.5,
+					right: Math.abs(buttons.right - inner) <= 1,
+					order: [...row.querySelectorAll(".wk-btn")].map((button) => button.firstChild.textContent).join(" "),
+					lines: box ? Math.round(box.clientHeight / line * 10) / 10 : null,
+					scrolls: box ? box.scrollHeight > box.clientHeight + 1 : null,
+				};
+			})`);
+			for (const [n, row] of got.entries()) {
+				assert(row.below && row.right, `at ${width} px the ${names[n]} question's answers sit under everything at its right, got ${JSON.stringify(row)}`);
+				assert(row.order === (names[n] === "typed answer" ? "Cancel Submit" : "Deny Allow"), `at ${width} px the ${names[n]} question keeps its answers' order, got ${row.order}`);
+			}
+			const script = got[names.indexOf("six-line script")];
+			const clip = got[names.indexOf("clipped")];
+			// At 1280 px no line of the script wraps: its six lines fit whole. A longer command scrolls in a box of exactly six lines.
+			if (width === 1280) assert(script.lines === 6 && script.scrolls === false, `at 1280 px the six-line script fits its box whole, got ${JSON.stringify(script)}`);
+			assert(clip.lines === 6 && clip.scrolls === true, `at ${width} px a longer command scrolls in a box of six whole lines, got ${JSON.stringify(clip)}`);
+			await page.close();
+		}
+	} finally {
+		await browser.close();
+	}
+});
+
+/** Draws `element` in a JSDOM window with a React root, for a check that clicks as the person does. */
+async function onLivePage(body: (draw: (element: unknown) => Promise<HTMLElement>, act: (work: () => void | Promise<void>) => Promise<void>) => Promise<void>): Promise<void> {
+	const { JSDOM } = await import("jsdom");
+	const dom = new JSDOM('<!doctype html><html><body></body></html>');
+	const globals = globalThis as any;
+	globals.window = dom.window;
+	globals.document = dom.window.document;
+	// Node 21 and later have a global navigator, which React reads once a window exists; Node 20 has none.
+	const ownNavigator = !("navigator" in globalThis);
+	if (ownNavigator) globals.navigator = dom.window.navigator;
+	globals.IS_REACT_ACT_ENVIRONMENT = true;
+	// An open thought's box follows its size; JSDOM lays nothing out, so nothing changes size.
+	const ownResizeObserver = !("ResizeObserver" in globalThis);
+	if (ownResizeObserver) globals.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+	const { createRoot } = pageRequire("react-dom/client");
+	const { act } = pageRequire("react");
+	const roots: any[] = [];
+	try {
+		await body(async (element) => {
+			const container = dom.window.document.createElement("div");
+			dom.window.document.body.append(container);
+			const root = createRoot(container);
+			roots.push(root);
+			await act(async () => root.render(element));
+			return container;
+		}, (work) => act(async () => { await work(); }));
+		for (const root of roots) await act(async () => root.unmount());
+	} finally {
+		delete globals.window;
+		delete globals.document;
+		if (ownNavigator) delete globals.navigator;
+		if (ownResizeObserver) delete globals.ResizeObserver;
+		delete globals.IS_REACT_ACT_ENVIRONMENT;
+	}
+}
+
+const thoughtItem = (id: string, ts: number, ms: number) => ({ kind: "thinking", id, ts, ms });
+const stretch = (items: Record<string, unknown>[]) => createElement(workCard.WorkStretch, { items, live: false, endTs: 9_000, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined });
+// An opened card's rows, its thoughts' boxes and its step's output, in the order the page shows them.
+const shownRows = (container: HTMLElement) => [...container.querySelectorAll(".wk-in .wk-row, .wk-in .wk-line, .wk-in .wk-out")].map((el) => {
+	const words = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+	if (el.classList.contains("wk-row")) return `row ${el.getAttribute("data-s")}: ${(el.querySelector(".wk-tx")?.textContent ?? "").replace(/\s+/g, " ").trim()}`;
+	if (el.classList.contains("wk-out-thought")) return "thought box";
+	return `${el.classList.contains("wk-line") ? "line" : "output"}: ${words}`;
+});
+const headOf = (container: HTMLElement) => ({
+	label: container.querySelector(".wk-head .wk-lbl")?.textContent ?? "",
+	button: !!container.querySelector("button.wk-head"),
+	mark: container.querySelector(".wk-head .wk-hmk .wk-ok") ? "check" : container.querySelector(".wk-head .wk-hmk .wk-bad") ? "failed" : "none",
+	open: container.querySelector(".wk-card")?.getAttribute("data-open") === "1",
+});
+
+// A card of the model's thinking and one step, opened with one click on its head as the person does.
+const openCard = async (act: (work: () => void | Promise<void>) => Promise<void>, container: HTMLElement) => {
+	await act(() => (container.querySelector("button.wk-head") as HTMLButtonElement).click());
+	return shownRows(container);
+};
+
+await check("thought and one step that worked: the step's sentence and check on the head, one click to the thought's row and the step's row, open to its output", () => onLivePage(async (draw, act) => {
+	const done = await draw(stretch([thoughtItem("t1-think", 1_000, 2_000), toolItem("t1-read", { name: "read", status: "done", args: { path: "notes.txt" }, result: "first line", startedAt: 3_000, endedAt: 3_100 })]));
+	assert(JSON.stringify(headOf(done)) === JSON.stringify({ label: "Read notes.txt", button: true, mark: "check", open: false }), `closed: the read's sentence and its check, got ${JSON.stringify(headOf(done))}`);
+	assert(!done.querySelector(".wk-out"), `closed: its output is not drawn yet, got ${done.innerHTML}`);
+	const rows = await openCard(act, done);
+	// Opened, its rows carry the marks, as a card of several steps' do.
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row done: Read notes.txt", "output: first line"]) && headOf(done).mark === "none", `opened with one click: the thought's row, then the read's row already open to its output, got ${JSON.stringify(rows)} / ${JSON.stringify(headOf(done))}`);
+}));
+
+await check("thought and one failed step: its own sentence and failed mark on the head, one click to the thought, the step's failed row, why it failed and the output", () => onLivePage(async (draw, act) => {
+	const missing = "ENOENT: no such file or directory, access '/Users/a/missing.txt'";
+	const failed = await draw(stretch([thoughtItem("t2-think", 1_000, 2_000), toolItem("t2-read", { name: "read", status: "error", args: { path: "missing.txt" }, result: missing, startedAt: 3_000, endedAt: 3_300 })]));
+	assert(JSON.stringify(headOf(failed)) === JSON.stringify({ label: "Couldn't read missing.txt", button: true, mark: "failed", open: false }), `closed: its own sentence and the failed mark, not "1 failed", got ${JSON.stringify(headOf(failed))}`);
+	const rows = await openCard(act, failed);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row failed: Couldn't read missing.txt", "line: There is no file called missing.txt.", `output: ${missing}`]) && failed.querySelector('.wk-row[data-s="failed"] .wk-bad'), `opened: the thought's row, the failed row with its mark, why it failed, the output, got ${JSON.stringify(rows)}`);
+	// A failure with no known cause: its command and what came back.
+	const command = await draw(stretch([thoughtItem("t2-think-run", 1_000, 2_000), toolItem("t2-run", { name: "bash", status: "error", args: { command: "npm test" }, result: "exit 1: 3 tests failed", startedAt: 3_000, endedAt: 4_000 })]));
+	assert(headOf(command).label === "Couldn't run npm test" && headOf(command).mark === "failed", `a failed command, closed: its own sentence, got ${JSON.stringify(headOf(command))}`);
+	const commandRows = await openCard(act, command);
+	assert(JSON.stringify(commandRows) === JSON.stringify(["row done: Thought for 2 s", "row failed: Couldn't run npm test", "output: npm testexit 1: 3 tests failed"]), `a failed command, opened: the thought's row, the failed row and the output, got ${JSON.stringify(commandRows)}`);
+}));
+
+await check("think, step, think again: the step's sentence on the head, opened the rows in the order they happened", () => onLivePage(async (draw, act) => {
+	const again = await draw(stretch([thoughtItem("t3-think", 1_000, 2_000), toolItem("t3-run", { name: "bash", status: "done", args: { command: "npm test" }, result: "12 passed", startedAt: 3_000, endedAt: 4_000 }), thoughtItem("t3-again", 5_000, 1_000)]));
+	assert(headOf(again).label === "Ran npm test", `closed: the command's sentence, got ${JSON.stringify(headOf(again))}`);
+	const rows = await openCard(act, again);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row done: Ran npm test", "output: npm test12 passed", "row done: Thought for 1 s"]), `opened: thought, the command's row open to its output, thought, got ${JSON.stringify(rows)}`);
+}));
+
+await check("thought and one step with nothing to show: the card still opens, so the thought stays in reach", () => onLivePage(async (draw, act) => {
+	const bare = await draw(stretch([thoughtItem("t4-think", 1_000, 2_000), toolItem("t4-search", { name: "web_search", status: "done", args: { query: "node lts release" } })]));
+	assert(headOf(bare).label === "Searched the web for node lts release" && headOf(bare).button, `closed: the search's sentence, and it opens, got ${JSON.stringify(headOf(bare))}`);
+	const rows = await openCard(act, bare);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row done: Searched the web for node lts release"]) && headOf(bare).open, `opened: the thought's row and the search's, got ${JSON.stringify(rows)}`);
+}));
+
+await check("thought and a step that did not run, still runs, or two steps: the rows as before", () => onLivePage(async (draw, act) => {
+	const declined = await draw(stretch([thoughtItem("t5-think", 1_000, 2_000), toolItem("t5-run", { name: "bash", status: "error", args: { command: "rm notes.txt" }, result: "The user declined this command. Do not run it or retry variants of it unless the user asks." })]));
+	const declinedRows = await openCard(act, declined);
+	assert(declinedRows.length === 2 && declinedRows[1].startsWith("row denied: Not run · you said no") && headOf(declined).label === "1 step not run", `a declined command keeps its calm row, got ${JSON.stringify(declinedRows)} / ${JSON.stringify(headOf(declined))}`);
+	const stopped = await draw(stretch([thoughtItem("t6-think", 1_000, 2_000), toolItem("t6-run", { name: "bash", status: "stopped", args: { command: "sleep 9" } })]));
+	const stoppedRows = await openCard(act, stopped);
+	assert(stoppedRows.length === 2 && stoppedRows[1].startsWith("row stopped: Stopped"), `a stopped command keeps its row, got ${JSON.stringify(stoppedRows)}`);
+	const running = await draw(createElement(workCard.WorkStretch, { items: [thoughtItem("t7-think", 1_000, 2_000), toolItem("t7-run", { name: "bash", status: "running", args: { command: "sleep 9" }, startedAt: Date.now() })], live: true, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined }));
+	assert(JSON.stringify(shownRows(running).map((row) => row.split(":")[0])) === JSON.stringify(["row done", "row running"]) && headOf(running).label === "Working", `a running command: the live card's rows, got ${JSON.stringify(shownRows(running))}`);
+	const two = await draw(stretch([thoughtItem("t8-think", 1_000, 2_000), toolItem("t8-ls", { name: "ls", status: "done", args: { path: "." }, result: "a" }), toolItem("t8-read", { name: "read", status: "done", args: { path: "a.ts" }, result: "x" })]));
+	const twoRows = await openCard(act, two);
+	assert(twoRows.length === 3 && twoRows[1].startsWith("row done: Listed the folder") && twoRows[2].startsWith("row done: Read a.ts") && headOf(two).label === "Listed a folder, read a file", `two steps: as before, got ${JSON.stringify(twoRows)} / ${JSON.stringify(headOf(two))}`);
+}));
+
+await check("at phone width a folded card's sentence takes a second line; a short one, and a folded turn, keep a card's height", async () => {
+	const { chromium } = await import("playwright");
+	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
+	if (!executable || !fs.existsSync(executable)) {
+		console.log("  (Chromium not installed: this section is skipped)");
+		return;
+	}
+	const search = card([toolItem("p1", { name: "web_search", status: "done", args: { query: "node lts release" } })], { endTs: Date.now() });
+	const three = [toolItem("p2", { name: "bash", status: "done", args: { command: "ls" }, result: "a\nb" }), toolItem("p3", { name: "bash", status: "done", args: { command: "sleep 4" }, result: "" }), toolItem("p4", { name: "read", status: "done", args: { path: "notes.txt" }, result: "x" })];
+	const steps = card(three, { endTs: Date.now() });
+	const short = card([toolItem("p5", { name: "bash", status: "done", args: { command: "npm test" }, result: "ok" })], { endTs: Date.now() });
+	const endless = card([toolItem("p6", { name: "web_search", status: "done", args: { query: "node lts release ".repeat(8).trim() } })], { endTs: Date.now() });
+	const turn = decode(renderToStaticMarkup(createElement(workCard.TurnCard, { foldId: "worked:p", steps: three.map((item) => ({ kind: "step", item })), ms: 6_300 })));
+	const fontsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web-ui/public/fonts");
+	const browser = await chromium.launch();
+	try {
+		const measure = async (width: number) => {
+			const page = await browser.newPage({ viewport: { width, height: 900 } });
+			// Served from a made-up origin so the stylesheet's /fonts/ load the page's own font: wrapping is measured in it.
+			await page.route("http://cards.test/**", (route) => {
+				const url = new URL(route.request().url());
+				if (url.pathname.startsWith("/fonts/")) return route.fulfill({ body: fs.readFileSync(path.join(fontsDir, path.basename(url.pathname))) });
+				return route.fulfill({ contentType: "text/html", body: `<!doctype html><html data-theme="light"><head><meta charset="utf-8"><style>${readPageStyles()}</style></head><body><div class="messages">${[search, steps, short, endless].map((html, n) => `<div id="c${n}">${html}</div>`).join("")}<div id="c4">${turn}</div></div></body></html>` });
+			});
+			await page.goto("http://cards.test/");
+			await page.evaluate("document.fonts.ready.then(() => Promise.all([...document.fonts].map((font) => font.load())))");
+			// A plain string: the compiler's helpers for named functions do not exist in the page.
+			const got: Array<{ words: string; whole: boolean; lines: number; cut: boolean; height: number; border: string }> = await page.evaluate(`[0, 1, 2, 3, 4].map((n) => {
+				const card = document.querySelector("#c" + n + " .wk-card");
+				const label = card.querySelector(".wk-head .wk-lbl");
+				const line = parseFloat(getComputedStyle(label).lineHeight);
+				return { words: label.textContent, whole: label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1, lines: Math.round(label.getBoundingClientRect().height / line), cut: label.scrollHeight > label.clientHeight + 1, height: card.querySelector(".wk-head").getBoundingClientRect().height, border: getComputedStyle(card).borderTopWidth + " " + getComputedStyle(card).borderTopStyle };
+			})`);
+			await page.close();
+			return got;
+		};
+		const [phone, desk] = [await measure(390), await measure(1280)];
+		assert(phone[0].whole && phone[0].lines <= 2, `at 390 px the folded search shows its whole sentence "${phone[0].words}", got ${JSON.stringify(phone[0])}`);
+		assert(phone[2].lines === 1 && Math.abs(phone[2].height - desk[2].height) < 0.05, `a short sentence stays one line, its card as tall as on a desktop, got ${JSON.stringify([phone[2], desk[2]])}`);
+		assert(phone[3].lines === 2 && phone[3].cut, `a sentence longer than two lines is cut after the second, got ${JSON.stringify(phone[3])}`);
+		assert(desk.every((card) => card.lines === 1), `on a desktop every folded sentence is one line, got ${JSON.stringify(desk)}`);
+		// A folded turn is the same card as a folded stretch: its border and its height.
+		for (const [at, cards] of [[390, phone], [1280, desk]] as const) {
+			assert(cards[4].border === cards[1].border && cards[4].border.endsWith("solid") && Math.abs(cards[4].height - cards[1].height) < 0.05, `at ${at} px a folded turn has a folded stretch's border and height, got ${JSON.stringify([cards[4], cards[1]])}`);
+		}
+	} finally {
+		await browser.close();
+	}
+});
+
+await check("in a card of a thought and one step, opened, the thought's box and the step's output sit where a card of several steps puts them, and its time lines up with its rows'", async () => {
+	const { chromium } = await import("playwright");
+	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
+	if (!executable || !fs.existsSync(executable)) {
+		console.log("  (Chromium not installed: this section is skipped)");
+		return;
+	}
+	const thoughts: any = await import(new URL("../../web-ui/src/thinking-text-store.ts", import.meta.url).href);
+	const read = (id: string) => toolItem(id, { name: "read", status: "done", args: { path: "notes.txt" }, result: "first line", startedAt: 3_000, endedAt: 3_100 });
+	// Each card opened as the person opens it: its head, then its thought's row; in the card of two steps, its read's row by hand too, which the other card opens with itself.
+	const opened: string[] = [];
+	await onLivePage(async (draw, act) => {
+		for (const items of [[thoughtItem("b1-think", 1_000, 2_000), read("b1-read")], [thoughtItem("b2-think", 1_000, 2_000), read("b2-read"), toolItem("b2-ls", { name: "ls", status: "done", args: { path: "." }, result: "a", startedAt: 4_000, endedAt: 4_200 })]]) {
+			for (const item of items) if (item.kind === "thinking") thoughts.thinkingTextStore.set(item.id, "Look at the notes first.");
+			const container = await draw(stretch(items));
+			await act(() => (container.querySelector("button.wk-head") as HTMLButtonElement).click());
+			const [thought, step] = [...container.querySelectorAll(".wk-row button.wk-open")] as HTMLButtonElement[];
+			await act(() => thought.click());
+			if (items.length > 2) await act(() => step.click());
+			opened.push(container.innerHTML);
+		}
+	});
+	const fontsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web-ui/public/fonts");
+	const browser = await chromium.launch();
+	try {
+		for (const width of [1280, 390]) {
+			const page = await browser.newPage({ viewport: { width, height: 900 } });
+			await page.route("http://cards.test/**", (route) => {
+				const url = new URL(route.request().url());
+				if (url.pathname.startsWith("/fonts/")) return route.fulfill({ body: fs.readFileSync(path.join(fontsDir, path.basename(url.pathname))) });
+				return route.fulfill({ contentType: "text/html", body: `<!doctype html><html data-theme="light"><head><meta charset="utf-8"><style>${readPageStyles()}</style></head><body><div class="messages">${opened.map((html, n) => `<div id="c${n}">${html}</div>`).join("")}</div></body></html>` });
+			});
+			await page.goto("http://cards.test/");
+			const left = (selector: string) => page.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? Math.round((el.getBoundingClientRect().left - el.closest(".wk-card").getBoundingClientRect().left) * 100) / 100 : null; })()`);
+			const got = { thought: await left("#c0 .wk-out-thought"), otherThought: await left("#c1 .wk-out-thought"), output: await left("#c0 .wk-out:not(.wk-out-thought)"), otherOutput: await left("#c1 .wk-out:not(.wk-out-thought)") };
+			// Opened, its rows carry the marks, so its head gives up the mark's place and its time lines up with theirs.
+			const rights = (card: string) => page.evaluate(`[...document.querySelectorAll("${card} .wk-head .wk-time, ${card} .wk-row .wk-meta")].filter((time) => time.textContent.trim()).map((time) => Math.round(time.getBoundingClientRect().right))`) as Promise<number[]>;
+			const [oneStep, twoSteps] = [await rights("#c0"), await rights("#c1")];
+			await page.close();
+			assert(got.thought !== null && got.thought === got.otherThought, `at ${width} px the opened thought's box sits where a two-step card puts its own, got ${JSON.stringify(got)}`);
+			assert(got.output !== null && got.output === got.otherOutput, `at ${width} px the step's output sits where an opened row of a two-step card puts it, got ${JSON.stringify(got)}`);
+			for (const [what, times] of [["a thought and one step", oneStep], ["two steps", twoSteps]] as const) {
+				assert(times.length >= 2 && times.every((right) => Math.abs(right - times[0]) <= 1), `at ${width} px an opened card of ${what} lines its time up with its rows' times, got ${JSON.stringify(times)}`);
+			}
+		}
+	} finally {
+		await browser.close();
+	}
+});
+
 await check("a running command counts on from when it began, after a reload too", async () => {
 	// The card reads the step's start time, so its first picture already counts from it.
-	const shown = chip({ name: "bash", status: "running", args: { command: "sleep 40" }, startedAt: Date.now() - 12_400 });
-	assert(/<span class="chip-running-for">12 s<\/span>/.test(shown), `a command that began 12 s ago says so at once, got ${shown}`);
+	const shown = card([toolItem("t1", { name: "bash", status: "running", args: { command: "sleep 40" }, startedAt: Date.now() - 12_400 })], { live: true });
+	assert(/<span class="wk-meta">12 s<\/span>/.test(shown), `a command that began 12 s ago says so at once, got ${shown}`);
 	const { chromium } = await import("playwright");
 	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
 	if (!executable || !fs.existsSync(executable)) {
@@ -489,22 +937,29 @@ await check("a running command counts on from when it began, after a reload too"
 			await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 			await page.waitForLoadState("networkidle");
 			if (await page.locator(".whats-new-close").count()) await page.locator(".whats-new-close").click();
-			await page.locator(".persistent-agent-card").filter({ hasText: "Long Command Desk" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+			await page.locator(".persistent-agent-card").filter({ hasText: "Long Command Desk" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await page.locator('button[title="Send"], .stop-btn').first().waitFor({ timeout: 15_000 });
 			await page.waitForTimeout(800);
 		};
+		// Enter sends only while Send is enabled, and Send waits for the room's connection: entering a room can replace
+		// its socket at once, and Send shows before the new one is up.
+		const sendInRoom = async (on: typeof page, text: string) => {
+			const box = on.locator("textarea").first();
+			await box.fill(text);
+			await until(() => on.getByRole("button", { name: "Send", exact: true }).isEnabled(), "Send is enabled with the message typed");
+			await box.press("Enter");
+		};
 		const seconds = async () => {
-			const text = (await page.locator(".chip-running-for").first().textContent().catch(() => null)) ?? "";
+			const text = (await page.locator('.wk-row[data-s="running"] .wk-meta').first().textContent().catch(() => null)) ?? "";
 			const match = /^(?:(\d+) min )?(\d+) s$/.exec(text.trim());
 			return match ? Number(match[1] ?? 0) * 60 + Number(match[2]) : -1;
 		};
 		await enter();
-		await page.locator("textarea").first().fill("Run the long check.");
-		await page.locator("textarea").first().press("Enter");
+		await sendInRoom(page, "Run the long check.");
 		await until(async () => (await seconds()) >= 6, "the command has run 6 s");
 		const before = await seconds();
 		await enter();
-		await page.locator(".chip-running-for, .tool-chip").first().waitFor({ timeout: 15_000 });
+		await page.locator(".wk-row").first().waitFor({ timeout: 15_000 });
 		await until(async () => (await seconds()) >= 0, "the card shows its time again", 5_000).catch(() => {});
 		const after = await seconds();
 		assert(after >= before, `after a reload the command's time counts on from ${before} s, got ${after < 0 ? "no time" : `${after} s`}`);
@@ -518,11 +973,10 @@ await check("a running command counts on from when it began, after a reload too"
 		await skewed.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await skewed.waitForLoadState("networkidle");
 		if (await skewed.locator(".whats-new-close").count()) await skewed.locator(".whats-new-close").click();
-		await skewed.locator(".persistent-agent-card").filter({ hasText: "Skewed Clock Desk" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await skewed.locator(".persistent-agent-card").filter({ hasText: "Skewed Clock Desk" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await skewed.locator('button[title="Send"], .stop-btn').first().waitFor({ timeout: 15_000 });
-		await skewed.locator("textarea").first().fill("Run the long check.");
-		await skewed.locator("textarea").first().press("Enter");
-		const shownTime = skewed.locator(".chip-running-for").first();
+		await sendInRoom(skewed, "Run the long check.");
+		const shownTime = skewed.locator('.wk-row[data-s="running"] .wk-meta').first();
 		await shownTime.waitFor({ timeout: 15_000 });
 		const firstShown = ((await shownTime.textContent()) ?? "").trim();
 		assert(/^\d s$/.test(firstShown), `with the browser's clock ahead, a command that just began counts from 0 s, got ${JSON.stringify(firstShown)}`);
@@ -531,7 +985,7 @@ await check("a running command counts on from when it began, after a reload too"
 		await skewed.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await skewed.waitForLoadState("networkidle");
 		if (await skewed.locator(".whats-new-close").count()) await skewed.locator(".whats-new-close").click();
-		await skewed.locator(".persistent-agent-card").filter({ hasText: "Skewed Clock Desk" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await skewed.locator(".persistent-agent-card").filter({ hasText: "Skewed Clock Desk" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		// The card can show before the replay dates it; its next tick shows the replayed start.
 		await replayed;
 		await skewed.waitForTimeout(1_500);

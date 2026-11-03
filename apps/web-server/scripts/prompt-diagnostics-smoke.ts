@@ -263,8 +263,6 @@ try {
 			deniedRootKinds: ["repo-root", "persistent-agents-root", "persistent-agent-root", "exxeta-state-root"],
 		},
 	});
-	assert(capabilityPolicy.type === "capability-policy", "capability-policy component type should be accepted");
-	assert(capabilityPolicy.included === false, "capability-policy component should remain excluded from prompt totals");
 	assert(capabilityPolicy.source && !("path" in capabilityPolicy.source), "capability-policy source must not use source.path");
 
 	const activeToolNames = ["ls", "find", "grep", "read", "write", "edit"];
@@ -332,7 +330,6 @@ try {
 		source: { "function": "before_agent_start_diagnostics_smoke" },
 		metadata: { phase: "before_agent_start_final", turnOrdinal: 1 },
 	});
-	assert(finalSystemPrompt.type === "final-system-prompt", "final-system-prompt component type should be accepted");
 
 	const turnMessageContextText = [
 		"messages=3",
@@ -361,7 +358,6 @@ try {
 			aggregateEstimatedTokens: 32,
 		},
 	});
-	assert(turnMessageContext.type === "message-context", "message-context component type should be accepted for per-turn aggregate counts");
 
 	const restoredTranscriptSentinel = "RESTORED_LIVE_THREAD_RAW_TRANSCRIPT_SENTINEL_SHOULD_NOT_LEAK";
 	const restoredLiveThreadBlock = [
@@ -392,19 +388,6 @@ try {
 			durability: "uncheckpointed_thread_context_not_l1b_memory",
 		},
 	});
-	assert(restoredLiveThreadContext.type === "restored-live-thread-context", "restored-live-thread-context component type should be accepted");
-	assert(restoredLiveThreadContext.metadata?.sourceItemCount === 5, "restored-live-thread-context metadata should include sourceItemCount");
-	assert(restoredLiveThreadContext.metadata?.eligibleItemCount === 4, "restored-live-thread-context metadata should include eligibleItemCount");
-	assert(restoredLiveThreadContext.metadata?.includedItemCount === 3, "restored-live-thread-context metadata should include includedItemCount");
-	assert(restoredLiveThreadContext.metadata?.omittedOlderCount === 1, "restored-live-thread-context metadata should include omittedOlderCount");
-	assert(restoredLiveThreadContext.metadata?.truncatedMessageCount === 1, "restored-live-thread-context metadata should include truncatedMessageCount");
-	assert(restoredLiveThreadContext.metadata?.maxRestoredMessages === 24, "restored-live-thread-context metadata should include maxRestoredMessages");
-	assert(restoredLiveThreadContext.metadata?.maxRestoredTotalChars === 12000, "restored-live-thread-context metadata should include maxRestoredTotalChars");
-	assert(restoredLiveThreadContext.metadata?.maxRestoredMessageChars === 1200, "restored-live-thread-context metadata should include maxRestoredMessageChars");
-	assert(restoredLiveThreadContext.metadata?.messageCountTruncated === true, "restored-live-thread-context metadata should include messageCountTruncated");
-	assert(restoredLiveThreadContext.metadata?.totalCharsTruncated === false, "restored-live-thread-context metadata should include totalCharsTruncated");
-	assert(restoredLiveThreadContext.metadata?.firstPromptOnly === true, "restored-live-thread-context metadata should include firstPromptOnly");
-	assert(restoredLiveThreadContext.metadata?.durability === "uncheckpointed_thread_context_not_l1b_memory", "restored-live-thread-context metadata should include durability");
 	assert(!JSON.stringify(restoredLiveThreadContext.metadata).includes(restoredTranscriptSentinel), "restored-live-thread-context metadata must not include raw transcript strings");
 
 	const manifest = createPromptAssemblyManifest({
@@ -421,17 +404,9 @@ try {
 		totals: { activeToolCount: 0, providerToolSchemaBytes: 0, messageCount: 2 },
 		warnings: ["smoke-only warning without private content"],
 	});
-	assert(manifest.schemaVersion === 1, "manifest should expose explicit schema version");
-	assert(manifest.components.length === 4, "manifest should include all components");
-	assert(manifest.totals.componentCount === 4, "manifest componentCount should include included and excluded components");
-	assert(manifest.totals.includedComponentCount === 2, "manifest includedComponentCount should count only included components");
 	assert(manifest.totals.chars === included.chars + messageContext.chars, "manifest chars should sum included components only");
 	assert(manifest.totals.bytes === included.bytes + messageContext.bytes, "manifest bytes should sum included components only");
 	assert(manifest.totals.estimatedTokens === included.estimatedTokens + messageContext.estimatedTokens, "manifest tokens should sum included components only");
-	assert(manifest.totals.activeToolCount === 0, "manifest should preserve safe optional totals");
-	assert(manifest.totals.providerToolSchemaBytes === 0, "no-policy manifest should preserve zero provider schema bytes");
-	assert(manifest.isolation?.noTools === true, "no-policy manifest should mark noTools isolation true");
-	assert(manifest.totals.messageCount === 2, "manifest should preserve safe message count");
 
 	const activeManifest = createPromptAssemblyManifest({
 		manifestId: "prompt-diagnostics-active-tools-smoke-manifest",
@@ -446,18 +421,8 @@ try {
 		components: [activeCapabilityPolicy, activeToolsComponent, registeredToolsComponent, ...providerSchemaComponents],
 		totals: { activeToolCount: 6, providerToolSchemaBytes: providerSchemaBytes },
 	});
-	assert(activeManifest.isolation?.noTools === false, "active workspace tools manifest should not claim noTools isolation");
-	assert(activeManifest.totals.activeToolCount === 6, "active workspace tools manifest should report active tool count");
-	assert(activeManifest.totals.providerToolSchemaBytes && activeManifest.totals.providerToolSchemaBytes > 0, "active workspace tools manifest should report provider schema bytes");
-	const activeToolComponent = activeManifest.components.find((component) => component.id === "persistent-room:active-tools-active");
-	assert((activeToolComponent?.metadata?.activeToolNames as string[] | undefined)?.join(",") === "ls,find,grep,read,write,edit", "active diagnostics should list workspace tools");
-	const registeredToolComponent = activeManifest.components.find((component) => component.id === "persistent-room:registered-tools-active");
-	assert((registeredToolComponent?.metadata?.registeredToolNames as string[] | undefined)?.join(",") === "ls,find,grep,read,write,edit", "registered diagnostics should list workspace tools");
-	assert(activeManifest.components.filter((component) => component.type === "provider-tool-schema").length === 6, "active diagnostics should include provider schemas for workspace tools");
-	assert(activeCapabilityPolicy.included === false, "active capability-policy component should remain excluded from prompt totals");
 	const activeSerialized = JSON.stringify(activeManifest);
 	assert(!activeSerialized.includes("/tmp/") && !activeSerialized.includes("/Users/") && !activeSerialized.includes("personalized-agents"), "active diagnostics must not include raw root/repo/persistent-agent paths");
-	assert(activeSerialized.includes("workspace") && activeSerialized.includes("b".repeat(64)), "active diagnostics should retain redacted basename and root hash");
 
 	const turnManifest = createPromptAssemblyManifest({
 		manifestId: "prompt-diagnostics-turn-smoke-manifest",

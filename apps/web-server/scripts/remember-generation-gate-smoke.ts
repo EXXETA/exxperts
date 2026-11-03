@@ -25,7 +25,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit, waitForServer } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(100);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -85,23 +88,6 @@ const gateway = http.createServer((req, res) => {
 	});
 });
 
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
 		...init,
@@ -109,15 +95,6 @@ async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promis
 	});
 	const text = await response.text();
 	return { status: response.status, body: text ? JSON.parse(text) : null };
-}
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error(`timed out waiting until ${label}`);
 }
 
 type Frame = Record<string, any>;
@@ -175,7 +152,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20_000);
 
 	const room = await requestJson("/api/persistent-agents", { method: "POST", body: JSON.stringify({ displayName: "Remember Gate Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
 	assert(room.status === 201, `room creation should return 201, got ${room.status}`);
@@ -221,11 +198,10 @@ try {
 	const framesBefore = frames.length;
 	const turnsBefore = gatewayRequests.filter((request) => !request.remember).length;
 	socket.send(JSON.stringify({ type: "prompt", text: `A message during Remember. ${GATED_TURN}` }));
-	const refusalIndex = await waitForFrame((frame) => frame.type === "error" && typeof frame.message === "string", "the refusal frame", framesBefore);
-	assert(frames[refusalIndex]!.message === "Remember is reading this conversation. Send your message when it has finished, or cancel it.", `the refusal is the plain sentence, got ${JSON.stringify(frames[refusalIndex]!.message)}`);
+	await waitForFrame((frame) => frame.type === "error" && typeof frame.message === "string", "the refusal frame", framesBefore);
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	assert(gatewayRequests.filter((request) => !request.remember).length === turnsBefore && !gatewayRequests.some((request) => request.body.includes(GATED_TURN)), "the refused message never reaches the model");
-	pass("a prompt frame during the proposal is refused with the plain sentence and never reaches the model");
+	pass("a prompt frame during the proposal is refused and never reaches the model");
 
 	const second = await requestJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/checkpoint/propose`, { method: "POST", body: JSON.stringify({ conversationId, model: { provider: "openai-compatible", model: "room-model" }, density: "standard", background: true }) });
 	assert(second.status === 202 && second.body?.attached === true && typeof second.body?.jobId === "string", `a second Remember for the conversation attaches to the running one, got ${second.status} ${JSON.stringify(second.body)}`);

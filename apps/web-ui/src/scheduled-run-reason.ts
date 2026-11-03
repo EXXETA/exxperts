@@ -24,6 +24,9 @@ export function formatFriendlyRunReason(run: Pick<PersistentRoomBackgroundRunVie
 		case "completed": return "Completed.";
 		case "already_completed": return "Already completed; no duplicate execution was performed.";
 		case "server_stopped": return "Stopped when exxperts stopped.";
+		// A shared server's two run rules write the person's own sentence as the message (the time limit's names the limit).
+		case "time_limit":
+		case "interrupted_by_restart": if (run.message) return run.message; break;
 		default: break;
 	}
 	// The server's own text names engine parts and ids: never shown.
@@ -32,6 +35,12 @@ export function formatFriendlyRunReason(run: Pick<PersistentRoomBackgroundRunVie
 	// A blocked run is checked again unless a reason above ended it.
 	if (run.status === "blocked" || run.status === "deferred") return "Waiting to run.";
 	return null;
+}
+
+/** A run's line under Recent runs: only runs that waited or went wrong carry one there, an unexpected stop included. */
+export function recentRunReason(run: PersistentRoomBackgroundRunView): string | null {
+	const shown = run.status === "deferred" || run.status === "blocked" || run.status === "failed" || run.reason === "interrupted_by_restart";
+	return shown ? formatFriendlyRunReason(run) : null;
 }
 
 /** Blocks that only wait their turn: the run goes on by itself once the room is free or its next conversation has started. */

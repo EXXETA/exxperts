@@ -1,7 +1,9 @@
 import type { AgentMessage } from "@exxeta/exxperts-core";
 import type { AssistantMessage, Model } from "@exxeta/exxperts-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type CompactionPreparation, compact, generateSummary } from "../src/core/compaction/index.js";
+import { type CompactionPreparation, compact, generateSummary, prepareCompaction } from "../src/core/compaction/index.js";
+import { ROOM_STATE_CUSTOM_TYPE } from "../src/core/messages.js";
+import type { SessionEntry } from "../src/core/session-manager.js";
 
 const { completeSimpleMock } = vi.hoisted(() => ({
 	completeSimpleMock: vi.fn(),
@@ -178,6 +180,35 @@ describe("turn prefix summarization prompt", () => {
 		expect(prompt).toContain("Later messages are stored separately");
 		expect(prompt).toContain("[User]: Summarize this.");
 		expect(prompt).not.toContain("<conversation>");
+	});
+});
+
+describe("a repeated compaction that splits the first kept turn", () => {
+	beforeEach(() => {
+		completeSimpleMock.mockReset();
+		completeSimpleMock.mockResolvedValue(mockSummaryResponse);
+	});
+
+	it("carries the previous summary forward although no history lies before the turn", async () => {
+		const at = new Date().toISOString();
+		const entries: SessionEntry[] = [
+			{ type: "message", id: "u1", parentId: null, timestamp: at, message: { role: "user", content: "old", timestamp: 0 } },
+			{ type: "message", id: "u2", parentId: "u1", timestamp: at, message: { role: "user", content: "the request", timestamp: 0 } },
+			{ type: "custom_message", id: "rs", parentId: "u2", timestamp: at, customType: ROOM_STATE_CUSTOM_TYPE, content: `# Room state\n${"x".repeat(3990)}`, display: false },
+			{ type: "message", id: "a2", parentId: "rs", timestamp: at, message: { ...mockSummaryResponse, content: [{ type: "text", text: "y".repeat(80000) }] } },
+			{ type: "compaction", id: "c1", parentId: "a2", timestamp: at, summary: "First summary", firstKeptEntryId: "u2", tokensBefore: 30000 },
+			{ type: "message", id: "u3", parentId: "c1", timestamp: at, message: { role: "user", content: "next", timestamp: 0 } },
+		];
+
+		// The answer fills the 20,000-token budget, so the cut falls on it and the turn starts at the first kept entry.
+		const preparation = prepareCompaction(entries, { enabled: true, reserveTokens: 2000, keepRecentTokens: 20000 });
+		expect(preparation).toMatchObject({ firstKeptEntryId: "a2", isSplitTurn: true, messagesToSummarize: [] });
+
+		const result = await compact(preparation!, createModel(false), "test-key");
+
+		const prompts = completeSimpleMock.mock.calls.map((call) => call[1].messages[0].content[0].text as string);
+		expect(prompts.some((prompt) => prompt.includes("<previous-summary>\nFirst summary\n</previous-summary>"))).toBe(true);
+		expect(result.summary).not.toContain("No prior history.");
 	});
 });
 

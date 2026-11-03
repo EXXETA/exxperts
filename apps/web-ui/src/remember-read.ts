@@ -125,7 +125,7 @@ export function isPlainProductSentence(message: string): boolean {
 
 /** The one plain stop for a Remember failure nothing classified (a full disk, an odd provider reply); its detail goes to the console. */
 export const REMEMBER_STOPPED_SENTENCE = "Remember stopped unexpectedly. Nothing was saved. Generate again.";
-/** The conversations a room holds before Memorize must make room; mirrors RECENT_CONTEXT_BLOCK_CAP in persistent-agents.ts. */
+/** The conversations a room holds before Memorize must make room; mirrors RECENT_CONTEXT_BLOCK_CAP in persistent-agent-store.ts. */
 export const RECENT_SESSIONS_BLOCK_CAP = 20;
 
 /** The warning one Remember before the room fills, and the line once it is full. */
@@ -155,7 +155,7 @@ export const REMEMBER_SAVED_ELSEWHERE_SENTENCE = "Already saved in another windo
 export const REMEMBER_DAMAGED_SENTENCE = "This room's memory file is damaged, so Remember cannot save. Nothing was lost.";
 
 export function rememberDamagedSentence(message: string): string | null {
-	// The server's structure checks (persistent-agents.ts, memory-shape.ts); a change there changes this match.
+	// The server's structure checks (persistent-agent-memory-files.ts, memory-shape.ts); a change there changes this match.
 	return /\bL1b (?:missing mandatory section|topology must be|Recent Context contains (?:duplicate|malformed))/.test(message) ? REMEMBER_DAMAGED_SENTENCE : null;
 }
 

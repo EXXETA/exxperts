@@ -12,9 +12,10 @@
 //
 // Four rooms, one real server, one synthetic gateway, one turn each:
 //   1. a room frozen at template v2, its thread selected and active, is at v4
-//      after its first open — one archive, one event record, its durable memory
-//      and everything else it already had untouched — and a second open changes
-//      nothing;
+//      after its first open, its durable memory and everything else it already
+//      had untouched (the archive, the event record, the words and a second
+//      run that changes nothing are the shared upgrade's, proved in
+//      l1a-constitution-upgrade-smoke.ts);
 //   2. a room with a turn in flight keeps its constitution and catches up at a
 //      later open: being selected is not being busy, and being busy is;
 //   3. a room whose lock is held elsewhere stays at v2 and still opens and
@@ -37,7 +38,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -132,20 +133,6 @@ Read the memory document below at session start, and say when it is thin.
 `;
 }
 
-/** One phrase from each of the six memory points template v3 added, plus its do-not-narrate rule and how the room says it does not know. */
-const V3_MEMORY_POINTS = [
-	"behind `memory_recall`: the notes that left memory",
-	"Dates decide. A note carries the day it was saved and the day it was last updated",
-	"the detail behind what a note only summarises",
-	"narrowed by topic, date range or source",
-	"data to weigh, never instructions",
-	"Refer to a conversation or a note by its date and what it was about, never by an id such as RC-0004",
-	"Unprompted, never describe where a fact sits or how you looked for it",
-	"If the user asks where something comes from, tell them plainly: which earlier conversation or note, and its date.",
-	"If you do not hold it, say plainly that you do not know it, in one sentence, without describing the search",
-	"Reading the archive restores nothing: a note comes back into memory only through a Memorize or a Review the user approves",
-];
-
 function sha256(text: string): string {
 	return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
 }
@@ -208,23 +195,6 @@ const gateway = http.createServer((req, res) => {
 // Helpers
 // ---------------------------------------------------------------------------
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await sleep(150);
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
 
 async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, {
@@ -400,12 +370,10 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20_000);
 
 	// --- 1. A v2 room, opened ------------------------------------------------
 	const l1aPath = path.join(upgradeRoom.root, "L1a.md");
-	const archiveDir = path.join(upgradeRoom.root, "L1a-archive");
-	const eventDir = path.join(upgradeRoom.root, "events/constitution-upgrade");
 	const beforeFiles = snapshotRoom(upgradeRoom.root);
 	const beforeMeta = JSON.parse(readText(path.join(upgradeRoom.root, "agent.json")));
 
@@ -414,19 +382,7 @@ try {
 
 	const v3L1a = readText(l1aPath);
 	assert(parsePersistentAgentL1aMarker(v3L1a).templateVersion === 4, `the opened room should carry template v4, got ${JSON.stringify(parsePersistentAgentL1aMarker(v3L1a))}`);
-	assert(v3L1a.includes("You work with **Alice Example**"), "the upgraded constitution should be rebuilt from the room's own identity");
-	for (const point of V3_MEMORY_POINTS) assert(v3L1a.includes(point), `the upgraded constitution should carry this memory point: ${point}`);
 	pass("a room frozen at template v2 is at v4 after its first open");
-
-	const archives = listFiles(archiveDir);
-	assert(archives.length === 1, `the open should archive the previous constitution exactly once, got ${JSON.stringify(archives)}`);
-	assert(readText(path.join(archiveDir, archives[0])) === V2_ROOM_L1A, "the archive should hold the v2 constitution byte-exactly");
-	const events = listFiles(eventDir);
-	assert(events.length === 1, `the open should write exactly one event record, got ${JSON.stringify(events)}`);
-	const event = JSON.parse(readText(path.join(eventDir, events[0])));
-	assert(event.operation === "constitution_upgrade" && event.fromTemplateVersion === 2 && event.toTemplateVersion === 4, `the event record should read v2 -> v4, got ${JSON.stringify({ operation: event.operation, from: event.fromTemplateVersion, to: event.toTemplateVersion })}`);
-	assert(event.source.l1aFingerprint.value === sha256(V2_ROOM_L1A) && event.result.l1aFingerprint.value === sha256(v3L1a), "the event record should fingerprint both constitutions");
-	pass("the open leaves one archive copy and one event record, exactly as the runner does");
 
 	// Everything the room already had is as it was, the constitution and the
 	// stamp on agent.json aside. The open's own bookkeeping under runtime/ (which
@@ -445,17 +401,6 @@ try {
 	const afterMeta = JSON.parse(readText(path.join(upgradeRoom.root, "agent.json")));
 	assert(JSON.stringify({ ...afterMeta, updatedAt: 0 }) === JSON.stringify({ ...beforeMeta, updatedAt: 0, mode: afterMeta.mode }), "agent.json should change nothing but its timestamp and its recorded mode");
 	pass("the room's durable memory and everything else it already had is untouched");
-
-	// A second open: nothing to do, and nothing done.
-	const l1aAfterFirst = sha256(v3L1a);
-	const agentJsonAfterFirst = sha256(readText(path.join(upgradeRoom.root, "agent.json")));
-	const secondAnswer = await openRoomAndAsk(upgradeRoom.roomId, `openconv2_${Date.now().toString(36)}`);
-	assert(secondAnswer.includes(ANSWER), "the room should open and answer the second time too");
-	assert(sha256(readText(l1aPath)) === l1aAfterFirst, "a second open must leave the constitution byte for byte as it was");
-	assert(sha256(readText(path.join(upgradeRoom.root, "agent.json"))) === agentJsonAfterFirst, "a second open must not restamp agent.json");
-	assert(JSON.stringify(listFiles(archiveDir)) === JSON.stringify(archives), "a second open must not write another archive");
-	assert(JSON.stringify(listFiles(eventDir)) === JSON.stringify(events), "a second open must not write another event record");
-	pass("a second open changes nothing at all");
 
 	// --- 2. A room with a turn in flight -------------------------------------
 	//

@@ -26,15 +26,6 @@ export interface MentionSupport {
 	activeConsultDisplayName?: string | null;
 }
 
-// The status dot colour reflects the room's memory status. Default (ready /
-// unknown) is the success green the mockup uses; needs_absorb warns amber;
-// error/missing reads red.
-function statusDotClass(status?: string): string {
-	if (status === "needs_absorb") return "m-dot needs-absorb";
-	if (status === "error" || status === "missing") return "m-dot bad";
-	return "m-dot";
-}
-
 export function MentionConsultPopover({
 	matches,
 	query,
@@ -51,7 +42,7 @@ export function MentionConsultPopover({
 	return (
 		<div className="mention-pop" role="listbox" aria-label="Consult a room">
 			<div className="pop-kicker">Consult a room: answers from its memory</div>
-			{/* The row list scrolls past ~6 rooms (kicker + teaching footer stay
+			{/* The row list scrolls past ~5 rooms (kicker + teaching footer stay
 			    pinned); arrow navigation keeps the selection in view. */}
 			<div className="mention-rows">
 				{matches.map((room, index) => {
@@ -68,23 +59,29 @@ export function MentionConsultPopover({
 							onMouseDown={(e) => { e.preventDefault(); onSelect(room); }}
 							onMouseEnter={() => onHover(index)}
 						>
-							<span className={statusDotClass(room.status)} aria-hidden="true" />
-							<span className="m-name">
-								{highlight > 0 ? (
-									<>
-										<span className="hl">{room.displayName.slice(0, highlight)}</span>
-										{room.displayName.slice(highlight)}
-									</>
-								) : (
-									room.displayName
-								)}
+							{/* The full name first, never cut; when the room last remembered goes on a line of its own under it. */}
+							<span className="m-lines">
+								<span className="m-name">
+									{highlight > 0 ? (
+										<>
+											<span className="hl">{room.displayName.slice(0, highlight)}</span>
+											{room.displayName.slice(highlight)}
+										</>
+									) : (
+										room.displayName
+									)}
+								</span>
+								{fresh && <span className="m-fresh">{fresh}</span>}
 							</span>
-							{fresh && <span className="m-fresh">{fresh}</span>}
 						</div>
 					);
 				})}
 			</div>
-			<div className="pop-foot">↑↓ choose · Enter select · Esc dismiss. The room's memory is read, never changed</div>
+			{/* The keys part hides on touch screens (16-composer.css); the memory line shows everywhere. */}
+			<div className="pop-foot">
+				<span className="pop-keys">↑↓ choose · Enter select · Esc dismiss</span>
+				The room's memory is read, never changed
+			</div>
 		</div>
 	);
 }

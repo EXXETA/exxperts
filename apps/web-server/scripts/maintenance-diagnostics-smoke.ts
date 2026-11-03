@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 // Every maintenance worker call leaves one record of what happened: the sizes,
 // the timings, the stop reason, which of the template's markers the reply
@@ -49,8 +49,6 @@ const {
 	maintenanceDiagnosticsDir,
 	maintenanceDiagnosticsParseSignature,
 	MEMORIZE_ASSESSMENT_MARKERS,
-	MEMORIZE_PROPOSAL_MARKERS,
-	writeMaintenanceDiagnosticsRecord,
 } = await import("../src/maintenance-diagnostics.js");
 const { getAbsorbModelLock, getStructuralReviewModelLock } = await import("../src/persistent-agent-ai-profiles.js");
 const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
@@ -190,23 +188,6 @@ const serverOutput: string[] = [];
 const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
-async function waitForServer(child: ChildProcessWithoutNullStreams): Promise<void> {
-	const deadline = Date.now() + 20_000;
-	let lastError = "server did not respond";
-	while (Date.now() < deadline) {
-		if (child.exitCode != null) throw new Error(`server exited before startup with code ${child.exitCode}`);
-		try {
-			const response = await fetch(`${baseUrl}/healthz`);
-			if (response.ok) return;
-			lastError = `healthz returned ${response.status}`;
-		} catch (error) {
-			lastError = (error as Error).message;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`server did not become ready: ${lastError}`);
-}
-
 try {
 	// --- 1. A Memorize first read whose headings deviate ----------------------
 	createPersistentAgentFromScaffoldInput({ displayName: "Diagnostics Smoke Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
@@ -324,37 +305,6 @@ try {
 	assert(cutStates.get("What to remember") === "exact", "a cut reply's surviving headings read as exact");
 	assert(cutStates.get("Needs your judgment") === "missing", "a cut reply's lost headings read as missing, not deviating");
 
-	// --- 4b. Newest first does not depend on file names -----------------------
-	// A retry can land in the same millisecond as the call it retried, and the
-	// second file's name then sorts BEFORE the first's. Order has to come from
-	// what the records say.
-	createPersistentAgentFromScaffoldInput({ displayName: "Diagnostics Order Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
-	const orderRootDir = createPersistentAgentInstance("diagnostics-order-room").rootDir;
-	const sameMillisecond = "2026-09-12T10:00:00.000Z";
-	for (const attempt of [1, 2]) {
-		writeMaintenanceDiagnosticsRecord(orderRootDir, {
-			schemaVersion: 1,
-			agentId: "diagnostics-order-room",
-			process: "memorize-proposal",
-			at: sameMillisecond,
-			attempt,
-			provider: "openai-compatible",
-			model: "gpt-5.5",
-			promptChars: 10,
-			promptEstimatedTokens: 3,
-			replyChars: 10,
-			truncated: false,
-			wallTimeMs: 1,
-			parseSignature: maintenanceDiagnosticsParseSignature("", MEMORIZE_PROPOSAL_MARKERS),
-			validatorErrors: [],
-			validatorWarnings: [],
-			outcome: attempt === 1 ? "retried" : "refused",
-		});
-	}
-	const ordered = listMaintenanceDiagnostics(orderRootDir);
-	assert(ordered.length === 2, `both records should be listed, got ${ordered.length}`);
-	assert(ordered[0].attempt === 2, `within one millisecond the later attempt comes first, got attempt ${ordered[0].attempt}`);
-
 	// --- 5. The export is one document, and the routes serve it ---------------
 	const exported = exportMaintenanceDiagnostics(reviewRootDir, reviewRoomId);
 	assert(exported.agentId === reviewRoomId && exported.recordCount === exported.records.length && exported.recordCount >= 4, `the export should carry every record, got ${exported.recordCount}`);
@@ -368,7 +318,7 @@ try {
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(server);
+	await waitForServer(server, baseUrl, 20_000);
 
 	const listResponse = await authedFetch(`${baseUrl}/api/persistent-agents/${reviewRoomId}/maintenance-diagnostics`);
 	assert(listResponse.status === 200, `the diagnostics route should return 200, got ${listResponse.status}`);

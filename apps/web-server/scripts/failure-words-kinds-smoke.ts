@@ -29,6 +29,7 @@ import { failureLineText, turnFailureLine as turnFailureParts, unreachedWayOn } 
 const turnFailureLine = (...args: Parameters<typeof turnFailureParts>): string => failureLineText(turnFailureParts(...args), "lost");
 import * as lines from "../../web-ui/src/turn-failure-line.js";
 import { isSignInFailure } from "../../web-ui/src/sign-in-failure.js";
+import { threadRecordToLocalThread } from "../../web-ui/src/room-thread-items.js";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { memoryModelStopWayOn, memoryModelStopWhy, reviewRunPausedSentence } from "../../web-ui/src/memory-v2-copy.js";
@@ -325,7 +326,7 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 		check(shownAgain(saved, past) === "GPT-5.5 has reached your plan's usage limit. Nothing was lost. It has reset: try again, or choose another model in Room settings, Model.", `a saved line whose reset has passed, got "${shownAgain(saved, past)}"`);
 		check(shownAgain(saved, soon) === `GPT-5.5 has reached your plan's usage limit. Nothing was lost. It resets ${lines.clockWhen(soon.resetsAt)}: try again then, or choose another model in Room settings, Model.`, `a saved line whose reset is still ahead says its clock time, got "${shownAgain(saved, soon)}"`);
 		const kept = saved.replace("Nothing was lost.", "Your message is back in the box.");
-		check(shownAgain(kept, past) === "GPT-5.5 has reached your plan's usage limit. Your message is back in the box. It has reset: try again, or choose another model in Room settings, Model.", "the middle sentence stays as it was");
+		check(shownAgain(kept, past) === "GPT-5.5 has reached your plan's usage limit. It has reset: try again, or choose another model in Room settings, Model.", `a saved line whose message is back drops that it is, got "${shownAgain(kept, past)}"`);
 	}
 }
 
@@ -382,21 +383,21 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 			const newest = (text: string, cause: string, way?: QuotaWay, shared = false) => wordsOf(text, buttonsOf(cause, way, shared));
 			const gatewayCause = "refused this request: the gateway may not accept the saved key, or the model may not be offered to you";
 			const pairs: Array<[string, string, QuotaWay | undefined, boolean, string]> = [
-				["GPT 6 has reached its usage limit or run out of credit. Your message is back in the box. Check your plan or balance with OpenAI, or choose another model in Room settings, Model.", "quota", { kind: "key", provider: "OpenAI" }, false, "GPT 6 has reached its usage limit or run out of credit. Your message is back in the box. Check your plan or balance with OpenAI, or choose another model."],
-				["GPT 6 refused this request: it may not be offered in your region or on your plan. Your message is back in the box. Choose another model in Room settings, Model.", "region-or-plan", undefined, false, "GPT 6 refused this request: it may not be offered in your region or on your plan. Your message is back in the box."],
-				[`Acme Model ${gatewayCause}. Your message is back in the box. Replace the gateway's key in Settings, AI setup, or choose another model in Room settings, Model.`, "gateway-refused", undefined, false, `Acme Model ${gatewayCause}. Your message is back in the box. Replace the gateway's key, or choose another model.`],
-				[`Acme Model ${gatewayCause}. Your message is back in the box. Tell your admin, or choose another model in Room settings, Model.`, "gateway-refused", undefined, true, `Acme Model ${gatewayCause}. Your message is back in the box. Tell your admin, or choose another model.`],
+				["GPT 6 has reached its usage limit or run out of credit. Check your plan or balance with OpenAI, or choose another model in Room settings, Model.", "quota", { kind: "key", provider: "OpenAI" }, false, "GPT 6 has reached its usage limit or run out of credit. Check your plan or balance with OpenAI, or choose another model."],
+				["GPT 6 refused this request: it may not be offered in your region or on your plan. Choose another model in Room settings, Model.", "region-or-plan", undefined, false, "GPT 6 refused this request: it may not be offered in your region or on your plan."],
+				[`Acme Model ${gatewayCause}. Replace the gateway's key in Settings, AI setup, or choose another model in Room settings, Model.`, "gateway-refused", undefined, false, `Acme Model ${gatewayCause}. Replace the gateway's key, or choose another model.`],
+				[`Acme Model ${gatewayCause}. Tell your admin, or choose another model in Room settings, Model.`, "gateway-refused", undefined, true, `Acme Model ${gatewayCause}. Tell your admin, or choose another model.`],
 				["GPT 6 could not answer this message. Your message is still above. Try again; if it repeats, choose another model in Room settings, Model.", "other", undefined, false, "GPT 6 could not answer this message. Your message is still above. Try again; if it repeats, choose another model."],
-				["GPT 6 could not respond: the conversation plus this room's memory are more than it can read at once. Your message is back in the box. Run Review from Maintain to shrink memory, or continue on a model that can read more at once in Room settings, Model.", "overflow", undefined, false, "GPT 6 could not respond: the conversation plus this room's memory are more than it can read at once. Your message is back in the box. Run Review from Maintain to shrink memory, or continue on a model that can read more at once."],
-				["GPT 6 can't read this conversation and the room's memory at once. Your message is back in the box. Shrink memory with Review from Maintain, or continue on a model that can read more at once in Room settings, Model.", "overflow", undefined, false, "GPT 6 can't read this conversation and the room's memory at once. Your message is back in the box. Shrink memory with Review, or continue on a model that can read more at once."],
-				["GPT 6 can't read this message at once. Your message is back in the box. Shorten it, or continue on a model that can read more at once in Room settings, Model.", "message-over-window", undefined, false, "GPT 6 can't read this message at once. Your message is back in the box. Shorten it, or continue on a model that can read more at once."],
-				["Acme Model can read only 8,192 tokens at once, less than the context window set in AI setup (32,768). Your message is back in the box. Correct it in AI setup, or choose another model in Room settings, Model.", "window-set-larger", undefined, false, "Acme Model can read only 8,192 tokens at once, less than the context window set in AI setup (32,768). Your message is back in the box. Correct it in AI setup, or choose another model."],
-				["Acme Model can read only 8,192 tokens at once, less than the context window set for it (32,768). Your message is back in the box. Tell your admin, or choose another model in Room settings, Model.", "window-set-larger", undefined, true, "Acme Model can read only 8,192 tokens at once, less than the context window set for it (32,768). Your message is back in the box. Tell your admin, or choose another model."],
-				["GPT 6 can't read this conversation at once. Your message is back in the box. Continue on a model that can read more at once in Room settings, Model.", "conversation-over-window", undefined, false, "GPT 6 can't read this conversation at once. Your message is back in the box. Continue on a model that can read more at once."],
-				["GPT 6 could not be reached. Your message is back in the box. Check your internet connection, then try again.", "connection", undefined, false, "GPT 6 could not be reached. Your message is back in the box. Check your internet connection, then try again."],
+				["GPT 6 could not respond: the conversation plus this room's memory are more than it can read at once. Run Review from Maintain to shrink memory, or continue on a model that can read more at once in Room settings, Model.", "overflow", undefined, false, "GPT 6 could not respond: the conversation plus this room's memory are more than it can read at once. Run Review from Maintain to shrink memory, or continue on a model that can read more at once."],
+				["GPT 6 can't read this conversation and the room's memory at once. Shrink memory with Review from Maintain, or continue on a model that can read more at once in Room settings, Model.", "overflow", undefined, false, "GPT 6 can't read this conversation and the room's memory at once. Shrink memory with Review, or continue on a model that can read more at once."],
+				["GPT 6 can't read this message at once. Shorten it, or continue on a model that can read more at once in Room settings, Model.", "message-over-window", undefined, false, "GPT 6 can't read this message at once. Shorten it, or continue on a model that can read more at once."],
+				["Acme Model can read only 8,192 tokens at once, less than the context window set in AI setup (32,768). Correct it in AI setup, or choose another model in Room settings, Model.", "window-set-larger", undefined, false, "Acme Model can read only 8,192 tokens at once, less than the context window set in AI setup (32,768). Correct it in AI setup, or choose another model."],
+				["Acme Model can read only 8,192 tokens at once, less than the context window set for it (32,768). Tell your admin, or choose another model in Room settings, Model.", "window-set-larger", undefined, true, "Acme Model can read only 8,192 tokens at once, less than the context window set for it (32,768). Tell your admin, or choose another model."],
+				["GPT 6 can't read this conversation at once. Continue on a model that can read more at once in Room settings, Model.", "conversation-over-window", undefined, false, "GPT 6 can't read this conversation at once. Continue on a model that can read more at once."],
+				["GPT 6 could not be reached. Check your internet connection, then try again.", "connection", undefined, false, "GPT 6 could not be reached. Check your internet connection, then try again."],
 				// A sentence that only says what the Try again button does goes; one that says when, or what to do first, stays.
-				["GPT 6 stopped in the middle of its answer. Your message is back in the box. Try again.", "cut-off", undefined, false, "GPT 6 stopped in the middle of its answer. Your message is back in the box."],
-				["GPT 6 is still busy after several tries. Your message is back in the box. Try again in a minute.", "still-busy", undefined, false, "GPT 6 is still busy after several tries. Your message is back in the box. Try again in a minute."],
+				["GPT 6 stopped in the middle of its answer. Try again.", "cut-off", undefined, false, "GPT 6 stopped in the middle of its answer."],
+				["GPT 6 is still busy after several tries. Try again in a minute.", "still-busy", undefined, false, "GPT 6 is still busy after several tries. Try again in a minute."],
 			];
 			for (const [text, cause, way, shared, shown] of pairs) check(newest(text, cause, way, shared) === shown, `the newest ${cause} line${shared ? " on a shared server" : ""} reads ${JSON.stringify(shown)}, got ${JSON.stringify(newest(text, cause, way, shared))}`);
 			// The overflow line names memory only where the conversation and memory overflow; the message alone has its own line.
@@ -451,7 +452,7 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 				const c1 = overflowLineOf(facts({}));
 				const c1Back = lines.lineWithMessage({ text: c1.text, parts: c1.parts }, "back");
 				const c1Kept = lines.lineWithMessage({ text: c1.text, parts: c1.parts }, "above");
-				check(c1Back.text.includes("(32,768). Your message is back in the box. Correct it") && c1Back.messageBack === true, `C1 says the message is back in the box once it is, got ${JSON.stringify(c1Back)}`);
+				check(c1Back.text.includes("(32,768). Correct it") && c1Back.messageBack === true, `C1 says nothing of where the message is once it is back, got ${JSON.stringify(c1Back)}`);
 				check(c1Kept.text.includes("(32,768). Your message is still above. Correct it") && c1Kept.messageAbove === true, `C1 says the message is still above while it stays, got ${JSON.stringify(c1Kept)}`);
 				check(lines.failureLineParts(c1Back).cause === "Acme Model can read only 8,192 tokens at once, less than the context window set in AI setup (32,768).", `C1's cause is its first sentence, got ${JSON.stringify(lines.failureLineParts(c1Back))}`);
 			}
@@ -461,8 +462,8 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 	}
 	{
 		const parts: Array<[string, string, string]> = [
-			["Claude Haiku 5.5 has reached its usage limit or run out of credit. Your message is back in the box. Check the balance at console.anthropic.com.", "Claude Haiku 5.5 has reached its usage limit or run out of credit.", "Your message is back in the box. Check the balance at console.anthropic.com."],
-			["Claude Haiku 5.5 can't read this conversation and the room's memory at once. Your message is back in the box. Shrink memory with Review, or continue on a model that can read more at once.", "Claude Haiku 5.5 can't read this conversation and the room's memory at once.", "Your message is back in the box. Shrink memory with Review, or continue on a model that can read more at once."],
+			["Claude Haiku 5.5 has reached its usage limit or run out of credit. Your message is back in the box. Check the balance at console.anthropic.com.", "Claude Haiku 5.5 has reached its usage limit or run out of credit.", "Check the balance at console.anthropic.com."],
+			["Claude Haiku 5.5 can't read this conversation and the room's memory at once. Your message is back in the box. Shrink memory with Review, or continue on a model that can read more at once.", "Claude Haiku 5.5 can't read this conversation and the room's memory at once.", "Shrink memory with Review, or continue on a model that can read more at once."],
 			["This room's model, Acme Inc. Model on Acme, is no longer offered. Your message is still above. Choose another model in Room settings, Model.", "This room's model, Acme Inc. Model on Acme, is no longer offered.", "Your message is still above. Choose another model in Room settings, Model."],
 			["The room could not shorten this conversation enough for Claude Haiku 5.5. Your memory is unchanged.", "The room could not shorten this conversation enough for Claude Haiku 5.5.", "Your memory is unchanged."],
 			["Response interrupted: the connection was lost.", "Response interrupted: the connection was lost.", ""],
@@ -478,10 +479,34 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 		const read = lines.savedFailureLineShown({ text: kept });
 		check(read.text === kept && read.messageAbove === true && read.parts?.cause === "GPT 6 isn't available on your account." && read.parts?.wayOn === "Choose another model in Room settings, Model.", `a saved line says where its message is by its fields, got ${JSON.stringify(read)}`);
 		const back = lines.savedFailureLineShown({ text: "Response interrupted by Stop. Your message is back in the box." });
-		check(back.messageBack === true && back.text === "Response interrupted by Stop. Your message is back in the box.", `a saved Stop line back in the box keeps its words, got ${JSON.stringify(back)}`);
+		check(back.messageBack === true && back.text === "Response interrupted by Stop.", `a saved Stop line back in the box keeps its words but that one, got ${JSON.stringify(back)}`);
+		// Saved with its fields, by a build that said the message was back in the box: worded again from them.
+		const withParts = lines.savedFailureLineShown({ text: "GPT 6 could not answer this message. Your message is back in the box. Try again.", parts: { cause: "GPT 6 could not answer this message.", wayOn: "Try again." }, messageBack: true });
+		check(withParts.text === "GPT 6 could not answer this message. Try again." && withParts.messageBack === true, `a saved line with its fields drops that its message is back in the box, got ${JSON.stringify(withParts)}`);
+		const aboveWithParts = { text: "GPT 6 could not answer this message. Your message is still above. Try again.", parts: { cause: "GPT 6 could not answer this message.", wayOn: "Try again." }, messageAbove: true as const };
+		check(lines.savedFailureLineShown(aboveWithParts).text === aboveWithParts.text, `a saved line whose message stayed above keeps its words, got ${JSON.stringify(lines.savedFailureLineShown(aboveWithParts))}`);
+		const lostWithParts = { text: "GPT 6 could not answer this message. Nothing was lost. Try again.", parts: { cause: "GPT 6 could not answer this message.", wayOn: "Try again." } };
+		check(lines.savedFailureLineShown(lostWithParts).text === lostWithParts.text, `a saved line that lost nothing keeps its words, got ${JSON.stringify(lines.savedFailureLineShown(lostWithParts))}`);
 		// An older order, the way on before where the message is: the way on is read out of the cause, and the line says it in today's order.
 		const older = lines.savedFailureLineShown({ text: "GPT 6 isn't available on your account. Choose another model in Room settings, Model. Your message is back in the box." });
-		check(older.parts?.cause === "GPT 6 isn't available on your account." && older.parts?.wayOn === "Choose another model in Room settings, Model." && older.messageBack === true && older.text === "GPT 6 isn't available on your account. Your message is back in the box. Choose another model in Room settings, Model.", `a line saved with the way on first reads it out of the cause, got ${JSON.stringify(older)}`);
+		check(older.parts?.cause === "GPT 6 isn't available on your account." && older.parts?.wayOn === "Choose another model in Room settings, Model." && older.messageBack === true && older.text === "GPT 6 isn't available on your account. Choose another model in Room settings, Model.", `a line saved with the way on first reads it out of the cause, got ${JSON.stringify(older)}`);
+		// The still-finishing note is never kept: one an older build saved, in its words then, goes on the way in too.
+		check(lines.TURN_RUNNING_LINE === "The last answer is still finishing; send your message in a moment.", `the still-finishing note, got ${JSON.stringify(lines.TURN_RUNNING_LINE)}`);
+		check(lines.isTurnRunningNote({ kind: "system", text: "The last answer is still finishing. Your message is back in the box; send it in a moment." }) && lines.isTurnRunningNote({ kind: "system", text: lines.TURN_RUNNING_LINE }), "the still-finishing note is known in an older build's words and in this one's");
+		// Opened again: every saved line older builds wrote with the message back in the box loses that sentence, whatever its level.
+		const reopened = threadRecordToLocalThread({ state: "standby", agentId: "room", threadId: "thread", model: { provider: "p", model: "m" }, items: [
+			{ kind: "user", id: "u1", text: "Earlier." },
+			{ kind: "system", id: "stop-fields", text: "You stopped this answer. Your message is back in the box.", parts: { cause: "You stopped this answer." }, messageBack: true, returnedId: "r1" },
+			{ kind: "system", id: "stop-text", text: "Response interrupted by Stop. Your message is back in the box." },
+			{ kind: "system", id: "edit", level: "info", text: "The conversation moved on, so this message can't be edited. Your text is in the message box." },
+			{ kind: "system", id: "switch", level: "info", text: "Continued on Claude Haiku 5.5" },
+			{ kind: "system", id: "notice", level: "info", text: "Claude Haiku 5.5 has reached its usage limit or run out of credit. Nothing was lost. Check the balance at console.anthropic.com." },
+		] } as never).items as Array<{ id: string; text?: string; parts?: unknown }>;
+		const shownText = (id: string) => reopened.find((item) => item.id === id)?.text;
+		check(shownText("stop-fields") === "You stopped this answer.", `a saved Stop line with its fields opens without the old sentence, got ${JSON.stringify(shownText("stop-fields"))}`);
+		check(shownText("stop-text") === "Response interrupted by Stop.", `a saved Stop line as text opens without the old sentence, got ${JSON.stringify(shownText("stop-text"))}`);
+		check(shownText("edit") === "The conversation moved on, so this message can't be edited.", `a saved refused-edit line opens without the old sentence, got ${JSON.stringify(shownText("edit"))}`);
+		check(shownText("switch") === "Continued on Claude Haiku 5.5" && shownText("notice") === "Claude Haiku 5.5 has reached its usage limit or run out of credit. Nothing was lost. Check the balance at console.anthropic.com." && reopened.find((item) => item.id === "notice")?.parts === undefined, `other saved notes open as they were, got ${JSON.stringify(reopened.slice(-2))}`);
 		const plain = lines.savedFailureLineShown({ text: "Response interrupted: the connection was lost." });
 		check(plain.parts === undefined && plain.messageAbove === undefined && plain.messageBack === undefined, `a line that says nothing of a message gets no fields, got ${JSON.stringify(plain)}`);
 	}
@@ -508,7 +533,7 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 		check(sentAgain([line], "line", files) === null, "no message above: nothing is sent again");
 	}
 	const backInBox = lines.lineWithMessage(lines.savedFailureLineShown({ text: "GPT 6 could not answer this message. Your message is still above. Try again." }), "back");
-	check(backInBox.text === "GPT 6 could not answer this message. Your message is back in the box. Try again." && backInBox.messageBack === true && backInBox.messageAbove === undefined, `a line that said the message is still above says it is back in the box once it is, got ${JSON.stringify(backInBox)}`);
+	check(backInBox.text === "GPT 6 could not answer this message. Try again." && backInBox.messageBack === true && backInBox.messageAbove === undefined, `a line that said the message is still above says nothing of where it is once it is back, got ${JSON.stringify(backInBox)}`);
 }
 
 // --- The room could not shorten a conversation: the summary call's own cause, read with the one reader ---
@@ -532,7 +557,7 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 		check(shorten(false).text === "The room could not shorten this conversation enough for Claude Haiku 5.5. Your memory is unchanged. Remember, then continue, or choose a model that reads more at once in Room settings, Model.", `the words stay as they were, got ${JSON.stringify(shorten(false).text)}`);
 		const above = shorten(true, true);
 		const back = lines.lineWithMessage(above, "back");
-		check(lines.failureLineParts(above).cause === "The room could not shorten this conversation enough for Claude Haiku 5.5." && lines.failureLineParts(back).rest.startsWith("Your message is back in the box. Your memory is unchanged."), `the cause first, then where the message is, got ${JSON.stringify(back.text)}`);
+		check(lines.failureLineParts(above).cause === "The room could not shorten this conversation enough for Claude Haiku 5.5." && lines.failureLineParts(back).rest.startsWith("Your memory is unchanged."), `the cause first, then the rest, got ${JSON.stringify(back.text)}`);
 		const buttons = lines.failureButtons("could-not-shorten" as never, undefined, false);
 		check(buttons.chooseModel && !buttons.tryAgain, `a size problem offers another model and no Try again, got ${JSON.stringify(buttons)}`);
 	}

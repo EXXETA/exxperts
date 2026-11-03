@@ -10,6 +10,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -43,15 +46,6 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 const ROOM = "Picker Room";
 const TOO_SMALL_LINE = "Too small for this room's memory";
 const PICKER_LINE = "A Memory model must read all of this room's memory at once. To use a smaller one, lower the memory budget in Memory.";
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
@@ -100,7 +94,7 @@ try {
 		const dismiss = page.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
 
-		await page.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: "Enter →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: "Enter" }).click();
 		await page.locator("textarea").first().waitFor({ timeout: 15000 });
 		await page.getByRole("button", { name: "Room settings" }).click();
 		await page.waitForSelector(".settings-dialog", { timeout: 10000 });
@@ -142,7 +136,7 @@ try {
 		assert(own.ok && (await roomMemory()).stored?.model === "claude-wide", `the room has its own Memory model, got ${own.status}`);
 		await page.goto(baseUrl);
 		await page.waitForLoadState("networkidle");
-		await page.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await page.locator("textarea").first().waitFor({ timeout: 15000 });
 		await page.getByRole("button", { name: "Room settings" }).click();
 		await page.waitForSelector(".settings-dialog", { timeout: 10000 });
@@ -159,7 +153,12 @@ try {
 		await page.waitForSelector(".settings-dialog", { timeout: 10000 });
 		await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Memory$/ }).first().click();
 		const slider = page.locator(".room-settings-section:not([hidden]) .memory-budget-slider");
-		await slider.waitFor({ timeout: 10000 });
+		// The slider shows and stays disabled at its lowest value until the room's settings answer; read or move it only after.
+		const sliderLoaded = async () => {
+			await slider.waitFor({ timeout: 10000 });
+			await waitUntil(() => slider.isEnabled(), "the slider shows the room's saved budget", 10000);
+		};
+		await sliderLoaded();
 		const saved = await slider.inputValue();
 		await slider.focus();
 		await page.keyboard.press("End");
@@ -183,7 +182,7 @@ try {
 		};
 		assert(await openMemoryPicker(), "at the 20k budget the medium model is too small");
 		await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Memory$/ }).first().click();
-		await slider.waitFor({ timeout: 10000 });
+		await sliderLoaded();
 		await slider.focus();
 		await page.keyboard.press("Home");
 		const settingsBudget = async () => ((await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/maintenance-settings`)).json()) as any)?.settings?.memoryBudgetTokens;

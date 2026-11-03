@@ -1,7 +1,8 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../api";
 import { agentLabel } from "../types";
-import { GATEWAY_PROVIDER_ID_PREFIX, modelDisplayName, modelTooltipName } from "../model-names";
+import { CloseIcon } from "./icons";
+import { GATEWAY_PROVIDER_ID_PREFIX, canonicalModelName, formatModelWithProvider, modelDisplayName } from "../model-names";
 import { allInput, cacheWords } from "../usage-words";
 
 // The Wallet never blends real and estimated dollars: the server splits every
@@ -16,6 +17,8 @@ interface UsageRow {
 	agent: string;
 	model?: string;
 	modelLabel?: string;
+	/** the model's name as the Wallet's model rows show it */
+	modelName?: string;
 	provider?: string;
 	authType?: "oauth" | "api_key";
 	kind?: string;
@@ -87,13 +90,15 @@ const RANGES: { id: Range; label: string }[] = [
 // kicks in past limit+1 so we never hide a single row behind a same-size button.
 const BAR_COLLAPSE_LIMIT = 6;
 
+const SOURCE_CHIP: Record<UsageSource, string> = { billed: "Billed", plan: "Plan", unattributed: "Unattributed" };
+
 const KIND_LABELS: Record<string, string> = {
-	chat: "chat",
-	upkeep: "upkeep",
-	scheduled: "scheduled",
-	hivemind: "hivemind",
-	cli: "cli",
-	consult: "consult",
+	chat: "Chat",
+	upkeep: "Upkeep",
+	scheduled: "Scheduled",
+	hivemind: "Ask your rooms",
+	cli: "CLI",
+	consult: "Consult",
 };
 
 function fmtTok(n: number): string {
@@ -175,12 +180,12 @@ const PROVIDER_SHORT: Record<string, string> = {
 };
 
 function modelCell(row: UsageRow): string {
-	return modelDisplayName(row) || "?";
+	return row.modelName || modelDisplayName(row) || "?";
 }
 
 /** Same cell, with the provider added: the table shows names, hover disambiguates. */
 function modelCellTitle(row: UsageRow): string | undefined {
-	const full = modelTooltipName(row);
+	const full = formatModelWithProvider(row.modelName || modelDisplayName(row), canonicalModelName(row).provider);
 	return full && full !== modelCell(row) ? full : undefined;
 }
 
@@ -272,7 +277,7 @@ export function Dashboard() {
 	// Prefer the room's CURRENT display name (renames included) from the live
 	// statuses the server joins in; retired/archived rooms fall back to the
 	// recorded label or id, exactly as before.
-	const nameOf = (id: string): string => (id === "hivemind:memory" ? "HiveMind" : data.agentNames?.[id] ?? agentLabel(id));
+	const nameOf = (id: string): string => (id === "hivemind:memory" ? KIND_LABELS.hivemind : data.agentNames?.[id] ?? agentLabel(id));
 
 	// Retired rooms (archived and deleted alike) sit folded under the active
 	// ones; the memory chat is a live surface and always counts as active.
@@ -369,7 +374,7 @@ export function Dashboard() {
 										<span className="fold-caret" aria-hidden="true">{removedOpen ? "▾" : "▸"}</span>
 										<span className="src-name">
 											Removed gateways
-											<span className="src-chip billed">billed</span>
+											<span className="src-chip billed">Billed</span>
 										</span>
 										<span className="src-money">{fmtPriced(removedSum, removedSources.every((s) => s.source === "billed"))}</span>
 										<span className="src-meta">
@@ -382,7 +387,7 @@ export function Dashboard() {
 							)}
 							<div className="src-note">
 								Estimated values use public API list prices. Gateway turns use the rates the gateway publishes; turns
-								from before a price was on file are priced at today's rate and marked ≈. Memory upkeep, HiveMind
+								from before a price was on file are priced at today's rate and marked ≈. Memory upkeep, Ask your rooms
 								answers and scheduled runs are recorded from July 2026; earlier upkeep was never persisted and is
 								not included.
 							</div>
@@ -486,7 +491,7 @@ export function Dashboard() {
 							onClick={(e) => { e.stopPropagation(); setAgent("all"); }}
 							onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setAgent("all"); } }}
 						>
-							{nameOf(agent)} <span aria-hidden="true">×</span>
+							{nameOf(agent)} <CloseIcon size={12} />
 						</span>
 					)}
 					<span className="recent-meta">{data.recent.length} entries, all time</span>
@@ -494,35 +499,38 @@ export function Dashboard() {
 				</button>
 				{recentOpen && (
 					<div id="recent-turns-body" className="recent-body">
-						<table>
-							<thead>
-								<tr>
-									<th>When</th>
-									<th>Room</th>
-									<th>Model</th>
-									<th>Source</th>
-									<th>Kind</th>
-									<th>↑ in</th>
-									<th>↓ out</th>
-									<th>value</th>
+						{/* The roles repeat the table's own: a phone shows each turn as a card
+						    (19-wallet.css), and a table whose display changes loses its
+						    semantics in some browsers unless they are stated. */}
+						<table role="table">
+							<thead role="rowgroup">
+								<tr role="row">
+									<th role="columnheader">When</th>
+									<th role="columnheader">Room</th>
+									<th role="columnheader">Model</th>
+									<th role="columnheader">Source</th>
+									<th role="columnheader">Kind</th>
+									<th role="columnheader">↑ In</th>
+									<th role="columnheader">↓ Out</th>
+									<th role="columnheader">Value</th>
 								</tr>
 							</thead>
-							<tbody>
+							<tbody role="rowgroup">
 								{data.recent.map((r, i) => (
-									<tr key={i}>
-										<td>{fmtAgo(r.ts)}</td>
-										<td className="first">{nameOf(r.agent)}</td>
-										<td title={modelCellTitle(r)}>{modelCell(r)}</td>
-										<td>{sourceCell(r)}</td>
-										<td><span className="kind-chip">{KIND_LABELS[r.kind ?? "chat"] ?? r.kind}</span></td>
-										<td title={turnTokensTitle(r)}>{fmtTok(allInput(r))}{cacheWords(r, fmtTok) && <span className="recent-cache-note">({cacheWords(r, fmtTok)})</span>}</td>
-										<td>{fmtTok(r.output)}</td>
-										<td>{fmtPriced(rowPriced(r), r.authType === "api_key")}</td>
+									<tr key={i} role="row">
+										<td role="cell">{fmtAgo(r.ts)}</td>
+										<td role="cell" className="first">{nameOf(r.agent)}</td>
+										<td role="cell" title={modelCellTitle(r)}>{modelCell(r)}</td>
+										<td role="cell">{sourceCell(r)}</td>
+										<td role="cell"><span className="kind-chip">{KIND_LABELS[r.kind ?? "chat"] ?? r.kind}</span></td>
+										<td role="cell" title={turnTokensTitle(r)}>{fmtTok(allInput(r))}{cacheWords(r, fmtTok) && <span className="recent-cache-note">({cacheWords(r, fmtTok)})</span>}</td>
+										<td role="cell">{fmtTok(r.output)}</td>
+										<td role="cell">{fmtPriced(rowPriced(r), r.authType === "api_key")}</td>
 									</tr>
 								))}
 								{data.recent.length === 0 && (
-									<tr>
-										<td colSpan={8}>{agent !== "all" ? "No turns for this room." : "No turns yet."}</td>
+									<tr role="row">
+										<td role="cell" colSpan={8}>{agent !== "all" ? "No turns for this room." : "No turns yet."}</td>
 									</tr>
 								)}
 							</tbody>
@@ -543,7 +551,7 @@ function SourceRow({ s, indented }: { s: UsagePayload["sources"][number]; indent
 			<span className={`src-dot seg-${s.source}`} />
 			<span className="src-name">
 				{s.name}
-				<span className={`src-chip ${s.source}`}>{s.source === "unattributed" ? "unattributed" : s.source}</span>
+				<span className={`src-chip ${s.source}`}>{SOURCE_CHIP[s.source]}</span>
 			</span>
 			<span className="src-money">{fmtPriced(s, s.source === "billed")}</span>
 			<span className="src-meta">
@@ -556,13 +564,22 @@ function SourceRow({ s, indented }: { s: UsagePayload["sources"][number]; indent
 	);
 }
 
-/** "incl. upkeep ≈ $0.12 over 6 runs" line under an exxpert with background kinds. */
+// The words for each background kind inside a sentence; the kind ids are stored and never shown.
+const BACKGROUND_KIND_WORDS: Record<string, string> = {
+	upkeep: "upkeep",
+	consult: "consult",
+	scheduled: "scheduled",
+	hivemind: KIND_LABELS.hivemind,
+	cli: "cli",
+};
+
+/** "incl. upkeep ≈ $0.12 over 6 runs" line under a room with background kinds. */
 function backgroundKindsNote(kinds: Record<string, Priced>): string | undefined {
 	const parts: string[] = [];
-	for (const kind of ["upkeep", "consult", "scheduled", "hivemind", "cli"]) {
+	for (const [kind, words] of Object.entries(BACKGROUND_KIND_WORDS)) {
 		const k = kinds[kind];
 		if (!k || k.turns === 0) continue;
-		parts.push(`${kind} ${fmtPriced(k, false)} over ${k.turns} run${k.turns === 1 ? "" : "s"}`);
+		parts.push(`${words} ${fmtPriced(k, false)} over ${k.turns} run${k.turns === 1 ? "" : "s"}`);
 	}
 	return parts.length ? `incl. ${parts.join(", ")}` : undefined;
 }

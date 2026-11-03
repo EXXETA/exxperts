@@ -42,6 +42,9 @@ import {
 } from "./specialist-templates.js";
 import { failedMessageError, failureCodesOf, notOfferedLine, notOnAccountLine, type FailureCodes } from "./model-call-causes.js";
 import { createHeadlessUiContext } from "./persistent-room-background-execution.js";
+import { callCacheRetention } from "./memory-call-cache.js";
+import { roomLoaderSettings } from "./room-loader-settings.js";
+import { serverHooks } from "./server-hooks.js";
 
 type RuntimeModel = NonNullable<CreateAgentSessionOptions["model"]>;
 
@@ -445,6 +448,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,
 		agentDir: input.agentDir,
+		settingsManager: roomLoaderSettings(input.cwd, input.agentDir),
 		noExtensions: true,
 		// Read scope = the write folder + the declared input artifacts, nothing
 		// else: "no access beyond your brief" is enforced, not just claimed.
@@ -465,6 +469,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 		sessionManager: SessionManager.inMemory(input.cwd),
 		modelRegistry: registry,
 		model,
+		cacheRetention: callCacheRetention("specialist", model),
 		tools: plan.toolNames,
 		customTools: [],
 		rawSystemPrompt: plan.systemPrompt,
@@ -518,7 +523,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 			else input.signal.addEventListener("abort", onAbort, { once: true });
 		}
 		try {
-			await created.session.prompt(plan.triggerPrompt);
+			await created.session.prompt(plan.triggerPrompt, serverHooks().promptOptions?.());
 		} finally {
 			input.signal?.removeEventListener("abort", onAbort);
 		}

@@ -14,6 +14,8 @@ import type { BackgroundRunModelLock, BackgroundRunTarget } from "./background-r
 import {
 	beginPersistentAgentTurn,
 	buildPersistentAgentBootContext,
+	buildPersistentAgentCurrentIdentitySection,
+	buildPersistentRoomCurrentWorkspaceSection,
 	createPersistentAgentPiSessionJsonlThreadRuntime,
 	createPersistentRoomAutoDeclinedQuestionLog,
 	finishPersistentAgentTurn,
@@ -28,7 +30,8 @@ import { rememberSentenceModelName } from "./checkpoint-compression.js";
 import { modelNotOnAccount, modelNotOnAccountSentence } from "./model-not-on-account.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import { createTurnStepLog, landedTextAfter } from "./persistent-room-turn-steps.js";
-import { buildPersistentRoomCurrentInstructionsSection } from "./persistent-room-instructions.js";
+import { readPersistentRoomInstructionsNow } from "./persistent-room-instructions.js";
+import { nextRoomStateMessage } from "./room-state-message.js";
 import {
 	getPersistentRoomToolPolicy,
 	PERSISTENT_ROOM_MEMORY_TOOL_NAMES,
@@ -52,20 +55,13 @@ import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import toolResultAgingExt from "../../../pi-package/extensions/tool-result-aging/index.js";
 import { keepAppTurnFailure } from "./failed-prompt-step-back.js";
 import { SERVER_STOPPED_REASON, STOP_SCHEDULED_RUN_SENTENCE, answerAlreadyEnded, trackRunningWork } from "./server-stop.js";
+import { callCacheRetention } from "./memory-call-cache.js";
+import { roomLoaderSettings } from "./room-loader-settings.js";
+import { serverHooks } from "./server-hooks.js";
+import { settleConversationEffortChoice } from "./persistent-room-effort-settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/**
- * The frozen boot snapshot plus the per-turn "Current instructions" section
- * when the room's instructions changed since that snapshot: the same
- * section the web hook appends every turn, so a scheduled run follows the
- * instructions in force now, not the ones the thread booted with. Returns
- * the snapshot untouched when nothing changed or the file cannot be read.
- */
-function withCurrentInstructions(roomId: string, runtime: { instructionsFingerprint?: string | null }, frozenSystemPrompt: string): string {
-	const options = runtime.instructionsFingerprint !== undefined ? { bootedFingerprint: runtime.instructionsFingerprint } : {};
-	return `${frozenSystemPrompt}${buildPersistentRoomCurrentInstructionsSection(roomId, frozenSystemPrompt, options)}`;
-}
 const REPO_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
 const SCHEDULED_ITEM_ID_PATTERN = /[^a-zA-Z0-9_-]+/g;
 const LEGACY_RUNTIME_NOT_SUPPORTED = "legacy_runtime_not_supported";
@@ -83,6 +79,8 @@ export interface PersistentRoomBackgroundExecutionInput {
 	agentDir?: string;
 	modelRegistry?: ModelRegistry;
 	allowLegacyTranscriptRecap?: boolean;
+	/** Ends the turn as a server stop does; its reason, an Error with a code, is the run's line and code. */
+	signal?: AbortSignal;
 }
 
 export interface PersistentRoomBackgroundExecutionResult {
@@ -328,7 +326,7 @@ export function preparePersistentRoomBackgroundExecution(input: PersistentRoomBa
 			thread: write.thread,
 			runtimeCwd,
 			sessionManager: openPersistentAgentPiSessionManager(roomId, write.thread.runtime, runtimeCwd),
-			rawSystemPrompt: withCurrentInstructions(roomId, write.thread.runtime, readPersistentAgentBootPromptSnapshot(roomId, write.thread.runtime)),
+			rawSystemPrompt: readPersistentAgentBootPromptSnapshot(roomId, write.thread.runtime),
 			...(promptPrefix ? { promptPrefix } : {}),
 			...(workspaceCapability ? { workspaceCapability } : {}),
 		};
@@ -355,10 +353,11 @@ export function preparePersistentRoomBackgroundExecution(input: PersistentRoomBa
 			thread,
 			runtimeCwd,
 			sessionManager: openPersistentAgentPiSessionManager(roomId, thread.runtime, runtimeCwd),
-			// A resumed thread runs on its frozen boot snapshot; the instructions
-			// the user changed since ride the same per-turn section the web hook
-			// appends, so a scheduled turn follows the current text too.
-			rawSystemPrompt: withCurrentInstructions(roomId, thread.runtime, readPersistentAgentBootPromptSnapshot(roomId, thread.runtime)),
+			// A resumed thread runs on its frozen boot snapshot, as a live turn
+			// does; the instructions the user changed since ride the room-state
+			// message (createRoomStateExtension), so a scheduled turn follows the
+			// current text too.
+			rawSystemPrompt: readPersistentAgentBootPromptSnapshot(roomId, thread.runtime),
 			...(promptPrefix ? { promptPrefix } : {}),
 			...(workspaceCapability ? { workspaceCapability } : {}),
 		};
@@ -443,6 +442,34 @@ export function persistentRoomBackgroundSessionToolNames(allowedToolNames: reado
 	return allowedToolNames.filter((toolName) => !liveOnlyToolNames.has(toolName));
 }
 
+/**
+ * The room-state message a live turn sends (room-state-message.ts), with what
+ * a background run can use: who the room is, the instructions in force and
+ * its workspace, which never has bash here. It has no skills or Files tools,
+ * so their parts are left out; the next live turn's copy differs and is sent
+ * whole. The run's copy is saved to the thread, so a live turn after it reads
+ * the latest state from the session as it does after its own turns.
+ */
+function createRoomStateExtension(roomId: string, thread: PersistentAgentThreadRecord, workspacePolicy: Parameters<typeof buildPersistentRoomCurrentWorkspaceSection>[0]) {
+	const bootedFingerprint = thread.runtime.kind === "pi-session-jsonl" ? thread.runtime.instructionsFingerprint : undefined;
+	return (pi: any) => {
+		pi.on("before_agent_start", async (event: { systemPrompt: string }, ctx: { sessionManager: SessionManager }) => {
+			let workspace: string | null = null;
+			try {
+				workspace = buildPersistentRoomCurrentWorkspaceSection(workspacePolicy);
+			} catch (error) {
+				console.warn(`scheduled run: current workspace section build failed: ${(error as Error)?.message ?? error}`);
+			}
+			const message = nextRoomStateMessage({
+				identity: buildPersistentAgentCurrentIdentitySection(roomId),
+				instructions: readPersistentRoomInstructionsNow(roomId, event.systemPrompt, bootedFingerprint !== undefined ? { bootedFingerprint } : {}),
+				workspace,
+			}, ctx.sessionManager);
+			return message ? { message } : undefined;
+		});
+	};
+}
+
 async function createPersistentRoomBackgroundSession(input: {
 	roomId: string;
 	threadId: string;
@@ -489,10 +516,12 @@ async function createPersistentRoomBackgroundSession(input: {
 		// one of the two factories would make the two kinds of run send
 		// different context for the same room.
 		toolResultAgingExt as any,
+		createRoomStateExtension(input.roomId, input.prepared.thread, { ...effectiveWorkspacePolicy, capability: backgroundWorkspaceCapability(effectiveWorkspacePolicy) }),
 	];
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,
 		agentDir: input.agentDir,
+		settingsManager: roomLoaderSettings(input.cwd, input.agentDir),
 		noExtensions: true,
 		noContextFiles: true,
 		noSkills: true,
@@ -502,16 +531,25 @@ async function createPersistentRoomBackgroundSession(input: {
 		appendSystemPromptOverride: (base) => base,
 	});
 	await loader.reload();
+	// A scheduled answer thinks as a live one would in this conversation: at
+	// its own level, else the room's default, which a conversation with no
+	// level of its own (a fresh one, its first message) takes as its own here.
+	// The session clamps it to the model; with no level anywhere it resolves its
+	// own, and the conversation keeps that one.
+	const thinkingLevel = settleConversationEffortChoice(input.roomId, input.threadId);
 	const created = await createAgentSession({
 		cwd: input.cwd,
 		resourceLoader: loader,
 		sessionManager: input.prepared.sessionManager,
 		modelRegistry: input.modelRegistry,
 		model: input.model,
+		...(thinkingLevel ? { thinkingLevel } : {}),
+		cacheRetention: callCacheRetention("scheduled", input.model),
 		...(input.prepared.rawSystemPrompt ? { rawSystemPrompt: input.prepared.rawSystemPrompt } : {}),
 		tools: backgroundToolNames,
 		...(customTools.length > 0 ? { customTools } : {}),
 	});
+	if (!thinkingLevel) settleConversationEffortChoice(input.roomId, input.threadId, created.session.thinkingLevel);
 	await created.session.bindExtensions({ uiContext: createHeadlessUiContext(undefined, input.onAutoDecline) });
 	return created.session;
 }
@@ -567,9 +605,20 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 	const turnId = input.turnId ?? `scheduled_${executionId}`.slice(0, 120);
 	const connectionId = input.connectionId ?? `scheduler:${executionId}`.slice(0, 120);
 	let activeTurnId: string | undefined;
-	// Set when a server stop ends this turn: the run then ends with the stop's line and code.
-	let stoppedByServer = false;
+	// Set when a server stop or the input's signal ends this turn: the run then ends with that error's line and code.
+	let endedBy: Error | undefined;
 	let releaseStopWork: (() => void) | undefined;
+	// A resumed conversation ends on the last turn's answer, which must not count as this turn's.
+	let answeredThisTurn = false;
+	const endTurn = (reason: Error) => {
+		// An answer that already ended is left to finish while the runtime's post-turn work runs: the run completed.
+		if (endedBy || (answeredThisTurn && answerAlreadyEnded(session.agent.state.messages))) return;
+		endedBy = reason;
+		// The compaction a resumed conversation may run before the prompt is cut too.
+		session.abortCompaction();
+		void Promise.resolve((session as any)?.abort?.()).catch(() => {});
+	};
+	const endBySignal = () => endTurn(input.signal!.reason);
 	try {
 		thread = writePersistentAgentThread(prepared.roomId, prepared.threadId, {
 			state: thread.state === "active" ? "active" : "standby",
@@ -580,15 +629,17 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		userItemPersisted = true;
 		const startedTurn = beginPersistentAgentTurn(prepared.roomId, prepared.threadId, { turnId, connectionId });
 		activeTurnId = startedTurn.turnId;
-		releaseStopWork = trackRunningWork("scheduled turn", () => {
-			// An answer that already ended is left to finish while the runtime's post-turn work runs: the run completed.
-			if (answerAlreadyEnded(session.agent.state.messages)) return;
-			stoppedByServer = true;
-			void Promise.resolve((session as any)?.abort?.()).catch(() => {});
-		});
+		releaseStopWork = trackRunningWork("scheduled turn", () => endTurn(Object.assign(new Error(STOP_SCHEDULED_RUN_SENTENCE), { code: SERVER_STOPPED_REASON })));
+		input.signal?.addEventListener("abort", endBySignal, { once: true });
+		// A signal that fired while the session was being made ends the turn before it asks the model.
+		if (input.signal?.aborted) endedBy = input.signal.reason;
 		session.subscribe((event: any) => {
+			// A turn ended before the model was asked stops as soon as the runtime starts asking it.
+			if (event?.type === "agent_start" && endedBy) void Promise.resolve(session.abort()).catch(() => {});
+			steps.frame(event);
 			if (event?.type === "message_end") steps.note(event.message);
 			if (event?.type !== "message_end" || event?.message?.role !== "assistant") return;
+			answeredThisTurn = true;
 			if (event.message.stopReason === "error") providerRefusal = String(event.message.errorMessage ?? "");
 			const text = textFromMessageParts(event.message.content);
 			({ text: assistantText, retryFrom } = landedTextAfter({ text: assistantText, retryFrom }, text, event.message.stopReason === "error" && session.retriesAfter(event.message)));
@@ -608,8 +659,8 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 			}
 		});
 		const promptText = prepared.promptPrefix ? [prepared.promptPrefix, "", prompt].join("\n") : prompt;
-		await session.prompt(promptText);
-		if (stoppedByServer) throw Object.assign(new Error(STOP_SCHEDULED_RUN_SENTENCE), { code: SERVER_STOPPED_REASON });
+		if (!endedBy) await session.prompt(promptText, serverHooks().promptOptions?.());
+		if (endedBy) throw endedBy;
 		if (!assistantText.trim() && modelNotOnAccount(providerRefusal)) throw new ScheduledModelNotOnAccountError(modelLock);
 		if (!assistantText.trim()) throw new Error("scheduled persistent-room execution produced no assistant text");
 		terminalReason = "completed";
@@ -617,23 +668,23 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		if (userItemPersisted) {
 			try {
 				const current = getPersistentAgentThread(prepared.roomId, prepared.threadId) ?? thread;
-				// A run the stop ended keeps what it had said, above the stop's line.
-				const keptPartial = stoppedByServer && assistantText.trim() !== "";
+				// A run the stop or the signal ended keeps what it had said, above that line.
+				const keptPartial = endedBy !== undefined && assistantText.trim() !== "";
 				const withAnswer = (items: unknown[]): unknown[] => keptPartial ? upsertItem(items, { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false, ts: Date.now() }) : items;
 				thread = writePersistentAgentThread(prepared.roomId, prepared.threadId, {
 					state: current.state === "active" ? "active" : "standby",
 					origin: current.origin,
 					model: current.model,
-					items: appendFailureItem(noteItemsOrJustTheItems(withAnswer(withSteps(current.items ?? []))), executionId, stoppedByServer ? STOP_SCHEDULED_RUN_SENTENCE : error instanceof ScheduledModelNotOnAccountError ? error.message : "Scheduled background task failed before an assistant response was saved."),
+					items: appendFailureItem(noteItemsOrJustTheItems(withAnswer(withSteps(current.items ?? []))), executionId, endedBy ? endedBy.message : error instanceof ScheduledModelNotOnAccountError ? error.message : "Scheduled background task failed before an assistant response was saved."),
 				}).thread;
 			} catch {
 				// Preserve the original execution error. Worker finalization records status.
 			}
 		}
-		if (stoppedByServer && (error as { code?: unknown } | null)?.code !== SERVER_STOPPED_REASON) throw Object.assign(new Error(STOP_SCHEDULED_RUN_SENTENCE), { code: SERVER_STOPPED_REASON });
-		throw error;
+		throw endedBy ?? error;
 	} finally {
 		releaseStopWork?.();
+		input.signal?.removeEventListener("abort", endBySignal);
 		// Before the turn ends: a room opened the moment it does must not hand this prompt back.
 		try { keepAppTurnFailure(session as any); } catch {}
 		if (activeTurnId) {

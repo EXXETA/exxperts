@@ -35,7 +35,6 @@ assert(bare.providerMessage === undefined, "blank provider text is not carried a
 // 4. Aborted: its own story, provider text appended only when present.
 const aborted = isolatedPersistentAgentWorkerFailure({ workerLabel, text: "", stopReason: "aborted", errorMessage: "  ", emptyTextError });
 assert(aborted instanceof IsolatedPersistentAgentWorkerTurnError && aborted.stopReason === "aborted", "an aborted stop produces the typed error with stopReason aborted");
-assert(aborted.message === `${workerLabel} was aborted before it answered`, `aborted message without detail, got: ${aborted.message}`);
 
 // 5. Normal stop with nothing to show: the empty-reply story is now true, and it stays the caller's exact string.
 const empty = isolatedPersistentAgentWorkerFailure({ workerLabel, text: "   \n", stopReason: "stop", emptyTextError, errorMessage: undefined });

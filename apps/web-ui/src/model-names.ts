@@ -7,11 +7,14 @@
 // This module turns any of those into one canonical display name so the same
 // model reads the same everywhere, without touching persisted formats.
 //
-// Dedupe spec (for the Wallet filter and any grouping surface): group entries
-// by `canonicalModelKey(...)` — the same model recorded under different raw
+// Dedupe spec (for any grouping surface): group entries by
+// `canonicalModelKey(...)`: the same model recorded under different raw
 // ids or label eras collapses into one group ("claude-opus-4-8" and
 // "claude-opus-4.8" share a key). A group renders as `canonicalModelName(...)`
 // once; selecting it must match ALL underlying raw model strings in the group.
+// The Wallet names a gateway's model by `realModelName(...)` instead: a name
+// a gateway's owner saved is not the model, and two gateways can save one
+// name for two models.
 //
 // Naming rules, in order:
 // 1. Known-family ids (GPT, Claude, Gemini, Kimi, DeepSeek, …) are prettified
@@ -45,6 +48,12 @@ export interface CanonicalModelName {
  * owner chose, which is never a name to show anybody.
  */
 export const GATEWAY_PROVIDER_ID_PREFIX = "gateway-";
+
+/** A gateway's provider: one saved under its own name, or the single gateway the app had before those. */
+function isGatewayProvider(providerId: string | null | undefined): boolean {
+	const id = (providerId ?? "").trim();
+	return id.startsWith(GATEWAY_PROVIDER_ID_PREFIX) || id === "openai-compatible";
+}
 
 // The names AI setup shows, also for the Wallet and the built-in profiles.
 // The server still writes the older "Anthropic / Claude" into new rows'
@@ -224,6 +233,10 @@ export function canonicalModelName(input: ModelNameInput): CanonicalModelName {
 	const splitProvider = split ? (PROVIDER_ID_BY_LABEL[split.provider] ? providerDisplayName(PROVIDER_ID_BY_LABEL[split.provider]) : split.provider) : undefined;
 	const provider = splitProvider ?? (input.provider ? providerDisplayName(input.provider.trim()) : undefined);
 
+	// A name a gateway's owner saved for a model is its name, as saved, even
+	// for a known family's id. A gateway label that only repeats the id is no
+	// saved name: it is tidied below like any other.
+	if (split && isGatewayProvider(input.provider) && split.name !== rawId) return { name: split.name, provider: splitProvider! };
 	if (rawId && KNOWN_FAMILY_ID.test(rawId)) {
 		return { name: prettifyModelId(rawId), ...(provider ? { provider } : {}) };
 	}
@@ -243,6 +256,35 @@ export function canonicalModelName(input: ModelNameInput): CanonicalModelName {
 /** Just the canonical name (most call sites only render the name). */
 export function modelDisplayName(input: ModelNameInput): string {
 	return canonicalModelName(input).name;
+}
+
+// Amazon Bedrock's id shapes: a region before the vendor
+// ("eu.anthropic.claude-…") and a version after the name ("-v1:0", "-1:0",
+// and a bare "-v1" on Claude ids). None is part of the model's name; a bare
+// "-v2" elsewhere can be ("nvidia.nemotron-nano-12b-v2"). Its Llama ids glue
+// the family to its version ("meta.llama3-3-70b-instruct" is Llama 3.3).
+const BEDROCK_REGION = /^(?:eu|us|us-gov|apac|au|jp|in|global)\.(?=[a-z0-9]+\.)/i;
+const BEDROCK_VERSION = /-v?\d+:\d+$/i;
+const BEDROCK_CLAUDE_VERSION = /^(anthropic\.claude-.+)-v\d+$/i;
+const BEDROCK_LLAMA = /^meta\.llama(\d+)(?:-(\d+))?(?=-)/i;
+
+/**
+ * The model behind an id, wherever it runs: its name and release date read
+ * from the id alone, through Bedrock's region and version shapes, so
+ * "eu.anthropic.claude-sonnet-4-5-20250929-v1:0" reads as
+ * `{ name: "Claude Sonnet 4.5", date: "29 Sep 2025" }`. For counting real
+ * models (the Wallet). A list to choose from
+ * keeps canonicalModelName, where a gateway's region variants of one model
+ * still read apart.
+ */
+export function realModelName(rawId: string): { name: string; date: string | null } {
+	const id = rawId
+		.trim()
+		.replace(BEDROCK_REGION, "")
+		.replace(BEDROCK_VERSION, "")
+		.replace(BEDROCK_CLAUDE_VERSION, "$1")
+		.replace(BEDROCK_LLAMA, (_, major: string, minor?: string) => `meta.llama-${minor ? `${major}.${minor}` : major}`);
+	return { name: modelDisplayName({ model: id }), date: modelIdDate(id) };
 }
 
 /**

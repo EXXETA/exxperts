@@ -1,0 +1,561 @@
+.ai-setup-page {
+	gap: 22px;
+}
+.ai-setup-page > * {
+	width: min(1120px, 100%);
+}
+.ai-setup-hero {
+	border-bottom: 1px solid var(--border);
+	padding-bottom: 18px;
+}
+/* The AI setup page itself runs without hairlines: one card carries the structure. */
+.ai-setup-page .ai-setup-hero {
+	border-bottom: none;
+	padding-bottom: 4px;
+}
+/* The two intro lines read as one block. */
+.ai-setup-hero p + p {
+	margin-top: 4px;
+}
+/* Copy tracks the card width instead of the generic 700px landing cap, so text
+   and cards share one right edge. */
+.ai-setup-page .landing-hero p,
+.ai-setup-page .ai-setup-copy,
+.ai-profile-switcher-section .cli-note,
+.add-provider-block .cli-note {
+	max-width: none;
+}
+.ai-setup-page .ai-profile-switcher-section {
+	border-bottom: none;
+}
+.ai-profile-card {
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-card);
+	background: var(--panel);
+	overflow: hidden;
+}
+.ai-profile-row-group + .ai-profile-row-group {
+	border-top: 1px solid var(--exx-divider);
+}
+.ai-profile-card-empty {
+	padding: 16px 18px;
+	margin: 0;
+}
+/* A provider row: its name and state on the left, its models and its menu
+   on the right. Nothing to select; the defaults above choose the models. */
+.ai-profile-row {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 16px 18px;
+}
+.ai-profile-main {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex: 1;
+	min-width: 0;
+}
+.ai-profile-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+.ai-profile-name {
+	font-weight: 700;
+	font-size: 15px;
+	color: var(--fg);
+}
+.ai-profile-sub {
+	font-size: 12.5px;
+	color: var(--muted);
+	margin-top: 1px;
+}
+.ai-profile-sub.warn { color: var(--warning); }
+.ai-profile-side {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-shrink: 0;
+	cursor: default;
+}
+.ai-profile-models-toggle {
+	background: none;
+	border: none;
+	padding: 4px 2px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.ai-profile-models-toggle:hover { color: var(--fg); }
+/* Optical nudge: the chevron's box is centred, the lowercase text is not. */
+.ai-profile-models-toggle .disclosure-chevron { position: relative; top: 1.5px; }
+.ai-profile-models {
+	background: var(--bg-2);
+	border-top: 1px solid var(--exx-divider);
+	padding: 12px 18px 14px;
+}
+.ai-profile-models-row {
+	display: flex;
+	gap: 14px;
+	padding: 4px 0;
+	font-size: 12.5px;
+}
+.ai-profile-models-row > span:first-child {
+	width: 150px;
+	flex-shrink: 0;
+	color: var(--muted);
+}
+.ai-profile-models-row > span:last-child { color: var(--fg-soft); }
+.ai-profile-foot-link {
+	background: none;
+	border: none;
+	padding: 0 0 1px;
+	color: var(--muted);
+	font-size: 13px;
+	border-bottom: 1px dotted var(--dim);
+	border-radius: 0;
+}
+.ai-profile-foot-link:hover { color: var(--fg); }
+.ai-profile-foot-link:disabled { opacity: 0.5; }
+/* Row management menu: the one affordance every ready profile row shares. */
+.ai-profile-menu-anchor { position: relative; display: inline-flex; }
+.ai-profile-menu-btn {
+	background: none;
+	border: none;
+	padding: 2px 8px;
+	font-size: 17px;
+	line-height: 1;
+	letter-spacing: 0.08em;
+	color: var(--muted);
+	border-radius: var(--exx-radius-control);
+}
+.ai-profile-menu-btn:hover,
+.ai-profile-menu-btn[aria-expanded="true"] { color: var(--fg); background: var(--panel-2); }
+/* Backdrop and menu render in a portal on <body> (the anchor rows live
+   inside scroll containers that would clip an in-place popover, and the
+   settings modal sits at z-index 70), so both stack above every host. */
+.ai-profile-menu-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 90;
+}
+.ai-profile-menu {
+	position: fixed;
+	z-index: 91;
+	min-width: 200px;
+	display: grid;
+	padding: 6px;
+	background: var(--panel);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	box-shadow: var(--exx-shadow-popover);
+}
+.ai-profile-menu-item {
+	background: none;
+	border: none;
+	border-radius: var(--exx-radius-control);
+	padding: 8px 10px;
+	font-size: 13px;
+	text-align: left;
+	color: var(--fg-soft);
+	white-space: nowrap;
+}
+.ai-profile-menu-item:hover { background: var(--panel-2); color: var(--fg); }
+.ai-profile-menu-item.danger { color: var(--danger, #d33); }
+.ai-profile-menu-confirm {
+	padding: 8px 10px 4px;
+	font-size: 12.5px;
+	color: var(--muted);
+	white-space: normal;
+	max-width: 240px;
+}
+.add-provider-panel {
+	display: grid;
+	gap: 14px;
+}
+/* Add a provider: one group of rows under the profile list. A row and the
+   field it opened (a key form, a sign-in code) read as one: no hairline
+   between them. */
+.add-provider-filter {
+	width: 220px;
+}
+.add-provider-key-form {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.add-provider-key-form input { flex: 1; }
+.add-provider-key-error {
+	flex-basis: 100%;
+	color: var(--danger);
+	font-size: 13px;
+}
+.add-provider-row-key-form,
+.add-provider-instructions {
+	padding: 0 0 12px;
+}
+/* Device-code sign-in (GitHub Copilot): the code the person types on the provider's page. */
+.add-provider-instructions {
+	font-size: 14px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	color: var(--fg);
+	font-variant-numeric: tabular-nums;
+}
+/* Same code, shown under a profile row while its sign-in is pending. */
+.ai-profile-signin-instructions {
+	padding: 0 18px 14px;
+}
+/* A profile row and the key form it opened read as one block, so the field is
+   plainly this row's and the single Cancel plainly closes this row. */
+.ai-profile-row-group.key-open {
+	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+	border-radius: var(--exx-radius-control);
+}
+/* A key form belongs to the row that opened it: indented to that row's name, and
+   padded so Save key and Cancel are not pressed against the card's edge. */
+.ai-profile-key-form {
+	padding: 2px 18px 14px;
+	flex-wrap: wrap;
+}
+.configure-profile-modal { max-width: 560px; }
+.configure-profile-body {
+	display: grid;
+	gap: 18px;
+}
+.configure-profile-field {
+	display: grid;
+	gap: 8px;
+}
+.configure-profile-field h3 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 12px;
+	margin: 0;
+	color: var(--muted);
+}
+.configure-profile-model-list {
+	display: grid;
+	gap: 0;
+	max-height: 260px;
+	overflow-y: auto;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+}
+.configure-profile-model-option {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 12px;
+	font-size: 13.5px;
+	cursor: pointer;
+}
+.configure-profile-model-option + .configure-profile-model-option {
+	border-top: 1px solid var(--exx-divider);
+}
+.configure-profile-model-option:hover { background: var(--panel-2); }
+.configure-profile-model-name { color: var(--fg-soft); }
+.configure-profile-suggested {
+	margin-left: auto;
+	font-size: 12px;
+	color: var(--muted);
+}
+.configure-profile-select {
+	width: 100%;
+	padding: 8px 10px;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	background: var(--bg-2);
+	color: var(--fg);
+	font-size: 13.5px;
+}
+.configure-profile-remove { margin-left: auto; color: var(--danger, #d33); }
+/* A gateway model row is one question and a set of facts: approve it, and
+   here is what it can do. Images, reasoning and the context figure read as
+   quiet badges; web search stays the row's one interactive tick because it can
+   bill per use; everything else is edited behind the row's adjust fold. Kept
+   on one line where the panel is wide enough so the list still scans like a
+   checkbox list rather than a form, and wrapping rather than squeezing when it
+   is not. */
+.gateway-model-row {
+	cursor: default;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+/* A company gateway routes fifty models or more, and a 260px window turns the
+   capability controls into something you hunt for. The list gets most of the
+   screen instead, and the modal gets the width the row needs to stay on one
+   line. */
+.gateway-model-list { max-height: min(60vh, 560px); }
+/* Written against .room-settings-modal, whose own max-width is declared later,
+   in 23-room-settings.css, and would otherwise win on equal specificity. */
+.room-settings-modal.gateway-config-modal { max-width: 960px; }
+/* The bulk controls stay put while the list scrolls: on model fifty they are
+   the reason somebody is here, and scrolling back up to find them is the
+   problem this row exists to end. */
+.gateway-model-bulk-row {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--panel-2);
+	cursor: default;
+}
+.gateway-model-bulk-cell {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: default;
+}
+.gateway-model-bulk-label { color: var(--muted); }
+/* Mirrors .menu-appearance-seg at list scale. As two bare links the pair read as
+   prose in the middle of a header, and "all on off" was one phrase nobody could
+   see the seam in; bordered and joined, they read as the two buttons they are. */
+.gateway-model-bulk-seg {
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-sm);
+	overflow: hidden;
+}
+.gateway-model-bulk-seg button {
+	background: transparent;
+	border: 0;
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.gateway-model-bulk-seg button + button { border-left: 1px solid var(--border); }
+.gateway-model-bulk-seg button:hover,
+.gateway-model-bulk-seg button:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+/* The header's two real actions, apply and use detected. Same secondary tokens
+   as .inline-action, without its uppercase display face: at this size the
+   toolbar has to stay quieter than the list it sits on. */
+.gateway-model-bulk-button {
+	background: var(--exx-action-secondary-bg);
+	border: 1px solid var(--exx-action-secondary-border);
+	border-radius: var(--exx-radius-sm);
+	color: var(--exx-action-secondary-fg);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.gateway-model-bulk-button:hover:not(:disabled),
+.gateway-model-bulk-button:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border);
+	color: var(--fg);
+	outline: none;
+}
+.gateway-model-bulk-button:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Use detected acts on the whole list rather than on a column, and the gap to
+   its right-hand seat says so. At the mobile widths the row wraps anyway, and
+   auto margin on a wrapped line collapses to nothing, so it degrades with the
+   cells instead of fighting them. */
+.gateway-model-bulk-detected { margin-left: auto; }
+/* Wrapping is decided on the flex bases, and the approve cell's shared 180px
+   basis left no room for use detected at the modal's width. The count it holds
+   is short, and the cell still grows into whatever the line has spare, so a
+   smaller basis costs nothing at full width and buys the one-line row. */
+.gateway-model-bulk-row .gateway-model-approve { flex-basis: 96px; }
+.gateway-model-approve {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	/* The name takes the leftover width but asks for little, so the four
+	   controls beside it decide the line break instead of being pushed off it.
+	   Long ids ellipsize, which they did before this too. */
+	flex: 1 1 180px;
+	cursor: pointer;
+}
+.gateway-model-approve .configure-profile-model-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Sits above the rows, appearing only once somebody has ticked web search, so
+   the consequence arrives at the moment it becomes theirs to get wrong. */
+.gateway-model-list-hint {
+	margin: 0 0 2px;
+	font-size: 12.5px;
+	color: var(--muted);
+	line-height: 1.5;
+}
+/* The gateway dialog is 960px wide, but `.landing p` caps prose at 700px and
+   reaches the hint and note paragraphs inside the modal. The list they sit
+   against spans the modal, so the capped copy wrapped three quarters of the
+   way across and stopped short of the list's right edge. */
+.gateway-config-modal .gateway-model-list-hint,
+.gateway-config-modal .cli-note {
+	max-width: none;
+}
+.gateway-model-vision,
+.gateway-model-websearch,
+.gateway-model-reasoning {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12.5px;
+	color: var(--muted);
+	cursor: pointer;
+	white-space: nowrap;
+}
+/* Fixed per column, and the same width in the header row as in the model rows,
+   so "images" sits over the images box instead of somewhere near it. Sized just
+   past the longest label in either row so nothing clips: with use detected now
+   living on the header line, the spare width these once carried is what keeps
+   the approved count from ellipsizing. */
+.gateway-model-vision { flex: 0 0 116px; }
+.gateway-model-websearch { flex: 0 0 140px; }
+.gateway-model-reasoning { flex: 0 0 132px; }
+/* A ticked box was inheriting accent-color: var(--fg), which in this theme is a
+   near-white tick on a near-white fill: on a fifty-model list an approved
+   capability looked untouched. The brand lila is the palette's one accent and
+   holds its contrast in both themes. Written past
+   .configure-profile-model-option input[type="checkbox"], which is declared
+   later, in 06-workspaces-create-room.css, and would otherwise win on equal
+   specificity. */
+.configure-profile-model-option.gateway-model-row input[type="checkbox"] {
+	accent-color: var(--exx-plan);
+	width: 15px;
+	height: 15px;
+}
+.gateway-model-window {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12.5px;
+	color: var(--muted);
+	/* Wide enough for the header's extra apply button, and the same in the rows,
+	   so the context field sits at one x down the whole list. */
+	flex: 0 0 202px;
+}
+.gateway-model-window-label { white-space: nowrap; }
+.gateway-model-window-input {
+	width: 100px;
+	padding: 4px 6px;
+	font-size: 12.5px;
+}
+.gateway-model-window-input.invalid { border-color: var(--danger, #d33); }
+/* .launcher-path-input is declared later, in 06-workspaces-create-room.css,
+   with the same specificity, so its full width and full padding were winning
+   here: the context field grew into a page-wide control and pushed the
+   capability checkboxes off the model's line. Scoped one level deeper so the
+   row gets the compact field it was written for, and fifty rows still read as
+   a list. */
+.gateway-model-row .gateway-model-window-input {
+	flex: 0 0 92px;
+	width: 92px;
+	padding: 4px 6px;
+	font-size: 12.5px;
+}
+/* The complaint sits under the row that caused it, on its own line, so a wide
+   value never pushes the three controls out of alignment. */
+.gateway-model-window-error {
+	flex: 1 0 100%;
+	font-size: 12px;
+	color: var(--danger, #d33);
+}
+/* The row's quiet middle: what the model effectively is. Muted chips, because
+   these are facts to read, not controls to press; changing them is what the
+   adjust fold is for. */
+.gateway-model-facts {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1 1 auto;
+	justify-content: flex-end;
+	min-width: 0;
+}
+.gateway-model-fact {
+	font-size: 11.5px;
+	color: var(--muted);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-sm);
+	padding: 1px 7px;
+	white-space: nowrap;
+	cursor: default;
+}
+/* The one way into a row's field editors: a small word, not a button, so fifty
+   rows do not become fifty toolbars. */
+.gateway-model-adjust {
+	background: transparent;
+	border: 0;
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 6px;
+	cursor: pointer;
+	border-radius: var(--exx-radius-sm);
+}
+.gateway-model-adjust:hover,
+.gateway-model-adjust:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.gateway-model-adjust[aria-expanded="true"] { color: var(--fg); }
+/* The fold takes the row's full width on its own line, one editor per fact
+   plus the detection note, so opening it never reflows the line above it. */
+.gateway-model-adjust-fold {
+	flex: 1 0 100%;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px 20px;
+	padding: 4px 0 2px 25px;
+}
+.gateway-adjust-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+/* Inside a fold the window field has no header column to line up with, so it
+   gives up the header-matched fixed width the old row version needed. */
+.gateway-model-adjust-fold .gateway-model-window { flex: 0 0 auto; }
+/* The side of the pair currently in force, so the fold answers before it asks. */
+.gateway-model-bulk-seg button.seg-active {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	color: var(--fg);
+}
+.gateway-model-detected-row {
+	flex: 1 0 100%;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.gateway-model-detected-note {
+	font-size: 12px;
+	color: var(--muted);
+}
+.gateway-models-input {
+	min-height: 84px;
+	resize: vertical;
+	font-family: inherit;
+}
+.gateway-discover-row {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+}
+.add-provider-added-note {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.add-provider-filter { max-width: 320px; }
+.ai-setup-section {
+	border-bottom: 1px solid var(--border);
+	padding: 6px 0 26px;
+	display: grid;
+	gap: 18px;
+}
+.ai-setup-section:last-child {
+	border-bottom: none;
+}

@@ -1,0 +1,363 @@
+/* Main pane --------------------------------------------------------- */
+.workbench {
+	min-width: 0;
+	min-height: 0;
+	height: 100%;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	overflow: hidden;
+}
+.workbench.with-preview,
+.workbench.with-right-pane {
+	grid-template-columns: minmax(0, 1fr) 8px minmax(360px, var(--right-pane-width, 420px));
+}
+/* V5: artifact viewer maximize — collapse the chat column + resizer and give the
+   pane the whole workbench. workbenchStyle is set to undefined in this state
+   (App.tsx) so this single-track grid is not overridden by an inline style. */
+.workbench.artifact-pane-maximized {
+	grid-template-columns: minmax(0, 1fr);
+}
+.workbench.artifact-pane-maximized > .main,
+.workbench.artifact-pane-maximized .pane-resizer {
+	display: none;
+}
+.pane-resizer {
+	cursor: col-resize;
+	background: transparent;
+	border-left: 1px solid var(--border);
+	border-right: 1px solid var(--border);
+}
+.pane-resizer:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+/* While the divider is being dragged: keep the col-resize cursor everywhere
+   (instead of flickering per-element), suppress text selection, and shield
+   pane iframes so they cannot swallow the drag's mouse events. */
+.workbench.pane-resizing { cursor: col-resize; user-select: none; }
+.workbench.pane-resizing iframe { pointer-events: none; }
+.main {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+.topbar {
+	min-height: 46px;
+	/* Where an answer's text starts: the messages' 24px side padding while
+	   the column is narrower than the reading rail, the centred rail's left
+	   edge once it is wider. The rail centres in the messages' width less
+	   their scrollbar gutter, which in-room-chat.tsx measures into
+	   --messages-gutter. 100% is this column's width, so the room name and
+	   the actions follow the chat column, not the window, when a pane opens
+	   beside it. */
+	--topbar-column-edge: max(24px, calc((100% - var(--messages-gutter, 0px) - var(--chat-rail-width)) / 2));
+	/* The right edge of the workspace banner above the composer, from this
+	   column's right: it is 780px wide at most and 26px in from each side
+	   (.room-workspace-nudge, 27-menu-and-notices.css; change both together). */
+	--topbar-banner-edge: max(26px, calc((100% - 780px) / 2));
+	/* Top padding is left alone: the mac shell overrides it to land this row
+	   on the wordmark's line. The collapsed-sidebar rules keep their
+	   clearance as a floor under the column edge. On the right, the last
+	   action's glyph ends on the banner's right edge: the 30px square holds
+	   its 16px glyph 7px in from its own edge, so the square, and its hover
+	   wash, reach 7px past the banner. */
+	padding: 8px calc(var(--topbar-banner-edge) - 7px) 8px var(--topbar-column-edge);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	background: transparent;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.topbar .left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 240px; }
+.topbar .title-stack { display: flex; flex-direction: column; gap: 0; }
+.topbar .title {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-weight: 700;
+	font-size: 16px;
+	color: var(--fg);
+	letter-spacing: -0.005em;
+	line-height: 1.05;
+}
+.topbar .subtitle {
+	font-size: 10px;
+	text-transform: lowercase;
+	color: var(--fg);
+}
+.topbar-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+	flex-shrink: 0;
+}
+/* Ghost: no resting border or fill, just the glyph. The 1px border box stays
+   so nothing shifts when hover paints it. */
+.topbar-actions .icon-btn {
+	background: transparent;
+	border-color: transparent;
+	color: var(--fg-soft);
+}
+.topbar-actions .icon-btn:hover:not(:disabled),
+.topbar-actions .icon-btn:focus-visible {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	border-color: transparent;
+	color: var(--fg);
+	outline: none;
+}
+/* Keyboard focus still needs an edge: a wash alone is not a ring. */
+.topbar-actions .icon-btn:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* Forget is the one destructive action up here, so it warms red rather than
+   neutral: red glyph on a faint red wash, no red outline. */
+.topbar-actions .icon-btn-danger:hover:not(:disabled),
+.topbar-actions .icon-btn-danger:focus-visible {
+	background: color-mix(in srgb, var(--exx-danger) 14%, transparent);
+	border-color: transparent;
+	color: var(--exx-danger);
+}
+.topbar-actions .icon-btn-danger:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--exx-danger) 40%, transparent);
+}
+/* The command-mode chip: only rooms with Bash on wear it. It sits in the
+   message box's rows, which give it their look (16-composer.css); here is
+   what it is wherever it sits. A keyboard focus still gets an edge. */
+.bash-mode-chip-anchor {
+	position: relative;
+	display: flex;
+	flex-shrink: 0;
+}
+.bash-mode-chip {
+	display: inline-flex;
+	align-items: center;
+	border: none;
+	background: transparent;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.bash-mode-chip:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* Two choices, one popover, right-aligned to the chip so it never leaves
+   the viewport; the box's rows open it upwards (16-composer.css). */
+.bash-mode-menu {
+	position: absolute;
+	right: 0;
+	min-width: 216px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+}
+.bash-mode-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: none;
+	border-radius: 8px;
+	padding: 7px 10px;
+	background: transparent;
+	color: var(--fg-soft);
+	font-size: 12.5px;
+	line-height: 1.3;
+	text-align: left;
+	cursor: pointer;
+}
+.bash-mode-option:hover:not(:disabled),
+.bash-mode-option:focus-visible {
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.bash-mode-option:disabled {
+	color: var(--dim);
+	cursor: not-allowed;
+}
+/* The current mode is marked, not merely highlighted: hover must not be able
+   to impersonate "this is what you have". */
+.bash-mode-option.is-current {
+	color: var(--fg);
+	font-weight: 700;
+}
+.bash-mode-option.is-current::after {
+	content: "✓";
+	font-weight: 700;
+	color: var(--success);
+}
+.bash-mode-option.is-current:disabled { color: var(--dim); }
+.bash-mode-menu-note {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.35;
+}
+.bash-mode-menu-error {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--error);
+	font-size: 11px;
+	line-height: 1.35;
+}
+.theme-toggle {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--fg);
+	border-radius: 999px;
+	padding: 6px 10px;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+}
+.theme-toggle:hover { background: var(--fg); color: var(--bg); }
+
+.icon-btn {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--fg);
+	border-radius: 6px;
+	padding: 5px 11px;
+	font-size: 12px;
+	font-weight: 700;
+}
+.icon-btn:hover,
+.icon-btn:focus-visible {
+	background: var(--fg);
+	color: var(--bg);
+	border-color: var(--fg);
+	outline: none;
+}
+.icon-btn.accent {
+	background: var(--fg);
+	color: var(--bg);
+	border-color: var(--fg);
+}
+.icon-btn.danger {
+	border-color: var(--error);
+	color: var(--error);
+}
+.icon-btn.danger:hover {
+	background: var(--error);
+	color: var(--bg);
+}
+
+.messages-frame {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+}
+.messages {
+	flex: 1;
+	min-height: 0;
+	width: 100%;
+	overflow-y: auto;
+	/* The gutter keeps the scrollbar's room whether or not the transcript
+	   scrolls, so the rail does not shift when it starts to, and its width
+	   can be measured once per resize. The side padding is the topbar's
+	   --topbar-column-edge floor: change both together. */
+	scrollbar-gutter: stable;
+	padding: 24px 24px 28px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 18px;
+}
+/* One turn: a user message and what answers it (groupIntoTurns). It lays its
+   rows out exactly as the transcript does. The turn just sent is at least as
+   tall as the box's content area, so the message sits at the top and the
+   answer grows into the space below while the viewport stands still; the
+   percentage follows the box on every resize. */
+.transcript-turn {
+	width: 100%;
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: inherit;
+}
+/* The lift (fitReservedTurn) lengthens the turn, or shortens it, so that at
+   the bottom of the list the item above the sent message ends at the box's
+   top edge. */
+.transcript-turn.reserved {
+	min-height: calc(100% + var(--reserved-turn-lift, 0px));
+}
+/* The consult/task dock column above the composer. The wrapper is observed
+   (ResizeObserver in InRoomChatShellView) so the messages re-pin to the bottom
+   when a dock appears or grows; the fade below marks the scroll boundary as
+   deliberate instead of a hard cut. */
+.above-composer-dock {
+	display: flex;
+	flex-direction: column;
+}
+.messages-frame.with-dock::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 26px;
+	pointer-events: none;
+	background: linear-gradient(to bottom, transparent, var(--bg));
+}
+/* Under the jump-to-latest pill: the transcript fades out at the box's bottom
+   edge so the pill reads as sitting above the composer, never on a line of
+   text. */
+.jump-to-latest-fade {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 56px;
+	z-index: 4;
+	pointer-events: none;
+	background: linear-gradient(to bottom, transparent, var(--bg) 58%);
+}
+.jump-to-latest {
+	position: absolute;
+	left: 50%;
+	bottom: 12px;
+	transform: translateX(-50%);
+	z-index: 5;
+	border: 1px solid var(--border);
+	background: color-mix(in srgb, var(--panel) 94%, transparent);
+	color: var(--fg);
+	border-radius: 999px;
+	padding: 6px 11px;
+	font: inherit;
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 1.2;
+	box-shadow: 0 10px 28px color-mix(in srgb, #000 20%, transparent);
+	cursor: pointer;
+}
+.jump-to-latest:hover,
+.jump-to-latest:focus-visible {
+	background: var(--fg);
+	border-color: var(--fg);
+	color: var(--bg);
+	outline: none;
+}
+.empty {
+	margin: auto;
+	color: var(--muted);
+	text-align: center;
+	max-width: 560px;
+}
+.empty h2 {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	color: var(--fg);
+	margin: 0 0 14px;
+	font-weight: 700;
+	font-size: 36px;
+	letter-spacing: -0.01em;
+	line-height: 1.0;
+}
+

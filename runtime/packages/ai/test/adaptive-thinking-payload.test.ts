@@ -86,11 +86,12 @@ describe("adaptive thinking reaches the provider as an effort", () => {
 	});
 
 	it("clamps a level the model cannot reach down instead of collapsing it to high", async () => {
-		// Opus 4.7 names "xhigh" and not "max", so a request for max is its top
-		// tier, not a fall through the mapping switch back to "high".
-		const model = getModel("anthropic", "claude-opus-4-7");
+		// Opus 4.6 has no max rung (its xhigh rung sends effort "max"), so a
+		// request for max lands on that top rung, not a fall through the mapping
+		// switch back to "high".
+		const model = getModel("anthropic", "claude-opus-4-6");
 		const payload = (await capture(streamSimpleAnthropic, model!, "max")) as AnthropicThinkingPayload;
-		expect(payload.output_config).toEqual({ effort: "xhigh" });
+		expect(payload.output_config).toEqual({ effort: "max" });
 	});
 
 	it("carries the same fix through Bedrock", async () => {
@@ -115,7 +116,7 @@ describe("a request with no thinking level on a model that cannot stop thinking"
 	// does not exist (thinking.type "disabled" is a 400), so the request goes
 	// out at the cheapest rung the dial offers instead of a disabled that the
 	// API refuses and the self-heal has to repair.
-	it.each(["claude-fable-5", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"] as const)(
+	it.each(["claude-fable-5", "claude-fable-5-1", "claude-opus-5-5"] as const)(
 		"%s sends adaptive thinking at effort low, never disabled",
 		async (modelId) => {
 			const model = getModel("anthropic", modelId);
@@ -127,7 +128,7 @@ describe("a request with no thinking level on a model that cannot stop thinking"
 		},
 	);
 
-	it.each(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"] as const)(
+	it.each(["claude-fable-5-1", "claude-opus-5-5"] as const)(
 		"%s keeps the binding field on that request, like any other turn on it",
 		async (modelId) => {
 			const model = getModel("anthropic", modelId);

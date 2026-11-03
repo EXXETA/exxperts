@@ -19,7 +19,7 @@ export const MEMORY_TOPIC_NAME_MAX_CHARS = 120;
 const LINE_BREAKS = /\r\n|[\r\u2028\u2029\u0085]/g;
 /** A heading line at any level, indented or not: a run of # and then whitespace and words, or nothing. */
 const HEADING_LINE = /^[ \t]*#+(?:[ \t]+(.*?))?[ \t]*$/;
-/** Remember's part markers in both bold forms, any case (absorb-summary.ts FIELD_LABEL, persistent-agents.ts extractApprovedRecentContextField). */
+/** Remember's part markers in both bold forms, any case (absorb-summary.ts FIELD_LABEL, persistent-agent-memory-files.ts extractApprovedRecentContextField). */
 const PART_MARKER = /\*\*(session arc|body|parked)(?::\*\*|\*\*:)/gi;
 /** Words that would read as a part marker or the must-keep marker once made bold. */
 const MARKER_WORDS = /^\s*(?:(?:session arc|body|parked)\s*:?|.*\bmust-keep\b.*)\s*$/i;

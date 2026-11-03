@@ -11,6 +11,9 @@ id = "GHSA-5pgg-2g8v-p4x9"
 reason = "xlsx ReDoS, fixed upstream in 0.20.2. Same situation: we ship 0.20.3 from the vendor's CDN, which the npm-ecosystem advisory record cannot see."
 
 [[IgnoredVulns]]
-id = "GHSA-238p-pmpm-9mq7"
-ignoreUntil = 2026-11-30
-reason = "KaTeX: an existing prototype pollution can bypass its trust restrictions; fixed in 0.18.2. KaTeX reaches the web app only through mermaid, which draws math in diagrams. Mermaid 11 still asks for KaTeX 0.16 in its newest release (11.17.2). Mermaid 12.2.0 takes the fixed KaTeX, but it is a major upgrade that changes how every flowchart is laid out and drawn, so it comes with its own check of every diagram type. The flaw needs a separate prototype pollution in the page before it can do anything. The date is on purpose: by then, upgrade mermaid, or decide again."
+id = "GHSA-3g3m-2fjr-6pw4"
+reason = "glob keeps reading folders after its AbortSignal fires; fixed in 14.0.2. Our only glob call, a globSync in runtime/packages/coding-agent/src/core/package-manager.ts, passes no signal, so the abort branch never runs."
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+reason = "minimatch can blow up a crafted pattern with **/../ parts into heavy CPU work; fixed only in 11.0.1. That step runs only at optimizationLevel 2 or higher. Our own minimatch calls use the default level 1; glob uses level 2, but our one glob call expands file patterns from an installed package's manifest, and the web server never loads packages (its loaders drop the packages setting)."

@@ -52,9 +52,11 @@ export const CONSULT_HANDOFF_RESERVED_TOKEN = "**must-keep**";
  * Plain-prose manipulation ("please keep this forever") is inherent LLM risk and
  * out of scope here; this closes the STRUCTURAL forge, which is the code's job.
  *
- * BOTH envelope families are defanged in EVERY untrusted block, not just the
- * family the block belongs to (critical-fixes hardening). The consent parser's
- * fence recognisers (userAuthoredPromptText) match both families, so a consult
+ * EVERY fence family is defanged in EVERY untrusted block, not just the
+ * family the block belongs to (critical-fixes hardening): both envelopes and
+ * the server's notes in front of a message (cut-answer-note.ts), which shares
+ * this one list. The consent parser's fence recognisers
+ * (userAuthoredPromptText) match all of them, so a consult
  * answer carrying a literal `[/SPECIALIST RESULT: x]` would close the consult
  * block early and launder the rest of the model-written block into
  * "user-authored" consent scope — the same laundering the delegation slice
@@ -62,18 +64,27 @@ export const CONSULT_HANDOFF_RESERVED_TOKEN = "**must-keep**";
  * fence recogniser anywhere can match must be un-reproducible in ANY
  * neutralised content.
  */
-const HANDOFF_MARKER_LIKE = /\[\s*\/?\s*CONSULT\s+HANDOFF\b[^\]\n]*\]/gi;
-const SPECIALIST_MARKER_LIKE = /\[\s*\/?\s*SPECIALIST\s+RESULT\b[^\]\n]*\]/gi;
+// A marker-like token: a run of "[", spaces and "/" that starts at a "[" with
+// no "[" before it (spaces and "/" between allowed), then a fence name, then
+// the rest up to the next bracket or line end, and the "]" if one follows.
+// Taking the whole run means removing its brackets cannot leave a "[" in front
+// of the name (`[[/X]]` would otherwise become `[/X]`), so one pass is enough.
+// Stopping the rest at any bracket and checking the lookbehind only after a
+// "[" keep the work linear in the text's length, however it is nested.
+const FENCE_MARKER_LIKE = /\[(?<!\[[\s/]*\[)[[\s/]*(?:CONSULT\s+HANDOFF|SPECIALIST\s+RESULT|ANSWER\s+CUT\s+OFF|SENT\s+WHILE\s+YOU\s+WORKED)\b[^[\]\n]*\]?/gi;
 const MUST_KEEP_EMPHASIS = /[*_]{1,3}\s*must[\s‐-―_-]*keep\s*[*_]{1,3}/gi;
 
+/**
+ * Keep the words, remove the fence: a marker-like token can no longer
+ * terminate or open an envelope or note once its brackets are gone.
+ */
+export function defangFenceMarkers(text: string): string {
+	return String(text ?? "").replace(FENCE_MARKER_LIKE, (marker) => marker.replace(/[[\]]/g, ""));
+}
+
 export function neutralizeBlockContent(text: string): string {
-	return String(text ?? "")
-		// Keep the words, remove the fence: a marker-like token can no longer
-		// terminate or open an envelope once its brackets are gone.
-		.replace(HANDOFF_MARKER_LIKE, (marker) => marker.replace(/[[\]]/g, ""))
-		.replace(SPECIALIST_MARKER_LIKE, (marker) => marker.replace(/[[\]]/g, ""))
-		// Collapse emphasized must-keep variants to plain text — no durability signal.
-		.replace(MUST_KEEP_EMPHASIS, "must-keep");
+	// Collapse emphasized must-keep variants to plain text: no durability signal.
+	return defangFenceMarkers(text).replace(MUST_KEEP_EMPHASIS, "must-keep");
 }
 
 /** Persisted pending-transfer queue caps (§2.3): entries × per-entry size. */

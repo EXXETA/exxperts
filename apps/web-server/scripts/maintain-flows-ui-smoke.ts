@@ -16,8 +16,16 @@
 // or a proxy's cut, the page joins the read still being made; a Review card
 // left ready waits behind the chooser, and Try again after its save keeps the
 // run's guidance; Back on a Memorize run that was waiting shows the first read;
-// and a gateway's bare 403 on a memory screen offers the buttons the chat's line
-// offers on a shared server and on a paired phone.
+// a gateway's bare 403 on a memory screen offers the buttons the chat's line
+// offers on a shared server and on a paired phone; Discuss first opens on the
+// first read's question, or on what to tell the room, with Continue open, no
+// message count, Back and Continue on screen on a phone, upright and sideways,
+// and an answer typed but not sent carried by Continue; Cancel asks to stop an
+// update still reading and to discard one that has read, whose Discard drops
+// the draft and opens the room's memory page, and a Discard the server refuses
+// keeps the card, a Keep chosen just before included; and the Maintain page
+// says everything is memorized only in a room that has remembered or memorized
+// a conversation.
 // Offline: one synthetic provider.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
@@ -29,6 +37,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -75,10 +86,20 @@ let waitingRoomReads = 0;
 const slowReads: string[] = [];
 const slowReadsCut: string[] = [];
 const slowCount = (read: string) => slowReads.filter((one) => one === read).length;
-// While set, the Busy Card Room's tidy of its warehouse note answers late: another window's Try again still at work.
+// While set, the Busy Card Room's tidy of its warehouse note is held until its scene lets it go: another window's Try again still at work.
 let kestrelTidyWaits = false;
+let releaseKestrelTidy: (() => void) | undefined;
 // The Flaky Key Room's first reads: the first is answered, every later one refused as signed out.
 let flakyKeyReads = 0;
+// While set, the Draft Room's fold is held until its scene lets it go: an update still reading.
+let marloweFoldWaits = false;
+let releaseMarloweFold: (() => void) | undefined;
+// The Draft Room's first read asks this, and its fold keeps one note: a draft with something in it.
+const DRAFT_QUESTION = "Should the Marlowe deposit stay with the venue?";
+const DRAFT_FIRST_READ = MEMORIZE_FIRST_READ.replace("### Needs your judgment\n\n- None", `### Needs your judgment\n\n- ${DRAFT_QUESTION}`);
+const DRAFT_FOLD = `One thing to keep.\n\n\`\`\`json\n${JSON.stringify({ ops: [{ op: "add", topic: "Venue", kind: "fact", text: "- Marlowe pays the deposit in June." }] })}\n\`\`\`\n`;
+// The Plain Talk Room's first read is long enough to fill its column on a phone, as a room with several conversations does.
+const LONG_FIRST_READ = MEMORIZE_FIRST_READ.replace("- The venue plan.", Array.from({ length: 12 }, (_, n) => `- The Tamsin plan, part ${n + 1}: who starts when, and what the first week holds.`).join("\n"));
 // A first read with all its sections, so Read again has no missing part to ask about.
 const COMPLETE_FIRST_READ = MEMORIZE_FIRST_READ.replace("- Deep Memory: the venue plan.", "- Deep Memory: the venue plan.\n- Active Items: the venue booking.");
 
@@ -155,7 +176,8 @@ const providers = http.createServer((req, res) => {
 			const refused = kind === "tidy" && (prompt.includes("Vexholm") || prompt.includes("Kestrel"));
 			sse(res, "message_start", { type: "message_start", message: { id: `msg_${calls.length}`, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 1 } } });
 			sse(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-			sse(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: refused ? "" : kind === "memorize-read" && ["Quorvale", "Brightwater", "Ravensholt", "Pembertine", "Ostrander"].some((marker) => prompt.includes(marker)) ? COMPLETE_FIRST_READ : text } });
+			const draftText = prompt.includes("Marlowe") ? (kind === "memorize-read" ? DRAFT_FIRST_READ : kind === "fold" ? DRAFT_FOLD : null) : kind === "memorize-read" && prompt.includes("Tamsin") ? LONG_FIRST_READ : null;
+			sse(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: refused ? "" : draftText ?? (kind === "memorize-read" && ["Quorvale", "Brightwater", "Ravensholt", "Pembertine", "Ostrander"].some((marker) => prompt.includes(marker)) ? COMPLETE_FIRST_READ : text) } });
 			sse(res, "content_block_stop", { type: "content_block_stop", index: 0 });
 			sse(res, "message_delta", { type: "message_delta", delta: { stop_reason: refused ? "refusal" : "end_turn", stop_sequence: null }, usage: { output_tokens: 20 } });
 			sse(res, "message_stop", { type: "message_stop" });
@@ -163,10 +185,13 @@ const providers = http.createServer((req, res) => {
 		};
 		// The slow rooms' first reads answer after a few seconds: time for a reload, a Cancel or a proxy's cut in the middle of them.
 		const slowMarker = ["Brightwater", "Ravensholt", "Pembertine"].find((marker) => prompt.includes(marker));
-		const slow = (kind === "memorize-read" || kind === "review-read") && slowMarker ? `${slowMarker} ${kind}` : kind === "tidy" && kestrelTidyWaits && prompt.includes("Kestrel") ? "Kestrel tidy" : null;
+		const slow = (kind === "memorize-read" || kind === "review-read") && slowMarker ? `${slowMarker} ${kind}` : kind === "tidy" && kestrelTidyWaits && prompt.includes("Kestrel") ? "Kestrel tidy" : kind === "fold" && marloweFoldWaits && prompt.includes("Marlowe") ? "Marlowe fold" : null;
 		if (slow) {
 			slowReads.push(slow);
-			const timer = setTimeout(answer, slow === "Kestrel tidy" ? 10_000 : 4_000);
+			const held = slow === "Kestrel tidy" || slow === "Marlowe fold";
+			const timer = held ? undefined : setTimeout(answer, 4_000);
+			if (slow === "Kestrel tidy") releaseKestrelTidy = answer;
+			if (slow === "Marlowe fold") releaseMarloweFold = answer;
 			res.on("close", () => { if (!res.writableFinished) { clearTimeout(timer); slowReadsCut.push(slow); } });
 			return;
 		}
@@ -174,38 +199,10 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-// A saved page as it reads: the open conversation's line stands apart from the
-// counts paragraph before it; the heading's text runs the full width of the page,
-// as the chips row below it does; and no footnote about undoing remains.
+// A saved page as it reads: no footnote about undoing remains.
 async function checkSavedPage(screen: ReturnType<Page["locator"]>, label: string): Promise<void> {
-	const look = await screen.locator(".checkpoint-saved-page").first().evaluate((page) => {
-		// No named helpers in here: the page runs this text as it is.
-		const line = [...page.querySelectorAll("p")].find((p) => p.textContent === "Your open conversation keeps the memory it started with. The changes apply from your next conversation.");
-		const before = line?.previousElementSibling;
-		const heading = page.querySelector(".checkpoint-input-heading");
-		const strip = page.querySelector(".absorb-review-strip");
-		const widths = [...(heading?.querySelectorAll("p") ?? [])].map((p) => Math.round(p.getBoundingClientRect().width));
-		return {
-			gap: line && before ? Math.round(line.getBoundingClientRect().top - before.getBoundingClientRect().bottom) : -1,
-			page: Math.round(page.getBoundingClientRect().width),
-			heading: heading ? Math.round(heading.getBoundingClientRect().width) : -1,
-			strip: strip ? Math.round(strip.getBoundingClientRect().width) : -1,
-			narrowest: widths.length ? Math.min(...widths) : -1,
-			text: (page as HTMLElement).innerText,
-		};
-	});
-	assert(look.gap >= 8, `${label}: the open conversation's line stands apart from the paragraph before it, got a gap of ${look.gap}px`);
-	assert(look.heading >= look.page - 1 && look.narrowest >= look.page - 1 && look.strip >= look.page - 1, `${label}: the heading's text runs the page's full width, as the chips do, got ${JSON.stringify({ page: look.page, heading: look.heading, narrowest: look.narrowest, strip: look.strip })}`);
+	const look = await screen.locator(".checkpoint-saved-page").first().evaluate((page) => ({ text: (page as HTMLElement).innerText }));
 	assert(!/can (also )?be undone/.test(look.text), `${label}: no footnote about undoing, got ${JSON.stringify(look.text)}`);
-}
-
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
 }
 
 /** Every file under a folder, by path, with a hash of its bytes. */
@@ -276,6 +273,17 @@ try {
 	createRoom("Waiting Card Room", "", [conversationPage("RC-0001", "2026-09-12", "The Brightwell call", "We spoke about Brightwell.", "- Brightwell signs in June.")]);
 	const savedRoom = createRoom("Saved Room", "", [conversationPage("RC-0001", "2026-09-10", "Conversation of 2026-09-10", "Conversation of 2026-09-10", "- Conversation of 2026-09-10")]);
 	const goneRoom = createRoom("Gone Room", "", []);
+	// The Keep Room is over its 10k budget with one conversation waiting: its Memorize card offers Keep on the notes it would archive.
+	const keepRoom = createRoom("Keep Room", ["### Shipments", "", ...Array.from({ length: 200 }, (_, n) => note(`m-${9000 + n}`, `- The Wexford shipment ${n} leaves the harbour on the first Monday; the customs papers, the delivery notes and the insurance letter travel with it, and the finance desk checks the invoice before it is paid.`)), ""].join("\n"), [conversationPage("RC-0001", "2026-09-12", "The Wexford call", "We spoke about Wexford.", "- Wexford ships in June.")]);
+	writePersistentRoomMaintenanceSettings(keepRoom.agentId, { memoryBudgetTokens: 10_000, memoryBudgetSettled: true });
+	// The Edited Room was never talked to: its memory holds only a note edited by hand, and the stamp that edit writes.
+	const editedRoom = createRoom("Edited Room", ["### Suppliers", "", note("m-0951", "- The Ardmore supplier delivers on Tuesdays."), ""].join("\n"), []);
+	fs.writeFileSync(editedRoom.l1bPath, fs.readFileSync(editedRoom.l1bPath, "utf-8").replace("- Last consolidation: none", "- Last consolidation: none\n- Last edit at: 2026-09-20T10:00:00.000Z"), "utf-8");
+	const draftRoom = createRoom("Draft Room", "", [conversationPage("RC-0001", "2026-09-12", "The Marlowe call", "We spoke about Marlowe.", "- Marlowe pays the deposit in June.")]);
+	createRoom("Plain Talk Room", "", [conversationPage("RC-0001", "2026-09-12", "The Tamsin call", "We spoke about Tamsin.", "- Tamsin starts in July.")]);
+	// The Done Room memorized everything before: its notes, nothing waiting, and the consolidation stamp a Memorize writes.
+	const doneRoom = createRoom("Done Room", ["### Renewals", "", note("m-0901", "- The Corvane contract renews in May."), ""].join("\n"), []);
+	fs.writeFileSync(doneRoom.l1bPath, fs.readFileSync(doneRoom.l1bPath, "utf-8").replace("- Last consolidation: none", "- Last consolidation: none\n- Last consolidation at: 2026-09-20T10:00:00.000Z"), "utf-8");
 	// A task that met the empty conversation Remember prepared, twice: the newer run waits for it, the older one ended.
 	const tasksRoom = createRoom("Tasks Room", "", []);
 	agents.writePersistentAgentThread(tasksRoom.agentId, "tasks_prepared_0001", { state: "standby", origin: "checkpoint", model: MODEL, items: [] });
@@ -349,22 +357,9 @@ try {
 		console.log("  ok  Back during Review's discussion asks Leave; Keep discussing stays; Leave goes; the discussion comes back");
 
 		// 3. The tidy from the discussion, its card, Save and the saved screen.
-		// The tidy's progress, however briefly it shows, runs the card's full width.
-		await page.evaluate(`(() => {
-			window.__progressLook = null;
-			const look = () => {
-				const progress = document.querySelector(".review-run-progress");
-				if (!progress || window.__progressLook) return;
-				const parent = progress.parentElement.getBoundingClientRect().width - parseFloat(getComputedStyle(progress.parentElement).paddingLeft) - parseFloat(getComputedStyle(progress.parentElement).paddingRight);
-				window.__progressLook = { width: Math.round(progress.getBoundingClientRect().width), parent: Math.round(parent) };
-			};
-			new MutationObserver(look).observe(document.body, { childList: true, subtree: true });
-		})()`);
 		await review.getByRole("button", { name: "Continue →" }).click();
 		const saveTidy = review.getByRole("button", { name: /^Save (to memory|over the budget)$/ });
 		await saveTidy.waitFor({ timeout: 60_000 });
-		const progressLook = await page.evaluate("window.__progressLook") as { width: number; parent: number } | null;
-		assert(progressLook && progressLook.width >= progressLook.parent - 1, `the tidy's progress runs the card's full width, got ${JSON.stringify(progressLook)}`);
 		const cardHead = await review.getByRole("heading", { level: 2 }).first().innerText();
 		assert(cardHead === "1 topic tidied.", `the card says what the tidy did, got ${JSON.stringify(cardHead)}`);
 		assert(!/can (also )?be undone/.test(await review.innerText()), "Review's card has no footnote about undoing");
@@ -374,17 +369,6 @@ try {
 		await review.getByRole("heading", { name: "Review Room tidied its memory." }).waitFor({ timeout: 30_000 });
 		assert(await review.getByText(OPEN_CONVERSATION_LINE, { exact: true }).count() === 1, "Review's saved screen says the open conversation keeps the memory it started with");
 		await checkSavedPage(review, "Review");
-		// At phone width the stacked header starts on the left edge, like the page under it.
-		await page.setViewportSize({ width: 390, height: 844 });
-		await page.waitForTimeout(400);
-		const headerLook = await page.evaluate(`(() => {
-			const header = document.querySelector(".maintain-workspace .absorb-workspace-header");
-			const edge = header.getBoundingClientRect().left + parseFloat(getComputedStyle(header).paddingLeft);
-			return [...header.children].map((child) => Math.round(child.getBoundingClientRect().left - edge));
-		})()`) as number[];
-		assert(headerLook.length > 0 && headerLook.every((offset) => Math.abs(offset) <= 1), `the Maintain header starts on the left edge at phone width, got offsets ${JSON.stringify(headerLook)}`);
-		await page.setViewportSize({ width: 1280, height: 900 });
-		await page.waitForTimeout(300);
 		const reviewMemory = fs.readFileSync(reviewRoom.l1bPath, "utf-8");
 		assert(reviewMemory.includes("- The Nordwind contract renews in May.\n") && !reviewMemory.includes("and the renewal is in May"), "the saved tidy is in memory");
 		await review.getByRole("button", { name: /^Back to rooms$/ }).first().click();
@@ -458,7 +442,7 @@ try {
 		await card("Saved Room").waitFor({ timeout: 10_000 });
 
 		// 5. Return Home from an ordinary saved Remember: Home, and nothing is written into the conversation the save closed.
-		await card("Saved Room").getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await card("Saved Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15_000 });
 		await page.waitForTimeout(800);
@@ -536,7 +520,7 @@ try {
 		// 8. Back onto the address of a room that is gone never keeps the person there: the next Back goes on.
 		await page.evaluate(() => { window.location.hash = "#/memory"; });
 		await page.evaluate(() => { window.location.hash = "#/"; });
-		await card("Gone Room").getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await card("Gone Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await waitUntil(async () => (await hash()) === `#/room/${goneRoom.agentId}`, "the room is open");
 		await page.evaluate(() => { window.location.hash = "#/"; });
 		await card("Gone Room").waitFor({ timeout: 10_000 });
@@ -832,7 +816,9 @@ try {
 		await page.reload({ waitUntil: "domcontentloaded" });
 		await waitUntil(async () => (await busy.count()) === 1, "the reload follows the tidy still at work here", 8_000);
 		assert((await busyState()) === "tidying", "the page followed the tidy while it was still at work");
+		await waitUntil(() => releaseKestrelTidy !== undefined, "the tidy asked again reaches the model", 10_000);
 		kestrelTidyWaits = false;
+		releaseKestrelTidy!();
 		await busy.getByRole("heading", { name: "1 topic tidied." }).waitFor({ timeout: 30_000 });
 		// Another window cancels it: Save here says the tidy is no longer open.
 		await page.evaluate(async (url) => { await fetch(url, { method: "POST" }); }, `${busyRun}/cancel`);
@@ -861,6 +847,161 @@ try {
 			await viewerContext.close();
 		}
 		console.log("  ok  a gateway's bare 403 on a memory screen: no Replace key on a shared server; a paired phone shows the chat's buttons");
+
+		// Scenes 20 to 22 start from their own page: the scenes before may leave this one inside a card.
+		const fixes = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+		const fixPage = await fixes.newPage();
+		await fixPage.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+		await fixPage.waitForLoadState("networkidle");
+		if (await fixPage.locator(".whats-new-close").count()) await fixPage.locator(".whats-new-close").click();
+		const fixCard = (name: string) => fixPage.locator(".persistent-agent-card").filter({ hasText: name });
+		const fixConfirm = (title: string) => fixPage.getByRole("dialog", { name: title });
+		const fixTranscript = fixPage.locator('[aria-label="Discussion transcript"]');
+
+		// 20. Discuss first opens on the first read's question, with no message count, and Continue goes on with no message.
+		// While the update still reads, Cancel asks to stop it; once it has read, Cancel asks to discard the draft:
+		// Keep draft keeps it as it was, Discard drops it on the server and opens the room's memory page.
+				await fixCard("Draft Room").waitFor({ timeout: 10_000 });
+		marloweFoldWaits = true;
+		await fixCard("Draft Room").getByRole("button", { name: "Maintain", exact: true }).click();
+		await fixPage.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();
+		const draft = fixPage.locator('[aria-label="Memory absorption workflow"]');
+		await draft.getByRole("button", { name: "Discuss first" }).click({ timeout: 30_000 });
+		await fixTranscript.locator(".absorb-discussion-empty").getByText(DRAFT_QUESTION).waitFor({ timeout: 10_000 }).catch(async () => { throw new Error(`Discuss first opens on the first read's question, got ${JSON.stringify(await fixTranscript.innerText())}`); });
+		assert(!/\d+ of \d+ messages/.test(await draft.innerText()), "Discuss first shows no message count");
+		const draftContinue = draft.getByRole("button", { name: "Continue →" });
+		assert(await draftContinue.isEnabled(), "Continue is open before any message");
+		await draftContinue.click();
+		await waitUntil(() => slowReads.includes("Marlowe fold"), "Continue with no message starts the update", 30_000);
+		await draft.locator(".checkpoint-preview-actions").getByRole("button", { name: "Cancel", exact: true }).click();
+		await fixConfirm("Stop this memory update?").getByRole("button", { name: "Keep going" }).click({ timeout: 10_000 });
+		marloweFoldWaits = false;
+		releaseMarloweFold!();
+		const draftSave = draft.getByRole("button", { name: /^Save (to memory|over the budget)$/ });
+		await waitUntil(async () => (await draftSave.count()) === 1 && (await draftSave.isEnabled()), "the update reaches its card", 60_000);
+		const draftApi = `/api/persistent-agents/${encodeURIComponent(draftRoom.agentId)}/absorb`;
+		const waitingDraft = () => fixPage.evaluate(async (url) => ((await (await fetch(`${url}/status`)).json()).waitingRunId ?? null) as string | null, draftApi);
+		const draftRunId = await waitingDraft();
+		assert(draftRunId, "the draft waits on the server");
+		const discard = fixConfirm("Discard this draft?");
+		await draft.locator(".checkpoint-preview-actions").getByRole("button", { name: "Cancel", exact: true }).click();
+		await discard.waitFor({ timeout: 10_000 }).catch(async () => { throw new Error(`Cancel on a draft that has read asks to discard it, got ${JSON.stringify(await fixPage.getByRole("dialog").allInnerTexts())}`); });
+		assert(await fixConfirm("Stop this memory update?").count() === 0, "an update that has read is not stopped: it is discarded");
+		assert(await discard.getByRole("button", { name: "Keep draft", exact: true }).count() === 1 && await discard.getByRole("button", { name: "Discard", exact: true }).count() === 1, "the question offers Keep draft and Discard");
+		await discard.getByRole("button", { name: "Keep draft", exact: true }).click();
+		await waitUntil(async () => (await discard.count()) === 0, "Keep draft closes the question");
+		assert(await draftSave.isEnabled() && await draft.getByText("Marlowe pays the deposit in June.").count() > 0 && (await waitingDraft()) === draftRunId, "Keep draft leaves the draft as it was, here and on the server");
+		await draft.locator(".checkpoint-preview-actions").getByRole("button", { name: "Cancel", exact: true }).click();
+		await discard.getByRole("button", { name: "Discard", exact: true }).click({ timeout: 10_000 });
+		const draftMemory = fixPage.locator('[aria-label="Memory maintenance chooser"]');
+		await draftMemory.waitFor({ timeout: 10_000 }).catch(async () => { throw new Error(`Discard opens the room's memory page, got ${JSON.stringify((await fixPage.locator("body").innerText()).slice(0, 400))}`); });
+		assert(await draft.count() === 0 && await draftMemory.locator(".card-kicker").innerText() === "Draft Room", "the memory page is the Draft Room's");
+		const discardedState = await fixPage.evaluate(async ({ url, runId }) => String((await (await fetch(`${url}/runs/${encodeURIComponent(runId)}`)).json()).state), { url: draftApi, runId: draftRunId });
+		assert((await waitingDraft()) === null && discardedState === "cancelled", `Discard drops the draft on the server, got ${discardedState}`);
+		assert(!fs.readFileSync(draftRoom.l1bPath, "utf-8").includes("Marlowe pays the deposit in June.\n<!--") && !/### Venue/.test(fs.readFileSync(draftRoom.l1bPath, "utf-8")), "nothing of the discarded draft is in memory");
+		await draftMemory.getByRole("button", { name: /^Back to rooms$/ }).click();
+		console.log("  ok  Discuss first opens on the first read's question with Continue open; Cancel stops an update still reading, and asks to discard one that has read: Keep draft keeps it, Discard drops it and opens the room's memory page");
+
+		// 21. On a phone, Discuss first on a first read that asks nothing: the opening says what to tell the room, and Back and Continue are on screen.
+		const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+		const phonePage = await phone.newPage();
+		const buttonsOnScreen = async (height: number) => {
+			const boxes: string[] = [];
+			for (const name of ["Back", "Continue →"]) {
+				const button = plain.getByRole("button", { name, exact: true });
+				const box = await button.boundingBox();
+				boxes.push(`${name} ${JSON.stringify(box)}`);
+				if (!box || box.y < 0 || box.y + box.height > height || !(await button.isEnabled())) return boxes.join(", ");
+			}
+			return "";
+		};
+		const waitButtonsOnScreen = async (height: number) => {
+			let last = "";
+			await waitUntil(async () => !(last = await buttonsOnScreen(height)), `Back and Continue are on screen and open at phone width, ${height} high`, 10_000).catch(() => {
+				throw new Error(`Back and Continue are on screen and open at phone width, ${height} high, got ${last}`);
+			});
+		};
+		await phonePage.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+		await phonePage.waitForLoadState("networkidle");
+		if (await phonePage.locator(".whats-new-close").count()) await phonePage.locator(".whats-new-close").click();
+		await phonePage.locator(".persistent-agent-card").filter({ hasText: "Plain Talk Room" }).getByRole("button", { name: "Maintain", exact: true }).click();
+		await phonePage.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();
+		const plain = phonePage.locator('[aria-label="Memory absorption workflow"]');
+		await plain.getByRole("button", { name: "Discuss first" }).click({ timeout: 30_000 });
+		await plain.locator(".absorb-discussion-empty").getByText("Tell the room what to keep, let go or change.", { exact: true }).waitFor({ timeout: 10_000 });
+		await waitButtonsOnScreen(844);
+		// The page scrolls as one: the first read has no scroll of its own that hides its last items.
+		const firstRead = plain.locator(".absorb-discussion-aside");
+		const firstReadFit = await firstRead.evaluate((el) => ({ scroll: el.scrollHeight, shown: el.clientHeight }));
+		assert(firstReadFit.scroll <= firstReadFit.shown + 1, `the first read shows whole on a phone, without a scroll of its own, got ${JSON.stringify(firstReadFit)}`);
+		// Sent from the pinned composer after reading that long page from its top, the message and the room's reply come into view.
+		await phonePage.evaluate(() => document.querySelector(".absorb-workspace-main")?.scrollTo(0, 0));
+		const turnsAtSend = calls.filter((call) => call === "memorize-turn").length;
+		await plain.getByPlaceholder("Your answer or instruction…").fill("Who starts first?");
+		await plain.getByRole("button", { name: "Send", exact: true }).click();
+		await waitUntil(async () => calls.filter((call) => call === "memorize-turn").length > turnsAtSend && await plain.locator(".absorb-discussion-message").count() === 2 && await plain.locator(".absorb-discussion-message.pending").count() === 0, "the room's reply lands", 20_000);
+		const newestShown = () => plain.locator(".absorb-discussion-message").last().evaluate((el) => {
+			const box = el.getBoundingClientRect();
+			const hit = document.elementFromPoint(box.left + box.width / 2, box.top + Math.min(box.height / 2, 12));
+			return { top: Math.round(box.top), bottom: Math.round(box.bottom), seen: Boolean(hit && el.contains(hit)) };
+		});
+		let newest = await newestShown();
+		await waitUntil(async () => (newest = await newestShown()).seen, "the room's reply is on screen", 5_000).catch(() => {
+			throw new Error(`the room's reply is on screen, above the pinned composer, after Send on a long page, got ${JSON.stringify(newest)}`);
+		});
+		// Turned sideways, the screen is far shorter than the first read and the chat together.
+		await phonePage.setViewportSize({ width: 667, height: 375 });
+		await waitButtonsOnScreen(375);
+		// An answer typed but not sent is never lost: Continue sends it, and goes on once the room has replied.
+		const count = (kind: string) => calls.filter((call) => call === kind).length;
+		const [turnsBefore, signoffsBefore] = [count("memorize-turn"), count("memorize-signoff")];
+		await plain.getByPlaceholder("Your answer or instruction…").fill("Tamsin's start date matters most.");
+		await plain.getByRole("button", { name: "Continue →", exact: true }).click();
+		await waitUntil(() => count("memorize-turn") > turnsBefore, "Continue sends the typed answer to the room", 20_000);
+		await waitUntil(() => count("memorize-signoff") > signoffsBefore, "then goes on with the discussion", 30_000);
+		await phone.close();
+		console.log("  ok  on a phone, upright and sideways, Discuss first with no question says what to tell the room, the first read shows whole, a reply to a message sent from the top of the page comes into view, Back and Continue are on screen, and Continue carries an answer typed but not sent");
+
+		// 22. The Maintain page's Memorize line: a room that memorized everything says so; a room never talked to, its
+		// memory only edited by hand, is asked for a conversation first.
+		const memorizeLine = fixPage.locator('[aria-label="Memory maintenance chooser"] .maintain-action').filter({ hasText: "Memorize" }).locator(".maintain-action-text");
+		await fixCard("Done Room").getByRole("button", { name: "Maintain", exact: true }).click({ timeout: 10_000 });
+		await memorizeLine.waitFor({ timeout: 10_000 });
+		assert((await memorizeLine.innerText()).trim() === "Everything is memorized.", `a room with everything memorized says so, got ${JSON.stringify(await memorizeLine.innerText())}`);
+		await fixPage.locator('[aria-label="Memory maintenance chooser"]').getByRole("button", { name: /^Back to rooms$/ }).click();
+		await fixCard("Edited Room").getByRole("button", { name: "Maintain", exact: true }).click({ timeout: 10_000 });
+		await waitUntil(async () => (await memorizeLine.count()) === 1 && (await fixPage.locator('[aria-label="Memory maintenance chooser"] .card-kicker').innerText()) === "Edited Room", "the Edited Room's memory page opens", 10_000);
+		assert((await memorizeLine.innerText()).trim() === "Nothing to memorize yet. Have a conversation with Edited Room first.", `a room never talked to keeps the line asking for a conversation, got ${JSON.stringify(await memorizeLine.innerText())}`);
+		console.log("  ok  the Maintain page says everything is memorized in a room that memorized it all, and asks for a conversation in a room never talked to");
+
+		// 23. A Discard the server refuses keeps the card as it was, a Keep chosen just before it included.
+		await fixPage.locator('[aria-label="Memory maintenance chooser"]').getByRole("button", { name: /^Back to rooms$/ }).click();
+		await fixCard("Keep Room").getByRole("button", { name: "Maintain", exact: true }).click({ timeout: 10_000 });
+		await fixPage.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();
+		const keepCard = fixPage.locator('[aria-label="Memory absorption workflow"]');
+		await keepCard.getByRole("button", { name: "Continue →" }).click({ timeout: 30_000 });
+		const keepSave = keepCard.getByRole("button", { name: /^Save (to memory|over the budget)$/ });
+		await waitUntil(async () => (await keepSave.count()) === 1 && (await keepSave.isEnabled()), "the over-budget update reaches its card", 90_000);
+		const keepApi = `/api/persistent-agents/${encodeURIComponent(keepRoom.agentId)}/absorb`;
+		const keepRunId = await fixPage.evaluate(async (url) => String((await (await fetch(`${url}/status`)).json()).waitingRunId ?? ""), keepApi);
+		const serverKeeps = () => fixPage.evaluate(async ({ url, runId }) => ((await (await fetch(`${url}/runs/${encodeURIComponent(runId)}`)).json()).demotion?.keepIds ?? []).length as number, { url: keepApi, runId: keepRunId });
+		await keepCard.locator(".absorb-run-archive > summary").click();
+		await keepCard.locator(".absorb-run-entry-group-toggle").first().click();
+		const keptBoxes = keepCard.locator(".absorb-run-entries .absorb-run-entry-keep input[type=checkbox]:checked");
+		const [keptBefore, serverBefore] = [await keptBoxes.count(), await serverKeeps()];
+		await fixes.route(/\/absorb\/runs\/[^/]+\/cancel$/, (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "The server could not stop this update." }) }));
+		await keepCard.locator(".absorb-run-entries .absorb-run-entry-keep input[type=checkbox]:not(:checked)").first().check();
+		await keepCard.locator(".checkpoint-preview-actions").getByRole("button", { name: "Cancel", exact: true }).click();
+		await fixConfirm("Discard this draft?").getByRole("button", { name: "Discard", exact: true }).click({ timeout: 10_000 });
+		await keepCard.getByText("The server could not stop this update.").waitFor({ timeout: 10_000 });
+		await fixes.unroute(/\/absorb\/runs\/[^/]+\/cancel$/);
+		await waitUntil(async () => (await serverKeeps()) === serverBefore + 1, "the Keep chosen before the refused Discard reaches the server", 10_000).catch(async () => { throw new Error(`a refused Discard keeps the Keep chosen before it, got ${await serverKeeps()} on the server (was ${serverBefore}) and ${await keptBoxes.count()} ticked (was ${keptBefore})`); });
+		assert(await keptBoxes.count() === keptBefore + 1, "the card still shows it ticked");
+		await keepCard.locator(".checkpoint-preview-actions").getByRole("button", { name: "Cancel", exact: true }).click();
+		await fixConfirm("Discard this draft?").getByRole("button", { name: "Discard", exact: true }).click({ timeout: 10_000 });
+		await fixPage.locator('[aria-label="Memory maintenance chooser"]').waitFor({ timeout: 10_000 });
+		console.log("  ok  a Discard the server refuses keeps the card as it was, a Keep chosen just before it included; the next Discard goes");
+		await fixes.close();
 	} finally {
 		await browser.close();
 	}

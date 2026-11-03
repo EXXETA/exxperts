@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useEscapeKey } from "./use-escape-key";
+import { CloseIcon } from "./icons";
 
 const PHONE_QUERY = "(max-width: 760px)";
 
@@ -77,7 +78,7 @@ export function SettingsDialog<Id extends string>({
 						{title}
 						{headNote}
 					</div>
-					<button type="button" className="settings-dialog-close" onClick={onClose} aria-label="Close">×</button>
+					<button type="button" className="settings-dialog-close" onClick={onClose} aria-label="Close"><CloseIcon size={16} /></button>
 				</header>
 				<div className="settings-dialog-body">
 					<nav className="settings-dialog-nav" aria-label={navLabel}>

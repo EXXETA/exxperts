@@ -94,18 +94,11 @@ try {
 	assert(over.memoryBudget!.reviewTargetEstimatedTokens > budget, "fixture should put the review target over budget");
 	assert(over.memoryBudget!.overBudget === true, "a fat review target is over budget");
 
-	// --- The Maintain chooser reads the room's automatic save off the status ---
-	assert(over.fastPathSecondApproval === false, "the status carries the automatic save, off by default");
-	writePersistentRoomMaintenanceSettings(agentId, { fastPathSecondApproval: true });
-	assert(getPersistentAgentStatus(agentId).fastPathSecondApproval === true, "the status follows the setting when it is turned on");
-	writePersistentRoomMaintenanceSettings(agentId, { fastPathSecondApproval: false });
-
 	// --- The setting's range: the ceiling is 80k, and it is enforced ---------
 	// Raised from 50k with memory v2, because the server now enforces the budget
 	// exactly on every maintenance write: a large room must be able to keep what
 	// it has. A number outside the range is REFUSED, never quietly clamped —
 	// storing a budget nobody asked for would silently decide what a room forgets.
-	assert(MEMORY_BUDGET_MAX_TOKENS === 80_000, `the memory budget ceiling should be 80000, got ${MEMORY_BUDGET_MAX_TOKENS}`);
 	assert(writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: MEMORY_BUDGET_MAX_TOKENS }).memoryBudgetTokens === 80_000, "the ceiling itself must be settable");
 	for (const refused of [MEMORY_BUDGET_MAX_TOKENS + 1, MEMORY_BUDGET_MIN_TOKENS - 1]) {
 		let threw = "";

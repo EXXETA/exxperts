@@ -13,6 +13,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -79,15 +82,6 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -134,6 +128,24 @@ try {
 		page.on("response", async (r) => {
 			if (r.request().method() === "PUT" && /\/threads\//.test(r.url()) && r.status() >= 400) failedSaves.push(`${r.status()} ${await r.text().catch(() => "")}`);
 		});
+		// The page saves a conversation half a second after it last changed, so
+		// a save may already be on its way when the answer shows; a Forget
+		// waits until a save that holds the question and its answer has landed.
+		const saves: Array<{ landed: boolean; body: string }> = [];
+		const saveOf = new Map<unknown, { landed: boolean; body: string }>();
+		page.on("request", (r) => {
+			if (r.method() !== "PUT" || !/\/threads\//.test(r.url())) return;
+			const save = { landed: false, body: r.postData() ?? "" };
+			saves.push(save);
+			saveOf.set(r, save);
+		});
+		page.on("requestfinished", async (r) => {
+			const save = saveOf.get(r);
+			if (save && ((await r.response())?.ok() ?? false)) save.landed = true;
+		});
+		const answerSaved = async (question: string) => {
+			await waitUntil(() => saves.some((save) => save.landed && save.body.includes(question) && save.body.includes("Answer from claude-fake.")), `the answer to "${question}" is saved`);
+		};
 		// Keep a handle on the page's sockets, so a Forget that fails after its
 		// socket closed can be staged.
 		await page.addInitScript(() => {
@@ -143,6 +155,11 @@ try {
 				constructor(url: string | URL, protocols?: string | string[]) {
 					super(url, protocols);
 					(window as any).__sockets.push(this);
+					const socket = this as unknown as { readyFrames: number };
+					socket.readyFrames = 0;
+					this.addEventListener("message", (event) => {
+						try { if (JSON.parse(String(event.data))?.type === "ready") socket.readyFrames += 1; } catch {}
+					});
 				}
 			};
 		});
@@ -158,24 +175,35 @@ try {
 			}).observe(document.body, { childList: true, subtree: true, characterData: true });
 		});
 		const connectedAgain = () => page.evaluate(() => (window as any).__connectedAgain as number);
+		const socketCount = () => page.evaluate(() => ((window as any).__sockets as WebSocket[]).length);
+		// The room's newest socket is open and the server's ready frame has come.
+		const newestSocketReady = (after = 0) => page.evaluate((after) => {
+			const sockets = (window as any).__sockets as Array<WebSocket & { readyFrames: number }>;
+			const newest = sockets[sockets.length - 1];
+			return sockets.length > after && newest.readyState === WebSocket.OPEN && newest.readyFrames > 0;
+		}, after);
 
-		await page.locator(".persistent-agent-card").filter({ hasText: "Forget Room" }).getByRole("button", { name: "Enter →" }).click();
+		await page.locator(".persistent-agent-card").filter({ hasText: "Forget Room" }).getByRole("button", { name: "Enter" }).click();
 		const composer = page.locator("textarea").first();
 		await composer.waitFor({ timeout: 15000 });
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await page.waitForTimeout(800);
+		await waitUntil(() => newestSocketReady(), "the room's socket is ready");
 
 		for (let round = 1; round <= 2; round += 1) {
 			await composer.fill(`Question ${round}.`);
 			await composer.press("Enter");
 			await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, `answer ${round}`);
-			await page.waitForTimeout(800);
+			await answerSaved(`Question ${round}.`);
+			const socketsBefore = await socketCount();
 			await page.getByRole("button", { name: "Forget", exact: true }).first().click();
 			await page.getByRole("alertdialog").getByRole("button", { name: "Forget", exact: true }).click();
 			// The fresh conversation is open and its socket ready.
 			await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 0, `forget ${round} clears the transcript`);
 			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-			await page.waitForTimeout(2500);
+			await waitUntil(() => newestSocketReady(socketsBefore), `forget ${round} opens the fresh conversation's socket`);
+			// A close taken for a drop dials again after the page's first retry
+			// pause (1 s), and its ready would show the toast: wait past it.
+			await page.waitForTimeout(1500);
 			assert(await connectedAgain() === 0, `Forget ${round} shows no "Connected again."`);
 			assert(failedSaves.length === 0, `Forget ${round} saves nothing into the forgotten conversation, got ${JSON.stringify(failedSaves)}`);
 		}
@@ -185,7 +213,7 @@ try {
 		await composer.fill("Question 3.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "answer 3");
-		await page.waitForTimeout(800);
+		await answerSaved("Question 3.");
 		await page.route("**/memento", async (route) => {
 			await page.evaluate(() => { const sockets = (window as any).__sockets as WebSocket[]; sockets[sockets.length - 1]?.close(); });
 			await new Promise((resolve) => setTimeout(resolve, 300));
@@ -197,13 +225,14 @@ try {
 		await waitUntil(async () => await connectedAgain() > 0, "a failed Forget on a closed socket reconnects", 20_000);
 		await page.unroute("**/memento");
 		assert(await page.getByText("Answer from claude-fake.").count() === 1, "the conversation is still there after the failed Forget");
-		await page.waitForTimeout(6000);
+		// The count starts again once this toast has cleared itself.
+		await waitUntil(async () => !(await page.getByText("Connected again.").count()) && await newestSocketReady(), "the reconnect's toast clears");
 		await page.evaluate(() => { (window as any).__connectedAgain = 0; });
 
 		// A real drop: the server goes away and comes back on the same port.
 		await stopSmokeServer(server);
 		server = undefined;
-		await page.waitForTimeout(1500);
+		await waitUntil(() => page.evaluate(() => { const sockets = (window as any).__sockets as WebSocket[]; return sockets[sockets.length - 1].readyState === WebSocket.CLOSED; }), "the page sees the drop");
 		startServer();
 		await waitUntil(() => fetch(`${baseUrl}/healthz`).then((r) => r.ok).catch(() => false), "server back");
 		await waitUntil(async () => await connectedAgain() > 0, "a real drop says Connected again.", 40_000);

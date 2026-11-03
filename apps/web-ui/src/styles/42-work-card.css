@@ -1,0 +1,241 @@
+/* While a room works (work-card.tsx, ThinkingRow.tsx): one quiet card per
+   stretch of work, in the app's own font, colours and corners. Only the one
+   live thing moves: a stepped sweep over its words; it pauses off screen, and
+   reduced motion leaves every change a short fade. */
+.wk-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.wk-card {
+	border: 1px solid var(--exx-border-soft);
+	border-radius: var(--exx-radius-card);
+	background: var(--exx-surface);
+	width: 100%;
+	max-width: 760px;
+	animation: wk-rise 200ms cubic-bezier(.2, 0, 0, 1);
+}
+.wk-head {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	padding: 8px 12px;
+	border: 0;
+	border-radius: var(--exx-radius-card);
+	background: none;
+	color: var(--exx-text-muted);
+	font: inherit;
+	font-size: 13.5px;
+	text-align: left;
+	cursor: pointer;
+}
+button.wk-head:hover:not(:disabled) { color: var(--exx-text-soft); }
+.wk-head:disabled, div.wk-head { cursor: default; }
+.wk-lead { display: inline-flex; align-items: center; min-width: 14px; }
+.wk-stack {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	margin-right: -6px;
+	border: 1.5px solid var(--exx-surface);
+	border-radius: 50%;
+	background: var(--exx-surface-raised);
+	color: var(--exx-text-soft);
+}
+.wk-stack:last-child { margin-right: 4px; }
+.wk-stack .wk-ic { width: 12px; height: 12px; }
+.wk-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* An inline-block clips its own words, so it carries the ellipsis a line too long for its label needs. */
+.wk-lbl { display: inline-block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; vertical-align: top; animation: wk-label-in 180ms cubic-bezier(.2, 0, 0, 1) both; }
+/* On a phone a folded card's sentence takes a second line before it is cut: a short one stays one line, so its card keeps its height. */
+@media (max-width: 760px) {
+	.wk-card[data-live="0"] .wk-label { white-space: normal; }
+	.wk-card[data-live="0"] .wk-lbl { display: -webkit-box; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+}
+.wk-time { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+/* A row's parts sit on the words' x height. The smaller timer takes the words' line box, so both baselines sit at the same height;
+   in the page's font that leaves the timer's x height a quarter pixel under the words' and the icons' middles a quarter pixel over it. */
+.wk-time, .wk-meta { line-height: calc(13.5px * var(--exx-line-height)); translate: 0 -0.25px; }
+.wk-lead, .wk-head > .wk-ic, .wk-row-ic, .wk-mk, .wk-hmk { translate: 0 0.25px; }
+/* A head's mark; empty, it keeps the place so the head's time lines up with the cards beside it. */
+.wk-hmk { display: inline-flex; flex: none; justify-content: center; width: 13px; }
+.wk-noarrow { flex: none; width: 14px; }
+.wk-caret { width: 14px; height: 14px; color: var(--exx-text-disabled); transform: rotate(90deg); transition: transform 200ms; }
+.wk-card[data-open="0"] .wk-caret, .wk-thought:not([data-open="1"]) .wk-caret, .wk-open[aria-expanded="false"] .wk-caret { transform: rotate(0deg); }
+.wk-open .wk-caret { margin-left: 4px; vertical-align: middle; }
+.wk-dot {
+	display: inline-block;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--exx-working);
+	animation: wk-breathe 1.6s ease-in-out infinite;
+}
+.wk-card.waiting .wk-head { color: var(--exx-warning); }
+.wk-card.waiting .wk-dot { background: var(--exx-warning); animation: none; }
+.wk-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 280ms cubic-bezier(.2, 0, 0, 1), opacity 200ms; }
+.wk-card[data-open="0"] .wk-body { grid-template-rows: 0fr; opacity: 0; }
+.wk-in { overflow: hidden; min-height: 0; }
+.wk-rows { border-top: 1px solid var(--exx-divider); padding: 4px 0; }
+.wk-card[data-open="0"] .wk-rows { visibility: hidden; }
+/* A card of one step opens to that step's output alone, under the head's words. */
+.wk-solo { padding: 8px 0 2px; }
+.wk-solo .wk-out { margin-left: 45px; }
+.wk-solo .wk-line { padding-left: 45px; }
+/* On a phone the output takes the card's width: under the sentence, a command's lines would break early. */
+@media (max-width: 760px) {
+	.wk-solo .wk-out { margin-left: 12px; }
+	.wk-solo .wk-line { padding-left: 12px; }
+}
+.wk-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 12px;
+	color: var(--exx-text-soft);
+	font-size: 13.5px;
+	animation: wk-rise 200ms cubic-bezier(.2, 0, 0, 1);
+}
+.wk-row-ic { display: inline-flex; flex: none; color: var(--exx-text-muted); }
+.wk-tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-tx b { font-weight: 400; color: var(--exx-text); }
+/* A command named by itself, in the opened row's command style (.wk-command). The words' space before it is narrower than
+   the code's own, so a little margin keeps the verb from reading as pinched against the command. */
+.wk-code { margin-left: 0.15em; font-family: var(--exx-font-mono); font-size: 12px; color: var(--exx-text); }
+button.wk-tx { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+button.wk-tx:hover { color: var(--exx-text); }
+.wk-row[data-s="running"] .wk-tx, .wk-row[data-s="writing"] .wk-tx { color: var(--exx-text-muted); }
+.wk-row[data-s="denied"] .wk-tx, .wk-row[data-s="denied"] .wk-tx b, .wk-row[data-s="denied"] .wk-code, .wk-row[data-s="stopped"] .wk-tx, .wk-row[data-s="stopped"] .wk-tx b, .wk-row[data-s="stopped"] .wk-code { color: var(--exx-text-muted); }
+.wk-row[data-s="failed"] .wk-row-ic { color: var(--exx-danger); }
+.wk-meta { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wk-mk { display: inline-flex; flex: none; justify-content: center; width: 14px; }
+.wk-ok { width: 13px; height: 13px; color: var(--exx-success); animation: wk-fade 150ms both; }
+.wk-bad { width: 13px; height: 13px; color: var(--exx-danger); }
+.wk-spin {
+	display: inline-block;
+	width: 11px;
+	height: 11px;
+	border: 1.5px solid var(--exx-border);
+	border-top-color: var(--exx-text-soft);
+	border-radius: 50%;
+	animation: wk-spin 0.9s linear infinite;
+}
+.wk-line { padding: 0 12px 6px 37px; color: var(--exx-text-muted); font-size: 13px; }
+.wk-more { display: block; padding: 4px 12px 4px 37px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.wk-more:hover { color: var(--exx-text-soft); }
+.wk-out {
+	max-height: calc(16 * 1.5em);
+	margin: 0 12px 6px 37px;
+	padding: 8px 10px;
+	overflow: auto;
+	border: 1px solid var(--exx-divider);
+	border-radius: var(--exx-radius-control);
+	background: var(--exx-surface-inset);
+	color: var(--exx-text-soft);
+	font-size: 12px;
+	animation: wk-fade 200ms both;
+}
+.wk-out pre, .wk-command { margin: 0; font-family: var(--exx-font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wk-command { color: var(--exx-text); }
+.wk-command + * { margin-top: 6px; }
+.wk-out-thought { padding-top: 10px; padding-bottom: 10px; font-family: inherit; font-size: 13.5px; color: var(--exx-text-muted); }
+/* A thought scrolled in its box fades out at the edge it continues past, so a line is never shown sliced; the padding keeps the first and last lines clear of it. */
+.wk-full, .wk-out-thought { mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%); }
+/* A question is a grid: its icon, then its title, what goes under the title (the command's box, the facts, a text box) and,
+   under everything at the right, its answers, so a long command never scrolls in a column beside them. */
+.wk-ask {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	column-gap: 10px;
+	row-gap: 8px;
+	align-items: start;
+	margin: 4px 6px;
+	padding: 9px 10px;
+	border: 1px solid color-mix(in srgb, var(--exx-warning) 45%, transparent);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--exx-warning) 7%, transparent);
+	animation: wk-fade 200ms both;
+}
+.wk-ask > .wk-row-ic { grid-area: 1 / 1; }
+.wk-ask > .wk-tx, .wk-ask-body, .wk-ask-btns { grid-column: 2; }
+.wk-ask > .wk-tx { white-space: normal; }
+.wk-ask > .wk-tx.wk-one { white-space: nowrap; }
+/* What goes under the title sits close to it, as one block; the row's gap stays above the answers. */
+.wk-ask-body { display: grid; gap: 2px; min-width: 0; margin-top: -6px; }
+.wk-ask .wk-code { overflow-wrap: anywhere; }
+/* A question's whole command keeps its own spaces and tabs: the person allows what they read. */
+.wk-ask > .wk-tx:not(.wk-one) .wk-code { white-space: pre-wrap; }
+/* In a card's head the command keeps the head's quiet colour, as the head's other words do. */
+.wk-head .wk-code { color: inherit; }
+/* Six whole lines at the line height the box inherits: counted in ems, a six-line script overflowed by a sliver and showed a scrollbar. */
+.wk-ask-sub { color: var(--exx-text-muted); font-family: var(--exx-font-mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6lh; overflow: auto; }
+.wk-ask-meta { color: var(--exx-text-muted); font-size: 12px; }
+.wk-ask-more { justify-self: start; padding: 2px 0; border: 0; background: none; color: var(--exx-text-muted); font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; }
+.wk-ask-more:hover { color: var(--exx-text); }
+.wk-ask-facts { color: var(--exx-text-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wk-ask-input { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--exx-border); border-radius: var(--exx-radius-control); background: var(--exx-surface-inset); color: var(--exx-text); font: inherit; font-size: 13px; resize: vertical; }
+.wk-ask-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-self: end; }
+.wk-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	padding: 4px 10px;
+	border: 1px solid var(--exx-border);
+	border-radius: var(--exx-radius-control);
+	background: transparent;
+	color: var(--exx-text-soft);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+	transition: transform 120ms, background-color 120ms;
+}
+.wk-btn:hover { background: var(--exx-surface-hover); }
+.wk-btn:active { transform: scale(0.95); }
+.wk-btn.primary { border-color: transparent; background: var(--exx-action-primary-bg); color: var(--exx-action-primary-fg); }
+/* Where the row shows no keys (a touch screen, a phone-width window), an answer is a finger's size. */
+@media (hover: none), (max-width: 720px) {
+	.wk-ask .wk-btn { min-height: 40px; padding-inline: 14px; }
+}
+.wk-btn kbd { padding: 1px 5px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font-family: inherit; font-size: 11px; line-height: 1.2; opacity: 0.6; animation: wk-fade 150ms both; }
+
+/* Thinking with no steps beside it: one line, opening to the whole thought. */
+.wk-thought { display: grid; gap: 2px; animation: wk-rise 200ms cubic-bezier(.2, 0, 0, 1); }
+.wk-thought .wk-head { width: auto; justify-self: start; padding: 2px 0; }
+.wk-full { max-height: calc(12 * 1.55em); overflow: auto; padding: 10px 0 10px 23px; color: var(--exx-text-muted); font-size: 14px; animation: wk-fade 200ms both; }
+.wk-full .md, .wk-out-thought .md { color: inherit; }
+.thought-break { border: 0; border-top: 1px solid var(--border-soft); margin: 0.9em 0; }
+
+/* A long turn, folded above its answer: its cards open under its own. */
+.wk-turnwork { width: 100%; }
+.wk-turnwork > div { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.wk-turnwork[data-open="0"] { display: none; }
+
+/* The sweep over the one live label: a light band, 2.4 s a pass in 30 steps. */
+.wk-sweep {
+	background: linear-gradient(90deg, var(--exx-text-muted) 0%, var(--exx-text-muted) 40%, var(--exx-text) 50%, var(--exx-text-muted) 60%, var(--exx-text-muted) 100%);
+	background-size: 250% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent !important;
+	animation: wk-sweep 2.4s steps(30) infinite;
+}
+.wk-sweep b, .wk-sweep .wk-code { color: transparent; }
+[data-offscreen] .wk-sweep, [data-offscreen] .wk-dot, [data-offscreen] .wk-spin { animation-play-state: paused; }
+
+@keyframes wk-sweep { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+@keyframes wk-spin { to { transform: rotate(360deg); } }
+@keyframes wk-breathe { 0%, 100% { opacity: 0.45; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes wk-rise { from { opacity: 0; transform: translateY(4px); } }
+@keyframes wk-fade { from { opacity: 0; } }
+@keyframes wk-label-in { from { opacity: 0; transform: translateY(3px); filter: blur(2px); } }
+
+@media (prefers-reduced-motion: reduce) {
+	.wk-sweep { animation: none; background: none; color: var(--exx-text-muted) !important; }
+	.wk-sweep b, .wk-sweep .wk-code { color: var(--exx-text); }
+	.wk-dot, .wk-spin { animation: none; }
+	.wk-card, .wk-row, .wk-thought, .wk-lbl, .wk-out, .wk-ask, .wk-full, .wk-ok, .wk-btn kbd { animation-duration: 120ms; animation-name: wk-fade; }
+	.wk-body, .wk-caret { transition-duration: 120ms; }
+	.wk-btn { transition: none; }
+}
+.wk-out .raw-result, .wk-out .md-result { margin: 0; padding: 0; border: 0; background: none; max-height: none; }
+/* The person started typing after this step asked: their message says no to it. */
+.wk-ask-denies { margin-top: 4px; color: var(--muted); font-size: 12.5px; animation: wk-fade 200ms both; }

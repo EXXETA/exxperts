@@ -143,8 +143,9 @@ window.render = (s) => {
 </body></html>`;
 }
 
-export function openUpdatePanel(options: { version: string; parent?: BrowserWindow }): UpdatePanel {
-  const { version, parent } = options;
+// inactive shows the panel without taking the front from the app in use.
+export function openUpdatePanel(options: { version: string; parent?: BrowserWindow; inactive?: boolean }): UpdatePanel {
+  const { version, parent, inactive } = options;
   let theme = palette(nativeTheme.shouldUseDarkColors);
   const win = new BrowserWindow({
     width: WIDTH,
@@ -171,7 +172,11 @@ export function openUpdatePanel(options: { version: string; parent?: BrowserWind
   } else {
     win.center();
   }
-  win.once("ready-to-show", () => { if (!win.isDestroyed()) win.show(); });
+  win.once("ready-to-show", () => {
+    if (win.isDestroyed()) return;
+    if (inactive) win.showInactive();
+    else win.show();
+  });
 
   const title = `Updating exxperts to ${version}`;
   let current: PanelState = { theme, state: "checking", title, line: "Checking for the update", percent: 0, bytes: "", time: "", note: "exxperts closes and reopens by itself when the download is done." };

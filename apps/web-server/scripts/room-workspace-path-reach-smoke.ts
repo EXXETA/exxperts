@@ -10,13 +10,14 @@
 // server started with an empty hook registry, as a shared-server entry does.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
-import http from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit, waitForServer } from "./smoke-server-process.js";
+import { pairDevice, remoteRequest } from "./smoke-pairing.js";
+import { waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -64,36 +65,10 @@ function serverEnv(place: Place, extra: Record<string, string> = {}): NodeJS.Pro
 	return smokeHomeEnv(place.home, { PORT: String(place.port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot, EXXETA_PERSISTENT_AGENTS_ROOT: place.agentsRoot, ...extra }) as NodeJS.ProcessEnv;
 }
 
-async function waitForServer(server: ChildProcessWithoutNullStreams, place: Place): Promise<void> {
-	const deadline = Date.now() + 30_000;
-	while (Date.now() < deadline) {
-		if (server.exitCode != null) throw new Error(`server exited before startup with code ${server.exitCode}`);
-		if (await fetch(`${place.baseUrl}/healthz`).then((r) => r.ok).catch(() => false)) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error("server did not come up");
-}
-
 async function api(place: Place, pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; text: string; body: any }> {
 	const response = await authedFetch(`${place.baseUrl}${pathname}`, { ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
 	const text = await response.text();
 	return { status: response.status, text, body: text ? JSON.parse(text) : null };
-}
-
-function tunnelRequest(port: number, pathname: string, cookie: string, options: { method?: string; body?: string } = {}): Promise<{ status: number; text: string }> {
-	return new Promise((resolve, reject) => {
-		const req = http.request(
-			{ host: "::1", port, path: pathname, method: options.method ?? "GET", agent: false, headers: { Host: `[::1]:${port}`, Cookie: cookie, ...(options.body != null ? { "content-type": "application/json" } : {}) } },
-			(res) => {
-				const chunks: Buffer[] = [];
-				res.on("data", (chunk) => chunks.push(chunk as Buffer));
-				res.on("end", () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
-			},
-		);
-		req.on("error", reject);
-		if (options.body != null) req.write(options.body);
-		req.end();
-	});
 }
 
 // A room with its folder saved, and one conversation with a folder of its own.
@@ -160,14 +135,7 @@ async function settingsFailureFrame(place: Place, roomId: string, conversationId
 	}
 }
 
-async function waitUntil(predicate: () => boolean, label: string, timeoutMs = 15_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
+const waitUntil = waitEvery(100, 15_000);
 
 function assertSettingsFrameWithoutPath(frame: any, place: Place, where: string): void {
 	assert(frame?.code === "room_settings_not_applied", `${where}: the message is refused as settings not applied, got ${JSON.stringify(frame)}`);
@@ -181,7 +149,7 @@ async function openWorkspacePane(page: Page) {
 	await card.waitFor({ timeout: 15_000 });
 	await card.locator(".card-gear-btn").click();
 	await page.waitForSelector(".settings-dialog", { timeout: 10_000 });
-	await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Workspace$/ }).first().click();
+	await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 	const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
 	await pane.locator(".workspace-folder-name").waitFor({ timeout: 10_000 });
 	return pane;
@@ -219,7 +187,7 @@ try {
 	servers.push(deskServer);
 	deskServer.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	deskServer.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(deskServer, desk);
+	await waitForServer(deskServer, desk.baseUrl, 30_000);
 	const deskRoom = await roomWithFolder(desk);
 	if (checks("computer")) {
 		for (const route of viewRoutes(deskRoom.roomId, deskRoom.conversationId, desk.folder)) {
@@ -238,38 +206,22 @@ try {
 	// 2. A paired remote device: the reads answer without any path, the changes are refused before any view.
 	const enabled = await api(desk, "/api/remote/enable", { method: "POST" });
 	assert(enabled.status === 200, `remote access turns on, got ${enabled.status} ${enabled.text}`);
-	const minted = await api(desk, "/api/remote/enroll-code", { method: "POST" });
-	const code = new URL(String(minted.body?.url)).searchParams.get("code") ?? "";
-	const exchange = await tunnelRequest(desk.port, "/remote/enroll/exchange", "", { method: "POST", body: JSON.stringify({ code, name: "Path phone" }) });
-	assert(exchange.status === 200, `the pairing code is exchanged, got ${exchange.status} ${exchange.text}`);
-	const requestId = String(JSON.parse(exchange.text).requestId);
-	const approved = await api(desk, "/api/remote/enroll-approve", { method: "POST", body: JSON.stringify({ requestId }) });
-	assert(approved.status === 200, `the device is approved, got ${approved.status}`);
-	const deviceKey = await new Promise<string>((resolve, reject) => {
-		const req = http.request({ host: "::1", port: desk.port, path: `/remote/enroll/status?requestId=${requestId}`, agent: false, headers: { Host: `[::1]:${desk.port}` } }, (res) => {
-			res.resume();
-			const cookies = ([] as string[]).concat((res.headers["set-cookie"] as string[] | undefined) ?? []).join("; ");
-			res.on("end", () => resolve(cookies.match(/exxperts_remote_device=([0-9a-f]+)/)?.[1] ?? ""));
-		});
-		req.on("error", reject);
-		req.end();
-	});
-	assert(deviceKey, "the approved device gets its cookie");
-	const deviceCookie = `exxperts_remote_device=${deviceKey}`;
+	const { cookie: deviceCookie } = await pairDevice(desk.port, "Path phone");
+	const deviceKey = deviceCookie.slice("exxperts_remote_device=".length);
 	if (checks("remote")) {
 		const remoteStatuses: string[] = [];
 		for (const route of viewRoutes(deskRoom.roomId, deskRoom.conversationId, desk.folder)) {
-			const answer = await tunnelRequest(desk.port, route.pathname, deviceCookie, { method: route.method, ...(route.body ? { body: route.body } : {}) });
+			const answer = await remoteRequest(desk.port, route.pathname, { method: route.method, headers: { Cookie: deviceCookie, ...(route.body ? { "content-type": "application/json" } : {}) }, ...(route.body ? { body: route.body } : {}) });
 			remoteStatuses.push(`${route.label} ${answer.status}`);
 			if (route.method === "GET") {
-				assert(answer.status === 200, `${route.label} answers a remote device, got ${answer.status} ${answer.text}`);
-				assert(JSON.parse(answer.text)?.policy?.roots?.[0]?.basename === "Quarterly reports", `${route.label} names the folder for a remote device, got ${answer.text}`);
+				assert(answer.status === 200, `${route.label} answers a remote device, got ${answer.status} ${answer.body}`);
+				assert(JSON.parse(answer.body)?.policy?.roots?.[0]?.basename === "Quarterly reports", `${route.label} names the folder for a remote device, got ${answer.body}`);
 			} else {
-				assert(answer.status === 403, `${route.label} is refused to a remote device, got ${answer.status} ${answer.text}`);
+				assert(answer.status === 403, `${route.label} is refused to a remote device, got ${answer.status} ${answer.body}`);
 			}
-			assertNoPath(answer.text, desk, `${route.label} through a remote device`);
+			assertNoPath(answer.body, desk, `${route.label} through a remote device`);
 		}
-		const remoteExposure = await tunnelRequest(desk.port, "/api/remote/rooms", deviceCookie);
+		const remoteExposure = await remoteRequest(desk.port, "/api/remote/rooms", { headers: { Cookie: deviceCookie } });
 		assert(remoteExposure.status === 403, `the exposure list is refused to a remote device, got ${remoteExposure.status}`);
 		pass(`through a remote device no workspace answer carries a path (${remoteStatuses.join(", ")})`);
 	}
@@ -281,7 +233,7 @@ try {
 	servers.push(sharedServer);
 	sharedServer.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	sharedServer.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
-	await waitForServer(sharedServer, shared);
+	await waitForServer(sharedServer, shared.baseUrl, 30_000);
 	const context = await api(shared, "/api/remote/client-context");
 	assert(context.body?.sharedServer === true, `the second server is a shared server, got ${context.text}`);
 	const sharedRoom = await roomWithFolder(shared);

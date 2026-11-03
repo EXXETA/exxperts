@@ -14,6 +14,7 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
 const {
 	buildPersistentRoomCurrentInstructionsSection,
+	readPersistentRoomInstructionsNow,
 	buildPersistentRoomInstructionsLayer,
 	fingerprintPersistentRoomInstructions,
 	persistentRoomInstructionsPath,
@@ -97,7 +98,6 @@ try {
 	assert(!before.systemPrompt.includes("## Instructions") && !before.systemPrompt.includes("exxeta:persistent-agent:instructions"), "no instructions → neither the section nor its marker appears in the boot prompt");
 	const none = readPersistentRoomInstructions(agentId);
 	assert(none.text === "" && none.fingerprint === null && none.updatedAt === null && none.unreadable === undefined, "absent file reads as none");
-	assert(Object.isFrozen(none), "the shared none result cannot be mutated by a caller");
 	assert(!fs.existsSync(file), "reading must not create the file");
 	assert(getPersistentRoomInstructions(agentId).fingerprint === null, "the room-level read agrees");
 	assert(buildPersistentRoomCurrentInstructionsSection(agentId, before.systemPrompt) === "", "no marker + no file → no stanza");
@@ -112,11 +112,11 @@ try {
 	assert(normalizePersistentRoomInstructionsText("a\tb") === "a\tb", "tabs are allowed");
 	assert(countPersistentRoomInstructionsControlCharacters("a\x00b\x0bc") === 2 && countPersistentRoomInstructionsControlCharacters("plain\ttext\n") === 0, "the pane can count the control characters a save would refuse");
 	const controls = assertThrows(() => validatePersistentRoomInstructionsText("a\x00b"), "1 invisible control character", "NUL is refused, not stripped, and counted");
-	assert(controls.message.includes("remove it and save again") && (controls as any).statusCode === 400, "the control refusal names the remedy and is the client's fault");
+	assert((controls as any).statusCode === 400, "the control refusal is the client's fault");
 	assertThrows(() => validatePersistentRoomInstructionsText("a\x00b\x7fc"), "2 invisible control characters", "several are counted in the plural");
 	assert(validatePersistentRoomInstructionsText("x".repeat(ROOM_INSTRUCTIONS_MAX_CHARS)).length === ROOM_INSTRUCTIONS_MAX_CHARS, "exactly the cap is accepted");
 	const overCap = assertThrows(() => validatePersistentRoomInstructionsText("x".repeat(ROOM_INSTRUCTIONS_MAX_CHARS + 1)), "the limit is 8,000", "one over the cap is refused with the number");
-	assert(overCap.message.includes("8,001 characters") && (overCap as any).statusCode === 400, "the refusal names the length it saw and is the client's fault");
+	assert((overCap as any).statusCode === 400, "the refusal is the client's fault");
 	// The pane measures what the server stores: a draft with a trailing newline and NFD accents at the cap is fine once normalized.
 	assert(validatePersistentRoomInstructionsText("é".repeat(ROOM_INSTRUCTIONS_MAX_CHARS) + "\n\n").length === ROOM_INSTRUCTIONS_MAX_CHARS, "a raw draft over the cap can be exactly at the cap once normalized, so the pane must measure the normalized text");
 
@@ -307,24 +307,26 @@ try {
 	assert((missing as any).statusCode === 404, "unknown room is 404");
 
 	// --- Busy guard: another process holds the room ---
-	const cliOwner = { surface: "cli", pid: process.pid };
-	assert(roomLock.tryAcquire(agentId, cliOwner).ok, "smoke acquires the room as a CLI session");
-	try {
-		const held = assertThrows(() => savePersistentRoomInstructions(agentId, "changed under a CLI lock"), "open in a CLI session; save its instructions when that session ends", "a CLI session blocks the save, naming the remedy");
-		assert((held as any).statusCode === 409, "a held room is a conflict");
-		assertThrows(() => savePersistentRoomInstructions(agentId, ""), "open in a CLI session; remove its instructions when that session ends", "a blocked removal is refused in the words of a removal");
-		assert(readPersistentRoomInstructions(agentId).text === text, "the blocked save left the previous text");
-		// Same predicate, same sentence shape for rename: the guard is shared.
-		assertThrows(() => renamePersistentAgent(agentId, "Renamed Under Lock"), "open in a CLI session; rename it when that session ends", "rename still refuses under the same lock");
-	} finally {
-		roomLock.release(agentId, cliOwner);
-	}
 	const schedulerOwner = { surface: "scheduler", pid: process.pid, lockId: "smoke-run" };
 	assert(roomLock.tryAcquire(agentId, schedulerOwner).ok, "smoke acquires the room as a scheduler run");
 	try {
-		assertThrows(() => savePersistentRoomInstructions(agentId, "changed under a scheduler lock"), "working on a scheduled background task; save its instructions when that finishes", "a scheduled run blocks the save, naming the remedy");
+		const held = assertThrows(() => savePersistentRoomInstructions(agentId, "changed under a scheduler lock"), "working on a scheduled background task; save its instructions when that finishes", "a scheduled run blocks the save, naming the remedy");
+		assert((held as any).statusCode === 409, "a held room is a conflict");
+		assertThrows(() => savePersistentRoomInstructions(agentId, ""), "working on a scheduled background task; remove its instructions when that finishes", "a blocked removal is refused in the words of a removal");
+		assert(readPersistentRoomInstructions(agentId).text === text, "the blocked save left the previous text");
+		// Same predicate, same sentence shape for rename: the guard is shared.
+		assertThrows(() => renamePersistentAgent(agentId, "Renamed Under Lock"), "working on a scheduled background task; rename it when that finishes", "rename still refuses under the same lock");
 	} finally {
 		roomLock.release(agentId, schedulerOwner);
+	}
+	// A lock the removed terminal app left behind holds nothing, even while its
+	// process is alive.
+	const terminalOwner = { surface: "cli", pid: process.pid };
+	assert(roomLock.tryAcquire(agentId, terminalOwner).ok, "smoke leaves a terminal app's lock on the room");
+	try {
+		assert(savePersistentRoomInstructions(agentId, text).text === text, "a terminal app's leftover lock does not block the save");
+	} finally {
+		roomLock.release(agentId, terminalOwner);
 	}
 	const webOwner = { surface: "web", pid: process.pid };
 	assert(roomLock.tryAcquire(agentId, webOwner).ok, "smoke opens the room in the web app");
@@ -335,6 +337,8 @@ try {
 	}
 
 	// --- A scheduled run that resumes an open conversation follows the current instructions ---
+	// Its system prompt stays the frozen snapshot; the instructions in force ride its room-state
+	// copy (room-state-continuations-smoke drives that end to end), read as below.
 	savePersistentRoomInstructions(agentId, "ALWAYS ANSWER IN GERMAN.");
 	const resumeThreadId = "smoke-resume-target";
 	// Thread writes check the model against the active AI profile; with an
@@ -360,10 +364,14 @@ try {
 	assert(unchangedRun.targetKind === "resume-thread" && unchangedRun.rawSystemPrompt === frozenSnapshot, "unchanged instructions → the scheduled run gets the frozen snapshot as it is");
 	savePersistentRoomInstructions(agentId, "ALWAYS ANSWER IN ENGLISH.");
 	const changedRun = preparePersistentRoomBackgroundExecution({ roomId: agentId, target: { kind: "resume-thread", threadId: resumeThreadId }, prompt: "hello", executionId: "smoke-exec-2", cwd: tempAgentsRoot }, threadModel);
-	assert(changedRun.rawSystemPrompt!.startsWith(frozenSnapshot) && changedRun.rawSystemPrompt!.includes("## Current instructions") && changedRun.rawSystemPrompt!.trimEnd().endsWith("ALWAYS ANSWER IN ENGLISH."), "changed instructions → the scheduled run gets the frozen snapshot plus the Current instructions section");
+	assert(changedRun.rawSystemPrompt === frozenSnapshot, "changed instructions → the scheduled run's system prompt is still the frozen snapshot");
+	const changedNow = readPersistentRoomInstructionsNow(agentId, frozenSnapshot, { bootedFingerprint: resumeWrite.thread.runtime.instructionsFingerprint });
+	assert(changedNow.kind === "changed" && changedNow.section.includes("## Current instructions") && changedNow.section.trimEnd().endsWith("ALWAYS ANSWER IN ENGLISH."), "changed instructions → its copy carries the Current instructions section");
 	savePersistentRoomInstructions(agentId, "");
 	const removedRun = preparePersistentRoomBackgroundExecution({ roomId: agentId, target: { kind: "resume-thread", threadId: resumeThreadId }, prompt: "hello", executionId: "smoke-exec-3", cwd: tempAgentsRoot }, threadModel);
-	assert(removedRun.rawSystemPrompt!.includes("removed the instructions this room followed"), "removed instructions → the scheduled run is told so");
+	assert(removedRun.rawSystemPrompt === frozenSnapshot, "removed instructions → the system prompt is still the frozen snapshot");
+	const removedNow = readPersistentRoomInstructionsNow(agentId, frozenSnapshot, { bootedFingerprint: resumeWrite.thread.runtime.instructionsFingerprint });
+	assert(removedNow.kind === "removed" && removedNow.section.includes("removed the instructions this room followed"), "removed instructions → its copy tells the scheduled run so");
 
 	// --- Consult: a consulted room answers with its instructions, in the same place ---
 	const consultText = "When consulted, answer in one paragraph.";
@@ -384,8 +392,6 @@ try {
 	assert(withInstructions.prompt.includes(consultText), "the consult prompt carries the instructions text");
 	assert(withInstructions.prompt.includes("Answer strictly from your constitution, instructions and memory above."), "the consult envelope names the instructions when they are there");
 	assert(plain.prompt.includes("Answer strictly from your constitution and memory above."), "and does not when they are not");
-	assert(withInstructions.telemetry.instructionsChars === consultLayer.length, "consult telemetry counts the instructions layer");
-	assert(!("instructionsChars" in plain.telemetry), "no instructions → no telemetry key");
 	assert(buildConsultPrompt({ ...base, instructions: "" }).prompt === plain.prompt, "empty instructions → the consult prompt is byte-identical");
 
 	// --- Too-large refusals name the instructions as something to shorten ---

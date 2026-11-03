@@ -136,7 +136,7 @@ await section("recycled-id", async () => {
 	assert((row.changes ?? []).filter((change) => change.kind === "added").length === 2, `the points the note gave back landed, since the note is not in what its fold reads, got ${JSON.stringify(row.changes)}`);
 	assert(ready.progress.total === 1 && ready.progress.folded === 1, `the re-read is not counted among the conversations, got ${JSON.stringify(ready.progress)}`);
 	const prompt = prompts.get("m-0101") ?? "";
-	assert(/Session being folded: m-0101 \(1 of 1\)/.test(prompt) && prompt.includes("This session is from 2026-08-01.") && /Session being folded: RC-0001 \(1 of 1\)/.test(prompts.get("RC-0001") ?? ""), "the re-read counts among the re-reads, dated with the note's learned day");
+	assert(prompt.includes("This session is from 2026-08-01."), "the re-read is dated with the note's learned day");
 	const memoryPart = prompt.slice(0, prompt.indexOf("## Material: Signed-Off Assessment"));
 	assert(memoryPart.includes("m-0003") && !memoryPart.includes("m-0101") && !memoryPart.includes("zqalpha"), "the memory the re-read reads, and the entries it can address, leave the note out");
 	const saved = approveAbsorbRun(room.agentId, runId, SAVE_AT);
@@ -209,7 +209,6 @@ await section("endings", async () => {
 		...summary("m-0105", "Failing call", ["The zqfail point is open."], " learned=2026-08-05"),
 	]);
 	let failed = 0;
-	const prompts = new Map<string, string>();
 	const { runId, run: ready } = await started(room, {
 		"RC-0001": () => adds("- Pricing zqgamma holds for the year."),
 		"m-0101": () => fence([{ op: "add", topic: "Accounts", kind: "fact", text: "" }, { op: "add", topic: "Accounts", kind: "fact", text: "  " }]),
@@ -217,8 +216,7 @@ await section("endings", async () => {
 		"m-0103": () => fence([{ op: "drop", reason: "Nothing here to keep." }]),
 		"m-0104": () => ({ text: "No list at all." }),
 		"m-0105": () => { failed += 1; throw new Error("the provider failed with an internal error"); },
-	}, { prompts });
-	assert(/Session being folded: m-0103 \(3 of 5\)/.test(prompts.get("m-0103") ?? "") && /Session being folded: RC-0001 \(1 of 1\)/.test(prompts.get("RC-0001") ?? ""), "the re-reads count among themselves, apart from the conversations");
+	});
 	const outcome = (id: string) => ready.rereads.find((row) => row.id === id)?.outcome;
 	assert(outcome("m-0101") === "summarized" && outcome("m-0102") === "folded" && outcome("m-0103") === "dropped" && outcome("m-0104") === "summarized" && outcome("m-0105") === "summarized" && failed === 2, `each re-read ends as its reply decides, a failure while the model answers leaving the note where it is, got ${JSON.stringify(ready.rereads.map((row) => [row.id, row.outcome]))}`);
 	assert(ready.state === "ready" && !ready.stop, "a failure the model answered for is the page's, not an outage");
@@ -413,15 +411,11 @@ await section("prepass", async () => {
 // nothing in Unsorted.
 await section("no-unsorted-hint", async () => {
 	const { getPersistentAgentStatus } = await import("../src/persistent-agents.js");
-	const reread = await import("../src/absorb-reread.js");
 	const room = createRoom("Hint Room", [page("RC-0001", "Pricing")], [], [
 		"### Unsorted", "",
 		...summary("m-0101", "Dropped call", ["The zqdrop point is small talk."], " learned=2026-08-01"),
 		...summary("m-0102", "Sorted call", ["The zqsorted point is agreed."], " learned=2026-08-02"),
 	]);
-	const status = (agentId: string) => getPersistentAgentStatus(agentId).memoryStatus as Record<string, unknown>;
-	assert(!("unsortedAfterReread" in status(room.agentId)), `the status carries no count for a hint, got ${JSON.stringify(status(room.agentId))}`);
-	assert(!("unsortedAfterRereadCount" in reread) && !("waitsUnsortedAfterReread" in reread), "nothing is left that only counted for the hint");
 	const toSort = (agentId: string) => getPersistentAgentStatus(agentId).memoryStatus.notesToSort;
 	assert(toSort(room.agentId) === 2, `the notes waiting in Unsorted, and untried summary notes, keep Memorize open, got ${toSort(room.agentId)}`);
 	const { runId } = await started(room, {

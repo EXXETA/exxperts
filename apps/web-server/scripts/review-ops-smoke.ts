@@ -30,10 +30,8 @@ const {
 	REVIEW_MAX_OPS,
 	REVIEW_MAX_TEXT_CHARS,
 	REVIEW_TRIGGER_PROMPT,
-	reviewGroupLabel,
 	reviewGroupNotes,
 	reviewGroupTopic,
-	reviewReplySourceBudget,
 	validateReviewOps,
 } = await import("../src/review-ops.js");
 const { emptyReviewGuidance } = await import("../src/review-guidance.js");
@@ -167,11 +165,6 @@ const source = noteOf("m-0031");
 const grown: ReviewOp[] = [{ op: "update", id: "m-0031", text: `${source.text} ${"And the same point again, at length, with nothing new in it. ".repeat(3)}` }];
 const growthRefusals = validateReviewOps(grown, NOTES, "tidy");
 assert(refusalMatching(growthRefusals, new RegExp(REVIEW_GROWTH_REFUSAL)), `an update that grows a note must be refused, got ${JSON.stringify(growthRefusals)}`);
-// Red-without: nothing else catches it. Apply the same op with the growth line
-// taken out and the note really is longer than it was.
-const grownApplied = applyReviewOps(fixture(), grown, { savedDate: "2026-09-14" });
-const grownNote = grownApplied.doc.topics[0].entries.find((e) => e.id === "m-0031");
-assert((grownNote?.text.length ?? 0) > source.text.length, "without the growth refusal, a tidy really does make the note longer — which is the whole reason for it");
 
 assert(validateReviewOps([{ op: "update", id: "m-0031", text: "- The Nordwind contract renews annually; legal signs before June." }], NOTES, "tidy").length === 0, "a genuinely shorter update passes");
 // The boundary, exactly: the note plus the slack passes, so a comma or an
@@ -354,26 +347,14 @@ function budgetFixture(): MemoryDocument {
 const tidiedOldest = applyReviewOps(budgetFixture(), [{ op: "update", id: "m-0031", text: "- Nordwind renews annually; legal signs before June." }], { savedDate: "2026-09-14" });
 const leavingOrder = demoteToBudget(tidiedOldest.doc, 0, { today: "2026-09-14" }).demoted.map((e) => e.id);
 assert(leavingOrder[leavingOrder.length - 1] === "m-0034" && leavingOrder.indexOf("m-0031") < leavingOrder.indexOf("m-0034"), `the note touched this year still leaves last, and the oldest note, shortened by the tidy, still leaves before it, got ${JSON.stringify(leavingOrder)}`);
-// Red-without: stamp the shortened note the way a fold's update is stamped, and
-// the ranking inverts — the note the tidy just kept would be the last to go.
-const stampedDoc = tidiedOldest.doc;
-stampedDoc.topics[0].entries.find((e) => e.id === "m-0031")!.updated = "2026-09-14";
-const stampedOrder = demoteToBudget(stampedDoc, 0, { today: "2026-09-14" }).demoted.map((e) => e.id);
-assert(stampedOrder[stampedOrder.length - 1] === "m-0031", `with the stamp the tidy would invert the budget's order, which is the whole reason it does not stamp, got ${JSON.stringify(stampedOrder)}`);
 
 // --- 7. Groups ---------------------------------------------------------------
-
-assert(reviewReplySourceBudget(16_384) === Math.floor(16_384 * 0.35), "the reply budget is the model's own output cap, by the share the design named");
-assert(reviewReplySourceBudget(1_000) === 3_000, "the floor holds whatever the cap says, so a small cap does not slice a room into single topics");
-assert(reviewReplySourceBudget(undefined) === Math.floor(16_384 * 0.35), "an unknown cap falls back to the default gateway row's");
 
 assert(partitionReviewTopics(GROUP, 1_000_000).length === 1, "everything that fits together is one group, and one call");
 const sliced = partitionReviewTopics(GROUP, 10);
 assert(sliced.length === GROUP.length, `a budget nothing fits under gives every topic its own group, got ${sliced.length}`);
 assert(sliced.every((group) => new Set(group.map((topic) => topic.section)).size === 1), "a group never straddles two sections");
 assert(sliced.flat().map((topic) => topic.title).join("|") === GROUP.map((topic) => topic.title).join("|"), "grouping keeps document order, so a merge inside a group stays meaningful");
-assert(reviewGroupLabel(GROUP) === "Commercial terms and 2 more topics", `a group is named by its first topic and how many ride with it, got ${JSON.stringify(reviewGroupLabel(GROUP))}`);
-assert(reviewGroupLabel([GROUP[0]]) === "Commercial terms", "one topic is named by itself");
 assert(partitionReviewTopics([], 1_000).length === 0, "no topics is no groups");
 // Bonded titles travel as one unit: the pair always reaches one call, even
 // when the budget would have split them or another topic sat between them.

@@ -5,9 +5,11 @@
 // a model not reached, a busy one, one not on the account, a restart, the
 // same failure twice) the table holds the buttons in order, which one leads,
 // what each button calls, and the buttons left after it. The same table holds
-// on this computer and on a paired phone; on a shared server only a gateway's
-// 403 differs, as the chat's line does. Each context runs in its own process,
-// as the page reads its context once.
+// on this computer and on a paired phone. On a shared server a gateway's 403
+// offers no key button, as the chat's line does; nor does a gone key for a
+// member, who cannot change the AI setup, nor a sign-in for anyone, as nobody
+// signs in there: the admin keeps Add key and Replace key. Each context runs
+// in its own process, as the page reads its context once.
 //
 // Offline: no server, no provider, no network, no port.
 
@@ -18,6 +20,7 @@ const CONTEXTS = {
 	computer: { remote: false, capability: "full", sharedServer: false },
 	phone: { remote: true, capability: "full", sharedServer: false },
 	shared: { remote: false, capability: "full", sharedServer: true },
+	"shared-admin": { remote: false, capability: "full", sharedServer: true, person: { id: "22222222-2222-4222-8222-222222222222", name: "Sample Admin", admin: true } },
 } as const;
 type ContextName = keyof typeof CONTEXTS;
 
@@ -50,9 +53,9 @@ if (!("navigator" in globalThis)) globals.navigator = dom.window.navigator;
 globalThis.fetch = (async () => new Response(JSON.stringify(context), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
 
 const pageRequire = (await import("node:module")).createRequire(new URL("../../web-ui/package.json", import.meta.url));
-const { createElement } = pageRequire("react");
+const { act, createElement } = pageRequire("react");
 globals.React = pageRequire("react");
-globals.IS_REACT_ACT_ENVIRONMENT = false;
+globals.IS_REACT_ACT_ENVIRONMENT = true;
 const { createRoot } = pageRequire("react-dom/client");
 const remoteContext: any = await import(new URL("../../web-ui/src/remote-client-context.ts", import.meta.url).href);
 await remoteContext.fetchRemoteClientContext();
@@ -60,7 +63,6 @@ const notice: any = await import(new URL("../../web-ui/src/components/model-noti
 const memorize: any = await import(new URL("../../web-ui/src/components/absorb-run-screen.tsx", import.meta.url).href);
 const review: any = await import(new URL("../../web-ui/src/components/review-screen.tsx", import.meta.url).href);
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 const MODEL = { provider: "acme-gw", model: "acme-model" };
 const PASSED = new Date(Date.now() - 5 * 60_000).toISOString();
 
@@ -154,9 +156,9 @@ async function mount(place: Place, cause: string, calls: string[]): Promise<{ co
 	const container = dom.window.document.createElement("div");
 	dom.window.document.body.appendChild(container);
 	const root = createRoot(container);
-	root.render(place.element(cause, handlers));
-	await settle();
-	return { container, unmount: () => { root.unmount(); container.remove(); } };
+	// act() returns once React has rendered and run the effects the change set off.
+	await act(async () => { root.render(place.element(cause, handlers)); });
+	return { container, unmount: () => { act(() => root.unmount()); container.remove(); } };
 }
 
 /** One line of the table: the buttons, then for each, what it calls and the buttons after it. */
@@ -169,8 +171,7 @@ async function line(place: Place, cause: string): Promise<string> {
 	for (let index = 0; index < shown.length; index++) {
 		const clickCalls: string[] = [];
 		const again = await mount(place, cause, clickCalls);
-		(rowButtons(again.container)[index] as HTMLButtonElement).click();
-		await settle();
+		await act(async () => { (rowButtons(again.container)[index] as HTMLButtonElement).click(); });
 		const after = rowButtons(again.container).map(describe).join("|");
 		again.unmount();
 		clicks.push(`${shown[index]}>${clickCalls.join("+") || "-"}${after === shown.join("|") ? "" : ` => ${after}`}`);
@@ -188,7 +189,7 @@ if (process.env.MEMORY_WAYS_ON_PRINT) {
 	process.exit(0);
 }
 
-// The table as the screens show it on this computer; a shared server differs only where SHARED says.
+// The table as the screens show it on this computer; a shared server differs only where SHARED and NO_KEY_BUTTON say.
 const EXPECTED = `
 notice quota-key: Try again|Choose another model|Close ; Try again>tryAgain ; Choose another model>chooseModel ; Close>close
 notice quota-plan-unknown-reset: Choose another model|Close ; Choose another model>chooseModel => Try again|Choose another model|Close ; Close>close
@@ -286,9 +287,16 @@ const SHARED: Record<string, string> = {
 	"review-paused gateway-403": "Close|Choose another model* ; Close>close ; Choose another model*>chooseModel => Close|Choose another model|Try again*",
 };
 
+// The causes whose key button a shared server does not offer: each reads as a gateway's 403 does there, Choose another model leading.
+const NO_KEY_BUTTON: Partial<Record<ContextName, readonly string[]>> = {
+	shared: ["gateway-403", "key-refused", "key-missing", "signed-out"],
+	"shared-admin": ["gateway-403", "signed-out"],
+};
 const expected = EXPECTED.map((row) => {
 	const key = row.slice(0, row.indexOf(":"));
-	return contextName === "shared" && SHARED[key] !== undefined ? `${key}: ${SHARED[key]}` : row;
+	const [place, cause] = key.split(" ");
+	const shared = SHARED[`${place} gateway-403`];
+	return NO_KEY_BUTTON[contextName]?.includes(cause) && shared !== undefined ? `${key}: ${shared}` : row;
 });
 const failures: string[] = [];
 for (let index = 0; index < Math.max(expected.length, table.length); index++) {

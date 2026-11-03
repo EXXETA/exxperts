@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-app",
-  "version": "0.14.5",
+  "version": "0.15.0",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -39,7 +39,9 @@
     "apps/web-server/package.json",
     "apps/web-server/tsconfig.json",
     "apps/web-ui/dist",
+    "apps/web-ui/src/assistant-stream.ts",
     "apps/web-ui/src/model-names.ts",
+    "apps/web-ui/src/reveal-cut.ts",
     "apps/web-ui/src/sign-in-failure.ts",
     "apps/web-ui/src/turn-failure-line.ts",
     "runtime/packages/ai/dist",

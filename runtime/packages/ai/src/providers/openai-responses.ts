@@ -45,11 +45,20 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 	};
 }
 
+/**
+ * "24h" is for the models whose cache writes are free. The ones that charge for
+ * writes (GPT-5.6 and later) take their lifetime as prompt_cache_options.ttl
+ * ("30m", their default, or "12h" at twice the write price), so "long" leaves
+ * them on their default.
+ */
 function getPromptCacheRetention(
+	model: Model<"openai-responses">,
 	compat: Required<OpenAIResponsesCompat>,
 	cacheRetention: CacheRetention,
 ): "24h" | undefined {
-	return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
+	return cacheRetention === "long" && compat.supportsLongCacheRetention && model.cost.cacheWrite === 0
+		? "24h"
+		: undefined;
 }
 
 // OpenAI Responses-specific options
@@ -227,7 +236,7 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		input: messages,
 		stream: true,
 		prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
-		prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
+		prompt_cache_retention: getPromptCacheRetention(model, compat, cacheRetention),
 		store: false,
 	};
 

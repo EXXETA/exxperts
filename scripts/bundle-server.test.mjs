@@ -269,15 +269,16 @@ test("a read relative to the code's own folder outside the reviewed places fails
 });
 
 test("a new read relative to the code's own folder in a reviewed file fails the bundle and names the file and the count", async () => {
-	// index.ts is reviewed for a number of own-location places; one more, such
-	// as a page read from beside the bundle, would break only the bundle.
-	const reviewed = REVIEWED_OWN_LOCATION_READS.find((entry) => entry.file.test("apps/web-server/src/index.ts")).sites;
+	// server-install-root.ts is reviewed for a number of own-location places;
+	// one more, such as a page read from beside the bundle, would break only the bundle.
+	const reviewed = REVIEWED_OWN_LOCATION_READS.find((entry) => entry.file.test("apps/web-server/src/server-install-root.ts")).sites;
 	const reads = Array.from({ length: reviewed + 1 }, (_, i) => `const page${i} = new URL("./page-${i}.html", import.meta.url);`);
 	const dir = fixtureTree({
-		"apps/web-server/src/index.ts": ['import "@silvia-odwyer/photon-node";', 'import "pi-mcp-adapter/ui-server.ts";', ...reads, `console.log(${reads.map((_, i) => `page${i}`).join(", ")});`].join("\n"),
+		"apps/web-server/src/index.ts": ['import "@silvia-odwyer/photon-node";', 'import "pi-mcp-adapter/ui-server.ts";', 'import "./server-install-root.ts";'].join("\n"),
+		"apps/web-server/src/server-install-root.ts": [...reads, `console.log(${reads.map((_, i) => `page${i}`).join(", ")});`].join("\n"),
 	});
 	await assert.rejects(bundleServer({ root: dir, log: () => {} }), (error) => {
-		assert.match(error.message, new RegExp(`apps/web-server/src/index\\.ts has ${reviewed + 1} places .*${reviewed} reviewed`));
+		assert.match(error.message, new RegExp(`apps/web-server/src/server-install-root\\.ts has ${reviewed + 1} places .*${reviewed} reviewed`));
 		return true;
 	});
 });
@@ -296,10 +297,12 @@ test("a package loaded by name at run time must ship as files or be reviewed", a
 	// The review's reproduction: a createRequire of a package that is inlined
 	// nowhere and ships nowhere passes every other check, and only the trimmed
 	// desktop payload, which keeps just the shipped packages, would lack it.
-	const index = (name) => ['import { createRequire } from "node:module";', 'import "@silvia-odwyer/photon-node";', 'import "pi-mcp-adapter/ui-server.ts";', `console.log(typeof createRequire(import.meta.url)(${JSON.stringify(name)}));`].join("\n");
-	await bundleServer({ root: fixtureTree({ "apps/web-server/src/index.ts": index("qrcode-terminal") }), log: () => {} });
+	const index = 'import "@silvia-odwyer/photon-node";\nimport "pi-mcp-adapter/ui-server.ts";\nimport "./server-install-root.ts";\n';
+	const loader = (name) => ['import { createRequire } from "node:module";', `console.log(typeof createRequire(import.meta.url)(${JSON.stringify(name)}));`].join("\n");
+	await bundleServer({ root: fixtureTree({ "apps/web-server/src/index.ts": index, "apps/web-server/src/server-install-root.ts": loader("qrcode-terminal") }), log: () => {} });
 	const dir = fixtureTree({
-		"apps/web-server/src/index.ts": index("mime-types"),
+		"apps/web-server/src/index.ts": index,
+		"apps/web-server/src/server-install-root.ts": loader("mime-types"),
 		"node_modules/mime-types/package.json": JSON.stringify({ name: "mime-types", version: "3.0.1", license: "MIT" }),
 	});
 	await assert.rejects(bundleServer({ root: dir, log: () => {} }), /mime-types.*(server\.mjs line \d+).*FILE_PACKAGES/s);

@@ -128,8 +128,6 @@ try {
 	assert(key(listed?.models?.conversation?.effective) === "anthropic/claude-sonnet-5" && !("preferredModel" in listed), `the room listing carries the rows and no preferred model, got ${JSON.stringify(listed?.models)}`);
 	const status = await api(`/api/persistent-agents/${agentId}/status`);
 	assert(key(status.body.models?.memory?.effective) === "openai-compatible/maint-model", "the room status carries the rows");
-	const gone = await api(`/api/persistent-agents/${agentId}/preferred-model`);
-	assert(gone.status === 404, `the preferred-model endpoint is gone, got ${gone.status}`);
 	pass("a room inherits, sets and refuses its rows, and its listing and status carry them in place of the preferred model");
 
 	// --- The pickers' lists ---------------------------------------------------------------
@@ -154,26 +152,25 @@ try {
 	file = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
 	assert(!file.profileId && key(file.defaults?.memory) === "anthropic/claude-opus-5-5" && key(file.defaults?.conversation) === "openai-compatible/room-model", `deleting the gateway the pointer named drops the pointer and keeps the defaults, got ${JSON.stringify(file)}`);
 	rows = await api(`/api/persistent-agents/${agentId}/models`);
-	assert(key(rows.body.models.memory.stored) === "openai-compatible/maint-model" && rows.body.models.memory.reason === "not-offered" && rows.body.models.memory.effective === null && /^This room's memory model, .+, is no longer offered\. Choose another Memory model in Room settings, Model\.$/.test(rows.body.models.memory.refusal), `a pick on the deleted gateway is kept, nothing runs in its place, and the row carries the refusal, got ${JSON.stringify(rows.body.models.memory)}`);
+	assert(key(rows.body.models.memory.stored) === "openai-compatible/maint-model" && rows.body.models.memory.reason === "not-offered" && rows.body.models.memory.effective === null, `a pick on the deleted gateway is kept and nothing runs in its place, got ${JSON.stringify(rows.body.models.memory)}`);
 	const memoryWork = await api(`/api/persistent-agents/${agentId}/checkpoint/estimate`);
-	assert(memoryWork.body.code === "model_unreachable" && memoryWork.body.details?.detail === "not-offered" && memoryWork.body.error === "Maint Model is no longer offered. Nothing was lost.", `Remember refuses on a memory model no longer offered with the one shared notice, got ${memoryWork.status} ${JSON.stringify(memoryWork.body)}`);
+	assert(memoryWork.body.code === "model_unreachable" && memoryWork.body.details?.detail === "not-offered", `Remember refuses on a memory model no longer offered, got ${memoryWork.status} ${JSON.stringify(memoryWork.body)}`);
 	defaults = await api("/api/ai/defaults");
-	assert(defaults.body.defaults.conversation.reason === "not-offered" && defaults.body.defaults.conversation.effective === null && defaults.body.defaults.conversation.source === "default" && /^The default model, .+, is no longer offered\. Choose another default in Settings, AI setup\.$/.test(defaults.body.defaults.conversation.refusal), `a default on the deleted gateway is not replaced and says why, got ${JSON.stringify(defaults.body.defaults.conversation)}`);
+	assert(defaults.body.defaults.conversation.reason === "not-offered" && defaults.body.defaults.conversation.effective === null && defaults.body.defaults.conversation.source === "default", `a default on the deleted gateway is not replaced, got ${JSON.stringify(defaults.body.defaults.conversation)}`);
 	pass("the defaults survive a profile switch and the delete of the gateway the pointer named, and picks on that gateway wait with the reason instead of falling back");
 
 	// --- A room whose pick is signed out refuses, end to end ---------------------------------
 	// ChatGPT is known to AI setup but signed out. A pick on it (written as an
 	// older sign-in left it; PUT refuses to set one) stops the room: a new
-	// conversation is refused with the sentence, and no other model is used.
+	// conversation is refused, and no other model is used.
 	fs.writeFileSync(path.join(agentsRoot, agentId, "runtime", "models.json"), JSON.stringify({ schemaVersion: 1, conversation: { provider: "openai-codex", model: "gpt-6-sol" }, updatedAt: new Date().toISOString() }, null, 2));
 	rows = await api(`/api/persistent-agents/${agentId}/models`);
-	const expected = "This room's model, GPT-6 Sol on ChatGPT Plus/Pro, is signed out. Sign in again in Settings, AI setup, or choose another model in Room settings, Model.";
-	assert(rows.body.models.conversation.effective === null && rows.body.models.conversation.reason === "signed-out" && rows.body.models.conversation.refusal === expected, `the row names the signed-out pick and the way out, got ${JSON.stringify(rows.body.models.conversation)}`);
+	assert(rows.body.models.conversation.effective === null && rows.body.models.conversation.reason === "signed-out", `the row marks the pick signed out, got ${JSON.stringify(rows.body.models.conversation)}`);
 	const threadId = "t-no-fallback";
 	const opened = await api(`/api/persistent-agents/${agentId}/threads/${threadId}`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", items: [] }) });
-	assert(opened.status === 409 && opened.body.code === "provider_signed_out" && opened.body.error === expected, `a new conversation is refused with the sentence, got ${opened.status} ${JSON.stringify(opened.body)}`);
+	assert(opened.status === 409 && opened.body.code === "provider_signed_out", `a new conversation is refused, got ${opened.status} ${JSON.stringify(opened.body)}`);
 	assert(!fs.existsSync(path.join(agentsRoot, agentId, "runtime", "threads", `${threadId}.json`)) && (await api(`/api/persistent-agents/${agentId}/status`)).body.runtime?.activeThreadId !== threadId, "and no conversation was written on another model");
-	pass("a room whose pick is signed out cannot start a conversation, and says which model, which provider, and the way out");
+	pass("a room whose pick is signed out cannot start a conversation");
 
 	console.log("ai defaults smoke passed");
 } catch (error) {

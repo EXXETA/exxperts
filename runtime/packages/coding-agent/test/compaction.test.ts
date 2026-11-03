@@ -15,9 +15,11 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "../src/core/compaction/index.js";
+import { ROOM_STATE_CUSTOM_TYPE } from "../src/core/messages.js";
 import {
 	buildSessionContext,
 	type CompactionEntry,
+	type CustomMessageEntry,
 	type ModelChangeEntry,
 	migrateSessionEntries,
 	parseSessionEntries,
@@ -129,6 +131,21 @@ function createThinkingLevelEntry(thinkingLevel: string): ThinkingLevelChangeEnt
 		parentId: lastId,
 		timestamp: new Date().toISOString(),
 		thinkingLevel,
+	};
+	lastId = id;
+	return entry;
+}
+
+function createCustomMessageEntry(customType: string, content: string): CustomMessageEntry {
+	const id = `test-id-${entryCounter++}`;
+	const entry: CustomMessageEntry = {
+		type: "custom_message",
+		id,
+		parentId: lastId,
+		timestamp: new Date().toISOString(),
+		customType,
+		content,
+		display: false,
 	};
 	lastId = id;
 	return entry;
@@ -337,6 +354,96 @@ describe("findCutPoint", () => {
 			expect(result.isSplitTurn).toBe(true);
 			expect(result.turnStartIndex).toBe(2); // Turn 2 starts at index 2
 		}
+	});
+
+	describe("room-state copies", () => {
+		// "# Room state\n" plus 8,000 characters: about 2,000 tokens, as a user message's text would be.
+		const roomState = (chars: number) => createCustomMessageEntry(ROOM_STATE_CUSTOM_TYPE, `# Room state\n${"x".repeat(chars)}`);
+		// The summarised history ends where the kept part begins, or at the split turn's start.
+		const historyEnd = (result: ReturnType<typeof findCutPoint>) =>
+			result.isSplitTurn ? result.turnStartIndex : result.firstKeptEntryIndex;
+
+		it("counts each copy in the keep budget, so large copies with short words still compact", () => {
+			const entries: SessionEntry[] = [];
+			for (let t = 0; t < 40; t++) {
+				entries.push(
+					createMessageEntry(createUserMessage(`question ${t}`)),
+					roomState(8000),
+					createMessageEntry(createAssistantMessage(`answer ${t}`)),
+				);
+			}
+
+			const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
+
+			// The default 20,000-token budget holds the last ten turns of about 2,000 tokens each;
+			// the thirty turns before them go into the summary, each with its own copy.
+			expect(historyEnd(result)).toBe(30 * 3);
+			expect((entries[historyEnd(result)] as SessionMessageEntry).message).toMatchObject({ content: "question 30" });
+		});
+
+		it("keeps a copy with the user message it follows when a turn is split", () => {
+			const entries: SessionEntry[] = [
+				createMessageEntry(createUserMessage("old")),
+				createMessageEntry(createAssistantMessage("old answer")),
+				createMessageEntry(createUserMessage("the request")), // index 2
+				roomState(200), // index 3
+			];
+			for (let k = 0; k < 10; k++) entries.push(createMessageEntry(createAssistantMessage("y".repeat(20000))));
+
+			const deep = findCutPoint(entries, 0, entries.length, 20000);
+			expect(deep).toEqual({ firstKeptEntryIndex: 10, turnStartIndex: 2, isSplitTurn: true });
+
+			// Four 5,000-token answers fill the budget, so the cut falls on the first answer, right after the copy.
+			const shallow = findCutPoint(entries.slice(0, 8), 0, 8, 20000);
+			expect(shallow).toEqual({ firstKeptEntryIndex: 4, turnStartIndex: 2, isSplitTurn: true });
+		});
+
+		it("keeps a last copy that fills the budget on its own together with its user message", () => {
+			const entries: SessionEntry[] = [
+				createMessageEntry(createUserMessage("old")),
+				createMessageEntry(createAssistantMessage("y".repeat(20000))),
+				createMessageEntry(createUserMessage("the request")), // index 2
+				roomState(80000), // index 3, no answer yet
+			];
+
+			const result = findCutPoint(entries, 0, entries.length, 20000);
+			expect(result).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
+		});
+
+		it("keeps a fresh turn whole when its copy fills the budget before a failed answer", () => {
+			const failed: AssistantMessage = {
+				...createAssistantMessage(""),
+				content: [],
+				stopReason: "error",
+				errorMessage: "prompt is too long",
+			};
+			const entries: SessionEntry[] = [
+				createMessageEntry(createUserMessage("the request")), // index 0
+				roomState(200), // index 1
+				createMessageEntry(failed), // index 2
+			];
+
+			const result = findCutPoint(entries, 0, entries.length, 5);
+			expect(result).toEqual({ firstKeptEntryIndex: 0, turnStartIndex: -1, isSplitTurn: false });
+
+			// Nothing comes before the request, so there is no summary to write.
+			expect(prepareCompaction(entries, { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 5 })).toBeUndefined();
+		});
+
+		it("leaves other custom messages as turn starts that the budget does not count", () => {
+			const entries: SessionEntry[] = [
+				createMessageEntry(createUserMessage("the request")), // index 0
+				createCustomMessageEntry("notes", "n".repeat(80000)), // index 1
+			];
+			for (let k = 0; k < 10; k++) entries.push(createMessageEntry(createAssistantMessage("y".repeat(20000))));
+
+			const split = findCutPoint(entries, 0, entries.length, 20000);
+			expect(split).toEqual({ firstKeptEntryIndex: 8, turnStartIndex: 1, isSplitTurn: true });
+
+			// Its 20,000 tokens alone would fill the budget, yet nothing is cut.
+			const uncounted = findCutPoint(entries.slice(0, 4), 0, 4, 20000);
+			expect(uncounted).toEqual({ firstKeptEntryIndex: 0, turnStartIndex: -1, isSplitTurn: false });
+		});
 	});
 });
 

@@ -229,6 +229,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
 	 * The hook receives the agent abort signal and is responsible for honoring it.
+	 * Once that signal is aborted, the hook is not called for the batch's remaining calls: each
+	 * ends as an error tool result without running, and so does a call the hook let through.
 	 */
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 

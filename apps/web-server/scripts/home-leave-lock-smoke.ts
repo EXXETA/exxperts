@@ -15,7 +15,10 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, authedFetch, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(150);
 
 // A machine without Chromium cannot run a browser assertion at all; skip
 // whole, the same way remote-settings-readonly-smoke does.
@@ -78,15 +81,6 @@ const providers = http.createServer((req, res) => {
 	});
 });
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 150));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -120,14 +114,26 @@ try {
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
 	await waitUntil(() => fetch(`${baseUrl}/healthz`).then((r) => r.ok).catch(() => false), "server ready");
+	const lockFree = async () => {
+		const rooms = await authedFetch(`${baseUrl}/api/persistent-agents`).then((r) => r.json()) as Array<{ id: string; activeLock?: unknown }>;
+		return !rooms.find((room) => room.id === agentId)?.activeLock;
+	};
 
 	const browser = await chromium.launch();
 	try {
 		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		const page = await ctx.newPage();
+		// Home's reads run on the page's timers, so the smoke moves the page's
+		// clock past them instead of waiting them out.
+		await page.clock.install();
 		// The page's socket close reaches the server 500 ms late.
+		let readyFrames = 0;
 		await page.routeWebSocket(/\/ws/, (ws) => {
 			const upstream = ws.connectToServer();
+			upstream.onMessage((message) => {
+				try { if (JSON.parse(String(message))?.type === "ready") readyFrames += 1; } catch {}
+				ws.send(message);
+			});
 			ws.onClose(() => { setTimeout(() => upstream.close(), 500); });
 			upstream.onClose(() => ws.close());
 		});
@@ -136,27 +142,42 @@ try {
 		const dismiss = page.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
 		const card = page.locator(".persistent-agent-card").filter({ hasText: "Leave Lock Room" });
-		const door = card.getByRole("button", { name: /^(Enter|Resume) →$/ });
+		const door = card.getByRole("button", { name: /^(Enter|Resume)$/ });
 		for (let round = 1; round <= 3; round += 1) {
+			const readyBefore = readyFrames;
 			await door.click();
 			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-			await page.waitForTimeout(800);
+			await waitUntil(() => readyFrames > readyBefore, `round ${round}: the room's lock is taken`);
 			await page.goBack();
 			await card.waitFor({ timeout: 10000 });
+			// Once the server has freed the lock, Home's next read (every 5 s
+			// while a card is greyed) offers the room.
+			await waitUntil(lockFree, `round ${round}: the server frees the room's lock`);
+			await page.clock.runFor(5000);
 			await waitUntil(() => door.isEnabled(), `round ${round}: the room just left is offered again without a refocus`, 6000);
 		}
 
 		let listReads = 0;
+		let delivered = 0;
 		page.on("request", (request) => {
-			if (request.method() === "GET" && new URL(request.url()).pathname === "/api/persistent-agents") listReads += 1;
+			const url = new URL(request.url());
+			if (request.method() === "GET" && url.pathname === "/api/persistent-agents") listReads += 1;
+			if (url.pathname === "/healthz" && url.search === "?delivered") delivered += 1;
 		});
+		// The page's requests so far have all reached this listener: the page
+		// sends one more and the listener sees it.
+		const requestsDelivered = async () => {
+			const before = delivered;
+			await page.evaluate(() => fetch("/healthz?delivered").then(() => undefined));
+			await waitUntil(() => delivered > before, "the page's requests reach the smoke");
+		};
 		const otherCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		const otherPage = await otherCtx.newPage();
 		await otherPage.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await otherPage.waitForLoadState("networkidle");
 		const otherDismiss = otherPage.locator(".whats-new-close");
 		if (await otherDismiss.count()) await otherDismiss.click();
-		await otherPage.locator(".persistent-agent-card").filter({ hasText: "Leave Lock Room" }).getByRole("button", { name: /^(Enter|Resume) →$/ }).click();
+		await otherPage.locator(".persistent-agent-card").filter({ hasText: "Leave Lock Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		await otherPage.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.reload();
 		await page.waitForLoadState("networkidle");
@@ -169,15 +190,19 @@ try {
 		});
 		await otherCtx.close();
 		const closedAt = Date.now();
+		await waitUntil(lockFree, "the server frees the lock the other window held");
+		await page.clock.runFor(5000);
 		await waitUntil(() => door.isEnabled(), "the room closed in the other window is offered again while Home keeps focus", 7500);
 		console.log(`home-leave-lock smoke: offered again ${Date.now() - closedAt} ms after the other window closed`);
 		if (openElsewhere.test(await door.getAttribute("title") ?? "")) throw new Error("the card still says the room is open in another window");
 		const focusEvents = await page.evaluate(() => (window as unknown as { __focusEvents: number }).__focusEvents);
 		if (focusEvents !== 0) throw new Error(`expected no focus event while Home waited, got ${focusEvents}`);
 
-		await page.waitForTimeout(1000);
+		await page.clock.runFor(1000);
+		await requestsDelivered();
 		const readsBefore = listReads;
-		await page.waitForTimeout(12000);
+		await page.clock.runFor(12000);
+		await requestsDelivered();
 		if (listReads !== readsBefore) throw new Error(`with no card greyed, Home read the room list ${listReads - readsBefore} more times in 12 s`);
 		await ctx.close();
 	} finally {

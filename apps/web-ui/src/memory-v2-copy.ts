@@ -648,10 +648,10 @@ export function changeKindLabel(kind: AbsorbRunChangeKind): string {
 }
 
 const KIND_LABELS: Record<EntryKind, string> = {
-	event: "conversation",
-	fact: "fact",
-	practice: "practice",
-	item: "item",
+	event: "Conversation",
+	fact: "Fact",
+	practice: "Practice",
+	item: "Item",
 };
 
 export function entryKindLabel(kind: EntryKind): string {

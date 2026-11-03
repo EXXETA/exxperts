@@ -4,6 +4,12 @@
 // on its read (for the diagnostics), so the quick path saves on its own and
 // nothing on screen speaks of it. No engine warning stops the quick save; only
 // an entry with no arc or body opens the preview, with no reason shown.
+//
+// And a Remember request's size. A session-backed conversation is read from
+// its session file, so the app sends no transcript and the request works
+// without one; the status tells the app the conversation's kind. A request
+// over the default 1 MiB (an older recap conversation's long transcript) is
+// accepted by the route, not refused before it runs.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -13,6 +19,9 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { waitEvery } from "./smoke-wait.js";
+
+const waitUntil = waitEvery(100);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -100,15 +109,6 @@ async function api(pathname: string, init: AuthedFetchInit = {}): Promise<{ stat
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-async function waitUntil(predicate: () => Promise<boolean> | boolean, label: string, timeoutMs = 25_000): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await predicate()) return;
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	throw new Error(`timed out waiting until ${label}`);
-}
-
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
 
@@ -163,8 +163,16 @@ try {
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
 	await waitUntil(() => fetch(`${baseUrl}/healthz`).then((r) => r.ok).catch(() => false), "server ready");
 
+	const status = (await api(`/api/persistent-agents/${agentId}/status`)).body;
+	assert(status?.activeThread?.threadId === conversationId && status.activeThread.runtime?.kind === "pi-session-jsonl", `the status names the open conversation's kind, got ${JSON.stringify(status?.activeThread?.runtime)}`);
+	assert(client.rememberSendsTranscript(status.activeThread.runtime.kind) === false, "the app sends no transcript for a session-backed conversation");
+	assert(client.rememberSendsTranscript("transcript-recap-v1") === true && client.rememberSendsTranscript(undefined) === true, "an older recap conversation, or an unknown kind, still sends it");
+	pass("the status names a session-backed conversation, and the app then sends no transcript");
+
 	const proposal = await api(`/api/persistent-agents/${agentId}/checkpoint/propose`, { method: "POST", body: JSON.stringify({ conversationId, density: "standard" }) });
 	assert(proposal.status === 200, `the proposal is written, got ${proposal.status} ${JSON.stringify(proposal.body).slice(0, 300)}`);
+	assert(String(proposal.body?.fields?.body ?? "").trim(), `Remember works with no transcript in the request, got ${JSON.stringify(proposal.body).slice(0, 300)}`);
+	pass("Remember reads a session-backed conversation with no transcript in the request");
 	const warnings: string[] = proposal.body.warnings ?? [];
 	assert(!warnings.some((warning) => /tool output|shortened|trimmed/i.test(warning)), `a shortened tool output is not a warning, got ${JSON.stringify(warnings)}`);
 	assert(proposal.body.rememberRead?.mode === "one-pass" && proposal.body.rememberRead?.trimmedToolOutputs === 1 && proposal.body.rememberRead?.toolOutputCapChars === 4000, `the read counts the one shortened tool output, got ${JSON.stringify(proposal.body.rememberRead)}`);
@@ -174,10 +182,18 @@ try {
 	assert(typeof needsPreview === "function" && needsPreview(proposal.body) === false, "Remember without the preview saves on its own");
 	assert(needsPreview({ warnings: ["the model declined twice to write the entry, so it was put together from the notes"], fields: { sessionArc: "Arc.", body: "- Body." } }) === false, "an engine warning never stops the quick save");
 	assert(needsPreview({ warnings: [], fields: { sessionArc: "Arc.", body: " " } }) === true, "an entry with no body opens the preview");
-	for (const gone of ["quickRememberBlockers", "rememberToolOutputSentence", "rememberReadSentences", "rememberChipValue"]) assert(!(gone in client), `${gone} is gone`);
-	const appSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
-	assert(!/shortened before reading|rememberReadSentences|displayWarnings|approval\.warnings/.test(appSource), "the preview and the saved line say nothing of how the entry was read");
+	// App.tsx and the files its top-level code moved into: a check that the page never says something reads them all.
+	const PAGE_FILES = ["App.tsx", "maintain-workflow-state.ts", "maintenance-errors.ts", "components/maintain-workflow-screens.tsx", "components/remember-dialog.tsx", "components/landing.tsx", "components/ai-profile-switcher.tsx", "components/memory-shell.tsx", "components/room-file-dialogs.tsx", "components/task-store-gc.tsx", "room-thread-items.ts"];
+	const pageText = PAGE_FILES.map((file) => fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", file), "utf8")).join("\n");
+	assert(!/shortened before reading|rememberReadSentences|displayWarnings|approval\.warnings/.test(pageText), "the preview and the saved line say nothing of how the entry was read");
 	pass("no engine warning stops the quick save, and nothing on screen says how the entry was read");
+
+	const bulky = Array.from({ length: 300 }, (_, index) => ({ kind: "assistant", id: `bulk_${index}`, text: "long visible answer text ".repeat(220) }));
+	const bigBody = JSON.stringify({ conversationId, density: "standard", items: bulky });
+	assert(bigBody.length > 1_300_000, `the request is over 1 MiB, got ${bigBody.length}`);
+	const big = await api(`/api/persistent-agents/${agentId}/checkpoint/propose`, { method: "POST", body: bigBody });
+	assert(big.status === 200, `a request over 1 MiB is accepted, got ${big.status} ${JSON.stringify(big.body).slice(0, 200)}`);
+	pass("a Remember request over the default 1 MiB is accepted by the route");
 
 	console.log("remember quick path tool output smoke passed");
 } catch (error) {

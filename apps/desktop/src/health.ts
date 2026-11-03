@@ -29,14 +29,17 @@ export function runDoctor(): Promise<{ output: string; exitCode: number | null }
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export function showTextWindow(title: string, heading: string, body: string, parent?: BrowserWindow): BrowserWindow {
+// inactive shows the window without taking the front from the app in use.
+export function showTextWindow(title: string, heading: string, body: string, options: { parent?: BrowserWindow; inactive?: boolean } = {}): BrowserWindow {
   const win = new BrowserWindow({
     width: 780,
     height: 560,
     title,
-    parent,
+    parent: options.parent,
+    show: !options.inactive,
     webPreferences: { sandbox: true },
   });
+  if (options.inactive) win.showInactive();
   win.setMenuBarVisibility(false);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <style>
@@ -48,8 +51,8 @@ export function showTextWindow(title: string, heading: string, body: string, par
   return win;
 }
 
-export async function showHealthCheck(parent?: BrowserWindow): Promise<BrowserWindow> {
-  const win = showTextWindow("exxperts health check", "Health check", "Running the health check...", parent);
+export async function showHealthCheck(parent?: BrowserWindow, options: { inactive?: boolean } = {}): Promise<BrowserWindow> {
+  const win = showTextWindow("exxperts health check", "Health check", "Running the health check...", { ...options, parent });
   // Idempotent: safe to apply both when the check lands and again after the
   // doctor render (which replaces the pre wholesale).
   const prependUpdateLine = async () => {

@@ -69,9 +69,16 @@ assert(/disabled/i.test(toolText(disabledResult)), "refusal should mention disab
 delete process.env.EXXETA_FETCH_URL_DISABLED;
 
 // A page or an API that answers 4xx or 5xx is a failure the room and the model both see, not a page read.
+// A body that trickles in forever is ended by the turn's stop, and without one by the request timeout.
 {
 	const http = await import("node:http");
 	const server = http.createServer((req, res) => {
+		if (req.url === "/trickle") {
+			res.writeHead(200, { "content-type": "text/plain" });
+			const timer = setInterval(() => res.write("x"), 500);
+			res.on("close", () => clearInterval(timer));
+			return;
+		}
 		if (req.url === "/missing.json") { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found; use /v2/notes" })); return; }
 		if (req.url === "/long-404") { res.writeHead(404, { "content-type": "text/plain" }); res.end("gone ".repeat(4_000)); return; }
 		if (req.url === "/broken") { res.writeHead(500, { "content-type": "text/html" }); res.end("<html><head><title>Server Error</title></head><body><h1>Server Error</h1><p>Something broke on our side, please try again later.</p></body></html>"); return; }
@@ -95,9 +102,21 @@ delete process.env.EXXETA_FETCH_URL_DISABLED;
 		assert(stepPlainLine(toolText(missing)) === "The site answered 404 Not Found.", `the card shows only the plain line, got ${stepPlainLine(toolText(missing))}`);
 		const fine = await local.execute("smoke", { url: `http://127.0.0.1:${port}/notes.txt` });
 		assert(fine?.isError !== true && toolText(fine).includes("five minutes"), `a page that answers is read, got ${toolText(fine)}`);
+		const endsWithin = (result: Promise<any>, ms: number) => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			return Promise.race([result, new Promise((resolve) => { timer = setTimeout(() => resolve("still reading"), ms); })]).finally(() => clearTimeout(timer));
+		};
+		const stop = new AbortController();
+		setTimeout(() => stop.abort(), 500);
+		const stopped = await endsWithin(local.execute("smoke", { url: `http://127.0.0.1:${port}/trickle` }, stop.signal), 5_000);
+		assert(stopped !== "still reading" && (stopped as any)?.isError === true, `the turn's stop ends a trickling read, got ${stopped === "still reading" ? stopped : toolText(stopped)}`);
+		const startedAt = Date.now();
+		const timedOut = await endsWithin(local.execute("smoke", { url: `http://127.0.0.1:${port}/trickle` }), 20_000);
+		assert(timedOut !== "still reading" && (timedOut as any)?.isError === true && Date.now() - startedAt >= 14_000, `the request timeout ends a trickling read, got ${timedOut === "still reading" ? timedOut : toolText(timedOut)} after ${Date.now() - startedAt} ms`);
 	} finally {
 		delete process.env.EXXETA_FETCH_URL_ALLOW_PRIVATE;
 		delete process.env.EXXETA_FETCH_URL_BROWSER;
+		server.closeAllConnections();
 		server.close();
 	}
 }

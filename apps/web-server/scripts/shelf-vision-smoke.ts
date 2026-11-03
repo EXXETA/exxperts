@@ -4,7 +4,7 @@
 // paging, and search_file skips both with the honest visual-read note. All
 // decode/render work runs in the isolated parse worker.
 //
-// Run: npm run smoke:shelf-vision   (or: node scripts/run-smokes.mjs shelf-vision)
+// Run: node scripts/run-smokes.mjs shelf-vision   (from the repo root)
 
 import fs from "node:fs";
 import os from "node:os";

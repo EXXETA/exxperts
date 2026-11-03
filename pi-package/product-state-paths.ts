@@ -44,19 +44,3 @@ export function ensureProductAppUserDirs(): void {
 	ensureProductAppStateDir("agents");
 	ensureProductAppStateDir("skills");
 }
-
-export function cliLauncherStateDir(): string {
-	const fromEnv = process.env.EXXPERTS_LAUNCHER_STATE_DIR;
-	if (fromEnv && fromEnv.trim()) return fromEnv;
-	return productAppStatePath("run", "cli");
-}
-
-export function ensureCliLauncherStateDir(): string {
-	const dir = cliLauncherStateDir();
-	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-	return dir;
-}
-
-export function cliLauncherStatePath(...segments: string[]): string {
-	return path.join(cliLauncherStateDir(), ...segments);
-}

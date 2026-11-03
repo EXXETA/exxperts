@@ -1,0 +1,663 @@
+/* Settings dialog ------------------------------------------------
+   One shell for Room settings (.rs-shell) and Settings (.settings-overlay):
+   kicker, title and one close control in the header, a 200 px navigation
+   column beside the pane. One size on every pane, centred: 960 px wide and
+   at most 800 px tall, 36 px clear of the viewport's edges; the pane scrolls
+   inside, so switching panes moves nothing. On a phone it is a full sheet
+   showing either the list of panes or one pane. */
+.settings-dialog-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 70;
+	background: color-mix(in srgb, var(--bg) 72%, transparent);
+	backdrop-filter: blur(10px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+}
+.settings-dialog {
+	width: 960px;
+	max-width: calc(100vw - 48px);
+	height: min(800px, calc(100vh - 72px));
+	display: flex;
+	flex-direction: column;
+	background: var(--panel);
+	border: 1px solid var(--exx-edge-dialog);
+	border-radius: 16px;
+	box-shadow: none;
+	color: var(--fg);
+	overflow: hidden;
+}
+.settings-dialog-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 20px 24px 14px;
+}
+.settings-dialog-heading {
+	min-width: 0;
+}
+.settings-dialog-kicker {
+	margin: 0 0 4px;
+	font-size: 11px;
+	color: var(--muted);
+}
+/* The title row and the rename form share one height, so renaming moves
+   nothing below the header. */
+.settings-dialog-title-row,
+.room-settings-rename-form {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	min-height: 38px;
+}
+.settings-dialog-head {
+	position: relative;
+}
+.settings-dialog-head-note {
+	position: absolute;
+	top: calc(100% - 8px);
+	left: 24px;
+	z-index: 6;
+	width: min(560px, calc(100% - 48px));
+	display: grid;
+	gap: 8px;
+	justify-items: start;
+	padding: 12px 14px;
+	background: var(--panel-2);
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	box-shadow: var(--exx-shadow-popover);
+}
+.settings-dialog-title {
+	margin: 0;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 24px;
+	font-weight: 700;
+	line-height: 1.2;
+	letter-spacing: -0.01em;
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+.settings-dialog-title-action {
+	flex-shrink: 0;
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 2px 8px;
+	font: inherit;
+	font-size: 12px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.settings-dialog-title-action:hover,
+.settings-dialog-title-action:focus-visible {
+	color: var(--fg);
+	border-color: var(--border);
+}
+.settings-dialog-close {
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+	line-height: 1;
+	cursor: pointer;
+}
+.settings-dialog-close:hover,
+.settings-dialog-close:focus-visible {
+	color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.settings-dialog-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: grid;
+	grid-template-columns: 200px minmax(0, 1fr);
+}
+.settings-dialog-nav {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px 12px 16px 16px;
+	min-height: 0;
+	overflow-y: auto;
+}
+.settings-dialog-nav-item {
+	text-align: left;
+	background: none;
+	border: 0;
+	border-radius: 8px;
+	padding: 8px 10px;
+	font: inherit;
+	font-size: 14px;
+	color: var(--fg-soft);
+	cursor: pointer;
+}
+.settings-dialog-nav-item:hover {
+	background: color-mix(in srgb, var(--fg) 6%, transparent);
+	color: var(--fg);
+}
+.settings-dialog-nav-item.active {
+	background: var(--exx-active-muted-bg);
+	color: var(--fg);
+}
+.settings-dialog-nav-item.danger {
+	margin-top: auto;
+	color: var(--error);
+}
+.settings-dialog-pane {
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
+	padding: 6px 24px 24px;
+}
+.settings-dialog-pane::-webkit-scrollbar {
+	width: 8px;
+}
+.settings-dialog-pane::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 4px;
+}
+.settings-dialog-pane::-webkit-scrollbar-track {
+	background: transparent;
+	margin-bottom: 16px;
+}
+.settings-dialog-back {
+	display: none;
+}
+/* A group inside a pane (GroupHeader): its kicker, a line, its actions. */
+.group-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 6px;
+}
+.group-head-line {
+	margin: 0;
+	color: var(--fg-soft);
+	font-size: 14px;
+}
+/* Every pane opens with the same header (PaneHeader): the title in the
+   display face, one muted line, the pane's actions on the right. */
+.pane-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin: 4px 0 6px;
+}
+.pane-head-text {
+	min-width: 0;
+}
+.pane-head h2 {
+	margin: 0 0 2px;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 20px;
+	font-weight: 700;
+	line-height: 1.25;
+	letter-spacing: -0.01em;
+}
+.pane-head p {
+	margin: 0;
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1.45;
+}
+.pane-head-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+/* The Settings pages were built as full pages: inside the pane they neither
+   scroll nor pad themselves, the pane does both. */
+.settings-dialog .landing {
+	overflow: visible;
+	min-height: auto;
+	padding: 0;
+	background: none;
+	gap: 12px;
+}
+@media (max-width: 760px) {
+	.settings-dialog-backdrop {
+		padding: 0;
+	}
+	.settings-dialog {
+		width: 100%;
+		max-width: none;
+		height: 100%;
+		border: 0;
+		border-radius: 0;
+		box-shadow: none;
+	}
+	.settings-dialog-head {
+		padding: 16px 16px 10px;
+	}
+	.settings-dialog-body {
+		display: block;
+		overflow: hidden;
+	}
+	.settings-dialog-nav,
+	.settings-dialog-pane {
+		height: 100%;
+	}
+	.settings-dialog.show-list .settings-dialog-pane,
+	.settings-dialog:not(.show-list) .settings-dialog-nav {
+		display: none;
+	}
+	/* A header whose action is a field (a search, a filter): the field takes
+	   its own full-width line under the kicker and its line. */
+	:is(.pane-head, .group-head):has(> .pane-head-actions input) {
+		flex-direction: column;
+		align-items: stretch;
+	}
+	:is(.pane-head, .group-head):has(> .pane-head-actions input) > .pane-head-text {
+		flex: none;
+	}
+	:is(.pane-head, .group-head) > .pane-head-actions:has(input) input {
+		width: 100%;
+		max-width: none;
+	}
+	/* The list of panes: one row each with a chevron, Archive or delete last. */
+	.settings-dialog-nav {
+		gap: 0;
+		padding: 4px 8px 16px;
+	}
+	.settings-dialog-nav-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 14px 8px;
+		border-radius: 0;
+		border-bottom: 1px solid var(--exx-divider);
+		font-size: 15px;
+		color: var(--fg);
+	}
+	.settings-dialog-nav-item::after {
+		content: "";
+		width: 12px;
+		height: 12px;
+		background-color: var(--muted);
+		-webkit-mask: var(--disclosure-chevron) center / contain no-repeat;
+		mask: var(--disclosure-chevron) center / contain no-repeat;
+	}
+	.settings-dialog-nav-item.active {
+		background: none;
+	}
+	.settings-dialog-nav-item.danger {
+		margin-top: 8px;
+		border-bottom: none;
+		color: var(--error);
+	}
+	.settings-dialog-nav-item.danger::after {
+		content: none;
+	}
+	.settings-dialog-pane {
+		padding: 4px 16px 24px;
+	}
+	.pane-head {
+		flex-wrap: wrap;
+	}
+	.pane-head-text {
+		flex: 1 1 220px;
+	}
+	/* Rows keep one line where they can: the label column shrinks before a
+	   value or a control does. The budget slider takes its own line. */
+	.settings-row-main {
+		flex-basis: 0;
+	}
+	.settings-row-tag {
+		white-space: nowrap;
+	}
+	.memory-budget-row {
+		flex-wrap: wrap;
+	}
+	/* A wide control (a long button, a segmented choice) goes under the text,
+	   left aligned, instead of squeezing it into a narrow column; toggles,
+	   radios, values and small buttons keep the right edge. */
+	.settings-row:has(> :is(.rs-btn-danger, .settings-segments)) {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
+	}
+	.memory-budget-control {
+		flex: 1 0 100%;
+	}
+	/* A typed folder adds Keep saved folder: the buttons go under the box
+	   instead of past the pane's edge. */
+	.workspace-folder-controls {
+		flex-wrap: wrap;
+	}
+	/* On a narrow screen the buttons can wrap under the title, to the left,
+	   so the line about them starts at the left too. */
+	.workspace-buttons {
+		align-items: flex-start;
+	}
+	.workspace-buttons-line {
+		text-align: left;
+	}
+	.settings-dialog-back {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		margin-bottom: 8px;
+		padding: 0;
+		background: none;
+		border: 0;
+		font: inherit;
+		font-size: 14px;
+		color: var(--fg-soft);
+		cursor: pointer;
+	}
+	/* A skill's page has its own way back (and the review its Cancel), so
+	   the shell's link to the list steps aside while one is open. */
+	.settings-dialog-pane:has(.skill-detail, .skill-review) > .settings-dialog-back {
+		display: none;
+	}
+}
+/* Profiles: rows wrap and the create input shrinks inside the pane. Without
+   this, the input's width:100% inside the flex actions (and a long armed
+   hint's max-content in the section grid) push the pane into the horizontal
+   scroll above, which no settings row should ever cause. */
+.state-profiles .settings-row {
+	flex-wrap: wrap;
+}
+.state-profiles .settings-row-main {
+	flex: 1 1 240px;
+}
+.state-profiles .settings-row-value {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	min-width: 0;
+}
+.state-profiles .launcher-path-input {
+	width: auto;
+	flex: 1 1 160px;
+	min-width: 0;
+}
+/* An armed delete is the one decision here that removes something: the row
+   takes the danger tint, so confirm-or-cancel is unmissable instead of one
+   red line of text. Moving the data folder or switching profiles only asks,
+   in the ordinary voice: the question under the label, no tint. */
+.state-profiles .settings-row.settings-row-armed {
+	background: color-mix(in srgb, var(--error) 8%, transparent);
+	padding-left: 12px;
+	padding-right: 12px;
+}
+.state-profiles .state-profile-asking {
+	color: var(--fg);
+	margin-top: 4px;
+}
+
+/* Compact scale inside the modal only: the hosted pages were built for
+   full-page air, and at modal density their sizes read loose. Everything
+   here is scoped under .settings-overlay so the full-page views (remote
+   devices see some of these components full-page) are untouched. */
+/* Inside the dialog a page's sections are groups: no rule between them, and
+   a long path in a row shortens instead of widening the pane. */
+.settings-overlay .ai-setup-section {
+	grid-template-columns: minmax(0, 1fr);
+	gap: 12px;
+	padding: 0;
+	border-bottom: none;
+}
+.settings-overlay .web-search-fallback-heading {
+	font-size: 11px;
+	letter-spacing: 0.12em;
+	color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+/* Small quiet pills instead of chunky bordered segments; the selected side
+   keeps the app's existing filled-selection treatment. */
+.settings-overlay .remote-capability-seg {
+	border-color: var(--border-soft);
+}
+.settings-overlay .remote-capability-seg button {
+	font-size: 12px;
+	line-height: 1.3;
+	padding: 4px 9px;
+}
+.settings-overlay .rs-quiet-danger:hover:not(:disabled) {
+	color: var(--error);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+/* Skills at modal density: compact rows, quiet row actions; Add skill
+   stays the section's one primary action. */
+.settings-overlay .skill-row {
+	padding: 8px 0;
+}
+/* Connectors at modal density: quiet row actions (the one primary Log in
+   keeps its fill), compact rows, and a plain count beside the header. */
+.connector-count-hint {
+	color: var(--muted);
+	font-size: 12px;
+}
+.settings-overlay .connector-row {
+	padding: 6px 0;
+	min-height: 48px;
+}
+/* Expandable rows answer the pointer: a faint tint across the whole row
+   while the name area is hovered, and the name underlines the way the
+   skills table's does. */
+.settings-overlay .connector-row:has(.connector-row-toggle:hover) {
+	background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.settings-overlay .connector-row-toggle:hover .connector-row-title strong,
+.settings-overlay .connector-row-toggle:focus-visible .connector-row-title strong {
+	text-decoration: underline;
+}
+.settings-overlay .connector-row-title strong {
+	font-size: 14px;
+	font-weight: 600;
+	flex: 0 1 auto;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* The one hint line per row never wraps: clamped to one line with an
+   ellipsis (the full tool list stays in the title attribute). */
+.settings-overlay .connector-row-meta {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary):hover:not(:disabled) {
+	color: var(--fg);
+	background: none;
+	border-color: transparent;
+}
+/* Reference tables (skills + connectors): one thin tracked-caps header
+   style shared by both tabs, rows on the remote tab's divider rhythm,
+   provenance as muted text instead of pills. */
+.settings-overlay .settings-table-head {
+	display: grid;
+	align-items: baseline;
+	padding: 0 0 6px;
+	border-bottom: 1px solid var(--exx-divider);
+	font-size: 10.5px;
+	font-weight: 600;
+	color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+.settings-overlay .skill-table-head,
+.settings-overlay .skill-table .skill-row {
+	grid-template-columns: minmax(0, 1fr) 88px 64px 108px 16px;
+	gap: 6px 14px;
+}
+.settings-overlay .skill-table .skill-row {
+	border-bottom-color: var(--exx-divider);
+}
+@media (hover: hover) {
+	.settings-overlay .skill-table .skill-row:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--fg) 3%, transparent);
+	}
+	.settings-overlay .skill-table .skill-row:hover .skill-table-name {
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+}
+.settings-overlay .skill-table-name {
+	font-size: 14px;
+	font-weight: 500;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-overlay .skill-table-cell {
+	font-size: 12px;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+/* Connectors table: header first cell spans icon+name; fixed type/status/
+   action columns keep the rows aligned even though each row is its own grid. */
+.settings-overlay .connector-table-head,
+.settings-overlay .connector-table .connector-row {
+	grid-template-columns: 24px minmax(0, 1fr) 118px 92px 190px;
+	gap: 6px 12px;
+}
+.settings-overlay .connector-table-head .connector-table-head-name {
+	grid-column: 1 / 3;
+}
+/* The type/status (and origin/date) cells share a wrapper so the phone
+   layout can fold them into one hint line; on desktop the wrapper
+   dissolves into the grid. */
+.settings-overlay .connector-table-facts,
+.settings-overlay .skill-table-facts {
+	display: contents;
+}
+.settings-overlay .connector-table-type,
+.settings-overlay .connector-table-status {
+	font-size: 12px;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+.settings-overlay .connector-table .connector-row-actions {
+	grid-column: 5;
+	grid-row: 1;
+	justify-content: flex-end;
+	flex-wrap: nowrap;
+	white-space: nowrap;
+	gap: 6px;
+	padding-right: 12px;
+}
+/* An outcome line ends where the actions above it end. */
+.settings-overlay .connector-table .connector-row-outcome {
+	padding-right: 12px;
+}
+/* AI setup in the dialog: the profiles are rows of one list like every
+   other setting; the radio alone says which one is active, and the models
+   panel under a row starts at the row's label edge. */
+.settings-overlay .ai-profile-card {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	overflow: visible;
+}
+.settings-overlay .ai-profile-row {
+	padding: 12px 0;
+}
+.settings-overlay .ai-profile-card-empty {
+	padding: 12px 0;
+}
+.settings-overlay .ai-profile-models {
+	margin: 0 0 12px;
+	border-top: none;
+	border-radius: 8px;
+	padding: 10px 12px;
+}
+@media (max-width: 760px) {
+	/* Phone tables: the fixed desktop columns collapse into stacked rows —
+	   name on top, the fact cells folded into one muted dot-separated hint
+	   line beneath, actions at the right. Self-labeling, so no header row. */
+	.settings-overlay .settings-table-head {
+		display: none;
+	}
+	.settings-overlay .connector-table .connector-row {
+		grid-template-columns: 24px minmax(0, 1fr) auto;
+	}
+	.settings-overlay .connector-table .connector-row-main {
+		grid-column: 2;
+		grid-row: 1;
+	}
+	.settings-overlay .connector-table-facts {
+		display: flex;
+		align-items: baseline;
+		gap: 4px;
+		grid-column: 2;
+		grid-row: 2;
+		min-width: 0;
+	}
+	.settings-overlay .connector-table-type:empty {
+		display: none;
+	}
+	.settings-overlay .connector-table-status::before {
+		content: "· ";
+	}
+	.settings-overlay .connector-table-type:empty + .connector-table-status::before {
+		content: none;
+	}
+	.settings-overlay .connector-table .connector-row-outcome {
+		padding-right: 0;
+	}
+	.settings-overlay .connector-table .connector-row-actions {
+		grid-column: 3;
+		grid-row: 1 / span 2;
+		align-self: center;
+		flex-wrap: wrap;
+		white-space: normal;
+		max-width: 40vw;
+		padding-right: 0;
+	}
+	.settings-overlay .skill-table .skill-row {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+	.settings-overlay .skill-table-name {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.settings-overlay .skill-table-wide {
+		display: none;
+	}
+	.settings-overlay .skill-table-narrow {
+		display: inline;
+	}
+	.settings-overlay .skill-table-facts {
+		display: flex;
+		align-items: baseline;
+		gap: 4px;
+		grid-column: 1;
+		grid-row: 2;
+		min-width: 0;
+	}
+	.settings-overlay .skill-table-facts .skill-table-cell:empty {
+		display: none;
+	}
+	.settings-overlay .skill-table-facts .skill-table-cell + .skill-table-cell::before {
+		content: "· ";
+	}
+	.settings-overlay .skill-table-chevron {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+		align-self: center;
+	}
+}
+

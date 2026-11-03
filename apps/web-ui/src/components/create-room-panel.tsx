@@ -82,8 +82,8 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 			</div>
 			{error && <div className="create-room-message error">{error}</div>}
 			<div className="create-room-actions">
-				<button className="landing-action" type="submit" disabled={submitting}>{submitting ? "Creating…" : "Create room"}</button>
 				<button className="inline-action" type="button" disabled={submitting} onClick={onClose}>Cancel</button>
+				<button className="landing-action" type="submit" disabled={submitting}>{submitting ? "Creating…" : "Create room"}</button>
 			</div>
 		</form>
 	);
@@ -95,7 +95,7 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 	if (variant === "section") {
 		return (
 			<div className="create-room-section create-room-body">
-				<p className="create-room-copy">Name the room and tell its exxpert who you are. You can rename the room later in its settings.</p>
+				<p className="create-room-copy">Name the room and tell it who you are. You can rename it later in Room settings.</p>
 				{successMessage}
 				{body}
 			</div>
@@ -108,8 +108,8 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 				<span className="status-dot ready" />
 				<h2>Create room</h2>
 			</div>
-			<p className="cli-note create-room-copy">Create a new room with its own exxpert and local memory.</p>
-			<p className="cli-note create-room-hint">The exxpert keeps this room's memory and context between sessions, so you can re-enter and continue later.</p>
+			<p className="cli-note create-room-copy">Create a new room with its own local memory.</p>
+			<p className="cli-note create-room-hint">The room keeps its memory and context between sessions, so you can come back and continue later.</p>
 			{successMessage}
 			{body}
 		</article>

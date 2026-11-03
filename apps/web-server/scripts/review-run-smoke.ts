@@ -23,6 +23,7 @@ import path from "node:path";
 
 import type { ReviewRun, ReviewRunGenerate } from "../src/review-run.js";
 import type { AbsorbGenerateResult } from "../src/persistent-agents.js";
+import { waitEvery } from "./smoke-wait.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "review-run-smoke-home-"));
 const root = path.join(tempHome, ".exxperts", "app", "personalized-agents");
@@ -48,7 +49,6 @@ const {
 	resetReviewRunsForTests,
 	resumeReviewRun,
 	REVIEW_TIDY_WORKER_FAILED,
-	REVIEW_TIDY_REFUSED_TWICE,
 	REVIEW_TIDY_NOT_REACHED,
 	reviewRunStatus,
 	setReviewRunBudget,
@@ -98,8 +98,6 @@ function expectThrows(fn: () => unknown, expected: RegExp, label: string): void 
 	}
 	throw new Error(`${label}: expected a refusal matching ${expected}, but the call returned without one`);
 }
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // --- The fixture --------------------------------------------------------------
 
@@ -449,23 +447,13 @@ const generate: ReviewRunGenerate = async (prompt, _model, options) => {
 
 const WORKING_STATES = new Set(["prepass", "tidying", "budget"]);
 
-async function settle(agentId: string, runId: string, label: string): Promise<ReviewRun> {
-	const deadline = Date.now() + 60_000;
-	let run = getReviewRun(agentId, runId);
-	while (WORKING_STATES.has(run.state)) {
-		assert(Date.now() < deadline, `${label}: the run was still in state "${run.state}" after 60 seconds, and a scripted tidy answers in milliseconds`);
-		await sleep(2);
-		run = getReviewRun(agentId, runId);
-	}
-	return run;
-}
+const waitUntil = waitEvery(2, 60_000);
 
-async function waitUntil(predicate: () => boolean, label: string): Promise<void> {
-	const deadline = Date.now() + 60_000;
-	while (!predicate()) {
-		assert(Date.now() < deadline, `${label}: the condition never came true within 60 seconds`);
-		await sleep(2);
-	}
+// A scripted tidy answers in milliseconds.
+async function settle(agentId: string, runId: string, label: string): Promise<ReviewRun> {
+	let run = getReviewRun(agentId, runId);
+	await waitUntil(() => !WORKING_STATES.has((run = getReviewRun(agentId, runId)).state), `${label} leaves prepass, tidying and budget`);
+	return run;
 }
 
 try {
@@ -531,7 +519,6 @@ try {
 	assert(left, `a group whose calls never came back should be named on the card, got ${JSON.stringify(run.leftAsIs)}`);
 	assert(left!.reason === REVIEW_TIDY_WORKER_FAILED, `a group that fails while the model answers says so in one sentence, whatever dropped, got ${JSON.stringify(left!.reason)}`);
 	assert(!run.changes.some((change) => change.topic === DOOMED_TOPIC), `a group left as it was changes nothing, got ${JSON.stringify(run.changes.filter((c) => c.topic === DOOMED_TOPIC))}`);
-	assert(REVIEW_TIDY_REFUSED_TWICE.length > 0, "the twice-refused sentence exists for the group whose replies the memory could not accept");
 
 	// The finished item.
 	const closed = run.changes.find((change) => change.kind === "closed");
@@ -628,7 +615,6 @@ try {
 	let failed: any = null;
 	try { approveReviewRun(roomA.agentId, run.runId, new Date(`${RUN_DAY}T09:04:00.000Z`)); } catch (error) { failed = error; }
 	assert(failed instanceof Error, "a save during a turn in flight is refused");
-	assert(failed.message.endsWith(" The budget stays at 10k."), `the refusal ends by saying where the budget is, got ${JSON.stringify(failed.message)}`);
 	const busyRefusal = failed as Error & { code?: string; statusCode?: number };
 	assert(busyRefusal.code === "memory_room_busy" && busyRefusal.statusCode === 400, `the refusal keeps its own code and status, got ${JSON.stringify({ code: busyRefusal.code, statusCode: busyRefusal.statusCode })}`);
 	assert(readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens === TIGHT_BUDGET, `a save that failed after the raise leaves the room the limit it had, got ${readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens}`);

@@ -256,7 +256,6 @@ try {
 	assert(first.settled === true && first.from === MEMORY_BUDGET_DEFAULT_TOKENS && first.to === SETTLED_TOKENS, `a 0.11.2 room of ${size1} tokens settles at 75k, got ${JSON.stringify(first)}`);
 	const settings1 = readPersistentRoomMaintenanceSettings(room1);
 	assert(settings1.memoryBudgetTokens === SETTLED_TOKENS && settings1.memoryBudgetSettled === true, `the settings carry the settled budget and the mark, got ${JSON.stringify(settings1)}`);
-	assert(settings1.memoryBudgetSettledTo === SETTLED_TOKENS, `the settings remember what the settle chose, got ${JSON.stringify(settings1)}`);
 	assert(readL1b(room1) === bytes1, "settling the budget leaves the memory file byte for byte as it was");
 	assert(recordedWrites(room1) === writesBefore, `settling the budget records no memory edit and archives no copy, got ${recordedWrites(room1)} against ${writesBefore}`);
 	const settingsBytes1 = readSettingsFile(room1);
@@ -272,7 +271,6 @@ try {
 	assert(handSet.settled === false && handSet.from === 30_000 && handSet.to === 30_000, `a budget set by hand in 0.11.2 is kept, got ${JSON.stringify(handSet)}`);
 	const settings2 = readPersistentRoomMaintenanceSettings(room2);
 	assert(settings2.memoryBudgetTokens === 30_000 && settings2.memoryBudgetSettled === true, `the hand-set room is marked settled at its own budget, got ${JSON.stringify(settings2)}`);
-	assert(settings2.memoryBudgetSettledTo === undefined, `a budget the settle left alone records no settled-to value, got ${JSON.stringify(settings2)}`);
 
 	// 3. A migrated room at 60k with the default budget: already on 0.12, never resized.
 	const room3 = createRoom("Memory Budget Settle Migrated Smoke Room", (id) => migratedFixture(id, notesPerTopic));

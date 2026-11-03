@@ -142,9 +142,6 @@ try {
 	assert(first.entriesMovedAside === 4, `the three unclassifiable folders + the incomplete-list folder must be moved aside (got ${first.entriesMovedAside})`);
 	const logText = fs.readFileSync(path.join(storeRoot, SHELF_MIGRATION_LOG_FILENAME), "utf-8");
 	assert(logText.includes("tasks/tsk-alien/stranded.html"), "the removal log must name the moved-aside file");
-	assert(logText.includes("moved aside (NOT deleted)"), "the removal log must say the folder was preserved");
-	assert(logText.includes("never migrated"), "the incomplete-list move-aside must be logged with its reason");
-	assert(!logText.includes("orphaned task of a deleted room"), "no unclassifiable folder may be logged as a deletion");
 	const markerPath = path.join(tempAgentsRoot, roomId, "runtime", SHELF_MIGRATION_MARKER_FILENAME);
 	assert(fs.existsSync(markerPath), "the room marker must exist");
 

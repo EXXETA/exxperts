@@ -12,31 +12,32 @@ describe("getThinkingLevelLadder", () => {
 		expect(ladder.map((rung) => rung.label)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
 	});
 
-	it.each(["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5"] as const)("gives %s no off rung, because its thinking cannot be disabled", (modelId) => {
+	it.each(["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"] as const)("gives %s no off rung, because its thinking cannot be disabled", (modelId) => {
 		const model = getModel("anthropic", modelId);
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
-		// The Fable family, Opus 5.5 and Sonnet 5.5 reject thinking disabled
-		// with a 400, so the dial never offers "off".
+		// The Fable family and Opus 5.5 reject thinking disabled with a 400, and
+		// have no other way to stop, so the dial never offers "off".
 		expect(ladder.map((rung) => rung.level)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		expect(ladder.map((rung) => rung.label)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 	});
 
-	it.each(["claude-sonnet-5", "claude-sonnet-4-5", "claude-haiku-5-5"] as const)("still lets %s be switched off", (modelId) => {
+	it.each(["claude-sonnet-5", "claude-sonnet-4-5", "claude-haiku-5-5", "claude-sonnet-5-5"] as const)("still lets %s be switched off", (modelId) => {
 		const model = getModel("anthropic", modelId);
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
-		// Only the Fable and Mythos families, Opus 5.5 and Sonnet 5.5 reject
-		// thinking disabled; every other Claude row keeps "off" as its first rung.
-		// Haiku 5.5 refuses disabled only beside xhigh or max, which off never sends.
+		// Only the Fable and Mythos families and Opus 5.5 cannot stop thinking;
+		// every other Claude row keeps "off" as its first rung. Haiku 5.5 refuses
+		// disabled only beside xhigh or max, which off never sends, and Sonnet 5.5
+		// stops through thinking type between_tools.
 		expect(ladder[0]).toEqual({ level: "off", label: "off" });
 	});
 
 	it("keeps every rung distinct for an OpenAI-family model that cannot stop reasoning", () => {
-		const model = getModel("github-copilot", "gpt-5.4");
+		const model = getModel("github-copilot", "gpt-5-mini");
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
-		expect(ladder.map((rung) => rung.level)).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+		expect(ladder.map((rung) => rung.level)).toEqual(["minimal", "low", "medium", "high"]);
 		// Labels equal the tokens: this family names its efforts the way we do.
 		expect(ladder.every((rung) => rung.level === rung.label)).toBe(true);
 	});
@@ -97,6 +98,27 @@ describe("getThinkingLevelLadder", () => {
 		expect(ladder.some((rung) => rung.level === "minimal")).toBe(false);
 	});
 
+	it.each([
+		["openai", ["off", "low", "medium", "high", "xhigh", "max"]],
+		["openai-codex", ["off", "low", "medium", "high", "xhigh", "max"]],
+		["azure-openai-responses", ["off", "low", "medium", "high", "xhigh", "max"]],
+		["github-copilot", ["low", "medium", "high", "xhigh", "max"]],
+	] as const)("gives GPT-6.1 Terra on %s the ladder its GPT-6 Sol row has there", (provider, levels) => {
+		// Terra takes effort none like GPT-6 Sol; Copilot rows of the family pin
+		// off to null, so only Copilot loses it.
+		const model = getModel(provider, "gpt-6.1-terra");
+		expect(model).toBeDefined();
+		expect(getThinkingLevelLadder(model!).map((rung) => rung.level)).toEqual(levels);
+	});
+
+	it("prices GPT-6.1 Terra on the API route as its model page does, cache writes at the 30-minute rate", () => {
+		const model = getModel("openai", "gpt-6.1-terra");
+		expect(model).toBeDefined();
+		expect(model!.cost).toEqual({ input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 });
+		expect([model!.contextWindow, model!.maxTokens]).toEqual([1050000, 128000]);
+		expect(model!.input).toEqual(["text", "image"]);
+	});
+
 	it.each(["gpt-6-sol", "gpt-6-luna"] as const)("gives %s on the subscription route the same ladder, off to max", (modelId) => {
 		const model = getModel("openai-codex", modelId);
 		expect(model).toBeDefined();
@@ -118,7 +140,7 @@ describe("getThinkingLevelLadder", () => {
 		const model = getModel("openai", "gpt-5.6-luna");
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
-		expect(ladder.map((rung) => rung.level)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+		expect(ladder.map((rung) => rung.level)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
 	});
 
 	it("labels the off rung with the effort a model actually sends for it", () => {

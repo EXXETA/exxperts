@@ -42,7 +42,7 @@ function workspaceDefaultUrl(agentId: string): string {
 }
 
 export async function fetchPersistentRoomWorkspaceDefault(agentId: string): Promise<PersistentRoomWorkspaceDefaultResponse> {
-	return fetchJson<PersistentRoomWorkspaceDefaultResponse>(workspaceDefaultUrl(agentId), undefined, "Couldn't load this room's workspace.");
+	return fetchJson<PersistentRoomWorkspaceDefaultResponse>(workspaceDefaultUrl(agentId), undefined, "Couldn't load this room's folder.");
 }
 
 export async function savePersistentRoomWorkspaceDefault(agentId: string, input: PersistentRoomWorkspaceDefaultInput): Promise<PersistentRoomWorkspaceDefaultResponse> {
@@ -59,7 +59,7 @@ export async function savePersistentRoomWorkspaceDefault(agentId: string, input:
 				bashEnabled: input.bashEnabled,
 			}),
 		},
-		"Couldn't save the workspace. Try again."
+		"Couldn't save the folder. Try again."
 	);
 }
 
@@ -67,7 +67,7 @@ export async function clearPersistentRoomWorkspaceDefault(agentId: string): Prom
 	return fetchJson<PersistentRoomWorkspaceDefaultResponse>(
 		workspaceDefaultUrl(agentId),
 		{ method: "DELETE" },
-		"Couldn't clear the workspace. Try again."
+		"Couldn't clear the folder. Try again."
 	);
 }
 

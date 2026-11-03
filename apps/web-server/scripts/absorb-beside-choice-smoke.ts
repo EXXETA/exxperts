@@ -33,7 +33,7 @@ const { parseMemoryDocument, reviewTargetTokens } = await import("../src/memory-
 const { undoMemorySave } = await import("../src/memory-undo.js");
 const { writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 const { flushMemoryUse, readMemoryUse } = await import("../src/memory-use.js");
-const { absorbRunSessionLine, changeBesideTag } = await import("../../web-ui/src/memory-v2-copy.js");
+const { changeBesideTag } = await import("../../web-ui/src/memory-v2-copy.js");
 
 const MODEL = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
 const RUN_CLOCK = () => new Date("2026-09-13T09:00:00.000Z");
@@ -171,7 +171,7 @@ await section("replace-guards", async () => {
 	const orphan = added(g.run, "RC-0001");
 	assert(orphan.besideOf === "m-0002" && orphan.besideState === "closed" && orphan.besideLine === LEGAL, `a row whose note this update closes says so and names it, got ${JSON.stringify(orphan)}`);
 	const orphanLine = changeBesideTag(orphan);
-	assert(orphanLine?.replaceLabel === null && /^May disagree with: "Send the draft to legal\."(?: \([^)]*\)\.)? That note is closed by this update\.$/.test(orphanLine.line), `the card's line names the closed note, got ${JSON.stringify(orphanLine)}`);
+	assert(orphanLine?.replaceLabel === null, `the card offers no Replace of the closed note, got ${JSON.stringify(orphanLine)}`);
 	refused(() => choose(gone, g.runId, orphan.id, "replace"), "absorb_run_bad_choice", "a Replace of a note this update closes");
 
 
@@ -332,7 +332,6 @@ await section("older-page", async () => {
 	const olderRows = ready.sessions[1].changes ?? [];
 	assert(olderRows.length === 2 && olderRows.every((change) => change.kind === "history" && change.topic === "Maintenance terms" && !change.beside) && olderRows.map((change) => change.after).sort().join("|") === [AUGUST, MAY].sort().join("|"), `the card lists each older value as an Older row, untagged, got ${JSON.stringify(olderRows)}`);
 	assert(olderRows.every((change) => change.of === "m-0003" && change.ofLine === JULY), `each Older row names the note it yielded to, as memory holds it now, got ${JSON.stringify(olderRows)}`);
-	assert(absorbRunSessionLine(ready.sessions[1]) === "Memorized · 2 older values kept as history", `the card's line for a page whose text was all older says so, got ${absorbRunSessionLine(ready.sessions[1])}`);
 	const saved = approveAbsorbRun(room.agentId, runId, SAVE_AT);
 	assert(saved.archivedEntries === 1 && saved.replacedEntries === 1 && saved.historyKept === 2, `the saved screen counts the rewritten text apart from the older values kept as history, got ${saved.archivedEntries} and ${saved.historyKept}`);
 	const note = parseMemoryDocument(fs.readFileSync(room.l1bPath, "utf-8")).topics.flatMap((topic) => topic.entries).find((e) => e.id === "m-0003");
@@ -352,10 +351,9 @@ await section("card-dates", async () => {
 	const { run: ready } = await started(room, { "RC-0001": () => fence([{ op: "add", topic: "Maintenance terms", kind: "fact", text: "- The Nordwind maintenance contract renews automatically on 1 July." }]) });
 	const row = added(ready, "RC-0001");
 	assert(row.beside === "may-disagree" && row.besideOf === "m-0003" && row.besideLearned === "2026-08-02" && row.learned === "2026-09-11", `the tagged row carries both days, got ${JSON.stringify(row)}`);
-	assert(changeBesideTag(row)?.line === `May disagree with: "${JUNE.slice(2)}" (as of 2 Aug; new note as of 11 Sep)`, `the card's line names both days, got ${JSON.stringify(changeBesideTag(row)?.line)}`);
 	const { run: pinnedReady } = await started(createRoom("Card Dates Pinned Room", [page("RC-0001", "April", "2026-09-11")]), { "RC-0001": () => fence([{ op: "update", id: "m-0001", text: "- The Nordwind contract renews in April, with 60 days notice." }]) });
 	const pinnedRow = added(pinnedReady, "RC-0001");
-	assert(pinnedRow.beside === "pinned" && changeBesideTag(pinnedRow)?.line === `May disagree with your pinned note: "${APRIL.slice(2)}" (new note as of 11 Sep)`, `beside a pinned note, the line names the days it knows, got ${JSON.stringify(changeBesideTag(pinnedRow)?.line)}`);
+	assert(pinnedRow.beside === "pinned", `a row beside a pinned note is tagged so, got ${JSON.stringify(pinnedRow)}`);
 });
 
 // A pair the person kept though the two may disagree: marked on both notes at

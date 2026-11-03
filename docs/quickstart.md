@@ -9,7 +9,7 @@ Exxperts is a local-first platform for persistent AI colleagues. Each room house
 Three doors into the same product, all sharing the same local data under `~/.exxperts` (rooms, memory, provider logins), one local server at a time:
 
 - **Desktop app** (macOS Apple Silicon, Windows x64): signed builds, download links in [the README](../README.md#install). The app is self-contained and always runs its own version, and it uses the same data as a terminal install.
-- **Terminal install**: the one-line command below; gives you the `exxperts` commands.
+- **Terminal install**: the one-line command below; gives you the `exxperts` command, which opens the app in your browser.
 - **Repo clone**: for contributors; the by-hand steps are [below](#1-install-and-run), the full guide is [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 If you take the app door, skip to [step 2](#2-connect-your-ai) once it opens.
@@ -39,7 +39,7 @@ irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
 Then start the web app:
 
 ```bash
-exxperts web
+exxperts
 ```
 
 **Windows note:** if PowerShell refuses to run `exxperts` afterwards ("running scripts is disabled on this system"), that is PowerShell's default script policy, not a broken install. Either run it from cmd.exe or Git Bash, or allow npm-installed commands for your user once and open a new terminal:
@@ -54,8 +54,8 @@ Prefer to do it by hand? The same commands work on every platform (on Windows, a
 git clone https://github.com/EXXETA/exxperts.git
 cd exxperts
 npm install
-npm run install:global   # builds, packs, and installs the exxperts commands
-exxperts web
+npm run install:global   # builds, packs, and installs the exxperts command
+exxperts
 ```
 
 The web app starts on `http://127.0.0.1:8787` and opens in your browser (if it doesn't, open the URL the command prints). Everything runs locally: the server only listens on your machine (unless you later opt in to remote mode, which serves your own paired devices over your private tunnel; see `SECURITY.md`).
@@ -71,17 +71,16 @@ echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-Prefer running straight from the clone without installing commands? `npm run build`, then `./scripts/exxperts-web` (macOS/Linux/Git Bash) or `node bin\exxperts-web.cjs` (Windows).
+Prefer running straight from the clone without installing the command? `npm run build`, then `./scripts/exxperts-web` (macOS/Linux/Git Bash) or `node bin\exxperts-web.cjs` (Windows).
 
-**Updating later**: re-run the one-line install command. On the platforms with prebuilt archives it performs an archive install even when you previously built from source: it migrates you to the archive install, carries `app/.env` over, and uninstalls the old npm-based global command (the clone stays in place); set `EXXPERTS_INSTALL_METHOD=source` to stay on a source install instead. Archive installs update in place and keep the install's `app/.env`; your rooms, memory, and provider logins in `~/.exxperts` are never touched by installs or updates. Updating a source install by hand: from the repo folder, `git pull`, `npm install`, `npm run install:global`. Confirm with `exxperts --version`. If anything misbehaves, `exxperts doctor` checks your install and the optional layers on any install type and prints the fix (contributors working from a clone can also use `npm run doctor`).
+**Updating later**: re-run the one-line install command. On the platforms with prebuilt archives it performs an archive install even when you previously built from source: it migrates you to the archive install, carries `app/.env` over, and uninstalls the old npm-based global command (the clone stays in place); set `EXXPERTS_INSTALL_METHOD=source` to stay on a source install instead. Archive installs update in place and keep the install's `app/.env`; your rooms, memory, and provider logins in `~/.exxperts` are never touched by installs or updates. Updating a source install by hand: from the repo folder, `git pull`, `npm install`, `npm run install:global`. Confirm with `exxperts --version`. If anything misbehaves, the desktop app's **Health Check** checks your install and the optional layers and prints the fix; on a terminal install, `exxperts doctor` runs the same check, and contributors working from a clone can run it with `npm run doctor`.
 
 ### Windows notes
 
-Windows is supported for the desktop app, the web app, and the CLI/TUI; the desktop app and the one-line installer need nothing preinstalled on Windows x64. The requirements below matter for two things only, shell access in rooms and installing from source (by hand or via the installer's fallback):
+Windows is supported for the desktop app and the web app; the desktop app and the one-line installer need nothing preinstalled on Windows x64. The requirements below matter for two things only, shell access in rooms and installing from source (by hand or via the installer's fallback):
 
 1. **Git for Windows ≥ 2.40** (https://gitforwindows.org), needed for the source install path and for rooms' optional shell tool: that tool runs commands through Git Bash's `bash.exe`, which is discovered automatically from your Git installation, whether machine-wide (`C:\Program Files\Git`) or per-user (`%LOCALAPPDATA%\Programs\Git`, the no-admin install), or on `PATH`. A WSL `bash` on `PATH` also works for rooms' shell tool; in that case commands run inside the WSL Linux environment (Windows drives under `/mnt/c`, the distro's own tools).
 2. **Node.js 20.6+ (LTS recommended) and npm** (https://nodejs.org), needed for the source install path only; the prebuilt archive bundles its own Node runtime.
-3. **Windows Terminal** recommended for the CLI/TUI (legacy conhost is untested).
 
 One-time Git settings before cloning (long paths matter because `node_modules` trees exceed the 260-character `MAX_PATH`); clone into a folder your user owns (for example under `%USERPROFILE%`), never into `C:\` or `C:\Program Files`:
 
@@ -90,14 +89,14 @@ git config --global core.longpaths true
 git config --global core.autocrlf false   # the repo's .gitattributes manages line endings
 ```
 
-Developing from a clone without a global install? Use the shell-independent forms: `node bin\exxperts-web.cjs`, `node bin\exxperts-cli.cjs`, and `node scripts\exxeta-web.mjs` (dev web app with server + Vite UI). The bash launchers in `scripts/` also work from Git Bash.
+Developing from a clone without a global install? Use the shell-independent forms: `node bin\exxperts-web.cjs` and `node scripts\exxeta-web.mjs` (dev web app with server + Vite UI). The bash launchers in `scripts/` also work from Git Bash.
 
 ## 2. Connect your AI
 
 Open **AI setup** in the web app.
 
 - **Claude or ChatGPT Plus/Pro:** click **Sign in** on the provider's row. The provider's login opens in a new browser tab; complete it there and the page updates by itself. Credentials stay on your machine, in the local credential store.
-- **OpenAI-compatible gateway (or any other provider):** on the same page, choose **Add provider**. For a gateway, choose **Add gateway**, give it a name, enter its base URL and API key, load its models and approve the ones your rooms may use; the terminal wizard (`exxperts setup openai-compatible`) still works too. Details: [Provider setup](provider-setup.md).
+- **OpenAI-compatible gateway (or any other provider):** on the same page, choose **Add provider**. For a gateway, choose **Add gateway**, give it a name, enter its base URL and API key, load its models and approve the ones your rooms may use. Details: [Provider setup](provider-setup.md).
 
 Signing in is enough: the provider's models join the model pickers, and the **Default models** on the same page start on the first provider you sign in to. Each room can pick its own Conversation and Memory models later in **Room settings, Model**. A room never switches models on its own: if its model's provider is signed out later, the room waits until you sign in again or choose another model.
 
@@ -137,7 +136,7 @@ If that fails with `Operation not permitted`, grant your terminal access in Syst
 | Path | Purpose |
 | --- | --- |
 | `~/.exxperts/app/` | Product state: rooms (memory, events, threads), schedules, usage, artifacts, feature config. |
-| `~/.exxperts/agent/` | Runtime state: provider credentials, model config, CLI sessions. |
+| `~/.exxperts/agent/` | Runtime state: provider credentials, model config. |
 
 Each room is a self-contained folder under `~/.exxperts/app/personalized-agents/<room-id>/`: its constitution, durable memory and archive, full event history with content fingerprints, and saved threads, all in plain files you can read.
 
@@ -163,4 +162,3 @@ Desktop app: quit it from the tray, then delete the app (macOS: drag it out of A
 - [Provider setup](provider-setup.md): all provider paths in detail, and which model a room uses.
 - [MCP client support](mcp.md): connect MCP tool servers.
 - [Web search](web-search.md): built in via DuckDuckGo, no setup; SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries.
-- CLI/TUI: `exxperts cli` (or `./scripts/exxperts-cli`) opens the terminal experience, sharing the same rooms and credentials.

@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, useCopiedFlag } from "./CopyButton";
+import { copyPng, encodePng } from "../png-picture";
 
-// Chromium takes only PNG on the clipboard, so any other picture is decoded
-// through an <img> and re-encoded. Same origin: the session cookie rides the
-// fetch as it rides the picture itself. An SVG with no intrinsic size decodes
-// to 0×0 and toBlob then yields null, which rejects like any other failure.
+// Same origin: the session cookie rides the fetch as it rides the picture itself.
 async function pngBlobOf(src: string): Promise<Blob> {
 	const response = await fetch(src);
 	if (!response.ok) throw new Error(`fetch ${response.status}`);
@@ -12,23 +10,14 @@ async function pngBlobOf(src: string): Promise<Blob> {
 	if (blob.type === "image/png") return blob;
 	const objectUrl = URL.createObjectURL(blob);
 	try {
-		const image = new Image();
-		image.src = objectUrl;
-		await image.decode();
-		const canvas = document.createElement("canvas");
-		canvas.width = image.naturalWidth;
-		canvas.height = image.naturalHeight;
-		const context = canvas.getContext("2d");
-		if (!context) throw new Error("no canvas");
-		context.drawImage(image, 0, 0);
-		return await new Promise<Blob>((resolve, reject) => canvas.toBlob((png) => (png ? resolve(png) : reject(new Error("encode"))), "image/png"));
+		return await encodePng(objectUrl);
 	} finally {
 		URL.revokeObjectURL(objectUrl);
 	}
 }
 
 // Below this width the two buttons would cover the whole picture, so the
-// cluster moves out above it (styles.css, .is-narrow).
+// cluster moves out above it (styles/14-answer-content.css, .is-narrow).
 const NARROW_WIDTH = 80;
 
 /**
@@ -56,13 +45,8 @@ export function ImageActions({ src, name, children }: { src: string; name: strin
 	}, []);
 	const copyImage = useCallback((event: MouseEvent) => {
 		event.stopPropagation();
-		// ClipboardItem is undefined over plain http on a LAN IP (not
-		// localhost), and a write can be denied: degrade quietly, as the text
-		// copy does. The conversion is handed over as a promise so the write
-		// itself runs inside the click — Safari refuses one that comes after
-		// an await.
-		if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) return;
-		void navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlobOf(src) })]).then(markCopied).catch(() => {});
+		// No clipboard or a denied write: degrade quietly, as the text copy does.
+		void copyPng(() => pngBlobOf(src)).then(markCopied).catch(() => {});
 	}, [src, markCopied]);
 	const stop = useCallback((event: MouseEvent) => event.stopPropagation(), []);
 	// ?download=1 makes the route answer with content-disposition: attachment

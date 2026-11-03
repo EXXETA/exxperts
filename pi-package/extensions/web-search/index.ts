@@ -207,7 +207,12 @@ function takeDdgSlot(): Promise<void> {
 	return slot;
 }
 
-async function searchSearxng(query: string, limit: number): Promise<SearchResult[]> {
+// The turn's stop ends a search as its timeout does.
+function withTurnSignal(timeout: AbortSignal, signal: AbortSignal | undefined): AbortSignal {
+	return signal ? AbortSignal.any([timeout, signal]) : timeout;
+}
+
+async function searchSearxng(query: string, limit: number, signal?: AbortSignal): Promise<SearchResult[]> {
 	const baseUrl = resolveWebSearchSettings().baseUrl;
 	if (!baseUrl) {
 		throw new Error(`SearXNG is selected but has no base URL. Set one in AI setup under Web search, or run ${SEARXNG_START} to start one and write the config.`);
@@ -221,7 +226,7 @@ async function searchSearxng(query: string, limit: number): Promise<SearchResult
 	try {
 		// Bounded so a wedged-but-port-open SearXNG falls back to DuckDuckGo
 		// instead of hanging the tool call forever.
-		res = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS) });
+		res = await fetch(url, { headers: { accept: "application/json" }, signal: withTurnSignal(AbortSignal.timeout(SEARXNG_TIMEOUT_MS), signal) });
 	} catch (e) {
 		throw new Error(`SearXNG is not reachable at ${baseUrl}. Start it with ${SEARXNG_START} (and make sure the container engine is running). ${(e as Error).message}`);
 	}
@@ -312,7 +317,7 @@ export function parseDuckDuckGoHtml(html: string, limit: number): SearchResult[]
 	return results;
 }
 
-async function searchDuckDuckGo(query: string, limit: number): Promise<SearchResult[]> {
+async function searchDuckDuckGo(query: string, limit: number, signal?: AbortSignal): Promise<SearchResult[]> {
 	const url = new URL(DDG_ENDPOINT);
 	url.searchParams.set("q", query);
 	await takeDdgSlot();
@@ -324,7 +329,7 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
 				// The HTML endpoint serves plain browsers; an empty UA gets blocked.
 				"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
 			},
-			signal: AbortSignal.timeout(15_000),
+			signal: withTurnSignal(AbortSignal.timeout(15_000), signal),
 		});
 	} catch (e) {
 		throw new Error(`DuckDuckGo is not reachable. ${(e as Error).message}`);
@@ -352,7 +357,7 @@ export default function (pi: ExtensionAPI) {
 			query: Type.String({ description: "Search query." }),
 			limit: Type.Optional(Type.Number({ description: "Maximum number of results to return. Default 5, max 10." })),
 		}),
-		async execute(_id, { query, limit = 5 }): Promise<any> {
+		async execute(_id, { query, limit = 5 }, signal): Promise<any> {
 			const settings = resolveWebSearchSettings();
 			const provider = settings.provider;
 			const maxResults = clampLimit(limit);
@@ -382,19 +387,21 @@ export default function (pi: ExtensionAPI) {
 				searxngError = "SearXNG is marked unreachable; retrying it automatically in a few minutes.";
 			} else if (provider === "searxng") {
 				try {
-					const results = await searchSearxng(query, maxResults);
+					const results = await searchSearxng(query, maxResults, signal);
 					searxngOutage.markUp();
 					return {
 						content: [{ type: "text", text: formatResults(query, results) }],
 						details: { configured: true, provider, query, count: results.length, results },
 					};
 				} catch (e) {
+					// A stopped turn is not an outage: SearXNG stays up and no fallback runs.
+					if (signal?.aborted) throw e;
 					searxngError = (e as Error).message;
 					searxngOutage.markDown(Date.now());
 				}
 			}
 			try {
-				const results = await searchDuckDuckGo(query, maxResults);
+				const results = await searchDuckDuckGo(query, maxResults, signal);
 				return {
 					content: [{ type: "text", text: formatResults(query, results) }],
 					details: {

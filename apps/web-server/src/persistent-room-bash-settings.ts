@@ -80,27 +80,45 @@ const BASH_AUTO_APPROVE_MIGRATION_MARKER = ".bash-auto-approve-defaults-v1";
 /**
  * One-time upgrade grant: rooms with bash already enabled before the
  * per-command approval card shipped ran commands without asking, so they keep
- * that behavior via an explicit settings write. Runs once (marker file);
- * every room that enables bash after the marker exists starts at ask-each.
- * A room with a settings file already on disk made an explicit choice and is
- * never touched. Any failure leaves rooms asking — the safe direction.
+ * that behavior via an explicit settings write. Runs once: the marker file is
+ * written before any grant, so a failed grant or a stop halfway never runs the
+ * step again, where it would grant a room that enabled bash after the upgrade
+ * and has no settings file yet. After the grants, the marker is rewritten to
+ * name the rooms granted and the rooms whose grant failed, for whoever reads
+ * the folder later. A room whose grant fails is logged and keeps asking, the
+ * safe direction. A room with a settings file already on disk made
+ * an explicit choice and is never touched.
  */
 export function migratePersistentRoomBashAutoApproveDefaults(
 	agents: ReadonlyArray<{ id: string; bashEnabled: boolean }>,
 	options: PersistentRoomBashSettingsStorageOptions = {},
 	now = new Date(),
-): { migrated: string[] } {
+): { migrated: string[]; failed: string[] } {
 	const root = options.persistentAgentsRoot ?? DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT;
 	const markerPath = path.join(root, BASH_AUTO_APPROVE_MIGRATION_MARKER);
-	if (fs.existsSync(markerPath)) return { migrated: [] };
+	if (fs.existsSync(markerPath)) return { migrated: [], failed: [] };
+	fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+	fs.writeFileSync(markerPath, JSON.stringify({ startedAt: now.toISOString() }, null, 2) + "\n", { mode: 0o600 });
 	const migrated: string[] = [];
+	const failed: string[] = [];
 	for (const agent of agents) {
 		if (agent.bashEnabled !== true) continue;
-		if (fs.existsSync(persistentRoomBashSettingsPath(agent.id, options))) continue;
-		writePersistentRoomBashSettings(agent.id, { autoApprove: true }, options, now);
-		migrated.push(agent.id);
+		try {
+			if (fs.existsSync(persistentRoomBashSettingsPath(agent.id, options))) continue;
+			writePersistentRoomBashSettings(agent.id, { autoApprove: true }, options, now);
+			migrated.push(agent.id);
+		} catch (error) {
+			failed.push(agent.id);
+			console.warn(`[bash-auto-approve-upgrade] agent=${JSON.stringify(String(agent.id))}: the grant was not written, so the room asks per command: ${(error as Error)?.message ?? String(error)}`);
+		}
 	}
-	fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-	fs.writeFileSync(markerPath, JSON.stringify({ migratedAt: now.toISOString(), migrated }, null, 2) + "\n", { mode: 0o600 });
-	return { migrated };
+	// Best effort: the marker already exists, so a failed rewrite still keeps the step from running again.
+	try {
+		const tempPath = `${markerPath}.tmp`;
+		fs.writeFileSync(tempPath, JSON.stringify({ startedAt: now.toISOString(), migrated, failed }, null, 2) + "\n", { mode: 0o600 });
+		fs.renameSync(tempPath, markerPath);
+	} catch (error) {
+		console.warn(`[bash-auto-approve-upgrade] the marker was not updated with the rooms: ${(error as Error)?.message ?? String(error)}`);
+	}
+	return { migrated, failed };
 }
