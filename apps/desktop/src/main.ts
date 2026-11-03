@@ -994,15 +994,20 @@ async function smokeReport(): Promise<void> {
     })()`)
     .catch(() => "error");
   const dragOk = dragRegion === "ok" || dragRegion === "n/a";
-  // Context menu: select the heading, then deliver a real right-click over
-  // it; the handler must have produced at least a copy item.
-  await win.webContents.executeJavaScript(
-    `(() => { const h = document.querySelector("h1"); if (h) getSelection().selectAllChildren(h); return h ? "sel" : "no-h1"; })()`,
-  ).catch(() => undefined);
-  win.webContents.sendInputEvent({ type: "mouseDown", x: 450, y: 60, button: "right", clickCount: 1 });
-  win.webContents.sendInputEvent({ type: "mouseUp", x: 450, y: 60, button: "right", clickCount: 1 });
-  await new Promise((r) => setTimeout(r, 600));
-  const contextOk = smokeContextMenuItems >= 1;
+  // Context menu: select the heading, then deliver a real right-click at the
+  // centre of its own box; the handler must have produced at least a copy
+  // item. A fixed point drifts off the heading when the page's look moves
+  // it, and a right-click off the text builds nothing once the selection is
+  // gone. No heading fails the check.
+  const heading = await win.webContents.executeJavaScript(
+    `(() => { const h = document.querySelector("h1"); if (!h) return null; getSelection().selectAllChildren(h); const r = h.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`,
+  ).catch(() => null) as { x: number; y: number } | null;
+  if (heading) {
+    win.webContents.sendInputEvent({ type: "mouseDown", x: heading.x, y: heading.y, button: "right", clickCount: 1 });
+    win.webContents.sendInputEvent({ type: "mouseUp", x: heading.x, y: heading.y, button: "right", clickCount: 1 });
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  const contextOk = heading !== null && smokeContextMenuItems >= 1;
   const spellOk = win.webContents.session.spellCheckerEnabled;
   // Deep-link plumbing: the page navigating to exxperts://focus must be
   // intercepted (handler fires, window URL untouched).
