@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Sidebar } from "./components/Sidebar";
-import { AssetsPanel } from "./components/assets-panel";
+import { AttachmentsBrowser, AttachmentsEntry, type AttachmentsView } from "./components/attachments-panel";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
 import { ToastStack, type ToastView } from "./components/toast-stack";
 import { usePausedSkillsNotice } from "./paused-skills-notice";
@@ -23,6 +23,7 @@ import { confirmLeavingArrangement } from "./home-room-arrange";
 import { NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } from "./memory-surface-copy";
 import { ProductSidebar, type AppearancePreference, type ThemeMode } from "./components/product-shell";
 import { SettingsOverlay, type SettingsSection } from "./components/settings-overlay";
+import { AppearancePane } from "./components/appearance-pane";
 import { isSignInFailure } from "./sign-in-failure";
 import { PaneHeader } from "./components/pane-header";
 import { sharedServerReleases, WhatsNewDialog, type WhatsNewSections } from "./components/whats-new-dialog";
@@ -36,6 +37,7 @@ import { SkillsPage } from "./components/SkillsPage";
 import { Preview } from "./components/Preview";
 import { ConnectionLostBanner, PersonChangedCover, SignedOutBanner } from "./components/connection-lost-banner";
 import { appendErrorLineOnce, CONNECT_DEADLINE_MS, createConnectionHealthState, msUntilWarn, OPEN_DWELL_MS, reduceConnectionHealth, type ConnectionHealthAction, type ConnectionHealthState } from "./connection-health";
+import { confirmForgetConversation } from "./components/RoomSessionSection";
 import { RoomSettingsModal, type SettingsPane } from "./components/RoomSettingsModal";
 import { ApiRequestError, apiErrorCode, apiFetch, fetchJson, isServiceUnreachableLine, isUnexplainedRequestFailure, withoutServiceLine } from "./api";
 import { askUntilAnswered, lostUndoLanded, sameNoteWords, SAVE_ANSWER_LOST_SENTENCE, SAVE_NOT_LANDED_SENTENCE, saveAnswerLost, settleLostRunSave, UNDO_NOT_LANDED_SENTENCE } from "./memory-save-answer";
@@ -51,6 +53,7 @@ import { estimateTokens, estimateTokensFromChars, modelTokenFactor } from "../..
 import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, keepAbsorbRunEntries, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry, chooseAbsorbRunBeside, moveAbsorbRunSortedNote, absorbBaseUrl, fetchAbsorbStatus, requestAbsorbDiscussionSignoff, requestAbsorbDiscussionTurn, withAbsorbStatusFields } from "./absorb-run-api";
 import { absorbRunFastPathBlockers, AUTOMATIC_APPLY_ON_SENTENCE, absorbRunIsWorking, KEEP_DEBOUNCE_MS, keepBatchAction, nextKeepIds, nextKeepTopics, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunNothingToSave, reviewRunFastPathBlockers, reviewRunIsWorking, reviewRunNothingToSave, reviewBudgetOnlyConfirmBody, discussionKeptSentence } from "./memory-v2-copy";
 import { closeSidebarOnPhone, usePhoneWidth } from "./sidebar-collapse";
+import { useEscapeKey } from "./components/use-escape-key";
 import { type ReviewUndoState } from "./components/review-screen";
 import { approveReviewRun, cancelFirstReadAt, cancelReviewRun, editReviewRunEntry, fetchReviewRun, fetchReviewStatus, keepReviewRunEntries, requestFirstRead, reviewBase, requestReviewDiscussionSignoff, requestReviewDiscussionTurn, resumeReviewRun, ReviewRunActiveError, setReviewRunBudget, startReviewRun, type ReviewDiscussionMessage } from "./review-api";
 import { undoMemorySave } from "./memory-entries-api";
@@ -390,7 +393,9 @@ export function App() {
 	// room confirms or refuses the switch: "waiting" while the room answers
 	// (the switch goes when the answer ends), "sending" once it is asked. A
 	// reload drops it, so the control never names a model the room did not get.
-	const [heldModelPick, setHeldModelPick] = useState<{ agentId: string; conversationId: string; lock: RoomModelLock; phase: "waiting" | "sending" } | null>(null);
+	// `level`: an effort set on the picked model's dial meanwhile. It lives here
+	// so it goes wherever the pick goes, and reaches the room only as the pick takes over.
+	const [heldModelPick, setHeldModelPick] = useState<{ agentId: string; conversationId: string; lock: RoomModelLock; phase: "waiting" | "sending"; level?: string } | null>(null);
 	const heldModelPickRef = useRef(heldModelPick);
 	heldModelPickRef.current = heldModelPick;
 	// For the pick handler, which runs outside the render that computed it.
@@ -414,8 +419,11 @@ export function App() {
 	// wire, which outlives the held pick when the page leaves and comes back.
 	function modelChangePendingFor(chat: PersistentChatConfig): boolean {
 		if (!chat) return false;
+		return heldPickFor(chat) !== null || switchesInFlightFor(chat.agentId, chat.conversationId) > 0;
+	}
+	function heldPickFor(chat: PersistentChatConfig) {
 		const held = heldModelPickRef.current;
-		return Boolean(held && held.agentId === chat.agentId && held.conversationId === chat.conversationId) || switchesInFlightFor(chat.agentId, chat.conversationId) > 0;
+		return chat && held && held.agentId === chat.agentId && held.conversationId === chat.conversationId ? held : null;
 	}
 	// The model panel opens from its control and from the chat's "Choose another model".
 	const [modelPanelOpen, setModelPanelOpen] = useState(false);
@@ -430,7 +438,11 @@ export function App() {
 	// by construction; the pane header always names the occupant.
 	type RightPaneOccupant =
 		| { kind: "preview"; data: ApprovalPreviewData }
-		| { kind: "artifactViewer"; taskId: string; templateLabel: string; artifact: { relativePath: string; extension: string }; asset?: AssetRowView }
+		| { kind: "artifactViewer"; taskId: string; templateLabel: string; artifact: { relativePath: string; extension: string }; asset?: AssetRowView; backTo?: AttachmentsView }
+		// The room's Attachments: the panel in this slot, or the gallery over the
+		// chat with the slot free, so a file opened there sits beside it. A file
+		// opened from them carries the view it goes back to (backTo).
+		| { kind: "attachments"; view: AttachmentsView }
 		// The run view: the live task's stream in the
 		// same pane slot; renders from taskState and swaps to the artifact viewer
 		// in place when the run ends.
@@ -441,14 +453,11 @@ export function App() {
 	const rightPaneRef = useRef<RightPaneOccupant | null>(null);
 	rightPaneRef.current = rightPane;
 	const [artifactMaximized, setArtifactMaximized] = useState(false);
+	const attachmentsScrollRef = useRef(0);
 	// Bumped when a finished revise rewrote the bytes behind the OPEN viewer's
 	// files/<name> route — the URL doesn't change, so the frame key must.
 	const [viewerReloadNonce, setViewerReloadNonce] = useState(0);
 	const [exportNotice, setExportNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
-	// The done-moment toast: fires once when a task
-	// ends and nothing else is already showing the result; top-right, ~6 s,
-	// click opens the viewer. The rail's green dot is the durable signal.
-	const [taskDoneToast, setTaskDoneToast] = useState<{ taskId: string; title: string; kind: "done" | "error"; templateLabel: string; artifact: { relativePath: string; extension: string } | null } | null>(null);
 	// Desktop app only: the done-moment also reaches the OS notification
 	// center when the window is hidden (close-to-tray) or unfocused, where the
 	// in-app toast cannot be seen. Clicking navigates to exxperts://focus, the
@@ -487,7 +496,7 @@ export function App() {
 	// every event that can change them — server truth, no client cache.
 	const [assetLedgerRows, setAssetLedgerRows] = useState<AssetLedgerRowInput[]>([]);
 	const [assetDeleteConfirm, setAssetDeleteConfirm] = useState<AssetRowView | null>(null);
-	// Files UI slice: the room's shelf listing (user-added rows + composer truth)
+	// The room's shelf listing (user-added rows + composer truth)
 	// and the composer's staged attachments — files already uploaded and parsed,
 	// waiting to ride the next message. The chip shows the honest parse state.
 	const [roomShelfFiles, setRoomShelfFiles] = useState<RoomShelfFile[]>([]);
@@ -515,7 +524,9 @@ export function App() {
 	}, []);
 	// Low-churn shim: the existing preview call sites keep working unchanged.
 	const preview = rightPane?.kind === "preview" ? rightPane.data : null;
-	const setPreview = (data: ApprovalPreviewData | null) => setRightPane(data ? { kind: "preview", data } : null);
+	// Clearing keeps the room's Attachments: a dropped connection is no reason to
+	// lose them, and leaving the room closes them itself.
+	const setPreview = (data: ApprovalPreviewData | null) => setRightPane((pane) => (data ? { kind: "preview", data } : pane?.kind === "attachments" || (pane?.kind === "artifactViewer" && pane.backTo) ? pane : null));
 
 	// The room settings wheel in the topbar opens the same modal the launcher
 	// card's wheel opens. Declared here because the Escape handler below has to
@@ -529,24 +540,21 @@ export function App() {
 	const [workspaceHint, setWorkspaceHint] = useState<WorkspaceHint | null>(null);
 
 	// Escape closes the artifact/run pane, the keyboard twin of clicking its X
-	// or the selected rail row. A maximized pane restores first (one Escape per
+	// or the selected card. A maximized pane restores first (one Escape per
 	// step), and any open dialog above the pane (delete confirm, export
 	// collision, file-delete confirm, Save-as prompt, room settings) owns Escape
 	// until dismissed — one Escape, one layer.
-	useEffect(() => {
-		const paneOpen = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun";
-		if (!paneOpen || assetDeleteConfirm || exportCollision || fileDeleteConfirm || saveAsPrompt || roomSettingsOpen) return;
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.key !== "Escape") return;
-			// A dialog that is not in this component's state (the expanded
-			// diagram viewer) owns Escape the same way: one Escape, one layer.
-			if (document.querySelector('[aria-modal="true"]')) return;
-			if (artifactMaximized) setArtifactMaximized(false);
-			else setRightPane(null);
-		}
-		document.addEventListener("keydown", onKeyDown);
-		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision, fileDeleteConfirm, saveAsPrompt, roomSettingsOpen]);
+	// As an Escape layer it keeps that Escape from the room's own keys too: the
+	// composer's Stop and a waiting question's deny.
+	const paneTakesEscape = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun" || rightPane?.kind === "attachments";
+	useEscapeKey(() => {
+		// A dialog that is not in this component's state (the expanded
+		// diagram viewer) owns Escape the same way: one Escape, one layer.
+		if (document.querySelector('[aria-modal="true"]')) return;
+		if (artifactMaximized) setArtifactMaximized(false);
+		else if (rightPane?.kind === "attachments" && rightPane.view === "gallery") setRightPane({ kind: "attachments", view: "panel" });
+		else closePaneFile();
+	}, paneTakesEscape && !assetDeleteConfirm && !exportCollision && !fileDeleteConfirm && !saveAsPrompt && !roomSettingsOpen);
 	const [conversationId, setConversationId] = useState<string>(() => newConversationId());
 	const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
@@ -830,7 +838,7 @@ export function App() {
 	// A level chosen while the socket was not OPEN. Kept with its room so a
 	// choice made in one room can never be delivered to the next, and flushed
 	// when that room binds again, so the pick is never silently lost.
-	const pendingEffortRef = useRef<{ agentId: PersistentAgentId; level: string } | null>(null);
+	const pendingEffortRef = useRef<{ agentId: PersistentAgentId; conversationId: string; level: string } | null>(null);
 	const busyRef = useRef(busy);
 	const turnCancellingRef = useRef(turnCancelling);
 	const turnInterruptedNoteRef = useRef<string | null>(turnInterruptedNote);
@@ -859,11 +867,6 @@ export function App() {
 	// The specialist-task card state machine (visuals V4) — see task-stream.ts.
 	const [taskState, setTaskState] = useState<TaskState>(createTaskState);
 	const taskStateRef = useRef<TaskState>(taskState);
-	// Iterate chip-chat (§5 amendment): pending = the frame is out and the
-	// approval card / launch is in flight; notice = the last ok:false reason.
-	// Both reset when the fresh task's task_started supersedes the card.
-	const [taskIteratePending, setTaskIteratePending] = useState(false);
-	const [taskIterateNotice, setTaskIterateNotice] = useState<string | null>(null);
 	// Consult MR-5 pending-transfer queue (§2, §2.3): handoff blocks that ride the
 	// user's NEXT prompt (not a memory-write path — the block enters the session
 	// JSONL like any user text). The ref is the synchronous source the send path
@@ -1060,7 +1063,7 @@ export function App() {
 			await commitRoomFileDelete(chat.agentId, staged.name, token);
 		} catch {
 			// If the delete fails the file simply stays on the shelf — visible in
-			// Files, never silently lost.
+			// Attachments, never silently lost.
 		}
 		void refreshRoomFiles();
 	}, [refreshRoomFiles]);
@@ -1071,7 +1074,7 @@ export function App() {
 		if (!chat) return;
 		try {
 			const uploaded = await uploadRoomFile(chat.agentId, file.name, await fileToBase64(file));
-			setExportNotice({ kind: "success", text: `${uploaded.name} is in this room's Files.` });
+			setExportNotice({ kind: "success", text: `${uploaded.name} is in this room's Attachments.` });
 			void refreshRoomFiles();
 		} catch (e) {
 			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be added." });
@@ -2968,7 +2971,7 @@ export function App() {
 					continuedLineRef.current = null;
 					const sent = continued ? undefined : [...itemsRef.current].reverse().find((item) => item.kind === "user");
 					const noteId = nid();
-					// Its files come back too, as Try again would send them again: those still in the room's Files.
+					// Its files come back too, as Try again would send them again: those still in the room's Attachments.
 					const shown = [...itemsRef.current, { kind: "system", id: noteId }];
 					const again = sent ? messageSentAgain(shown, noteId, attachmentAccessRef.current.existingNames) : null;
 					if (!continued) handBack(sent ? [sent] : [], (s) => [...s, { kind: "system", id: noteId, text: TURN_RUNNING_LINE, level: "info" }]);
@@ -2981,7 +2984,7 @@ export function App() {
 						setStagedAttachments((s) => [...s, ...files.map((file) => ({ ...file, stageId: nid(), status: "ready" as const, parseNote: "", ...(fileUrl && STAGED_IMAGE_EXTENSIONS.has(file.extension) ? { previewUrl: fileUrl(file.name) } : {}) }))]);
 					};
 					if (again?.attachments.length) restage(again.attachments);
-					// A file dropped and sent at once can beat the Files list's refresh: the list is read once more before a chip is left out.
+					// A file dropped and sent at once can beat the Attachments list's refresh: the list is read once more before a chip is left out.
 					const room = persistentChatRef.current?.agentId;
 					if (!again && sent?.attachments?.length && room) {
 						void listRoomFiles(room).then((files) => {
@@ -3202,25 +3205,7 @@ export function App() {
 				dispatchConsult({ type: "error", consultId: String(msg.consultId ?? ""), message: String(msg.message ?? "The consult failed."), ...(msg.code ? { code: String(msg.code) } : {}) });
 				return;
 			}
-			if (msg.type === "task_iterate_result") {
-				// ok:true needs no card action — the fresh task's task_started (next
-				// frame) supersedes the done card; ok:false surfaces the reason.
-				setTaskIteratePending(false);
-				if (!msg.ok) {
-					const reason = String(msg.reason ?? "The iteration could not start.");
-					setTaskIterateNotice(reason);
-					// The viewer footer renders the refusal inline; whenever that
-					// footer isn't on screen, the toast keeps the failure from
-					// being silent.
-					const pane = rightPaneRef.current;
-					const inlineVisible = pane?.kind === "artifactViewer" && !!pane.asset;
-					if (!inlineVisible) setExportNotice({ kind: "error", text: reason });
-				}
-				return;
-			}
 			if (msg.type === "task_started") {
-				setTaskIteratePending(false);
-				setTaskIterateNotice(null);
 				dispatchTask({
 					type: "started",
 					taskId: String(msg.taskId ?? ""),
@@ -3271,8 +3256,7 @@ export function App() {
 				void refreshAssetRows();
 				void refreshRoomFiles();
 				// Done-moment: if the user is watching
-				// the run view, swap it for the artifact viewer in place — no toast
-				// needed. Otherwise the toast fires once; the green dot persists.
+				// the run view, swap it for the artifact viewer in place.
 				if (next.taskId === endTaskId && next.phase === "done") {
 					const first = next.artifacts[0] ?? null;
 					const pane = rightPaneRef.current;
@@ -3292,16 +3276,6 @@ export function App() {
 						} else {
 							setRightPane(null);
 						}
-					} else {
-						const doneTitle = assetDisplayTitle(next.title || "Specialist task", next.artifacts);
-						setTaskDoneToast({
-							taskId: endTaskId,
-							title: doneTitle,
-							kind: "done",
-							templateLabel: next.templateLabel ?? "visual",
-							artifact: first ? { relativePath: first.relativePath, extension: first.extension } : null,
-						});
-						notifyDesktop(doneTitle, "Task finished.");
 					}
 				}
 				return;
@@ -3314,7 +3288,7 @@ export function App() {
 				if (typeof msg.handoff === "string" && msg.handoff) {
 					applyPendingHandoffs([...pendingHandoffsRef.current, msg.handoff], pendingConsultItemIdsRef.current);
 				}
-				const next = dispatchTask({
+				dispatchTask({
 					type: "error",
 					taskId: errorTaskId,
 					message: String(msg.message ?? "The task did not finish."),
@@ -3322,21 +3296,6 @@ export function App() {
 				});
 				void refreshAssetRows();
 				void refreshRoomFiles();
-				// A user-requested stop needs no announcement (they did it); a real
-				// failure gets the toast unless the run view is already showing it.
-				const pane = rightPaneRef.current;
-				const watching = pane?.kind === "taskRun" && pane.taskId === errorTaskId;
-				if (next.taskId === errorTaskId && next.phase === "error" && !next.stopRequested && !watching) {
-					const errorTitle = assetDisplayTitle(next.title || "Specialist task", next.artifacts);
-					setTaskDoneToast({
-						taskId: errorTaskId,
-						title: errorTitle,
-						kind: "error",
-						templateLabel: next.templateLabel ?? "visual",
-						artifact: next.artifacts[0] ? { relativePath: next.artifacts[0].relativePath, extension: next.artifacts[0].extension } : null,
-					});
-					notifyDesktop(errorTitle, "The task did not finish.");
-				}
 				return;
 			}
 			if (msg.type === "task_away_notice") {
@@ -3347,14 +3306,14 @@ export function App() {
 					const title = String(notice.title ?? "").trim() || "A specialist task";
 					const outcome = (() => {
 						switch (String(notice.outcome ?? "")) {
-							case "ok": return `While you were away: “${title}” finished — it's waiting in Files.`;
-							case "aborted": return `While you were away: “${title}” was stopped. What it made so far is in Files.`;
-							case "orphaned": return `While you were away: “${title}” was interrupted when the app closed. What it made so far is in Files.`;
+							case "ok": return `While you were away: “${title}” finished: it's waiting in Attachments.`;
+							case "aborted": return `While you were away: “${title}” was stopped. What it made so far is in Attachments.`;
+							case "orphaned": return `While you were away: “${title}” was interrupted when the app closed. What it made so far is in Attachments.`;
 							default: return `While you were away: “${title}” didn't finish.`;
 						}
 					})();
 					// A refused overwrite is the one away outcome the generic line
-					// would misreport: "it's waiting in Files" is true, but not that
+					// would misreport: "it's waiting in Attachments" is true, but not that
 					// it is waiting under a DIFFERENT name because the original
 					// changed. Same sentence as the live path.
 					return [outcome, ...readReviseConflicts(notice.reviseConflicts).map(reviseConflictSentence)];
@@ -4433,7 +4392,7 @@ export function App() {
 		// notes join the wire text, their chips join the bubble. A message may
 		// be attachments-only — the note alone is then the prompt.
 		const readyAttachments = fromBox ? stagedAttachmentsRef.current.filter((entry) => entry.status === "ready" && entry.name) : [];
-		// A file sent again, or back in the box after a refusal, is still in the room's Files: its note is said again from what the room lists.
+		// A file sent again, or back in the box after a refusal, is still in the room's Attachments: its note is said again from what the room lists.
 		const listedPages = (name: string) => roomShelfFiles.find((shelf) => shelf.name === name)?.pages ?? undefined;
 		const carried = fromBox
 			? readyAttachments.map((entry) => ({ name: entry.name, bytes: entry.bytes, extension: entry.extension, pages: entry.pages ?? listedPages(entry.name), parseNote: entry.parseNote }))
@@ -4452,7 +4411,7 @@ export function App() {
 		// reads on demand via its shelf tools.
 		const attachmentNotes = carried.map((entry) => {
 			const measure = typeof entry.pages === "number" ? `${entry.pages} page${entry.pages === 1 ? "" : "s"}` : entry.parseNote || entry.extension.replace(/^\./, "") || "file";
-			return `[FILE ATTACHED: ${entry.name} · ${measure} · now in this room's Files; read it with read_file when relevant]`;
+			return `[FILE ATTACHED: ${entry.name} · ${measure} · now in this room's Attachments; read it with read_file when relevant]`;
 		});
 		const wireBody = attachmentNotes.length > 0 ? [attachmentNotes.join("\n"), payload].filter(Boolean).join("\n\n") : payload;
 		const wireText = composeOutgoingPromptWithHandoffs(pending, wireBody);
@@ -4555,7 +4514,7 @@ export function App() {
 
 	/**
 	 * The message above a line, sent again whole with its files: for a line saved before Try again continued, or a conversation that moved on from the failure.
-	 * One that cannot go whole (a file gone from the room's Files, a transfer that rode with it) goes back into an empty box, and its line no longer says it is above;
+	 * One that cannot go whole (a file gone from the room's Attachments, a transfer that rode with it) goes back into an empty box, and its line no longer says it is above;
 	 * with a draft in the box, or no words to give back, its line says it cannot be sent again as it was. Either way the line changes.
 	 */
 	function sendAgainFromLine(lineId: string): void {
@@ -4719,12 +4678,11 @@ export function App() {
 	// Assets panel (rung 3): open a ledger row in the right-pane viewer — the
 	// reconstituted done-card. The live running row opens the run view instead;
 	// other rows without artifacts are not clickable.
-	function openAssetRow(row: AssetRowView) {
+	function openAssetRow(row: AssetRowView, backTo?: AttachmentsView) {
 		// Clicking the already-selected row closes the pane (same as the header
 		// X); a running task keeps running server-side either way.
 		if (rightPane && (rightPane.kind === "artifactViewer" || rightPane.kind === "taskRun") && rightPane.taskId === row.taskId) {
-			setArtifactMaximized(false);
-			setRightPane(null);
+			closePaneFile();
 			return;
 		}
 		if (row.running) {
@@ -4736,16 +4694,28 @@ export function App() {
 		setArtifactMaximized(false);
 		// User-added rows (files UI slice) have no ledger record to stamp.
 		if (!row.userFileName) markAssetRowViewed(row.taskId);
-		// A refusal notice belongs to the task it answered — never carry it
-		// into another row's footer.
-		setTaskIterateNotice(null);
 		setRightPane({
 			kind: "artifactViewer",
 			taskId: row.taskId,
 			templateLabel: row.userFileName ? "file" : assetTemplateShortName(row.templateId),
 			artifact: { relativePath: row.artifacts[0].relativePath, extension: row.artifacts[0].extension },
 			asset: row,
+			...(backTo ? { backTo } : {}),
 		});
+	}
+
+	// The file on show leaves the pane: back to the Attachments it opened from, if any.
+	function closePaneFile() {
+		const pane = rightPaneRef.current;
+		setArtifactMaximized(false);
+		setRightPane(pane?.kind === "artifactViewer" && pane.backTo ? { kind: "attachments", view: pane.backTo } : null);
+	}
+
+	function toggleAttachments() {
+		closeSidebarOnPhone();
+		setArtifactMaximized(false);
+		attachmentsScrollRef.current = 0;
+		setRightPane(rightPane?.kind === "attachments" ? null : { kind: "attachments", view: "panel" });
 	}
 
 	// Per-task delete (contract §4): orphan rows only; the server re-verifies
@@ -4761,10 +4731,7 @@ export function App() {
 				return;
 			}
 			setExportNotice({ kind: "success", text: "Deleted." });
-			if (rightPane?.kind === "artifactViewer" && rightPane.taskId === row.taskId) {
-				setArtifactMaximized(false);
-				setRightPane(null);
-			}
+			if (rightPane?.kind === "artifactViewer" && rightPane.taskId === row.taskId) closePaneFile();
 			void refreshAssetRows();
 			void refreshRoomFiles();
 		} catch {
@@ -4786,10 +4753,7 @@ export function App() {
 				return;
 			}
 			setRemoveNotice({ taskId: row.taskId });
-			if ((rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun") && rightPane.taskId === row.taskId) {
-				setArtifactMaximized(false);
-				setRightPane(null);
-			}
+			if ((rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun") && rightPane.taskId === row.taskId) closePaneFile();
 			void refreshAssetRows();
 		} catch {
 			setExportNotice({ kind: "error", text: "That didn't work — the list is unchanged." });
@@ -4808,7 +4772,7 @@ export function App() {
 		void refreshAssetRows();
 	}
 
-	// Unified delete (files-management slice): the Files row ✕ on file rows.
+	// Unified delete: Delete on an Attachments card.
 	// Stage opens the undo window (the file leaves shelf, panel and manifest at
 	// once); the toast's expiry commits (bytes + reading cache go); Undo brings
 	// it back. Room-made files and files the room read this session get the
@@ -4835,10 +4799,7 @@ export function App() {
 		releaseStaged(stagedAttachmentsRef.current.filter((entry) => entry.name === fileName));
 		setStagedAttachments((s) => s.filter((entry) => entry.name !== fileName));
 		const pane = rightPaneRef.current;
-		if (pane?.kind === "artifactViewer" && pane.artifact?.relativePath === `files/${fileName}`) {
-			setArtifactMaximized(false);
-			setRightPane(null);
-		}
+		if (pane?.kind === "artifactViewer" && pane.artifact?.relativePath === `files/${fileName}`) closePaneFile();
 		void refreshRoomFiles();
 		void refreshAssetRows();
 	}
@@ -4889,10 +4850,7 @@ export function App() {
 				setStagedAttachments((s) => s.map((entry) => (entry.name === fileName ? { ...entry, name: result.name, extension: result.name.includes(".") ? result.name.slice(result.name.lastIndexOf(".")).toLowerCase() : "" } : entry)));
 			}
 			const pane = rightPaneRef.current;
-			if (pane?.kind === "artifactViewer" && pane.artifact?.relativePath === `files/${fileName}`) {
-				setArtifactMaximized(false);
-				setRightPane(null);
-			}
+			if (pane?.kind === "artifactViewer" && pane.artifact?.relativePath === `files/${fileName}`) closePaneFile();
 		} catch (e) {
 			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be renamed." });
 		}
@@ -4931,19 +4889,6 @@ export function App() {
 		} finally {
 			setGcBusy(false);
 		}
-	}
-
-	// Panel iterate: the same user-authored one-click frame as the done card —
-	// the server derives template + read scope from its own records (D7; the
-	// ledger fallback covers rows older than the reseed window).
-	function submitAssetIterate(taskId: string, brief: string): boolean {
-		const payload = brief.trim();
-		const ws = wsRef.current;
-		if (!payload || !ws || ws.readyState !== WebSocket.OPEN) return false;
-		setTaskIteratePending(true);
-		setTaskIterateNotice(null);
-		ws.send(JSON.stringify({ type: "task_iterate", taskId, brief: payload }));
-		return true;
 	}
 
 	// Remember runs on the server as a job: this starts it and follows it to
@@ -7155,11 +7100,23 @@ export function App() {
 	// picks inside one frame (drag right, drag back) compare against what was
 	// actually just chosen instead of a stale render's value.
 	function selectRoomEffort(level: string): void {
+		// While a pick is held the dial stands on that model's ladder, and the
+		// room still runs the model being left: the level waits with the pick.
+		const held = heldPickFor(persistentChatRef.current);
+		if (held) {
+			const next = { ...held, level };
+			heldModelPickRef.current = next;
+			setHeldModelPick(next);
+			return;
+		}
+		// The dial is empty while a socket comes back; a level from a pick that
+		// took over meanwhile still has to reach the room.
 		const current = roomEffortRef.current;
-		if (!current) return;
-		const next = { ...current, level };
-		roomEffortRef.current = next;
-		setRoomEffort(next);
+		if (current) {
+			const next = { ...current, level };
+			roomEffortRef.current = next;
+			setRoomEffort(next);
+		}
 		const ws = wsRef.current;
 		if (ws && ws.readyState === WebSocket.OPEN) {
 			pendingEffortRef.current = null;
@@ -7172,7 +7129,7 @@ export function App() {
 		// claiming a level the room never heard about. Hold it against this
 		// room and send it the moment the room binds again.
 		const room = persistentChatRef.current;
-		if (room) pendingEffortRef.current = { agentId: room.agentId, level };
+		if (room) pendingEffortRef.current = { agentId: room.agentId, conversationId: room.conversationId, level };
 	}
 
 	/** Delivers a level picked while the socket was down, once it is back. */
@@ -7180,8 +7137,8 @@ export function App() {
 		const pending = pendingEffortRef.current;
 		if (!pending) return;
 		const room = persistentChatRef.current;
-		// A choice belongs to the room it was made in and travels nowhere else.
-		if (!room || room.agentId !== pending.agentId) { pendingEffortRef.current = null; return; }
+		// A choice belongs to the conversation it was made in and travels nowhere else.
+		if (!room || room.agentId !== pending.agentId || room.conversationId !== pending.conversationId) { pendingEffortRef.current = null; return; }
 		if (ws.readyState !== WebSocket.OPEN) return;
 		pendingEffortRef.current = null;
 		const current = roomEffortRef.current;
@@ -7221,12 +7178,15 @@ export function App() {
 	}
 
 	// A held pick goes once the room confirms it (the conversation's model is
-	// then the pick) or refuses it; a newer pick made meanwhile stays.
-	function settleHeldModelPick(conversationId: string, lock: RoomModelLock): void {
+	// then the pick) or refuses it; a newer pick made meanwhile stays. A level
+	// held with it goes over only when the pick took over: the session is on
+	// the new model by now, so the room judges the level against that model.
+	function settleHeldModelPick(conversationId: string, lock: RoomModelLock, tookOver: boolean): void {
 		const held = heldModelPickRef.current;
 		if (!held || held.conversationId !== conversationId || held.lock.provider !== lock.provider || held.lock.model !== lock.model) return;
 		heldModelPickRef.current = null;
 		setHeldModelPick(null);
+		if (tookOver && held.level) selectRoomEffort(held.level);
 	}
 
 	async function applyConversationPick(agentId: string, conversationId: string, lock: RoomModelLock): Promise<void> {
@@ -7257,7 +7217,7 @@ export function App() {
 			try {
 				const switched = await switchConversationModel(agentId, conversationId, lock);
 				if (stillOpen()) adoptSwitchedConversationModel(conversationId, switched.model, switched.notice ?? null);
-				settleHeldModelPick(conversationId, lock);
+				settleHeldModelPick(conversationId, lock, true);
 				void refreshPersistentAgentStatus();
 				return;
 			} catch (e) {
@@ -7269,12 +7229,14 @@ export function App() {
 				// Until a read says where the conversation stands, the switch stays
 				// on the wire, Send waits and nothing is saved: the stored model and
 				// its lines are taken first, so the next save keeps what the switch wrote.
+				let tookOver = false;
 				while (refusal === null && stillOpen()) {
 					try {
 						const record = await fetchPersistentAgentThread(agentId as PersistentAgentId, conversationId);
 						if (stillOpen()) {
 							adoptSwitchedConversationModel(conversationId, { ...record.model, label: record.model.label ?? record.model.model }, null);
 							setItems((s) => withStoredSwitchLines(s, record.items));
+							tookOver = record.model.provider === lock.provider && record.model.model === lock.model;
 						}
 						break;
 					} catch {
@@ -7282,7 +7244,7 @@ export function App() {
 					}
 				}
 				switchOutcomeUnknownRef.current.delete(key);
-				settleHeldModelPick(conversationId, lock);
+				settleHeldModelPick(conversationId, lock, tookOver);
 				return;
 			}
 		}
@@ -7319,14 +7281,7 @@ export function App() {
 		if (!targetChat) return;
 		// Memento always works, even mid-stream: the server stops the current
 		// response, closes the thread and opens a fresh one.
-		const inFlightWarning = persistentRoomInFlight ? "The response currently being written will be stopped. " : "";
-		const ok = await confirmDialog({
-			title: "Forget this conversation and start fresh?",
-			body: `${inFlightWarning}This deletes this conversation for good. Nothing from it is saved to memory.`,
-			confirmLabel: "Forget",
-			danger: true,
-		});
-		if (!ok) return;
+		if (!(await confirmForgetConversation(persistentRoomInFlight))) return;
 		// The server closes this room's socket as part of Forget, before its
 		// answer arrives: that close is deliberate, not a drop to reconnect
 		// from (or to save an interrupted answer into the forgotten conversation).
@@ -7480,7 +7435,6 @@ export function App() {
 				};
 			}
 		}
-		setTaskIterateNotice(null);
 		setRightPane({ kind: "artifactViewer", taskId, templateLabel, artifact, ...(asset ? { asset } : {}) });
 	}, []);
 
@@ -7539,11 +7493,6 @@ export function App() {
 	}, []);
 
 	useEffect(() => {
-		if (!taskDoneToast) return;
-		const timer = window.setTimeout(() => setTaskDoneToast(null), 6000);
-		return () => window.clearTimeout(timer);
-	}, [taskDoneToast]);
-	useEffect(() => {
 		if (!backgroundDoneToast) return;
 		const timer = window.setTimeout(() => setBackgroundDoneToast(null), 8000);
 		return () => window.clearTimeout(timer);
@@ -7591,7 +7540,7 @@ export function App() {
 	}, [persistentChat?.agentId]);
 
 	// Assets panel projection: ledger rows + the live task + the thread's
-	// transferred ids → the rail's row view-models (pure, smoke-tested).
+	// transferred ids → the cards' row view-models (pure, smoke-tested).
 	const threadTaskIds = useMemo(() => new Set(items.filter((it): it is Extract<ChatItem, { kind: "task" }> => it.kind === "task").map((it) => it.taskId)), [items]);
 	const shelfFileRows = useMemo<ShelfFileRowInput[]>(() => roomShelfFiles.map((file) => ({
 		name: file.name,
@@ -7666,31 +7615,9 @@ export function App() {
 				action: { label: "Undo", onClick: () => void undoFileDelete() },
 			});
 		}
-		if (taskDoneToast) {
-			// The whole card used to be the click target ("click to open"); under
-			// one grammar the verb becomes the action button, so every toast is
-			// read the same way: what happened, then what you can do about it.
-			const toast = taskDoneToast;
-			list.push({
-				id: `task:${toast.taskId}`,
-				tone: toast.kind === "done" ? "success" : "error",
-				text: toast.kind === "done" ? `“${toast.title}” is ready.` : `“${toast.title}” didn't finish.`,
-				...(toast.artifact
-					? {
-						action: {
-							label: toast.kind === "done" ? "Open" : "See what it made",
-							onClick: () => {
-								setTaskDoneToast(null);
-								if (toast.artifact) openArtifactViewer(toast.taskId, toast.templateLabel, toast.artifact);
-							},
-						},
-					}
-					: {}),
-			});
-		}
 		return list;
-	}, [pausedSkillsToast, reconnectedNotice, backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
-	// The chip in a message opens the file exactly as its Files row does (taste
+	}, [pausedSkillsToast, reconnectedNotice, backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice]);
+	// The chip in a message opens the file exactly as its Attachments card does (taste
 	// pass), so the two entry points can never drift: find the row that stands
 	// for that shelf file and take the row's own path. A ref keeps the handler
 	// identity stable for the memoised transcript while still calling the
@@ -7718,6 +7645,14 @@ export function App() {
 	const attachmentAccessRef = useRef(attachmentAccess);
 	attachmentAccessRef.current = attachmentAccess;
 	const selectedAssetTaskId = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun" ? rightPane.taskId : null;
+	const attachmentRows = assetRows.filter((row) => row.artifacts.length > 0 || row.running);
+	const attachmentsView = rightPane?.kind === "attachments" ? rightPane.view : rightPane?.kind === "artifactViewer" ? rightPane.backTo ?? null : null;
+	// A phone has no gallery: its panel is already the whole screen's width.
+	const galleryShown = attachmentsView === "gallery" && !phoneWidth;
+	// Another room has other Attachments.
+	useEffect(() => {
+		setRightPane((pane) => (pane?.kind === "attachments" || (pane?.kind === "artifactViewer" && pane.backTo) ? null : pane));
+	}, [persistentChat?.agentId]);
 
 	const empty = items.length === 0;
 	const currentThreadHasUserInput = hasUserInput(items);
@@ -7808,7 +7743,7 @@ export function App() {
 		if (!persistentChat || persistentChat.agentId !== heldModelPick.agentId || persistentChat.conversationId !== heldModelPick.conversationId) { heldModelPickRef.current = null; setHeldModelPick(null); return; }
 		if (persistentRoomInFlight || switchesInFlightFor(heldModelPick.agentId, heldModelPick.conversationId) > 0 || heldModelPick.phase !== "waiting") return;
 		// A return to the model the conversation already runs on needs no request.
-		if (persistentChat.model.provider === heldModelPick.lock.provider && persistentChat.model.model === heldModelPick.lock.model) { heldModelPickRef.current = null; setHeldModelPick(null); return; }
+		if (persistentChat.model.provider === heldModelPick.lock.provider && persistentChat.model.model === heldModelPick.lock.model) { settleHeldModelPick(heldModelPick.conversationId, heldModelPick.lock, true); return; }
 		const sending = { ...heldModelPick, phase: "sending" as const };
 		heldModelPickRef.current = sending;
 		setHeldModelPick(sending);
@@ -8319,16 +8254,6 @@ export function App() {
 					),
 				},
 				{
-					id: "web-search",
-					label: "Web search",
-					content: (
-						<div className="landing ai-setup-page settings-web-search">
-							<PaneHeader title="Web search" line="How rooms look things up on the web." />
-							<WebSearchSettingsSection />
-						</div>
-					),
-				},
-				{
 					id: "instructions",
 					label: "Instructions",
 					title: "Guidance every room follows before its own instructions",
@@ -8338,6 +8263,7 @@ export function App() {
 						</div>
 					),
 				},
+				{ id: "skills", label: "Skills", title: "Reusable know-how your rooms can pick up", content: <SkillsPage serviceBack={serviceBack} /> },
 				{
 					id: "connectors",
 					label: "Connectors",
@@ -8349,7 +8275,17 @@ export function App() {
 						</div>
 					),
 				},
-				{ id: "skills", label: "Skills", title: "Reusable know-how your rooms can pick up", content: <SkillsPage serviceBack={serviceBack} /> },
+				{
+					id: "web-search",
+					label: "Web search",
+					content: (
+						<div className="landing ai-setup-page settings-web-search">
+							<PaneHeader title="Web search" line="How rooms look things up on the web." />
+							<WebSearchSettingsSection />
+						</div>
+					),
+				},
+				{ id: "appearance", label: "Appearance", content: <AppearancePane appearance={appearance} onSetAppearance={setAppearance} /> },
 				...(computerOnlyControls ? [{
 					id: "remote" as const,
 					label: "Remote access",
@@ -8505,7 +8441,7 @@ export function App() {
 		);
 	}
 
-	const rightPaneVisible = Boolean(rightPane);
+	const rightPaneVisible = Boolean(rightPane) && !(rightPane?.kind === "attachments" && galleryShown);
 	const artifactPaneMaximized = artifactMaximized && rightPane?.kind === "artifactViewer";
 	// Maximized: no inline style — the .artifact-pane-maximized class drives a
 	// single-track grid. The width travels as a custom property (consumed by the
@@ -8515,8 +8451,25 @@ export function App() {
 		? ({ "--right-pane-width": `${rightPaneWidth}px` } as CSSProperties)
 		: undefined;
 
+	const attachmentsBrowser = (view: AttachmentsView) => (
+		<AttachmentsBrowser
+			view={view}
+			rows={attachmentRows}
+			{...(persistentChat ? { roomId: persistentChat.agentId } : {})}
+			selectedTaskId={selectedAssetTaskId}
+			onOpen={(row) => openAssetRow(row, view)}
+			onClose={() => setRightPane(null)}
+			onShowView={(next) => setRightPane({ kind: "attachments", view: next })}
+			onDeleteFile={requestFileDelete}
+			onRenameFile={(row, fileName, newName) => void renameFileRow(row, fileName, newName)}
+			onRemove={(row) => void removeAssetRow(row)}
+			onAddFiles={(files) => { for (const file of files) void addFileToShelfQuietly(file); }}
+			scrollTop={attachmentsScrollRef}
+		/>
+	);
 	const rightPaneSlot = (
 		<>
+			{galleryShown && attachmentsBrowser("gallery")}
 			{rightPaneVisible && !artifactPaneMaximized && (
 				<div
 					className="pane-resizer"
@@ -8536,6 +8489,7 @@ export function App() {
 					}}
 				/>
 			)}
+			{rightPane?.kind === "attachments" && !galleryShown && attachmentsBrowser("panel")}
 			{preview && <Preview content={preview.content} title={preview.title} type={preview.type} onClose={() => setPreview(null)} />}
 			{rightPane?.kind === "taskRun" && taskState.phase !== "none" && taskState.taskId === rightPane.taskId && (
 				<TaskRunView
@@ -8553,9 +8507,10 @@ export function App() {
 					artifact={rightPane.artifact}
 					maximized={artifactMaximized}
 					onToggleMaximize={() => setArtifactMaximized((m) => !m)}
-					onClose={() => { setArtifactMaximized(false); setRightPane(null); }}
+					onClose={() => { if (rightPane.backTo === "gallery") closePaneFile(); else { setArtifactMaximized(false); setRightPane(null); } }}
 					roomId={persistentChat?.agentId}
 					reloadNonce={viewerReloadNonce}
+					{...(rightPane.backTo ? { onBack: closePaneFile } : {})}
 					{...(rightPane.asset ? {
 						assetTitle: rightPane.asset.title,
 						originLine: rightPane.asset.originLine,
@@ -8565,13 +8520,8 @@ export function App() {
 							<AssetViewerFooter
 								taskId={rightPane.taskId}
 								artifact={rightPane.artifact}
-								userFileName={rightPane.asset.userFileName}
 								roomId={persistentChat?.agentId}
-								canIterate={!rightPane.asset.userFileName && rightPane.asset.artifacts.length > 0}
 								summary={rightPane.asset.summary}
-								onIterate={(brief) => submitAssetIterate(rightPane.taskId, brief)}
-								iteratePending={taskIteratePending}
-								iterateNotice={taskIterateNotice}
 								{...(rightPane.artifact.relativePath.startsWith("files/") ? { onSaveTo: () => setSaveAsPrompt({ shelfName: rightPane.artifact.relativePath.slice("files/".length) }) } : {})}
 								{...(rightPane.asset.orphan ? { onDelete: () => rightPane.asset && setAssetDeleteConfirm(rightPane.asset) } : {})}
 							/>
@@ -8583,7 +8533,8 @@ export function App() {
 	);
 
 	const shownQueued = queuedBubbles(outgoing);
-	const switchingLock = persistentChat ? (heldModelPick && heldModelPick.agentId === persistentChat.agentId && heldModelPick.conversationId === persistentChat.conversationId ? heldModelPick.lock : switchingToRef.current.get(`${persistentChat.agentId}\n${persistentChat.conversationId}`)) : undefined;
+	const heldHere = heldPickFor(persistentChat);
+	const switchingLock = persistentChat ? (heldHere?.lock ?? switchingToRef.current.get(`${persistentChat.agentId}\n${persistentChat.conversationId}`)) : undefined;
 	const switchingToName = modelChangePending && switchingLock ? modelDisplayName(switchingLock) : null;
 	// A step of this answer waits for the person's OK.
 	const stepAsksNow = persistentRoomRunning && items.some((item) => item.kind === "approval" && approvalAsking(item) && liveApprovalIds.has(item.requestId));
@@ -8622,12 +8573,12 @@ export function App() {
 					appearance={appearance}
 					onSetAppearance={setAppearance}
 					onSettings={openSettings}
-					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} onDeleteFile={(row, fileName) => requestFileDelete(row, fileName)} onRenameFile={(row, fileName, newName) => void renameFileRow(row, fileName, newName)} /> : undefined}
+					assetsSlot={persistentChat ? <AttachmentsEntry count={attachmentRows.length} open={attachmentsView !== null} onClick={toggleAttachments} /> : undefined}
 				/>
 			}
 			withPreview={false}
 			workbenchRef={workbenchRef}
-			workbenchClassName={`${rightPaneVisible ? (artifactPaneMaximized ? "with-right-pane artifact-pane-maximized" : "with-right-pane") : ""}${resizingRightPane ? " pane-resizing" : ""}`}
+			workbenchClassName={`${rightPaneVisible ? (artifactPaneMaximized ? "with-right-pane artifact-pane-maximized" : "with-right-pane") : ""}${resizingRightPane ? " pane-resizing" : ""}${rightPane?.kind === "attachments" || rightPane?.kind === "artifactViewer" ? " with-file-pane" : ""}${galleryShown ? " attachments-gallery-open" : ""}`}
 			workbenchStyle={workbenchStyle}
 			activeDisplay={activeDisplay || ""}
 			ownerSecondary=""
@@ -8656,7 +8607,7 @@ export function App() {
 					<>
 						<button
 							className="icon-btn icon-btn-square composer-attach-btn"
-							title="Add a file to this room's Files and attach it to your next message"
+							title="Add a file to this room's Attachments and to your next message"
 							aria-label="Attach a file"
 							onClick={() => attachFileInputRef.current?.click()}
 						><PaperclipIcon /></button>
@@ -8702,12 +8653,12 @@ export function App() {
 						onOpenChange={setModelPanelOpen}
 						current={persistentChat.model}
 						currentName={runningModelName && runningModelName.provider === persistentChat.model.provider && runningModelName.model === persistentChat.model.model ? runningModelName.name : undefined}
-						held={heldModelPick && heldModelPick.agentId === persistentChat.agentId && heldModelPick.conversationId === persistentChat.conversationId ? heldModelPick.lock : null}
+						held={heldHere && { ...heldHere.lock, level: heldHere.level }}
 						effort={roomEffort}
-						// The effort waits while a model change is pending: a level set
-						// for a model not yet bound would be judged against the one being left.
-						effortDisabled={!connectedForChrome || modelChangePending}
-						effortWaits={modelChangePending}
+						// A held pick keeps its level with it. A switch on the wire with no
+						// held pick (the page left and came back) has nowhere to keep one: a
+						// level sent now would be judged against the model being left.
+						effortDisabled={!connectedForChrome || (modelChangePending && !heldHere)}
 						onPick={pickConversationModel}
 						onEffort={selectRoomEffort}
 						onTooLong={askModelSwitch}
@@ -8850,7 +8801,7 @@ export function App() {
 										{/* Hide only for the moment, never write the dismissed flag:
 										    the close-modal re-check re-shows the nudge if the user
 										    cancelled without setting a workspace. Only Dismiss burns it. */}
-										<button className="rs-btn" type="button" title="Choose the folder this room may read and write" onClick={() => { setWorkspaceHint(null); openRoomSettings(); }}>Set workspace</button>
+										<button className="rs-btn" type="button" title="Choose the folder this room may read and write" onClick={() => { setWorkspaceHint(null); openRoomSettings("workspace"); }}>Set workspace</button>
 										<button className="rs-quiet" type="button" title="Hide this hint for good" onClick={dismissWorkspaceNudge}>Dismiss</button>
 									</div>
 								</>

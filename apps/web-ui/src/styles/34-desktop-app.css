@@ -23,15 +23,13 @@ html.desktop-app-mac .product-sidebar-header {
 	min-height: 0;
 	padding: 62px 12px 20px var(--sidebar-text-left);
 }
-html.desktop-app-mac .brand img.logo {
-	height: 20px;
-}
 /* The header's own bottom padding is the air above the list; the list steps
-   28px, as a native mac sidebar does. */
+   32px: 28px boxes, as a native mac sidebar's, 4px apart so a selected row and
+   a hovered one do not touch. */
 html.desktop-app-mac .sidebar-primary-nav,
 html.desktop-app-mac .product-nav {
 	padding-top: 0;
-	gap: 0;
+	gap: 4px;
 }
 html.desktop-app-mac .sidebar-primary-nav .list-btn,
 html.desktop-app-mac .product-nav .list-btn {
@@ -160,10 +158,27 @@ html.desktop-app-mac .absorb-workspace-header input {
    the pane above the strip so its header paints last, then mirror the
    sidebar-header pattern — the header bar itself drags the window, its
    controls opt back out. Empty header stretches stay grabbable. */
-html.desktop-app-mac .workbench > .artifact-viewer,
 html.desktop-app-mac .workbench > .preview-pane {
 	position: relative;
 	z-index: 21;
+}
+/* A window as narrow as a phone keeps the sheet and the full-screen file
+   (38-phone.css), which paint over the strip themselves. */
+@media (min-width: 761px) {
+	html.desktop-app-mac .workbench > .artifact-viewer,
+	html.desktop-app-mac .workbench > .attachments-panel {
+		position: relative;
+		z-index: 21;
+	}
+	html.desktop-app-mac .attachments-panel .att-head {
+		-webkit-app-region: drag;
+		min-height: var(--mac-row-height);
+		padding-top: 0;
+		padding-bottom: 0;
+	}
+	html.desktop-app-mac .attachments-panel .att-head button {
+		-webkit-app-region: no-drag;
+	}
 }
 html.desktop-app-mac .artifact-viewer-head,
 html.desktop-app-mac .preview-head {
@@ -228,6 +243,10 @@ html.desktop-app-mac .preview-head a,
 html.desktop-app-mac .preview-head button,
 html.desktop-app-mac .preview-head input {
 	-webkit-app-region: no-drag;
+}
+/* The gallery sits under the room's bar, on the mac's taller row. */
+html.desktop-app-mac .attachments-gallery {
+	margin-top: var(--mac-row-height);
 }
 /* Full-screen overlays already paint above the strip (z 40-85), but paint
    order alone does not clear a drag region — only an explicit no-drag does.

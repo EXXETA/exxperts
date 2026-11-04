@@ -161,12 +161,18 @@
 	overflow: auto;
 	padding: 6px 24px 24px;
 }
-.settings-dialog-pane::-webkit-scrollbar {
+.settings-dialog-pane::-webkit-scrollbar,
+.room-instructions-textarea::-webkit-scrollbar {
 	width: 8px;
 }
-.settings-dialog-pane::-webkit-scrollbar-thumb {
+.settings-dialog-pane::-webkit-scrollbar-thumb,
+.room-instructions-textarea::-webkit-scrollbar-thumb {
 	background: var(--border);
 	border-radius: 4px;
+}
+.room-instructions-textarea::-webkit-scrollbar-track,
+.room-instructions-textarea::-webkit-scrollbar-corner {
+	background: transparent;
 }
 .settings-dialog-pane::-webkit-scrollbar-track {
 	background: transparent;
@@ -480,16 +486,14 @@
 	border-color: transparent;
 }
 /* Reference tables (skills + connectors): one thin tracked-caps header
-   style shared by both tabs, rows on the remote tab's divider rhythm,
-   provenance as muted text instead of pills. */
+   style shared by both tabs, provenance as muted text instead of pills. */
 .settings-overlay .settings-table-head {
 	display: grid;
 	align-items: baseline;
 	padding: 0 0 6px;
-	border-bottom: 1px solid var(--exx-divider);
 	font-size: 10.5px;
 	font-weight: 600;
-	color: color-mix(in srgb, var(--muted) 78%, transparent);
+	color: var(--muted);
 }
 .settings-overlay .skill-table-head,
 .settings-overlay .skill-table .skill-row {
@@ -497,7 +501,7 @@
 	gap: 6px 14px;
 }
 .settings-overlay .skill-table .skill-row {
-	border-bottom-color: var(--exx-divider);
+	border-bottom: none;
 }
 @media (hover: hover) {
 	.settings-overlay .skill-table .skill-row:hover:not(:disabled) {
@@ -563,13 +567,11 @@
 .settings-overlay .connector-table .connector-row-outcome {
 	padding-right: 12px;
 }
-/* AI setup in the dialog: the profiles are rows of one list like every
+/* AI setup in the dialog: the profiles are rows of one soft box like every
    other setting; the radio alone says which one is active, and the models
    panel under a row starts at the row's label edge. */
 .settings-overlay .ai-profile-card {
 	border: none;
-	border-radius: 0;
-	background: transparent;
 	overflow: visible;
 }
 .settings-overlay .ai-profile-row {

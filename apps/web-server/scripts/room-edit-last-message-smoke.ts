@@ -145,7 +145,7 @@ await row("the step back refuses after a shortening, beside the same message wit
 	assert((await stepBackForEdit(plain, "Write the report.")).ok, "the same message without a shortening is taken");
 });
 await row("the step back refuses a message with a file note, and text the bubble did not show", async () => {
-	const withFile = fakeSession([user("u1", null, "[FILE ATTACHED: a.txt · 1 page · now in this room's Files; read it with read_file when relevant]\n\nRead it."), answer("a1", "u1", "Done.")]);
+	const withFile = fakeSession([user("u1", null, "[FILE ATTACHED: a.txt · 1 page · now in this room's Attachments; read it with read_file when relevant]\n\nRead it."), answer("a1", "u1", "Done.")]);
 	const refused = await stepBackForEdit(withFile, "Read it.");
 	assert(!refused.ok && refused.refused === "not-typed", `a file's message is refused, got ${JSON.stringify(refused)}`);
 	const other = fakeSession([user("u1", null, "Write the report."), answer("a1", "u1", "Done.")]);

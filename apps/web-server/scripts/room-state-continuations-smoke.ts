@@ -9,7 +9,7 @@
 //      carries a new copy with the change, after the kept message;
 //   4. a live turn, an instruction edit, a scheduled resume, a live turn: the
 //      scheduled run's system prompt carries no instructions, its copy does
-//      (without skills or Files, which it cannot use), and the next live turn
+//      (without skills or Attachments, which it cannot use), and the next live turn
 //      sends a whole copy under the live system prompt it had before.
 import { agentDir, assert, copiesIn, isCopy, MODEL, openRoom, personsNewest, rename, requests, RoomSocket, setInstructions, startRoomStateServer, stopRoomStateServer, waitUntil, type SentRequest } from "./room-state-setup.js";
 
@@ -101,14 +101,14 @@ try {
 		assert(!scheduled.system.includes("Use bullet points.") && !scheduled.system.includes("## Current instructions"), "the scheduled run's system prompt carries no instructions");
 		const scheduledCopy = scheduled.messages.at(-1)!;
 		assert(isCopy(scheduledCopy) && scheduledCopy.text.includes("Use bullet points.") && scheduledCopy.text.includes("Your name is now **Scheduled Room**"), `the scheduled run's copy carries the edited instructions, got ${describe(scheduled)}`);
-		assert(!scheduledCopy.text.includes("## Files in this room") && !scheduledCopy.text.includes("## Enabled skills") && scheduledCopy.text.includes("leaves them out"), `the scheduled run's copy leaves out what it cannot use, got:\n${scheduledCopy.text}`);
+		assert(!scheduledCopy.text.includes("## Attachments in this room") && !scheduledCopy.text.includes("## Enabled skills") && scheduledCopy.text.includes("leaves them out"), `the scheduled run's copy leaves out what it cannot use, got:\n${scheduledCopy.text}`);
 		room = await RoomSocket.connect(roomId, conversationId);
 		sockets.push(room);
 		const after = (await room.prompt("Hello after."))[0];
 		assert(after.system === live.system, "the live turn after the scheduled run keeps the live system prompt");
 		assert(after.messages.some((message) => message.text === scheduledCopy.text), `the live turn sees the scheduled run's copy, got ${describe(after)}`);
 		const liveCopy = after.messages.at(-1)!;
-		assert(isCopy(liveCopy) && liveCopy.text.includes("Use bullet points.") && liveCopy.text.includes("## Files in this room") && !liveCopy.text.includes("leaves them out"), `the next live turn sends a whole copy, got ${describe(after)}`);
+		assert(isCopy(liveCopy) && liveCopy.text.includes("Use bullet points.") && liveCopy.text.includes("## Attachments in this room") && !liveCopy.text.includes("leaves them out"), `the next live turn sends a whole copy, got ${describe(after)}`);
 	});
 
 	if (failures.length > 0) throw new Error(`${failures.length} of ${passes + failures.length} cases failed`);

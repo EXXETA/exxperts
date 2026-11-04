@@ -1,13 +1,12 @@
-// The room's sidebar lines its Files block up on the sidebar's one left edge,
-// in the page against a real server. On a wide screen, in the browser and in
-// the mac app's look, light and dark: the wordmark, Home, the "Files" word and
-// every file's tile start on --sidebar-text-left; the selected and the hovered
-// file card's box starts where Home's highlight does; the header is a small
-// muted label with the count on the right and no arrow, and it folds and
-// unfolds on a click and from the keyboard, a folded list showing the header
-// and count only. At phone width the block keeps its look: the arrow before
-// the word, the word, the cards and the tiles where they were. Offline: a
-// synthetic model. Throwaway HOME.
+// The room's sidebar: "Attachments" is one row under Home, in the page against
+// a real server. On a wide screen, in the browser and in the mac app's look,
+// light and dark: the wordmark, Home and the entry's word start on
+// --sidebar-text-left, the entry reads as Home reads, its count sits at the
+// right in plain muted digits, and no per-file list is left. A room with no
+// files shows the entry without a number. Rows step 36px in the browser and
+// 32px in the mac app, in the room and on Home, and the logo is 22 in both.
+// At phone width the entry sits under Home in the drawer. Offline: a synthetic
+// model. Throwaway HOME.
 import fs from "node:fs";
 import { chromium, type Page } from "playwright";
 import { assert, baseUrl, openRoom, requestJson, startRoomStateServer, stopRoomStateServer, waitUntil } from "./room-state-setup.js";
@@ -23,56 +22,65 @@ import { closeBrowser } from "./smoke-close-context.js";
 }
 
 const ROOM = "Garden Plans";
+const EMPTY_ROOM = "Quiet Plot";
 const FILES = ["watering.md", "bed-layout.md", "seed-order.md"];
-const SELECTED = "bed layout";
-const HOVERED = "watering";
-const TRANSPARENT = "rgba(0, 0, 0, 0)";
-// The phone's block as it reads on main: the card's box on the list's 12px,
-// the tile inside its 1px border and 6px padding, and the word after the
-// header's 4px padding, the arrow's 10px and the 6px gap.
-const PHONE = { cardLeft: 12, tileLeft: 19, wordLeft: 32, fontSize: "11px", fontWeight: "700" };
+const STEP = { browser: 36, mac: 32 };
+const LOGO_HEIGHT = 22;
 
-interface Edges {
+interface Sidebar {
 	edge: number;
-	wordmark: number;
-	home: number;
-	homeBox: number;
-	word: number;
-	tiles: number[];
-	cards: Array<{ name: string; left: number; background: string }>;
-	head: { fontSize: string; fontWeight: string; color: string; muted: string; arrow: string; count: string; countRight: number; headRight: number };
-	caret: number;
+	logoLeft: number;
+	logoHeight: number;
+	homeWord: number;
+	homeBox: { left: number; top: number; right: number; bottom: number };
+	entryWord: number;
+	entryBox: { left: number; top: number; right: number; bottom: number };
+	home: { fontSize: string; fontWeight: string; color: string };
+	entry: { fontSize: string; fontWeight: string; color: string };
+	count: { text: string; color: string; right: number; background: string } | null;
+	muted: string;
+	fileRows: number;
 }
 
 // The page's edges, read in one evaluate. No named function inside it: tsx
 // wraps those in a helper the page does not have.
-async function edges(page: Page): Promise<Edges> {
+async function sidebar(page: Page): Promise<Sidebar> {
 	return page.evaluate(() => {
-		const home = [...document.querySelectorAll(".sidebar-primary-nav .list-btn")].find((button) => (button.textContent ?? "").trim() === "Home") ?? null;
-		const [homeText, word] = [home, document.querySelector(".assets-head-label")].map((element) => {
-			if (!element) return Number.NaN;
+		const home = [...document.querySelectorAll(".sidebar-primary-nav .list-btn")].find((button) => (button.textContent ?? "").trim() === "Home")!;
+		const entry = document.querySelector(".attachments-entry")!;
+		const [homeWord, entryWord] = [home, entry.firstElementChild!].map((element) => {
 			const range = document.createRange();
 			range.selectNodeContents(element);
 			return range.getClientRects()[0]?.left ?? Number.NaN;
 		});
-		const head = document.querySelector(".assets-head")!;
-		const headStyle = getComputedStyle(head);
+		const [homeBox, entryBox] = [home, entry].map((element) => {
+			const { left, top, right, bottom } = element.getBoundingClientRect();
+			return { left, top, right, bottom };
+		});
+		const [homeType, entryType] = [home, entry].map((element) => {
+			const { fontSize, fontWeight, color } = getComputedStyle(element);
+			return { fontSize, fontWeight, color };
+		});
+		const count = entry.querySelector(".attachments-entry-count");
 		const probe = document.createElement("span");
 		probe.style.color = "var(--muted)";
-		head.append(probe);
+		entry.append(probe);
 		const muted = getComputedStyle(probe).color;
 		probe.remove();
-		const count = document.querySelector(".assets-count")!;
+		const logo = document.querySelector(".sidebar-header .brand img.logo")?.getBoundingClientRect();
 		return {
 			edge: parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-text-left")),
-			wordmark: document.querySelector(".sidebar-header .brand img.logo")?.getBoundingClientRect().left ?? Number.NaN,
-			home: homeText,
-			homeBox: home?.getBoundingClientRect().left ?? Number.NaN,
-			word,
-			tiles: [...document.querySelectorAll(".assets-row .assets-icon")].map((tile) => tile.getBoundingClientRect().left),
-			cards: [...document.querySelectorAll(".assets-row")].map((card) => ({ name: (card.querySelector(".assets-row-title")?.textContent ?? "").trim(), left: card.getBoundingClientRect().left, background: getComputedStyle(card).backgroundColor })),
-			head: { fontSize: headStyle.fontSize, fontWeight: headStyle.fontWeight, color: headStyle.color, muted, arrow: `${document.querySelector(".assets-caret")?.textContent ?? ""}${getComputedStyle(head, "::before").content.replace(/^none$/, "")}`, count: (count.textContent ?? "").trim(), countRight: count.getBoundingClientRect().right, headRight: head.getBoundingClientRect().right },
-			caret: document.querySelectorAll(".assets-caret").length,
+			logoLeft: logo?.left ?? Number.NaN,
+			logoHeight: logo?.height ?? Number.NaN,
+			homeWord,
+			homeBox: homeBox!,
+			entryWord,
+			entryBox: entryBox!,
+			home: homeType!,
+			entry: entryType!,
+			count: count ? { text: (count.textContent ?? "").trim(), color: getComputedStyle(count).color, right: count.getBoundingClientRect().right, background: getComputedStyle(count).backgroundColor } : null,
+			muted,
+			fileRows: document.querySelectorAll(".sidebar .assets-row, .sidebar .sidebar-assets").length,
 		};
 	});
 }
@@ -89,6 +97,7 @@ let error: unknown;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
 	await startRoomStateServer();
+	await openRoom(EMPTY_ROOM);
 	const { roomId } = await openRoom(ROOM);
 	for (const file of FILES) {
 		const uploaded = await requestJson(`/api/persistent-agents/${roomId}/files`, { method: "POST", body: JSON.stringify({ filename: file, contentBase64: Buffer.from(`# ${file}\n`).toString("base64") }) });
@@ -100,86 +109,80 @@ try {
 	await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 	await page.waitForLoadState("networkidle");
 	if (await page.locator(".whats-new-close").count()) await page.locator(".whats-new-close").click();
-	await page.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
-	const card = (name: string) => page.locator(".assets-row").filter({ hasText: name }).first();
-	await waitUntil(async () => (await page.locator(".assets-row").count()) === FILES.length, "the sidebar lists the room's three files", 15_000);
-	await card(SELECTED).click();
-	await page.locator(".assets-row.sel").waitFor({ timeout: 10_000 });
-	const head = page.locator(".assets-head");
+	const enter = (room: string) => page.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
+	const macLook = (on: boolean) => page.evaluate((mac) => document.documentElement.classList.toggle("desktop-app-mac", mac), on);
 
-	// Wide: the edges, the card boxes, the header's look, in both looks and both themes.
+	// Home's list takes the same step before any room opens.
 	for (const mac of [false, true]) {
-		await page.evaluate((on) => document.documentElement.classList.toggle("desktop-app-mac", on), mac);
+		await macLook(mac);
+		const tops = await page.evaluate(() => [...document.querySelectorAll(".product-nav .list-btn")].map((row) => row.getBoundingClientRect().top));
+		const steps = tops.slice(1).map((top, index) => top - tops[index]!);
+		const step = STEP[mac ? "mac" : "browser"];
+		check(steps.length >= 2 && steps.every((each) => near(each, step)), `Home's rows in the ${mac ? "mac app" : "browser"} step ${JSON.stringify(steps)}, not ${step}`);
+	}
+	await macLook(false);
+
+	await enter(EMPTY_ROOM);
+	await page.locator(".attachments-entry").waitFor({ timeout: 15_000 });
+	const empty = await sidebar(page);
+	check(empty.count === null && (await page.locator(".attachments-entry").innerText()).trim() === "Attachments", `at 0 the entry reads ${JSON.stringify(await page.locator(".attachments-entry").innerText())}, with no number`);
+	await page.locator(".sidebar-home-btn").click();
+	await enter(ROOM);
+	await waitUntil(async () => (await page.locator(".attachments-entry-count").count()) === 1, "the entry counts the room's files", 15_000);
+
+	for (const mac of [false, true]) {
+		await macLook(mac);
 		for (const scheme of ["light", "dark"] as const) {
 			await page.emulateMedia({ colorScheme: scheme });
 			const look = `1280 wide, ${mac ? "mac app" : "browser"}, ${scheme}`;
-			await card(HOVERED).hover();
-			await waitUntil(async () => (await card(HOVERED).evaluate((element) => getComputedStyle(element).backgroundColor)) !== TRANSPARENT, `${look}: the hovered card shows its box`, 3_000).catch(() => {});
-			const at = await edges(page);
+			const at = await sidebar(page);
 			check(at.edge === (mac ? 27 : 41), `${look}: the sidebar's text edge is ${at.edge}`);
-			check(near(at.wordmark, at.edge), `${look}: the wordmark starts at ${at.wordmark}, the edge is ${at.edge}`);
-			check(near(at.home, at.edge), `${look}: Home starts at ${at.home}, the edge is ${at.edge}`);
-			check(near(at.word, at.edge), `${look}: the "Files" word starts at ${at.word}, the edge is ${at.edge}`);
-			check(at.tiles.length === FILES.length && at.tiles.every((left) => near(left, at.edge)), `${look}: the file tiles start at ${JSON.stringify(at.tiles)}, the edge is ${at.edge}`);
-			for (const [name, why] of [[SELECTED, "selected"], [HOVERED, "hovered"]]) {
-				const box = at.cards.find((each) => each.name.includes(name));
-				check(!!box && box.background !== TRANSPARENT && near(box.left, at.homeBox), `${look}: the ${why} card's box ${box ? `starts at ${box.left} (${box.background})` : "is missing"}, Home's highlight at ${at.homeBox}`);
-			}
-			check(at.head.fontSize === "12px" && at.head.fontWeight === "500" && at.head.color === at.head.muted, `${look}: the header reads ${at.head.fontSize} / ${at.head.fontWeight} in ${at.head.color}, the muted colour is ${at.head.muted}`);
-			check(at.caret === 0 && at.head.arrow === "", `${look}: the header draws an arrow (${at.caret} in the markup, ${JSON.stringify(at.head.arrow)} in all)`);
-			check(at.head.count === String(FILES.length) && at.head.headRight - at.head.countRight <= 6, `${look}: the count reads ${JSON.stringify(at.head.count)} and ends ${at.head.headRight - at.head.countRight}px short of the header's right`);
+			check(near(at.logoLeft, at.edge), `${look}: the wordmark starts at ${at.logoLeft}, the edge is ${at.edge}`);
+			check(near(at.logoHeight, LOGO_HEIGHT), `${look}: the logo is ${at.logoHeight} high, not ${LOGO_HEIGHT}`);
+			check(near(at.homeWord, at.edge), `${look}: Home starts at ${at.homeWord}, the edge is ${at.edge}`);
+			check(near(at.entryWord, at.edge), `${look}: the entry's word starts at ${at.entryWord}, the edge is ${at.edge}`);
+			check(near(at.entryBox.left, at.homeBox.left) && near(at.entryBox.right, at.homeBox.right), `${look}: the entry's box runs ${at.entryBox.left} to ${at.entryBox.right}, Home's ${at.homeBox.left} to ${at.homeBox.right}`);
+			check(near(at.entryBox.top - at.homeBox.top, STEP[mac ? "mac" : "browser"]), `${look}: the entry sits ${at.entryBox.top - at.homeBox.top}px under Home, the list's step is ${STEP[mac ? "mac" : "browser"]}`);
+			check(JSON.stringify(at.entry) === JSON.stringify(at.home), `${look}: the entry reads ${JSON.stringify(at.entry)}, Home ${JSON.stringify(at.home)}`);
+			check(at.count?.text === String(FILES.length) && at.count.color === at.muted && at.count.background === "rgba(0, 0, 0, 0)" && at.entryBox.right - at.count.right <= 14, `${look}: the count is ${JSON.stringify(at.count)}, plain muted digits at the right, the muted colour ${at.muted}`);
+			check(at.fileRows === 0, `${look}: ${at.fileRows} per-file rows are left in the sidebar`);
 		}
 	}
-	await page.evaluate(() => document.documentElement.classList.remove("desktop-app-mac"));
+	await macLook(false);
 	await page.emulateMedia({ colorScheme: "light" });
 
-	// The header's name and its folding: a click folds, Enter unfolds, Space folds, a click unfolds.
-	const named = page.getByRole("button", { name: `Files ${FILES.length}`, exact: true });
-	check(await named.count() === 1, `the header's accessible name is "Files ${FILES.length}" (${await head.evaluate((element) => element.textContent)})`);
-	const folded = async () => ({ expanded: await head.getAttribute("aria-expanded"), rows: await page.locator(".assets-rows").count(), shown: (await page.locator(".sidebar-assets").innerText()).replace(/\s+/g, " ").trim() });
-	const steps: Array<[string, () => Promise<void>, boolean]> = [
-		["a click", () => head.click(), true],
-		["Enter", async () => { await head.focus(); await page.keyboard.press("Enter"); }, false],
-		["Space", async () => { await head.focus(); await page.keyboard.press("Space"); }, true],
-		["a click", () => head.click(), false],
-	];
-	for (const [how, act, fold] of steps) {
-		await act();
-		await waitUntil(async () => (await head.getAttribute("aria-expanded")) === String(!fold), `${how} ${fold ? "folds" : "unfolds"} the list`, 3_000).catch(() => {});
-		const state = await folded();
-		if (fold) check(state.expanded === "false" && state.rows === 0 && state.shown === `Files ${FILES.length}`, `${how} folds to the header and count only, got ${JSON.stringify(state)}`);
-		else check(state.expanded === "true" && state.rows === 1 && (await page.locator(".assets-row").count()) === FILES.length, `${how} unfolds the list, got ${JSON.stringify(state)}`);
-	}
+	const entry = page.locator(".attachments-entry");
+	check(await page.getByRole("button", { name: `Attachments ${FILES.length}`, exact: true }).count() === 1, `the entry's accessible name is "Attachments ${FILES.length}"`);
+	await entry.focus();
+	await page.keyboard.press("Enter");
+	await waitUntil(async () => (await entry.getAttribute("aria-expanded")) === "true", "Enter opens the Attachments", 3_000);
+	await page.keyboard.press("Space");
+	await waitUntil(async () => (await entry.getAttribute("aria-expanded")) === "false", "Space closes the Attachments", 3_000);
 
-	// The phone keeps its block: the arrow before the word, the word and the cards where they were.
 	// Narrowing to phone width closes the drawer (sidebar-collapse.tsx), on the
 	// media query's change event; the smoke waits for that, then opens it as a
 	// person does and waits for its slide to end.
 	await page.setViewportSize({ width: 390, height: 844 });
 	await waitUntil(() => page.evaluate(() => document.documentElement.classList.contains("sidebar-collapsed")), "the phone's drawer starts closed", 5_000);
 	await page.getByRole("button", { name: "Show sidebar" }).first().click();
-	await head.waitFor({ state: "visible", timeout: 10_000 });
-	await waitUntil(async () => near((await edges(page)).cards[0]?.left ?? -1, PHONE.cardLeft), "the phone's drawer has opened", 5_000).catch(() => {});
-	const phone = await edges(page);
-	check(phone.cards.length === FILES.length && phone.cards.every((each) => near(each.left, PHONE.cardLeft)), `at phone width the cards start at ${JSON.stringify(phone.cards.map((each) => each.left))}, on main ${PHONE.cardLeft}`);
-	check(phone.tiles.every((left) => near(left, PHONE.tileLeft)), `at phone width the tiles start at ${JSON.stringify(phone.tiles)}, on main ${PHONE.tileLeft}`);
-	check(near(phone.word, PHONE.wordLeft) && phone.head.fontSize === PHONE.fontSize && phone.head.fontWeight === PHONE.fontWeight, `at phone width the word starts at ${phone.word} in ${phone.head.fontSize} / ${phone.head.fontWeight}, on main ${PHONE.wordLeft} in ${PHONE.fontSize} / ${PHONE.fontWeight}`);
-	check(phone.head.arrow.includes("▾"), `at phone width the open list's arrow reads ${phone.head.arrow}`);
-	await head.click();
-	await waitUntil(async () => (await head.getAttribute("aria-expanded")) === "false", "the phone's list folds", 3_000);
-	const phoneFolded = await edges(page);
-	check(phoneFolded.head.arrow.includes("▸") && near(phoneFolded.word, PHONE.wordLeft), `at phone width the folded list's arrow reads ${phoneFolded.head.arrow}, its word starts at ${phoneFolded.word}`);
-	check(await named.count() === 1, "at phone width the arrow stays out of the header's accessible name");
+	await entry.waitFor({ state: "visible", timeout: 10_000 });
+	await waitUntil(async () => near((await sidebar(page)).homeBox.left, 12), "the phone's drawer has opened", 5_000);
+	const phone = await sidebar(page);
+	// The drawer's rows are tap-sized, so the gap is what carries over.
+	check(near(phone.entryBox.left, phone.homeBox.left) && near(phone.entryBox.top - phone.homeBox.bottom, 4), `at phone width the entry starts at ${phone.entryBox.left}, ${phone.entryBox.top - phone.homeBox.bottom}px under Home`);
+	check(phone.count?.text === String(FILES.length), `at phone width the count reads ${JSON.stringify(phone.count)}`);
+	check(phone.fileRows === 0, `at phone width ${phone.fileRows} per-file rows are left in the drawer`);
 
-	assert(failures.length === 0, `the sidebar's Files block:\n  ${failures.join("\n  ")}`);
-	console.log("  ok at 1280 wide, browser and mac look, light and dark: the wordmark, Home, the \"Files\" word and every tile start on the sidebar's text edge, and the selected and hovered cards' boxes start where Home's highlight does");
-	console.log("  ok the header reads 12px / 500 in the muted colour with the count on the right and no arrow; a click, Enter and Space fold and unfold it, a folded list shows the header and count only, and its name reads \"Files 3\"");
-	console.log("  ok at phone width the block keeps its look: the arrow before the word, the word, the cards and the tiles where they were");
+	assert(failures.length === 0, `the sidebar's Attachments entry:\n  ${failures.join("\n  ")}`);
+	console.log("  ok at 1280 wide, browser and mac look, light and dark: the wordmark, Home and the entry start on the sidebar's text edge, the entry reads as Home reads, the count is plain muted digits at the right, and no per-file row is left");
+	console.log(`  ok rows step ${STEP.browser}px in the browser and ${STEP.mac}px in the mac app, in a room and on Home, and the logo is ${LOGO_HEIGHT} in both`);
+	console.log("  ok a room with no files shows the entry with no number; Enter and Space work it from the keyboard");
+	console.log("  ok at phone width the entry sits under Home in the drawer");
 	console.log(`sidebar-files-lineup-ui-smoke: ${passes} checks passed`);
 } catch (caught) {
 	error = caught;
 	console.error(`sidebar-files-lineup-ui-smoke FAILED: ${(caught as Error).message}`);
-	if (failures.length > 0 && !(caught as Error).message.includes(failures[0])) console.error(`  before that:\n  ${failures.join("\n  ")}`);
+	if (failures.length > 0 && !(caught as Error).message.includes(failures[0]!)) console.error(`  before that:\n  ${failures.join("\n  ")}`);
 	process.exitCode = 1;
 } finally {
 	if (browser) await closeBrowser(browser).catch(() => {});

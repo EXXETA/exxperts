@@ -901,34 +901,6 @@ try {
 		console.log("ok 16 Stop on a finished answer keeps the words shown, even when the page never saved");
 	});
 
-	// --- 16b. A message taken during a step is the turn's consent from then on: the earlier request no longer starts a specialist on its own, the message's own does.
-	await scene("16b", async () => {
-		const asked = "Make me a one-page document about the files and list them";
-		const delegate = (quote: string): Leg => ({ tool: { name: "delegate_task", args: { template: "document-html", brief: "A one-page HTML document listing the files.", userRequest: quote } } });
-		const delegateEnd = (mark: number) => since(mark).find((frame) => frame.type === "event" && frame.event?.type === "tool_execution_end" && frame.event.toolName === "delegate_task");
-		const cardsSince = (mark: number) => since(mark).filter((frame) => frame.type === "ui_request" && frame.kind === "confirm");
-		// Withdrawn: the model still quotes the first message, so the specialist asks first.
-		const mark = await runSlowStep(`${asked}, after a quick check.`, 2, [delegate(asked), { text: "All right, no document." }]);
-		steer("s-withdraw", "Do not make the document after all.");
-		await waitUntil(() => has(mark, (frame) => frame.type === "steer_taken" && frame.id === "s-withdraw"), "the room took it");
-		await waitUntil(() => cardsSince(mark).length >= 2 || !!delegateEnd(mark), "the specialist asked first or ran");
-		const card = cardsSince(mark)[1];
-		if (card) socket.send(JSON.stringify({ type: "ui_response", id: card.id, value: false }));
-		await waitUntil(() => turnEnded(mark), "the turn ended");
-		const withdrawn = String(delegateEnd(mark)?.event?.result?.content?.[0]?.text ?? "");
-		assert(card && !withdrawn.startsWith("Specialist started"), `a request the person withdrew asks first, got ${JSON.stringify(withdrawn.slice(0, 160))}`);
-		await roomIdle();
-		// The taken message asks for it itself: it starts at once, as a request in the first message does.
-		const own = "Make me a one-page document about the notes and list them";
-		const second = await runSlowStep("Run a quick check first.", 2, [delegate(own), { text: "It is underway." }]);
-		steer("s-ask", own);
-		await waitUntil(() => turnEnded(second), "the second turn ended");
-		const started = String(delegateEnd(second)?.event?.result?.content?.[0]?.text ?? "");
-		assert(cardsSince(second).length === 1 && started.startsWith("Specialist started"), `the taken message's own request starts the specialist with no card, got ${cardsSince(second).length} cards, ${JSON.stringify(started.slice(0, 160))}`);
-		await roomIdle();
-		console.log("ok 16b a taken message is the turn's consent from then on");
-	});
-
 	// --- 16c. A saved steered message is no prompt of its own: a later turn's landing keeps the earlier turn's answer and adds its own prompt.
 	await scene("16c", async () => {
 		socket.close();

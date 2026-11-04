@@ -331,6 +331,8 @@
 	resize: vertical;
 	font-size: 13px;
 	line-height: 1.5;
+	/* The text wraps before Clear, so a click on the text never lands on it. */
+	padding-right: 76px;
 }
 /* One button tall without buttons too, so the counter stays put when
    Discard and Save appear. */
@@ -360,19 +362,20 @@
 	font-size: 12px;
 	line-height: 1.4;
 }
-/* Above the box: "Show the global instructions" on the left (a room's pane
-   only) and Clear or Undo on the right, on a row of its own while the global
-   text is shown. One button tall when empty too, so the box does not move as
-   Clear comes and goes. */
+/* Above the box: "Show the global instructions" (a room's pane only). Clear
+   or Undo takes no height here and hangs into the box's top right corner, so
+   the box does not move as Clear comes and goes. */
 .room-instructions-box-head {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	min-height: 32px;
+	position: relative;
+	z-index: 1;
 }
+/* Top: the 12px gap above the box, then 6px into it. Right: clear of the box's
+   scroll bar (36-settings-dialog.css). */
 .room-instructions-box-head .rs-btn {
-	margin-left: auto;
+	position: absolute;
+	top: calc(100% + 18px);
+	right: 14px;
 }
 /* The buttons keep to the right, also when a narrow pane wraps them under the count. */
 .room-instructions-foot .rs-pane-actions {
@@ -392,6 +395,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
+	margin-top: 10px;
 }
 .room-instructions-global-toggle {
 	margin-left: 0;
@@ -411,31 +415,6 @@
 	color: var(--muted);
 	max-height: 260px;
 	overflow: auto;
-}
-.room-session-confirm {
-	display: grid;
-	gap: 10px;
-}
-
-/* Room settings: delete room ------------------------------------------ */
-.room-danger-note {
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.45;
-	margin: 0;
-}
-.room-danger-note strong {
-	color: var(--fg);
-}
-.room-danger-confirm {
-	display: grid;
-	gap: 10px;
-}
-.room-danger-confirm-actions {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 10px;
 }
 
 

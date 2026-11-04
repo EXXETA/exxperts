@@ -8,6 +8,7 @@ import { gfm } from "micromark-extension-gfm";
 import { createAnswerSplitter } from "./answer-blocks";
 import { readChart } from "./chart-block";
 import { CodeBlock } from "./CodeBlock";
+import { CopyTableTool, FigureStrip, FigureTools } from "./figure-tools";
 import { ImageActions } from "./ImageActions";
 import { Maths } from "./Maths";
 import { DISPLAY_MATHS_LINE, dollarFormulaAt, displayMathsSyntax, inlineMathsConstruct, MATHS_SIGN, mathsFromMarkdown } from "./maths-syntax";
@@ -462,6 +463,9 @@ function looksLikeMarkdown(s: string): boolean {
 	return /(^|\n)(#{1,6} |\* |- |\d+\. |```|>)|\*\*|`[^`]+`|\[[^\]]+]\([^)]+\)/.test(s);
 }
 
+/** Whether a link's address leads anywhere outside the app, in a new tab here and from a mail once copied. */
+export const opensOutside = (address: string): boolean => /^(?:https?:|mailto:)/i.test(address);
+
 /**
  * Sub-agents sometimes wrap their entire output in a single fenced code
  * block (```markdown ... ``` or ```md ... ```), which makes the rendered
@@ -555,7 +559,7 @@ export function markTableFrame(frame: HTMLElement): void {
 }
 
 // The band sits on the frame, outside the scroller, so it stays at the edge and paints above the table.
-function TableFrame({ children }: { children: React.ReactNode }) {
+function TableFrame({ copy, children }: { copy: boolean; children: React.ReactNode }) {
 	const frame = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		const element = frame.current;
@@ -572,7 +576,14 @@ function TableFrame({ children }: { children: React.ReactNode }) {
 			resized?.disconnect();
 		};
 	}, []);
-	return <div ref={frame} className="md-table-frame"><div className="md-table-scroll">{children}</div></div>;
+	const framed = <div ref={frame} className="md-table-frame"><div className="md-table-scroll">{children}</div></div>;
+	if (!copy) return framed;
+	return (
+		<div className="figure-table">
+			<FigureStrip className="figure-strip-plain"><FigureTools copy={<CopyTableTool table={() => frame.current?.querySelector("table")} />} /></FigureStrip>
+			{framed}
+		</div>
+	);
 }
 
 /**
@@ -581,6 +592,8 @@ function TableFrame({ children }: { children: React.ReactNode }) {
  * drawn diagram (its open viewer included) keeps its element.
  */
 const AnswerStreaming = createContext(false);
+/** Whether a formula stands in a table, whose own Copy takes it along. */
+const InTable = createContext(false);
 
 /** A diagram still being written: a quiet box the size of a small diagram, its code behind a toggle. */
 function DiagramBeingDrawn({ children }: { children: React.ReactNode }) {
@@ -625,7 +638,7 @@ class ChartOrCode extends Component<{ code: React.ReactNode; children: React.Rea
 // is a quiet box, and an answer that ended inside its fence keeps it as code.
 // A ```math fence is a display formula, and a formula the parser found
 // (maths-syntax.ts) is an `exx-maths` element.
-function markdownComponents(onOpenRoomFile?: (name: string) => void, codeTokens = false): Components {
+function markdownComponents(onOpenRoomFile?: (name: string) => void, codeTokens = false, answer = false): Components {
 	const heading = (Tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6") => ({ node, children, ...props }: React.ComponentProps<typeof Tag> & ExtraProps) => <Tag {...props} data-anchor={headingAnchor(node)}>{children}</Tag>;
 	return {
 		h1: heading("h1"),
@@ -638,14 +651,14 @@ function markdownComponents(onOpenRoomFile?: (name: string) => void, codeTokens 
 		// a growing row never re-balances them; they take their own widths once, at the end.
 		table({ node: _node, children, ...props }) {
 			const streaming = useContext(AnswerStreaming);
-			return <TableFrame><table {...props} data-streaming={streaming || undefined}>{children}</table></TableFrame>;
+			return <TableFrame copy={answer}><InTable.Provider value={true}><table {...props} data-streaming={streaming || undefined}>{children}</table></InTable.Provider></TableFrame>;
 		},
 		a({ href, children, node: _node, ...props }) {
 			const address = typeof href === "string" ? href : "";
 			// A footnote or "#details" stays in this answer: a new tab would open the app again.
 			if (address.startsWith("#")) return <a href={address} {...props} onClick={(event) => { event.preventDefault(); scrollToAnchor(event.currentTarget, address.slice(1)); }}>{children}</a>;
 			// A file, a relative or any other address opens nothing here: it shows as text the person can copy.
-			if (!/^(?:https?:|mailto:)/i.test(address)) {
+			if (!opensOutside(address)) {
 				const written = readableAddress(address);
 				return written && String(children) !== written ? <span>{children} <code>{written}</code></span> : written ? <code>{written}</code> : <span>{children}</span>;
 			}
@@ -709,13 +722,14 @@ function markdownComponents(onOpenRoomFile?: (name: string) => void, codeTokens 
 				// Keyed by its text: other numbers start with no value hovered.
 				if (read?.ok) return <ChartOrCode key={fenced.text} code={asCode}><Suspense fallback={<ChartBeingDrawn />}><ChartBlock chart={read.chart} /></Suspense></ChartOrCode>;
 			}
-			if (language === "math" && fenced.fence !== "opening") return <Maths tex={fenced.text} display written={fenced.text} writing={streaming && fenced.fence === "open"} />;
+			if (language === "math" && fenced.fence !== "opening") return <Maths tex={fenced.text} display written={fenced.text} writing={streaming && fenced.fence === "open"} copy={answer} />;
 			return asCode;
 		},
 		...({
 			"exx-maths": ({ "data-tex": tex, "data-display": display, "data-written": written, "data-open": open }: { "data-tex"?: string; "data-display"?: string; "data-written"?: string; "data-open"?: string }) => {
 				const streaming = useContext(AnswerStreaming);
-				return <Maths tex={tex ?? ""} display={display === "true"} written={written ?? tex ?? ""} writing={streaming && open === "true"} />;
+				const inTable = useContext(InTable);
+				return <Maths tex={tex ?? ""} display={display === "true"} written={written ?? tex ?? ""} writing={streaming && open === "true"} copy={answer && !inTable} />;
 			},
 		} as Components),
 	};
@@ -747,7 +761,7 @@ const AnswerBlock = memo(function AnswerBlock({ text, components }: { text: stri
  * itself, stored, saved and copied, is never changed.
  */
 function MarkdownRendererImpl({ children, streaming = false, onOpenRoomFile, codeTokens = false, answer = false }: { children: string; streaming?: boolean; onOpenRoomFile?: (name: string) => void; codeTokens?: boolean; answer?: boolean }) {
-	const components = useMemo(() => markdownComponents(onOpenRoomFile, codeTokens), [onOpenRoomFile, codeTokens]);
+	const components = useMemo(() => markdownComponents(onOpenRoomFile, codeTokens, answer), [onOpenRoomFile, codeTokens, answer]);
 	const [streamed, setStreamed] = useState(streaming);
 	if (streaming && !streamed) setStreamed(true);
 	const [split] = useState(() => createAnswerSplitter(ANSWER_BLOCK_SYNTAX, ANSWER_BLOCK_NODES));

@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { installAnswerCopy } from "./answer-copy";
 import { App } from "./App";
 import { AppErrorBoundary } from "./components/app-error-boundary";
 import { ConfirmDialogHost } from "./components/confirm-dialog";
@@ -19,6 +20,9 @@ if (navigator.userAgent.includes("ExxpertsDesktop")) {
 
 // Phone keyboard/viewport tracking (no-op above the phone breakpoint).
 installPhoneViewportTracking();
+
+// A copy inside an answer leaves the page's look behind.
+installAnswerCopy();
 
 createRoot(document.getElementById("root")!).render(
 	<React.StrictMode>

@@ -38,11 +38,16 @@ let server: ChildProcessWithoutNullStreams | null = null;
 
 const BUSY = "The room is busy with a scheduled task. Save again when it has finished.";
 
+type Rect = { x: number; y: number; width: number; height: number };
+const inBoxCorner = (button: Rect, box: Rect): boolean =>
+	button.y > box.y && button.y + button.height < box.y + box.height / 2
+	&& button.x + button.width < box.x + box.width && button.x + button.width >= box.x + box.width - 16;
+
 // Both Instructions panes, measured in the page: Clear (and its Undo) sits
-// above the box at its right edge without moving the box, the counter under
-// the box reads "N / 8,000" and turns the app's danger red only past the
-// limit, and the row under the box stays on one line with Save in place as
-// the text crosses the limit. Leaves `keep` in the box.
+// in the box's top right corner without moving the box, the text wraps before
+// it, the counter under the box reads "N / 8,000" and turns the app's danger
+// red only past the limit, and the row under the box stays on one line with
+// Save in place as the text crosses the limit. Leaves `keep` in the box.
 async function checkInstructionsBox(page: Page, pane: Locator, label: string, keep: string): Promise<void> {
 	const box = pane.locator(".room-instructions-textarea");
 	const counter = pane.locator(".room-instructions-count [aria-hidden='true']");
@@ -83,22 +88,26 @@ async function checkInstructionsBox(page: Page, pane: Locator, label: string, ke
 	const toggle = pane.locator(".room-instructions-global-toggle");
 	if (await toggle.count()) {
 		const shared = await rect(toggle);
-		assert(Math.abs((shared.y + shared.height / 2) - (clear.y + clear.height / 2)) <= 4 && shared.x < clear.x, `${label}: Clear shares the row of "Show the global instructions", the link on the left`);
-		// With the global text shown, Clear leaves it and sits right above the room's own box.
+		assert(shared.y + shared.height <= boxRect.y, `${label}: "Show the global instructions" sits above the box`);
+		// With the global text shown, Clear stays in the room's own box, under that text.
 		await toggle.click();
 		const globalText = pane.locator(".room-instructions-global-text");
 		await globalText.waitFor({ timeout: 5000 });
 		const shown = await rect(globalText);
 		const clearOpen = await rect(button("Clear"));
 		const boxOpen = await rect(box);
-		assert(clearOpen.y >= shown.y + shown.height && clearOpen.y + clearOpen.height <= boxOpen.y, `${label}: with the global text shown, Clear sits between it and the box`);
+		assert(boxOpen.y >= shown.y + shown.height && inBoxCorner(clearOpen, boxOpen), `${label}: with the global text shown, Clear sits in the box under it`);
 		await toggle.click();
 		await globalText.waitFor({ state: "detached", timeout: 5000 });
 		assert((await rect(box)).y === emptyTop, `${label}: hiding the global text puts the box back`);
 	}
 	assert((await rect(counter)).y === cleanCounterTop, `${label}: the counter stays put when Discard and Save appear`);
-	assert(clear.y + clear.height <= boxRect.y, `${label}: Clear sits above the box`);
-	assert(Math.abs((clear.x + clear.width) - (boxRect.x + boxRect.width)) <= 2, `${label}: Clear keeps to the box's right edge`);
+	assert(inBoxCorner(clear, boxRect), `${label}: Clear sits in the box's top right corner`);
+	const textRight = await box.evaluate((element) => {
+		const style = getComputedStyle(element);
+		return element.getBoundingClientRect().right - parseFloat(style.paddingRight);
+	});
+	assert(textRight <= clear.x, `${label}: the text wraps before Clear`);
 	assert(await counter.innerText() === `${keep.length} / 8,000` && !(await isDanger()), `${label}: under the limit the counter is plain, got ${JSON.stringify(await counter.innerText())}`);
 	assert(await sameLine(), `${label}: the counter and Save share one line`);
 
@@ -120,7 +129,7 @@ async function checkInstructionsBox(page: Page, pane: Locator, label: string, ke
 	await button("Clear").click();
 	await button("Undo").waitFor({ timeout: 5000 });
 	const undo = await rect(button("Undo"));
-	assert((await rect(box)).y === emptyTop && undo.y + undo.height <= boxRect.y, `${label}: Undo takes Clear's place above the box`);
+	assert((await rect(box)).y === emptyTop && inBoxCorner(undo, boxRect), `${label}: Undo takes Clear's place in the box`);
 	await button("Undo").click();
 	assert((await box.inputValue()).length === 8100, `${label}: Undo puts the text back`);
 	await box.fill(keep);

@@ -215,7 +215,7 @@ try {
 
 	// --- 7. The next message carries only a file ------------------------------
 	{
-		const fileNote = `[FILE ATTACHED: ${SLOW_MARKER}.txt · 1 page · now in this room's Files; read it with read_file when relevant]`;
+		const fileNote = `[FILE ATTACHED: ${SLOW_MARKER}.txt · 1 page · now in this room's Attachments; read it with read_file when relevant]`;
 		const { roomId, conversationId, ws, request } = await answerThenSendNext("file-only", { next: fileNote });
 		const latePut = await putThread(roomId, conversationId, [...earlierTurn, { kind: "user", id: "u-next", text: "", attachments: [{ name: `${SLOW_MARKER}.txt`, bytes: 12, extension: ".txt" }] }]);
 		assert(latePut.status === 200, `file-only: the late save should succeed, got ${latePut.status}: ${JSON.stringify(latePut.body)}`);

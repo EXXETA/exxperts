@@ -1068,6 +1068,7 @@ export function ComposerInput({
 		// An empty composer answers the one pending yes/no card; with text in
 		// it, Enter sends as always and the card stays.
 		// Cmd/Ctrl+Enter is never the card's: in an empty box it sends the first queued message now.
+		if (e.key === "Escape" && otherLayerOpen()) return;
 		if (keyboardApproval && draft === "" && !e.shiftKey && !(e.key === "Enter" && chordHeld(e.nativeEvent)) && (e.key === "Enter" || e.key === "Escape")) {
 			e.preventDefault();
 			e.stopPropagation();

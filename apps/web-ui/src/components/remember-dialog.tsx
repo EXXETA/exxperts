@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useEscapeKey } from "./use-escape-key";
 import { confirmDialog } from "./confirm-dialog";
 import { useRemoteClientContext } from "../remote-client-context";
@@ -269,34 +269,17 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 	);
 }
 
+const CHOOSE_WHAT_TO_KEEP = "Choose what to keep…";
+
+// The main half runs Remember; the arrow opens the options form straight away.
+// Both halves are off together, while Remember runs and before any message, and say why.
 function CheckpointSplitButton({ hasUserInput, inFlight, skipsPreview, onQuickCheckpoint, onOpenFullCheckpoint }: { hasUserInput: boolean; inFlight: boolean; skipsPreview: boolean; onQuickCheckpoint: () => void; onOpenFullCheckpoint: () => void }) {
-	const [menuOpen, setMenuOpen] = useState(false);
-	const rootRef = useRef<HTMLDivElement | null>(null);
-	useEffect(() => {
-		if (!menuOpen) return;
-		function onPointerDown(event: PointerEvent) {
-			if (rootRef.current && !rootRef.current.contains(event.target as Node)) setMenuOpen(false);
-		}
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") setMenuOpen(false);
-		}
-		document.addEventListener("pointerdown", onPointerDown);
-		document.addEventListener("keydown", onKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", onPointerDown);
-			document.removeEventListener("keydown", onKeyDown);
-		};
-	}, [menuOpen]);
-	const checkpointTitle = inFlight ? REMEMBER_WAIT_SENTENCE : hasUserInput ? (skipsPreview ? "Saves without the preview unless something needs your review" : "Proposes what to remember from this conversation, for you to review") : "Send a message before remembering";
+	const offReason = inFlight ? REMEMBER_WAIT_SENTENCE : hasUserInput ? null : "Send a message before remembering";
+	const checkpointTitle = offReason ?? (skipsPreview ? "Saves without the preview unless something needs your review" : "Proposes what to remember from this conversation, for you to review");
 	return (
-		<div className="checkpoint-split" ref={rootRef}>
-			<button className="icon-btn checkpoint-split-main" title={checkpointTitle} disabled={!hasUserInput || inFlight} onClick={() => { setMenuOpen(false); onQuickCheckpoint(); }}>Remember</button>
-			<button className="icon-btn checkpoint-split-toggle" title="More ways to remember" aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More ways to remember" disabled={inFlight} onClick={() => setMenuOpen((open) => !open)}><ChevronDownIcon /></button>
-			{menuOpen && (
-				<div className="checkpoint-split-menu" role="menu">
-					<button role="menuitem" title={hasUserInput ? "Choose summary density and add a steering note, then review before saving" : "Send a message before remembering"} disabled={!hasUserInput} onClick={() => { setMenuOpen(false); onOpenFullCheckpoint(); }}>Remember with options…</button>
-				</div>
-			)}
+		<div className="checkpoint-split">
+			<button className="icon-btn checkpoint-split-main" title={checkpointTitle} disabled={offReason !== null} onClick={onQuickCheckpoint}>Remember</button>
+			<button className="icon-btn checkpoint-split-toggle" title={offReason ?? CHOOSE_WHAT_TO_KEEP} aria-label={CHOOSE_WHAT_TO_KEEP} disabled={offReason !== null} onClick={onOpenFullCheckpoint}><ChevronDownIcon /></button>
 		</div>
 	);
 }

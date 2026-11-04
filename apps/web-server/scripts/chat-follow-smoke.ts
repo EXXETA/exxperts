@@ -16,6 +16,8 @@
 //   glides the new message to the top;
 // - each new block fades in while the answer is written; a finished answer,
 //   a reconnect's replay and reduced motion show no fade;
+// - the row under the box lines up: the meter, Remember's two halves, the
+//   model and the command mode share one height, top and text baseline;
 // - a reconnect's replay paints in one go: the answer is never shorter on
 //   screen than it was before the drop.
 //
@@ -464,6 +466,51 @@ try {
 			const blocks = await blocksSince(page, 0);
 			if (blocks.length === 0) return "no block of the finished answer was seen";
 			return blocks.some((b) => b.fades) ? `${blocks.filter((b) => b.fades).length} blocks of a finished answer faded in` : null;
+		});
+		await row("the row under the box lines up: the meter, both halves of Remember and the model share one height, top and text baseline", async () => {
+			// A string, so the bundler adds no helper names the page does not have.
+			const boxes = await fade.page.evaluate(`(() => {
+				// The baseline is where a zero-size inline probe beside the label's first words sits.
+				const baselineOf = (el) => {
+					const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+					let node = walker.nextNode();
+					while (node && !node.textContent.trim()) node = walker.nextNode();
+					if (!node) return null;
+					const wrap = document.createElement("span");
+					node.parentNode.insertBefore(wrap, node);
+					wrap.appendChild(node);
+					const probe = document.createElement("span");
+					probe.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
+					wrap.appendChild(probe);
+					const y = probe.getBoundingClientRect().bottom;
+					wrap.parentNode.insertBefore(node, wrap);
+					wrap.remove();
+					return y;
+				};
+				const controls = [
+					["the meter", ".composer-context-pill", ".composer-context-pill-label"],
+					["Remember", ".checkpoint-split-main", ".checkpoint-split-main"],
+					["Remember's arrow", ".checkpoint-split-toggle", null],
+					["the model", ".model-pick-trigger", ".model-pick-trigger-name"],
+					["the command mode", ".bash-mode-chip", ".bash-mode-chip-label"],
+				];
+				return controls.map(([name, box, text]) => {
+					const el = document.querySelector(".composer-under-row " + box);
+					if (!el) return { name, missing: true };
+					const r = el.getBoundingClientRect();
+					return { name, top: r.top, height: r.height, baseline: text ? baselineOf(document.querySelector(".composer-under-row " + text)) : null };
+				});
+			})()`) as Array<{ name: string; missing?: true; top: number; height: number; baseline: number | null }>;
+			// The command mode shows only in a room with commands on, which this one is not.
+			const missing = boxes.filter((b) => b.missing && b.name !== "the command mode").map((b) => b.name);
+			if (missing.length) return `the row under the box has no ${missing.join(", ")}`;
+			const shown = boxes.filter((b) => !b.missing);
+			const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
+			const describe = (pick: (b: (typeof shown)[number]) => number | null) => shown.filter((b) => pick(b) !== null).map((b) => `${b.name} ${pick(b)!.toFixed(2)}`).join(", ");
+			if (spread(shown.map((b) => b.height)) > 1) return `the controls' heights differ: ${describe((b) => b.height)}`;
+			if (spread(shown.map((b) => b.top)) > 1) return `the controls' tops differ: ${describe((b) => b.top)}`;
+			const baselines = shown.flatMap((b) => (b.baseline === null ? [] : [b.baseline]));
+			return spread(baselines) > 1 ? `the labels' baselines differ: ${describe((b) => b.baseline)}` : null;
 		});
 		const calm = await enter("Calm Room", { reducedMotion: true });
 		await row("with reduced motion no block fades in", async () => {

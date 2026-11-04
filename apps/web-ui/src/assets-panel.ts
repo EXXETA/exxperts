@@ -1,7 +1,7 @@
 /**
  * Assets panel projection (assets contract §2, rung 3 — mockup v2).
  *
- * Pure logic for the in-room rail's Artifacts section: the room's ledger rows
+ * Pure logic for a room's Attachments: the room's ledger rows
  * (rows survive Memento/checkpoint) + the
  * live task state + the thread's transferred task ids → compact row view-models.
  * The subline is the SINGLE status channel (no state badges); running shows
@@ -60,7 +60,7 @@ export interface AssetRowView {
 	/**
 	 * Origin disclosure for rows born in another conversation:
 	 * "From an earlier thread · Jul 12". Empty for rows
-	 * of the live conversation — the rail subline never carries origin; the
+	 * of the live conversation: the card's subline never carries origin; the
 	 * viewer header is its only surface.
 	 */
 	originLine: string;
@@ -401,16 +401,3 @@ export function rowShelfFileName(row: AssetRowView): string | null {
 	return relativePath.startsWith("files/") ? relativePath.slice("files/".length) : null;
 }
 
-export const ASSET_PANEL_DEFAULT_VISIBLE = 3;
-
-/**
- * The resting window: newest rows up to `visibleCount` unless expanded. The
- * component passes a height-derived count (files-management slice: the panel
- * shows as many rows as the sidebar fits, 8–10 typical, before "Show all");
- * the constant stays the conservative fallback for callers without a height.
- */
-export function windowAssetRows(rows: AssetRowView[], showAll: boolean, visibleCount: number = ASSET_PANEL_DEFAULT_VISIBLE): { visible: AssetRowView[]; hiddenCount: number } {
-	const count = Number.isFinite(visibleCount) && visibleCount >= 1 ? Math.floor(visibleCount) : ASSET_PANEL_DEFAULT_VISIBLE;
-	if (showAll || rows.length <= count) return { visible: rows, hiddenCount: 0 };
-	return { visible: rows.slice(0, count), hiddenCount: rows.length - count };
-}

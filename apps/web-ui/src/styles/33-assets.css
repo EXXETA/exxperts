@@ -1,113 +1,372 @@
-/* ── Assets panel (contract §2 rung 3, mockup v2) ─────────────────────────── */
-.sidebar-assets {
-	margin: 2px 12px 0;
+/* ── A room's Attachments: the sidebar's entry, the panel, the gallery ─────── */
+.sidebar-primary-nav .attachments-entry {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	text-align: left;
+}
+/* Open reads as a selected row of Home's lists (.product-nav .list-btn.active),
+   hovered too: :root .sidebar outranks the light theme's sidebar rows. */
+:root .sidebar .sidebar-primary-nav .attachments-entry[aria-expanded="true"],
+:root .sidebar .sidebar-primary-nav .attachments-entry[aria-expanded="true"]:hover,
+:root .sidebar .sidebar-primary-nav .attachments-entry[aria-expanded="true"]:focus-visible {
+	background: var(--exx-active-muted-bg);
+	border-color: var(--exx-divider);
+	box-shadow: var(--exx-shadow-hover);
+	color: var(--fg);
+}
+.attachments-entry-count {
+	color: var(--muted);
+	font-size: 12px;
+}
+/* On the open row's darker fill the muted number falls under 4.5:1 in light: a step toward the text. */
+.attachments-entry[aria-expanded="true"] .attachments-entry-count { color: color-mix(in srgb, var(--muted) 70%, var(--fg)); }
+.attachments-browser {
+	min-width: 0;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
+	overflow: hidden;
+	background: var(--bg);
+	color: var(--fg);
 }
-.assets-head {
+/* The gallery lies over the chat column, under the room's bar. The column
+   stays laid out beneath it, so its draft and scroll survive, unseen but for
+   the bar and the composer's toast stack (a delete's Undo), which paint over
+   the gallery as positioned parts of the column. The column is no stacking
+   context, which would hold the bar under the mac app's drag strip. */
+.attachments-gallery {
+	grid-column: 1;
+	grid-row: 1;
+	margin-top: 46px;
+}
+.workbench.attachments-gallery-open > .main {
+	grid-column: 1;
+	grid-row: 1;
+	pointer-events: none;
+}
+.workbench.attachments-gallery-open > .main > .topbar { pointer-events: auto; }
+.workbench.attachments-gallery-open > .main > :not(.topbar) { visibility: hidden; }
+.workbench.attachments-gallery-open .composer-toasts {
+	visibility: visible;
+	bottom: calc(100% - 120px);
+}
+/* The room's bar takes the gallery's edges, not the reading rail's. */
+.workbench.attachments-gallery-open .topbar {
+	--topbar-column-edge: max(24px, calc((100% - 1160px) / 2 + 24px));
+	--topbar-banner-edge: var(--topbar-column-edge);
+}
+.workbench.artifact-pane-maximized > .attachments-gallery { display: none; }
+.attachments-panel { border-left: 1px solid var(--border); }
+.att-backdrop { display: none; }
+.att-head {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 10px;
+	flex: none;
+	padding: 10px 24px 14px;
+}
+.attachments-panel .att-head {
+	min-height: 46px;
+	box-sizing: border-box;
+	padding: 7px var(--exx-sp-4);
+	border-bottom: 1px solid var(--border);
+}
+.attachments-gallery .att-head,
+.attachments-gallery .att-grid {
 	width: 100%;
-	background: transparent;
-	border: none;
-	padding: 8px 4px 6px;
+	box-sizing: border-box;
+	max-width: 1160px;
+	margin-inline: auto;
+}
+.att-title {
+	margin: 0;
+	font-size: 17px;
+	font-weight: 600;
+	color: var(--fg);
+}
+.att-count {
 	color: var(--muted);
-	font-size: 11px;
-	font-weight: 700;
-	cursor: pointer;
-	text-align: left;
+	font-size: 13px;
 }
-.assets-head:hover { color: var(--fg-soft); }
-.assets-head-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.assets-count {
-	font-size: 10px;
-	font-weight: 700;
+.att-spacer { flex: 1; }
+.att-icon {
+	flex: none;
+	width: 30px;
+	height: 30px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: var(--exx-radius-control);
+	background: none;
 	color: var(--fg-soft);
-	background: var(--exx-surface-raised);
-	border: 1px solid var(--border);
-	border-radius: var(--exx-radius-pill);
-	padding: 0 6px;
-	line-height: 16px;
+	cursor: pointer;
 }
-.assets-rows { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; }
-.assets-row {
+.att-icon:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+.att-add {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	background: transparent;
+	color: var(--fg-soft);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.att-add:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+.att-grid {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+	grid-auto-rows: max-content;
+	align-content: start;
+	gap: 18px;
+	padding: 4px 24px 32px;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+.attachments-panel .att-grid {
+	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	gap: 14px;
+	padding: var(--exx-sp-4);
+}
+.att-card {
+	position: relative;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-card);
+	background: var(--exx-surface);
+	transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+.att-card:hover {
+	transform: translateY(-1px);
+	box-shadow: var(--exx-shadow-hover);
+	border-color: var(--border);
+}
+.att-card.sel { border-color: var(--fg-soft); }
+.att-card:has(.att-menu) {
+	z-index: 6;
+	/* Scrolled into view for its menu, it keeps a gap under the panel's head. */
+	scroll-margin: 16px;
+}
+.att-open {
+	display: block;
+	width: 100%;
+	padding: 0;
+	border: none;
+	background: none;
+	cursor: pointer;
+	border-radius: var(--exx-radius-card) var(--exx-radius-card) 0 0;
+}
+/* The whole card opens the file; ⋯, its menu and a rename sit above this. */
+.att-open::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	border-radius: var(--exx-radius-card);
+}
+.att-open:focus-visible { outline: none; }
+.att-open:focus-visible::after { outline: 2px solid var(--exx-focus); outline-offset: -2px; }
+.att-preview {
+	position: relative;
+	display: flex;
+	justify-content: center;
+	align-items: flex-start;
+	overflow: hidden;
+	aspect-ratio: 4 / 3;
+	background: var(--exx-surface-raised);
+	border-radius: 11px 11px 0 0;
+}
+.att-image { width: 100%; height: 100%; object-fit: cover; display: block; }
+.att-paper {
+	display: block;
+	box-sizing: border-box;
+	width: 70%;
+	height: 100%;
+	margin-top: 14px;
+	overflow: hidden;
+	background: var(--exx-paper);
+	box-shadow: var(--exx-shadow-hover);
+}
+.att-paper canvas { display: block; width: 100%; height: auto; }
+/* A text preview fades out at the sheet's foot rather than ending on half-cut letters. */
+.att-paper.att-paper-text { position: relative; }
+.att-paper.att-paper-text::after {
+	content: "";
+	position: absolute;
+	inset: auto 0 0;
+	height: 36px;
+	background: linear-gradient(transparent, var(--exx-paper));
+}
+.att-paper-text {
+	padding: 10px 11px;
+	color: var(--exx-ink);
+	font-family: var(--exx-font-mono);
+	font-size: 8.5px;
+	line-height: 1.5;
+	text-align: left;
+	white-space: pre-wrap;
+}
+.att-drawn {
+	display: grid;
+	align-content: start;
+	gap: 6px;
+	box-sizing: border-box;
+	width: 72%;
+	height: 100%;
+	margin-top: 28px;
+	padding: 14px 13px;
+	background: var(--exx-surface-hover);
+	border-radius: 3px 3px 0 0;
+}
+.att-drawn i { display: block; height: 4px; border-radius: 2px; background: var(--muted); opacity: 0.75; }
+.att-drawn i:nth-child(1) { width: 58%; height: 6px; }
+.att-drawn i:nth-child(4) { width: 84%; }
+.att-drawn i:nth-child(7) { width: 46%; }
+.att-drawn-sheet { grid-template-columns: repeat(4, 1fr); gap: 3px; }
+.att-drawn.att-drawn-sheet i:nth-child(n) { width: auto; height: 11px; border-radius: 1px; opacity: 0.4; }
+.att-drawn.att-drawn-sheet i:nth-child(-n+4) { opacity: 1; }
+.att-foot {
+	position: relative;
+	flex: 1;
+	display: flex;
+	gap: 4px;
+	padding: 9px 11px 11px;
+}
+/* Cards in a row share a height: the meta sits on the bottom, so a wrapped name
+   beside a short one keeps the meta lines level with no line held in reserve. */
+.att-words { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.att-words .assets-rename-input { position: relative; z-index: 2; margin-bottom: auto; }
+.att-name {
+	margin-bottom: auto;
+	padding-bottom: 2px;
+	color: var(--fg);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.3;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+.att-card.orphan .att-name { color: var(--muted); }
+.att-meta {
+	color: var(--muted);
+	font-size: 11.5px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.att-more {
+	position: absolute;
+	z-index: 2;
+	top: 7px;
+	right: 7px;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	background: var(--exx-surface);
+	color: var(--fg-soft);
+	font-size: 15px;
+	line-height: 1;
+	cursor: pointer;
+}
+@media (hover: hover) {
+	.att-more { opacity: 0; transition: opacity 120ms ease; }
+	.att-card:hover .att-more,
+	.att-more:focus-visible,
+	.att-more[aria-expanded="true"] { opacity: 1; }
+}
+.att-more:hover,
+.att-more[aria-expanded="true"] { background: var(--exx-surface-raised); color: var(--fg); }
+.att-menu {
+	position: absolute;
+	right: 44px;
+	bottom: calc(100% + 8px);
+	z-index: 5;
+	min-width: 124px;
+	display: flex;
+	flex-direction: column;
+	padding: 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	background: var(--exx-surface-raised);
+	box-shadow: var(--exx-shadow-popover);
+}
+.att-menu a,
+.att-menu button {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	width: 100%;
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: var(--exx-radius-control);
-	padding: 5px 6px;
-	cursor: pointer;
+	padding: 5px 9px;
+	border: none;
+	border-radius: var(--exx-radius-sm);
+	background: none;
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+	text-decoration: none;
 	text-align: left;
-	position: relative;
-	transition: background 120ms ease, border-color 120ms ease;
-}
-.assets-row:hover:not(:disabled) { background: var(--exx-surface-raised); }
-.assets-row.sel { background: var(--exx-surface-raised); border-color: var(--border); }
-.assets-row:disabled { cursor: default; opacity: 0.85; }
-/* Remove from list: the hover-reveal ✕ on every settled row (a ✕ on a list
- * row reads as remove, so it IS remove — closing the pane stays with the
- * row click, the viewer's own ✕, and Escape). Same reveal mechanics as the
- * running row's Stop; rows reserve the right padding so titles never shift. */
-.assets-row-wrap:not(.running) .assets-row { padding-right: 26px; }
-.assets-row-remove {
-	position: absolute;
-	right: 8px;
-	top: 50%;
-	transform: translateY(-50%);
-	width: 18px;
-	height: 18px;
-	display: grid;
-	place-items: center;
-	padding: 0;
-	border: none;
-	border-radius: 5px;
-	background: none;
-	color: var(--muted);
 	cursor: pointer;
-	opacity: 0;
-	transition: opacity 120ms ease;
+	white-space: nowrap;
+}
+.att-menu a:hover,
+.att-menu button:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.att-menu .att-menu-delete { color: var(--error-text); }
+/* The hover tint darkens dark's menu: the red moves toward the text colour to keep 4.5:1. */
+.att-menu .att-menu-delete:hover { color: color-mix(in srgb, var(--error-text) 70%, var(--fg)); }
+.att-empty {
+	flex: 1;
 	display: flex;
+	flex-direction: column;
 	align-items: center;
 	justify-content: center;
+	gap: 8px;
+	padding: 32px 28px 72px;
+	text-align: center;
 }
-.assets-row-wrap:hover .assets-row-remove,
-.assets-row-remove:focus-visible,
-.assets-row-wrap:focus-within .assets-row-remove { opacity: 1; }
-.assets-row-remove:hover { color: var(--fg); background: var(--exx-surface-raised); }
-/* Inline rename (files-management slice): the hover-reveal ✎ sits left of the
- * ✕ with the same reveal mechanics; file rows reserve wider right padding so
- * titles never shift under the second control. */
-.assets-row-wrap:has(.assets-row-rename) .assets-row { padding-right: 46px; }
-.assets-row-rename {
-	position: absolute;
-	right: 28px;
-	top: 50%;
-	transform: translateY(-50%);
-	width: 18px;
-	height: 18px;
+.att-empty-tile {
 	display: grid;
 	place-items: center;
-	padding: 0;
-	border: none;
-	border-radius: 5px;
-	background: none;
-	color: var(--muted);
-	cursor: pointer;
-	opacity: 0;
-	transition: opacity 120ms ease;
-	display: flex;
-	align-items: center;
-	justify-content: center;
+	width: 56px;
+	height: 56px;
+	margin-bottom: 6px;
+	border-radius: var(--exx-radius-card);
+	background: var(--exx-surface-raised);
+	color: var(--fg-soft);
 }
-.assets-row-wrap:hover .assets-row-rename,
-.assets-row-rename:focus-visible,
-.assets-row-wrap:focus-within .assets-row-rename { opacity: 1; }
-.assets-row-rename:hover { color: var(--fg); background: var(--exx-surface-raised); }
+.att-empty-title { margin: 0; color: var(--fg); font-size: 15px; font-weight: 600; }
+.att-empty-line { margin: 0 0 10px; max-width: 340px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.artifact-viewer-back + .artifact-viewer-provenance { flex: 1; }
+/* Status dots in the subline: green steady = done-unread (decays on first
+   open), danger steady = didn't finish. Never animated — oscillation is the
+   running row's alone. */
+.assets-dot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	margin-right: 5px;
+	vertical-align: 1px;
+}
+.assets-dot-ready { background: var(--success); }
+.assets-dot-failed { background: var(--exx-danger); }
 /* Save… filename step (files-management slice). */
 .save-as-input {
 	width: 100%;
@@ -132,125 +391,6 @@
 	border: 1px solid var(--border);
 	border-radius: 5px;
 	padding: 1px 4px;
-}
-.assets-icon {
-	flex: none;
-	width: 26px;
-	height: 26px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	background: var(--exx-surface-raised);
-	color: var(--muted);
-	font-size: 8px;
-	font-weight: 800;
-	letter-spacing: 0.04em;
-}
-.assets-icon.orphan { border-style: dashed; background: transparent; }
-.assets-pulse {
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	background: var(--exx-working);
-	animation: task-pulse 1.6s ease-in-out infinite;
-}
-/* Status dots in the subline: green steady = done-unread (decays on first
-   open), danger steady = didn't finish. Never animated — oscillation is the
-   running row's alone. */
-.assets-dot {
-	display: inline-block;
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	margin-right: 5px;
-	vertical-align: 1px;
-}
-.assets-dot-ready { background: var(--success); }
-.assets-dot-failed { background: var(--exx-danger); }
-/* The running row's hover-reveal stop square: zero idle chrome, visible on
-   row hover or keyboard focus. */
-.assets-row-wrap { position: relative; display: block; }
-.assets-row-wrap.running .assets-row { padding-right: 28px; }
-.assets-row-stop {
-	position: absolute;
-	right: 8px;
-	top: 50%;
-	transform: translateY(-50%);
-	width: 18px;
-	height: 18px;
-	padding: 0;
-	border: 1px solid var(--border);
-	border-radius: 5px;
-	background: var(--exx-surface-raised);
-	cursor: pointer;
-	opacity: 0;
-	transition: opacity 120ms ease;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
-.assets-row-wrap:hover .assets-row-stop,
-.assets-row-stop:focus-visible,
-.assets-row-wrap:focus-within .assets-row-stop { opacity: 1; }
-.assets-row-stop::before {
-	content: "";
-	width: 7px;
-	height: 7px;
-	border-radius: 2px;
-	background: var(--exx-danger);
-}
-.assets-row-stop:hover { border-color: color-mix(in srgb, var(--exx-danger) 55%, var(--border)); }
-.assets-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.assets-row-title {
-	font-size: 12.5px;
-	font-weight: 600;
-	color: var(--fg);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.assets-row.orphan .assets-row-title { color: var(--muted); }
-.assets-row-sub {
-	font-size: 10.5px;
-	color: var(--muted);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.assets-showall {
-	background: transparent;
-	border: none;
-	color: var(--muted);
-	font-size: 10.5px;
-	padding: 4px 6px 6px 40px;
-	cursor: pointer;
-	text-align: left;
-}
-.assets-showall:hover { color: var(--fg-soft); text-decoration: underline; }
-/* On a wide screen the block keeps the sidebar's one left edge
-   (--sidebar-text-left, where the logo and Home start): the header's word and
-   each file's tile start on it, and the card's box starts where Home's
-   highlight does, on the list's 12px, its 1px border included. The header is
-   a small grey label with the count on the right; a click on it still folds
-   the list. */
-@media (min-width: 761px) {
-	.assets-head {
-		padding-left: calc(var(--sidebar-text-left) - 12px);
-		font-size: 12px;
-		font-weight: 500;
-	}
-	.assets-row { padding-left: calc(var(--sidebar-text-left) - 13px); }
-	/* Under the file names: the tile's 26px and the 8px gap past the edge. */
-	.assets-showall { padding-left: calc(var(--sidebar-text-left) + 22px); }
-}
-/* The phone keeps its fold arrow, drawn from the button's state. The empty
-   alternative text keeps the arrow out of the button's name, which
-   aria-expanded already carries. */
-@media (max-width: 760px) {
-	.assets-head::before { content: "▾"; content: "▾" / ""; font-size: 9px; width: 10px; }
-	.assets-head[aria-expanded="false"]::before { content: "▸"; content: "▸" / ""; }
 }
 
 /* Reconstituted done-card viewer: header file list + action footer */

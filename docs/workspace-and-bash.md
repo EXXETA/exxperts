@@ -16,7 +16,7 @@ asks before it runs.
 Both modes carry the same six tools: **Read**, **List**, **Find**,
 **Search**, **Write** and **Edit**. Read opens text, images, spreadsheets
 (`.xlsx`, previewed as a table), PDFs and Word documents in one tool; PDF and
-Word text comes through the same isolated parser the room's Files use, with
+Word text comes through the same isolated parser the room's Attachments use, with
 page counts noted and offset/limit paging like any text file, and a scanned
 PDF with no text layer is called out honestly instead of returning nothing.
 Search finds text across the folder. Write and Edit create and change files

@@ -24,7 +24,7 @@
 //   connection lost), the next message is one of its own: refused while an
 //   answer runs, it is handed back with its line;
 // - Try again for a message that cannot go whole again (its file gone from
-//   the room's Files) sends nothing: its words go back in the box, focused,
+//   the room's Attachments) sends nothing: its words go back in the box, focused,
 //   and its line says so; with a draft in the box, or no words of its own,
 //   the box stays as it is and the line says it can't be sent again as it was.
 import fs from "node:fs";
@@ -141,7 +141,7 @@ try {
 	assert((await page.locator(".composer-staged-card").count()) === 0 && (await bubbles("Refused while running, with a file.")) === 1, "the chip went with the message, shown once");
 	await composer.fill("");
 	console.log("  ok  a message with a file sent while an answer runs goes back in the box with its file's chip, and Send carries the file's note once");
-	// A file dropped and sent before the room's Files list caught up: the list the page holds lacks it, and its chip still comes back.
+	// A file dropped and sent before the room's Attachments list caught up: the list the page holds lacks it, and its chip still comes back.
 	const staleName = "dropped-and-sent.txt";
 	let staleLists = 1;
 	await page.route(/\/api\/persistent-agents\/[^/]+\/files(\?|$)/, async (route) => {
@@ -153,9 +153,9 @@ try {
 	});
 	await page.locator(".composer-attach-input").setInputFiles({ name: staleName, mimeType: "text/plain", buffer: Buffer.from("Thursday: restore checked.\n") });
 	await page.locator(".composer-staged-card:not(.uploading)").waitFor({ timeout: 15000 });
-	await waitUntil(() => staleLists === 0, "the Files list read after the upload is the stale one");
+	await waitUntil(() => staleLists === 0, "the Attachments list read after the upload is the stale one");
 	await send("Refused while running, dropped and sent.", false);
-	await isReturned("Refused while running, dropped and sent.", "a message with a file sent before the Files list caught up");
+	await isReturned("Refused while running, dropped and sent.", "a message with a file sent before the Attachments list caught up");
 	await page.locator(".composer-staged-card:not(.uploading)", { hasText: staleName }).waitFor({ timeout: 5000 });
 	await page.unroute(/\/api\/persistent-agents\/[^/]+\/files(\?|$)/);
 	const staleBefore = requestUserTexts.length;
@@ -166,7 +166,7 @@ try {
 	const sentStale = requestUserTexts.slice(staleBefore).find((texts) => texts.at(-1)?.includes("Refused while running, dropped and sent.")) ?? [];
 	assert((sentStale.at(-1) ?? "").split(`[FILE ATTACHED: ${staleName}`).length - 1 === 1, `Send carries the file's note once, got ${JSON.stringify(sentStale)}`);
 	await composer.fill("");
-	console.log("  ok  a file sent before the Files list caught up still comes back as a chip");
+	console.log("  ok  a file sent before the Attachments list caught up still comes back as a chip");
 	// The moment between attempts and the still-finishing line, each checked to the end so every miss is named.
 	const turnFailures: string[] = [];
 	const expect = (condition: unknown, message: string) => { if (!condition) turnFailures.push(message); };
@@ -422,10 +422,10 @@ try {
 	}
 	console.log("  ok  after a Try again refused before it began, by the app stopping or the connection lost, the next message refused is handed back with its line");
 
-	// Try again where the conversation moved on, for a message that cannot go whole again (its file gone from the room's Files):
+	// Try again where the conversation moved on, for a message that cannot go whole again (its file gone from the room's Attachments):
 	// nothing is sent, its words go back in the box, focused, and its line says so.
 	const goneAbove = `${MODEL_NAME} could not answer this message. Your message is still above. Try again; if it repeats, choose another model.`;
-	// Sends a message with a file, which fails and stays above; the file then leaves the room's Files, the room opens again,
+	// Sends a message with a file, which fails and stays above; the file then leaves the room's Attachments, the room opens again,
 	// and Try again finds nothing to continue.
 	const tryAgainWithFileGone = async (fileName: string, text: string, draft = "") => {
 		await composer.fill("");
@@ -438,7 +438,7 @@ try {
 		await settled();
 		await waitUntil(async () => (await errorTexts()).at(-1) === goneAbove, `the message with its file stays above, got ${JSON.stringify((await errorTexts()).at(-1))}`, 10000);
 		const deleted = await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/files/${encodeURIComponent(fileName)}/delete`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-		assert(deleted.ok, `the file leaves the room's Files, got ${deleted.status}`);
+		assert(deleted.ok, `the file leaves the room's Attachments, got ${deleted.status}`);
 		const committed = await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/files/${encodeURIComponent(fileName)}/delete/commit`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: (await deleted.json()).token }) });
 		assert(committed.ok, `the delete is final, got ${committed.status}`);
 		await open();

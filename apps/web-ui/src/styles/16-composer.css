@@ -342,7 +342,6 @@
 /* One control with two segments, not two buttons pushed together. The halves
    are transparent inside the container and carry only their own wash, so the
    caret can never light up as a detached box.
-   Deliberately NOT overflow:hidden, which would clip the menu below.
    The three custom properties below are what keep this coherent: they are set
    ONCE on the container and read by both segments, so a state that belongs to
    the whole control (dimmed, or showing its divider) is expressed in one place
@@ -354,7 +353,6 @@
 	--split-ink-hover: var(--fg);
 	--split-wash: color-mix(in srgb, var(--fg) 12%, transparent);
 	--split-divider: transparent;
-	position: relative;
 	display: inline-flex;
 	align-items: stretch;
 	height: var(--composer-control-size, 34px);
@@ -366,23 +364,15 @@
    control is in play and stays out of sight when it is only sitting there: a
    hairline floating with no container around it reads as a stray mark. */
 .checkpoint-split:hover,
-.checkpoint-split:focus-within,
-.checkpoint-split:has(.checkpoint-split-toggle[aria-expanded="true"]) {
+.checkpoint-split:focus-within {
 	--split-divider: var(--border-soft);
 }
-/* One control, one dimmed state. When the main action cannot run, the label,
-   the divider and the chevron all dim together. The caret stays CLICKABLE,
-   because its menu is where the reason lives, but a bright caret inside a
-   greyed control looks like a bug rather than an invitation. */
+/* One control, one dimmed state. When Remember cannot run, both halves are
+   off and the label, the divider and the chevron all dim together; each
+   half's tooltip says why. */
 .checkpoint-split:has(.checkpoint-split-main:disabled) {
 	--split-ink: var(--dim);
-	--split-ink-hover: var(--fg-soft);
-	--split-wash: color-mix(in srgb, var(--fg) 7%, transparent);
 	--split-divider: transparent;
-}
-.checkpoint-split:has(.checkpoint-split-main:disabled):hover,
-.checkpoint-split:has(.checkpoint-split-main:disabled):focus-within {
-	--split-divider: color-mix(in srgb, var(--border-soft) 60%, transparent);
 }
 .checkpoint-split:has(:focus-visible) {
 	border-color: color-mix(in srgb, var(--fg) 35%, transparent);
@@ -423,43 +413,9 @@
 .composer-actions .checkpoint-split .icon-btn:disabled,
 .composer-actions .checkpoint-split .icon-btn:disabled:hover {
 	background: transparent;
+	/* The generic disabled button's border would draw a seam under the pointer. */
+	border-color: var(--split-divider);
 	color: var(--split-ink);
-	cursor: not-allowed;
-}
-.checkpoint-split-menu {
-	position: absolute;
-	right: 0;
-	bottom: calc(100% + 6px);
-	min-width: 232px;
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	padding: 4px;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	box-shadow: var(--exx-shadow-popover);
-	z-index: 30;
-}
-.checkpoint-split-menu button {
-	background: transparent;
-	border: none;
-	color: var(--fg);
-	text-align: left;
-	padding: 8px 10px;
-	border-radius: 6px;
-	font-size: 12.5px;
-	font-weight: 600;
-	cursor: pointer;
-}
-.checkpoint-split-menu button:hover:not(:disabled),
-.checkpoint-split-menu button:focus-visible {
-	background: var(--fg);
-	color: var(--bg);
-	outline: none;
-}
-.checkpoint-split-menu button:disabled {
-	color: var(--dim);
 	cursor: not-allowed;
 }
 /* The row under the message box (wider screens): the context ring and
@@ -523,11 +479,12 @@
 	bottom: calc(100% + 8px);
 }
 /* In the phone's box the chip sits beside Remember, so it takes the box
-   buttons' height and type (the phone sizes in 21-approval-preview.css). */
+   buttons' height, corners and type (the phone sizes in 21-approval-preview.css). */
 @media (max-width: 760px) {
 	.composer-box-bottom .bash-mode-chip {
 		height: var(--composer-control-size, 34px);
 		padding: 0 9px;
+		border-radius: 10px;
 		font-size: 11.5px;
 		font-weight: 700;
 		line-height: 1;
@@ -539,15 +496,52 @@
 	gap: 4px;
 	min-width: 0;
 }
-/* Under the box Remember sits at the column's left edge, so its menu opens
-   rightwards: anchored right it would run past the edge and be cut off when
-   a side pane narrows the chat. */
-.composer-under-actions .checkpoint-split-menu {
-	left: 0;
-	right: auto;
+/* One shape for the whole row: each control is a box of the row's height
+   with 8px corners and 8px sides, its text on one 16px line, so the boxes,
+   their centres and the baselines meet, and any two labels sit the same
+   distance apart. At rest only the text shows; a wash shows the box. */
+.composer-under-row .composer-context-pill,
+.composer-under-row .checkpoint-split,
+.composer-under-row .model-pick-trigger,
+.composer-under-row .bash-mode-chip {
+	height: var(--composer-control-size);
+	border-radius: 8px;
+	line-height: 16px;
 }
 .composer-under-row .composer-context-pill {
-	padding: 4px 8px;
+	padding: 0 8px;
+}
+/* Keyboard focus gets the row's edge too: a wash alone is not a ring. */
+.composer-under-row .composer-context-pill:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* Remember's label in the row's ink, as the model's and the command mode's
+   (the dimmed state still wins). Its frame becomes a focus ring outside the
+   box, as its neighbours', so both halves fill the row's height. */
+.composer-under-row .checkpoint-split {
+	--split-ink: var(--fg);
+	border: none;
+}
+.composer-under-row .checkpoint-split:has(:focus-visible) {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.composer-under-row .checkpoint-split .icon-btn:focus-visible {
+	box-shadow: none;
+}
+.composer-under-row .checkpoint-split .checkpoint-split-main {
+	padding: 0 8px;
+	line-height: inherit;
+	border-radius: 8px 0 0 8px;
+}
+.composer-under-row .checkpoint-split .checkpoint-split-toggle {
+	width: 22px;
+	border-radius: 0 8px 8px 0;
+	color: var(--muted);
+}
+/* Pointing at either half washes the whole control under that half's own
+   wash, so the arrow reads as part of Remember, not a button beside it. */
+.composer-under-row .checkpoint-split:hover:not(:has(:disabled)) {
+	background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 /* The ring is the meter: filled towards the recommended context in the zone's colour. */
 .context-ring {
@@ -760,20 +754,14 @@
 	margin: 0;
 	transform: translate(-50%, -50%);
 	color: var(--exx-plan);
-	font-family: var(--exx-font-display);
-	font-size: 20px;
-	font-weight: 700;
+	/* The static face has 700 only: a 600 draws from the variable one. */
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-size: 16px;
+	font-weight: 600;
 	letter-spacing: -0.01em;
 	line-height: 1.25;
 	white-space: nowrap;
 	cursor: default;
-}
-.model-pick-effort-hint {
-	margin: 0 16px 8px;
-	color: var(--muted);
-	font-size: 11.5px;
-	line-height: 1.4;
-	text-align: center;
 }
 /* The model under the dial: the row that leads to the models. */
 .model-pick-effort-model {
@@ -830,9 +818,62 @@
 .effort-slider:focus-visible {
 	box-shadow: 0 0 0 2px color-mix(in srgb, var(--exx-plan) 45%, transparent);
 }
+/* The dial's one moving number, 0 at the arc's start and 1 at its end: the
+   needle, the knob, the fill's reach and the knob's shade all read it, so they
+   cannot part mid swing. Registered so it can transition; a browser without
+   @property jumps to rest. */
+@property --effort-at {
+	syntax: "<number>";
+	inherits: true;
+	initial-value: 0;
+}
+/* The small kick that ends a drag, on top of --effort-at. */
+@property --effort-nudge {
+	syntax: "<number>";
+	inherits: true;
+	initial-value: 0;
+}
 .effort-dial {
 	position: relative;
 	aspect-ratio: 240 / 150;
+	/* The ramp's ends. One mix for both themes: the top end leans to the text
+	   colour, so in dark it goes lighter, not darker. */
+	--effort-pale: color-mix(in srgb, var(--exx-plan-shape) 55%, var(--exx-paper));
+	--effort-deep: color-mix(in srgb, var(--exx-plan) 80%, var(--fg));
+}
+/* Motion only for those who have not asked for less; a level set before the
+   panel opens has nothing to transition from, so it opens at rest. */
+@media (prefers-reduced-motion: no-preference) {
+	.effort-dial {
+		/* A damped spring: past the rung by an eighth, back, at rest in 450ms. */
+		transition: --effort-at 450ms linear(0, 0.074, 0.249, 0.463, 0.673, 0.85, 0.983, 1.069, 1.114, 1.126, 1.117, 1.095, 1.068, 1.041, 1.019, 1.002, 0.991, 0.986, 0.984, 0.985, 1);
+	}
+	/* A drag stays on the pointer. */
+	.effort-dial.is-follow-up,
+	.effort-dial.is-follow-down {
+		transition: none;
+	}
+	.effort-dial.is-settle-up {
+		--effort-kick: 1;
+		animation: effort-dial-settle 400ms ease-in-out;
+	}
+	.effort-dial.is-settle-down {
+		--effort-kick: -1;
+		animation: effort-dial-settle 400ms ease-in-out;
+	}
+}
+/* After a drag the knob is already on its rung, so the spring gets a kick the
+   way the drag was going. */
+@keyframes effort-dial-settle {
+	25% {
+		--effort-nudge: calc(var(--effort-kick) * 0.03);
+	}
+	50% {
+		--effort-nudge: 0;
+	}
+	72% {
+		--effort-nudge: calc(var(--effort-kick) * -0.008);
+	}
 }
 .effort-dial svg {
 	display: block;
@@ -841,7 +882,8 @@
 	overflow: visible;
 }
 .effort-dial-track,
-.effort-dial-fill {
+.effort-dial-fill,
+.effort-dial-reach {
 	fill: none;
 	stroke-width: 10;
 	stroke-linecap: round;
@@ -849,8 +891,25 @@
 .effort-dial-track {
 	stroke: color-mix(in srgb, var(--fg) 12%, transparent);
 }
-.effort-dial-fill {
-	stroke: var(--exx-plan-shape);
+/* The ramp's shade at --effort-at: pale to the brand lila over the first half,
+   on to deep over the second. */
+.effort-dial-fill,
+.effort-dial .effort-slider-thumb {
+	stroke: color-mix(in srgb, color-mix(in srgb, var(--effort-deep) calc(clamp(0, var(--effort-at) * 2 - 1, 1) * 100%), var(--exx-plan-shape)) calc(clamp(0, var(--effort-at) * 2, 1) * 100%), var(--effort-pale));
+}
+/* The mask over the ramp, so a move shows more of the same colours rather than
+   stretching them: pathLength 100 makes the dash a share of the arc. */
+.effort-dial-reach {
+	stroke: #fff;
+	/* The dash ends at --effort-at and starts far behind the arc, so a swing past
+	   the top cannot bring its gap round to the arc's start. */
+	stroke-dasharray: 200px 200px;
+	stroke-dashoffset: calc((2 - var(--effort-at) - var(--effort-nudge)) * 100px);
+}
+/* A swing stops at the arc's ends, a hair past them, or a long one would throw
+   the knob into the word beside it. */
+.effort-dial-hand {
+	transform: rotate(calc((clamp(-0.015, var(--effort-at) + var(--effort-nudge), 1.015) * 2 - 1) * var(--effort-span)));
 }
 .effort-dial-tick {
 	fill: color-mix(in srgb, var(--fg) 52%, transparent);
@@ -869,7 +928,6 @@
 }
 .effort-dial .effort-slider-thumb {
 	fill: var(--exx-paper);
-	stroke: var(--exx-plan-shape);
 	stroke-width: 3;
 }
 .effort-slider:focus-visible .effort-slider-thumb {
@@ -883,6 +941,10 @@
 	line-height: 1;
 	white-space: nowrap;
 	pointer-events: none;
+}
+/* The knob's word: it ties the knob to its name around the arc. */
+.effort-dial-label.is-current {
+	color: var(--fg);
 }
 /* The models view's top: a back arrow to the effort view and "Models". */
 .model-pick-list-head {
@@ -1020,6 +1082,9 @@
 /* On the phone the dial is larger, one tap area for a finger. */
 .model-pick-sheet .model-pick-effort-dial {
 	width: 270px;
+}
+.model-pick-sheet .model-pick-effort-title {
+	font-size: 17px;
 }
 .model-pick-sheet .effort-dial-label {
 	font-size: 12.5px;

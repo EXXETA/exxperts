@@ -1,4 +1,4 @@
-// The file types a room's Files preview as plain text. The server serves them
+// The file types a room's Attachments preview as plain text. The server serves them
 // as text/plain; charset=utf-8 under the artifact headers (nosniff, a
 // sandboxed frame), so the bytes show as inert source and never become a page,
 // a script or a picture; the viewer shows the same set in its text frame. One

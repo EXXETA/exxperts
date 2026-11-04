@@ -10,6 +10,7 @@ import { isMacPlatform } from "../platform";
 import { messageDeclinesQuestion, useComposerEmpty, useDraftStartedAt, useEnterReachesQuestion } from "../question-keys";
 import { askedCommand, askOpen, commandAction, commandSentence, durationText, foldedWords, itemKind, sizeText, stepResultWords, stepState, stepTime, workPieces, type StepKind, type StepState, type WorkPiece } from "../work-look";
 import { approvalMetadata, composerTextarea, confirmApprovalLabels, declinedAnswer, splitFencedBrief } from "./Approval";
+import { handOffApprovalSubject, SPECIALISTS_OFF_SENTENCE } from "../../../web-server/src/room-approval-titles";
 import { domainOf, GENERIC_TOOL_VIEWS, isMarkdownResult, mcpChipView, ResultBody, runningForText, summariseToolArgs } from "./Message";
 import { Label, ThinkingCardRow, ThinkingRow, useNow, useOffscreen, WorkIcon, type WorkIconName } from "./ThinkingRow";
 
@@ -85,8 +86,18 @@ function finishedWords(item: ToolItem, state: "done" | "failed"): string {
 
 type StepOutcome = ReturnType<typeof stepOutcome>;
 
+/**
+ * An old hand-off card left waiting: specialists are switched off, so it can
+ * never start and says why instead of asking. Read from the card alone, since
+ * an old step comes back stopped, or still running when it was saved mid-turn.
+ */
+function handOffLeftWaiting(ask: ApprovalItem | undefined): boolean {
+	return !!ask?.unanswered && handOffApprovalSubject(ask.title) !== null;
+}
+
 /** Where a step stands as its row shows it: a refusal (the app's rules or the room's settings kept it from running) reads calm, apart from a failure. */
 function rowState(item: ToolItem, ask: ApprovalItem | undefined, sharedServer: boolean): { state: StepState; outcome: StepOutcome | null } {
+	if (handOffLeftWaiting(ask) && item.status !== "done") return { state: "denied", outcome: null };
 	const state = stepState(item, ask);
 	const outcome = state === "failed" && typeof item.result === "string" ? stepOutcome(item.result, item, sharedServer) : null;
 	return { state: outcome?.refused ? "denied" : state, outcome };
@@ -303,6 +314,7 @@ function StepRow({ item, ask, elsewhere, keyboard, onResolve, onPreview, opensWi
 	if (state === "asking" && ask) return <AskRow item={item} ask={ask} icon={KIND_ICONS[kind]} keyboard={keyboard} onResolve={onResolve} onPreview={onPreview} />;
 	// Another window took the room: a step still under way goes on there, and is shown here only.
 	const goesOnElsewhere = elsewhere && (state === "running" || state === "writing");
+	const leftWaiting = state === "denied" && handOffLeftWaiting(ask);
 
 	let sentence: ReactNode;
 	let meta = "";
@@ -321,10 +333,10 @@ function StepRow({ item, ask, elsewhere, keyboard, onResolve, onPreview, opensWi
 	} else if (state === "failed") {
 		sentence = <StepSentence verb={verbs[2]} {...what} />;
 		meta = stepTime(item);
-	} else if (state === "denied") sentence = outcome?.refused ? <>{outcome.line}</> : <>{notRunWords(item, ask)}{name ? <> · <StepName name={name} code={code} /></> : null}</>;
+	} else if (state === "denied") sentence = outcome?.refused ? <>{outcome.line}</> : leftWaiting ? <>{SPECIALISTS_OFF_SENTENCE}</> : <>{notRunWords(item, ask)}{name ? <> · <StepName name={name} code={code} /></> : null}</>;
 	else sentence = <>Stopped · <StepSentence verb={verbs[0]} {...what} /></>;
 
-	const icon: WorkIconName = goesOnElsewhere ? "away" : state === "denied" ? "ban" : state === "stopped" ? "stop" : KIND_ICONS[kind];
+	const icon: WorkIconName = goesOnElsewhere ? "away" : leftWaiting || state === "stopped" ? "stop" : state === "denied" ? "ban" : KIND_ICONS[kind];
 	const body = stepBody(item, state);
 	const live = !goesOnElsewhere && (state === "running" || state === "writing");
 	const mark = live ? <span className="wk-spin" /> : state === "done" ? <WorkIcon name="check" className="wk-ok" /> : state === "failed" ? <WorkIcon name="x" className="wk-bad" /> : null;
@@ -335,7 +347,7 @@ function StepRow({ item, ask, elsewhere, keyboard, onResolve, onPreview, opensWi
 				{body ? (
 					<button type="button" className="wk-tx wk-open" aria-expanded={open} onClick={() => setOpen((value) => !value)}>{sentence}</button>
 				) : (
-					<span className={`wk-tx${live ? " wk-sweep" : ""}`}>{sentence}</span>
+					<span className={`wk-tx${live ? " wk-sweep" : ""}${leftWaiting ? " wk-wrap" : ""}`}>{sentence}</span>
 				)}
 				{meta && <span className="wk-meta">{meta}</span>}
 				<span className="wk-mk">{mark}</span>
@@ -504,11 +516,12 @@ function AskRow({ item, ask, icon, keyboard, onResolve, onPreview }: { item?: To
 function LoneAskRow({ ask, keyboard, onResolve, onPreview }: { ask: ApprovalItem; keyboard: boolean; onResolve: StretchProps["onResolve"]; onPreview?: StretchProps["onPreview"] }) {
 	if (askOpen(ask)) return <AskRow ask={ask} icon="tool" keyboard={keyboard} onResolve={onResolve} onPreview={onPreview} />;
 	const declined = ask.stopped || declinedAnswer(ask.done);
+	const specialistsOff = handOffLeftWaiting(ask);
 	const words = ask.stopped ? "Not done · you pressed Stop" : ask.unanswered ? "Not answered" : declined ? "Not done · you said no" : /^(yes\b|approve)/i.test(ask.done ?? "") ? "Allowed" : ask.done && !/^(submitted|\(empty\))/i.test(ask.done) ? `You chose ${ask.done}` : "Answered";
 	return (
 		<div className="wk-row" data-s={declined || ask.unanswered ? "denied" : "done"}>
-			<span className="wk-row-ic"><WorkIcon name={declined ? "ban" : "check"} /></span>
-			<span className="wk-tx">{words} · <b>{ask.title}</b></span>
+			<span className="wk-row-ic"><WorkIcon name={specialistsOff ? "stop" : declined ? "ban" : "check"} /></span>
+			{specialistsOff ? <span className="wk-tx wk-wrap">{SPECIALISTS_OFF_SENTENCE}</span> : <span className="wk-tx">{words} · <b>{ask.title}</b></span>}
 			<span className="wk-mk" />
 		</div>
 	);

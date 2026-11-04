@@ -32,7 +32,7 @@ function TaskStoreGcDialog({ assessment, busy, onConfirm, onClose }: { assessmen
 		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Review task-store cleanup">
 			<section className="checkpoint-input-card maintain-confirm-card task-store-gc-card">
 				<h2>Free up task storage</h2>
-				<p>These {proposal.candidates.length} are from old work no conversation refers to anymore. Deleting them frees {fmtMb(proposal.reclaimBytes)} — your Files and saved snapshots stay.</p>
+				<p>These {proposal.candidates.length} are from old work no conversation refers to anymore. Deleting them frees {fmtMb(proposal.reclaimBytes)}; your Attachments and saved snapshots stay.</p>
 				<div className="task-store-gc-list">
 					{proposal.candidates.map((candidate) => (
 						<div key={candidate.taskId} className="task-store-gc-row">

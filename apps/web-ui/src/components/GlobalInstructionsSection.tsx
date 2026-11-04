@@ -120,7 +120,7 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 			{unreadable && (
 				<div className="workspaces-error">The global instructions cannot be read right now ({unreadable}). New conversations start without them; a conversation that is already open keeps the text it started with.</div>
 			)}
-			{/* Clear above the box, in a row that keeps its height without it so the box never moves. */}
+			{/* Clear hangs in the box's top right corner from a row with no height, so the box never moves. */}
 			{!readOnly && (
 				<div className="room-instructions-box-head">
 					{clearLink && (

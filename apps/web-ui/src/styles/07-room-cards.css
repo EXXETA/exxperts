@@ -196,14 +196,18 @@
 	flex: 0 0 auto;
 	gap: 8px;
 }
+/* The card's buttons read in the card's own face and size; the padding keeps
+   them at the 29px the row had in the display face, so cards do not grow. */
 .persistent-agent-actions .landing-action,
 .persistent-agent-actions .inline-action {
-	font-size: 11px;
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
 	line-height: 1;
-	padding: 8px 12px;
+	padding: 7px 12px;
 }
+/* Wide enough for "Entering…", so the row does not jump on a click. */
 .persistent-agent-actions .landing-action {
-	min-width: 78px;
+	min-width: 92px;
 	text-align: center;
 }
 .persistent-agent-actions .inline-action {

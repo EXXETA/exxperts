@@ -102,6 +102,15 @@ export function SpinnerIcon({ size = 14 }: { size?: number } = {}) {
 }
 
 
+/** Back: a viewer to the Attachments it opened from, the gallery to the panel. */
+export function BackArrowIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<svg className="ui-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+			<path d="M13 8H3M7 4 3 8l4 4" />
+		</svg>
+	);
+}
+
 /** Close: dialogs, panes and removable rows. */
 export function CloseIcon({ size = 16 }: { size?: number } = {}) {
 	return (

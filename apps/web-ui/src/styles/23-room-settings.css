@@ -222,7 +222,8 @@
 /* Settings rows: every item in both settings dialogs is a row of one list,
    the label (and an optional subline) on the left, the control or value on
    the right, a hairline between rows only: never above the first or below
-   the last. Groups inside a pane are set apart by space and their kicker. */
+   the last, and none in the dialogs' soft boxes (the end of this file).
+   Groups inside a pane are set apart by space and their kicker. */
 .settings-rows > * + * {
 	border-top: 1px solid var(--exx-divider);
 }
@@ -665,7 +666,6 @@ label.settings-row {
 	font-weight: 600;
 }
 .room-schedules-completed {
-	border-top: 1px solid var(--border-soft);
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -692,7 +692,6 @@ label.settings-row {
 	text-decoration: underline;
 }
 .room-schedules-history {
-	border-top: 1px solid var(--border-soft);
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -721,15 +720,7 @@ label.settings-row {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
-	padding: 8px 0;
-	border-bottom: 1px solid var(--border-soft);
-}
-.room-schedules-run:first-child {
-	padding-top: 0;
-}
-.room-schedules-run:last-child {
-	border-bottom: none;
-	padding-bottom: 0;
+	padding: 14px 0;
 }
 .room-schedules-run-primary {
 	display: flex;
@@ -788,3 +779,122 @@ label.settings-row {
 	}
 }
 
+/* Both settings dialogs: each group's rows sit in one soft box under its
+   heading. The fill alone holds a box: no outline, no line between its rows
+   and none under a pane's title. 5% is as far as the fill goes: much past it
+   dark's muted words fall under 4.5:1. */
+.settings-dialog {
+	--settings-box-fill: color-mix(in srgb, var(--fg) 5%, var(--panel));
+	/* Every danger word in the dialogs reads at 4.5:1 on a box and on the
+	   chosen row too. Light's --error-text is its --error, so light keeps
+	   both reds. */
+	--error: var(--error-text);
+	--danger: var(--error-text);
+}
+:root:not([data-theme="light"]) .settings-dialog {
+	--exx-danger: var(--error-text);
+}
+.settings-dialog :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-table, .skill-table) {
+	background: var(--settings-box-fill);
+	border-radius: 12px;
+	padding: 0 16px;
+}
+/* An empty list has no box; its line stands alone, as on a pane with no rows. */
+.settings-dialog :is(.settings-rows, .room-skills-rows):empty {
+	display: none;
+}
+/* A table's head sits inside the box, clear of its edge. */
+.settings-dialog :is(.skill-table, .connector-table) {
+	padding-top: 10px;
+}
+.settings-dialog :is(.settings-rows > * + *, .ai-profile-row-group + .ai-profile-row-group, .connector-rows > .connector-row + .connector-row) {
+	border-top: none;
+}
+.settings-dialog .settings-row {
+	padding: 14px 0;
+}
+/* A group's name reads as its heading, and its line as the help under it. */
+.settings-dialog .settings-group-kicker {
+	margin: 0 0 2px;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--fg);
+}
+.settings-dialog .group-head {
+	margin-bottom: 10px;
+}
+.settings-dialog .group-head-line {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+.settings-dialog .pane-head {
+	padding-bottom: 16px;
+	margin-bottom: 8px;
+}
+.settings-dialog .settings-group {
+	margin-top: 28px;
+}
+.settings-dialog .pane-head + .settings-group {
+	margin-top: 8px;
+}
+.settings-dialog .settings-empty {
+	margin-top: 4px;
+}
+/* Room settings' panes: one distance from the title to the first rows. */
+.rs-shell .pane-head + :is(.settings-rows, .room-skills-rows) {
+	margin-top: 0;
+}
+.rs-shell .room-model-section .pane-head + .settings-rows {
+	margin-top: 20px;
+}
+/* The chosen side of a switch in dark, as Remote access's rooms have it
+   (35-sidebar-remote.css): the quiet fill sits too close to the box. So does
+   the soft edge. */
+:root:not([data-theme="light"]) .settings-dialog .settings-segment.active {
+	background: color-mix(in srgb, var(--fg) 20%, var(--panel));
+}
+:root:not([data-theme="light"]) .settings-dialog :is(.settings-segments, .settings-segment + .settings-segment) {
+	border-color: var(--border);
+}
+@media (min-width: 761px) {
+	.settings-dialog .settings-dialog-pane {
+		padding-right: 32px;
+	}
+	.settings-dialog .settings-dialog-nav-item.active {
+		font-weight: 600;
+	}
+}
+@media (max-width: 760px) {
+	/* The chat width has no effect at phone width, so it is not offered there. */
+	.settings-dialog .settings-chat-width-row {
+		display: none;
+	}
+	.settings-dialog :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-table, .skill-table) {
+		padding: 0 12px;
+	}
+	/* These tables have no head on a phone, so their first row needs the room. */
+	.settings-dialog :is(.connector-table, .skill-table) {
+		padding-block: 6px;
+	}
+	/* A switch is a finger's target here. */
+	.settings-dialog .settings-segments {
+		height: 40px;
+	}
+	/* The box leaves no room beside a room's name: the name and its line take
+	   the whole width and the switch its own line. */
+	.settings-dialog .remote-room-row {
+		flex-wrap: wrap;
+	}
+	.settings-dialog .remote-room-row .settings-row-main {
+		flex: 1 1 100%;
+	}
+	/* The box's sides would cut a line that fits without them: it may take a third line. */
+	.settings-dialog .settings-row-clamp {
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+	}
+	.settings-dialog .state-profiles .settings-row-value:has(input) {
+		flex: 1 1 100%;
+	}
+}

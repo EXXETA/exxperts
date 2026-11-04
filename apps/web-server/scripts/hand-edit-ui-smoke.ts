@@ -447,8 +447,7 @@ try {
 			await composer.press("Enter");
 			await page.getByText("Answer from claude-fake.").waitFor({ timeout: 20_000 });
 			await page.waitForTimeout(800);
-			await page.getByRole("button", { name: "More ways to remember" }).click();
-			await page.getByRole("menuitem", { name: "Remember with options…" }).click();
+			await page.getByRole("button", { name: "Choose what to keep…" }).click();
 			await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 			await dialog.getByRole("button", { name: "Save to memory" }).waitFor({ timeout: 20_000 });
 			proposalReady = true;
@@ -464,8 +463,7 @@ try {
 			await page.keyboard.press("Escape");
 			await page.keyboard.press("Escape");
 			await waitUntil(async () => (await dialog.count()) === 0, "the dialog closes", 5_000);
-			await page.getByRole("button", { name: "More ways to remember" }).click();
-			await page.getByRole("menuitem", { name: "Remember with options…" }).click();
+			await page.getByRole("button", { name: "Choose what to keep…" }).click();
 			await dialog.waitFor({ timeout: 5_000 });
 			if (await dialog.getByRole("button", { name: "Edit", exact: true }).count()) await dialog.getByRole("button", { name: "Edit", exact: true }).click();
 			const value = await dialog.getByLabel(/What to keep/).inputValue();
@@ -520,8 +518,7 @@ try {
 			await composer.press("Enter");
 			await page.getByText("Answer from claude-fake.").waitFor({ timeout: 20_000 });
 			await page.waitForTimeout(800);
-			await page.getByRole("button", { name: "More ways to remember" }).click();
-			await page.getByRole("menuitem", { name: "Remember with options…" }).click();
+			await page.getByRole("button", { name: "Choose what to keep…" }).click();
 			await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 			await dialog.getByRole("button", { name: "Save to memory" }).waitFor({ timeout: 20_000 });
 			if (await dialog.getByRole("button", { name: "Edit", exact: true }).count()) await dialog.getByRole("button", { name: "Edit", exact: true }).click();

@@ -253,7 +253,7 @@ try {
 
 	const scannedOutput = await execute(tools, "read", { path: "scanned.pdf" }, tmp);
 	assert(scannedOutput.includes("no extractable text"), "scanned pdf should get the honest no-text note");
-	assert(scannedOutput.includes("Files"), "scanned pdf note should point at the room's Files");
+	assert(scannedOutput.includes("Attachments"), "scanned pdf note should point at the room's Attachments");
 
 	try {
 		await executeResult(tools, "read", { path: "huge.pdf" }, tmp);

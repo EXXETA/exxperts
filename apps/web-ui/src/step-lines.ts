@@ -37,11 +37,12 @@ const CONNECTOR_OFF = "This connector is not on for this room. You can turn it o
 
 // Each pattern is a sentence the tools write (persistent-room-workspace-tools.ts,
 // the runtime's file tools, mcp/room-scope.ts, persistent-room-skill-tool.ts,
-// persistent-room-shelf-tools.ts, persistent-room-bash-approval.ts, persistent-room-delegate-tool.ts, fetch_url,
+// persistent-room-shelf-tools.ts, persistent-room-bash-approval.ts, fetch_url,
 // web-search, the message room-socket.ts gives a turn's questions when the person leaves, and
 // the one server-stop.ts gives them when exxperts stops, and the one turn-ended-by.ts gives
 // them when the person presses Stop);
-// a change there must change its match here. The line never repeats the
+// a change there must change its match here. The specialist hand-off's sentences
+// stay matched for old conversations, though no tool writes them now. The line never repeats the
 // label's words: the label already says the step did not happen.
 const REFUSED_LINES: Array<[RegExp, Line]> = [
 	[/looks like a secret file or the app's own data, so rooms don't open it/, "Blocked: a secret file or the app's own data"],

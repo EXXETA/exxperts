@@ -1,6 +1,6 @@
 /* Room settings at the main Settings' density -----------------------------
    The room settings modal speaks the Settings overlay's quiet grammar:
-   hairline row rhythm instead of boxes, sentence-case action pills,
+   rows of one soft box, sentence-case action pills,
    tracked-caps group labels, outcomes as plain colored sentences. Everything
    is scoped to .rs-shell so the full-page borrowers of the rs-* control
    language (remote devices, web search, archived rooms) keep their scale.
@@ -15,8 +15,8 @@
 	padding: 0;
 }
 
-/* Skills + connectors: bordered row-cards flatten to the shared divider
-   rhythm; the picker keeps its outline as a boundary but loses the fill. */
+/* Skills + connectors: bordered row-cards flatten to rows of the soft box;
+   the picker keeps its outline as a boundary but loses the fill. */
 .rs-shell .room-skills-rows {
 	gap: 0;
 	margin-top: 4px;
@@ -25,9 +25,6 @@
 	border: none;
 	border-radius: 0;
 	padding: 8px 0;
-}
-.rs-shell .room-skills-row + .room-skills-row {
-	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
 }
 .rs-shell .room-skills-picker {
 	background: transparent;
@@ -50,7 +47,7 @@
 .rs-shell .room-schedules-day-chip.active {
 	background: var(--fg);
 }
-/* Task cards flatten to divider-separated entries. */
+/* Task cards flatten to rows of the soft box. */
 .rs-shell .room-schedules-list {
 	gap: 0;
 }
@@ -58,9 +55,6 @@
 	border: none;
 	border-radius: 0;
 	padding: 12px 0;
-}
-.rs-shell .room-schedules-job + .room-schedules-job {
-	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
 }
 /* Status reads as colored caps text rather than an outlined pill, the way
    the Settings tables show provenance as muted text instead of chips. */

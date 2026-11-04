@@ -8,7 +8,7 @@
  * byte-identical to the one the room's context receives. Before this the
  * server and the client each wrote their own wording for the same event; two
  * strings for one fact drift, and the taste pass found them already drifted
- * ("was saved as" vs "is in Files as").
+ * ("was saved as" vs "is in Attachments as").
  *
  * The visible path is the STRUCTURED one: the `reviseConflicts` field on
  * `task_end` (live) and on the away notice (tab closed). The same sentence is
@@ -29,7 +29,7 @@ export function reviseConflictSentence(conflict: ReviseConflictNotice): string {
 	const name = String(conflict?.name ?? "").trim() || "The file";
 	const savedAs = String(conflict?.savedAs ?? "").trim();
 	return savedAs
-		? `“${name}” changed while the specialist worked, so it was not overwritten — the revision is in Files as “${savedAs}”.`
+		? `“${name}” changed while the specialist worked, so it was not overwritten: the revision is in Attachments as “${savedAs}”.`
 		: `“${name}” changed while the specialist worked, so it was not overwritten.`;
 }
 

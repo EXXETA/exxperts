@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { CloseIcon } from "./icons";
+import { BackArrowIcon, CloseIcon } from "./icons";
 import { PLAIN_TEXT_PREVIEW_EXTENSIONS } from "../../../web-server/src/plain-text-preview";
 
 export interface ArtifactRef {
@@ -14,7 +14,7 @@ interface Props {
 	onClose: () => void;
 	maximized: boolean;
 	onToggleMaximize: () => void;
-	/** Files UI slice: the room — routes user-added rows (`file:<name>`) through the room-files endpoint. */
+	/** The room: routes user-added rows (`file:<name>`) through the room-files endpoint. */
 	roomId?: string;
 	/** Asset-panel mode (contract §2 rung 3): the asset's display title leads the header. */
 	assetTitle?: string;
@@ -28,9 +28,8 @@ interface Props {
 	files?: ArtifactRef[];
 	onSelectFile?: (file: ArtifactRef) => void;
 	/**
-	 * The action footer (files UI slice: Ask for changes primary left; the
-	 * quiet snapshot actions right). The header carries only view chrome —
-	 * open in new tab, maximize, close.
+	 * The action footer (the quiet snapshot actions). The header carries only
+	 * view chrome: open in new tab, maximize, close.
 	 */
 	footerSlot?: ReactNode;
 	/**
@@ -40,6 +39,8 @@ interface Props {
 	 * refetch (the routes are no-store, so a remount always gets fresh bytes).
 	 */
 	reloadNonce?: number;
+	/** Set when the file opened from the room's Attachments: a back arrow returns to them. */
+	onBack?: () => void;
 }
 
 type RouteResolution = { url: string; segments: string[] } | { error: string };
@@ -85,7 +86,7 @@ export function resolveRouteUrl(taskId: string, relativePath: string, roomId?: s
 	return { url, segments };
 }
 
-export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maximized, onToggleMaximize, roomId, assetTitle, originLine, files, onSelectFile, footerSlot, reloadNonce }: Props) {
+export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maximized, onToggleMaximize, roomId, assetTitle, originLine, files, onSelectFile, footerSlot, reloadNonce, onBack }: Props) {
 	const extension = artifact.extension.toLowerCase();
 	// Vocabulary: a user-added row is a "file" everywhere the chrome speaks —
 	// "artifact" stays reserved for room-made task outputs.
@@ -194,6 +195,11 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 			    the producing template and asserts the sandbox — deliberately NO task
 			    ids appear here. */}
 			<header className="artifact-viewer-head">
+				{onBack && (
+					<button type="button" className="att-icon artifact-viewer-back" onClick={onBack} aria-label="Back to Attachments" title="Back to Attachments">
+						<BackArrowIcon />
+					</button>
+				)}
 				<div className="artifact-viewer-provenance">
 					{/* The sandbox assertion moved from a visible badge into this tooltip:
 					    it is provenance for the curious, not action-relevant status. The

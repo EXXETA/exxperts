@@ -27,7 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 
@@ -222,7 +222,10 @@ try {
 
 	const launched = await chromium.launch();
 	browser = launched;
+	// first-run-guide-ui-smoke.ts holds the guide; here it has had its turn.
+	const guideSeen = (context: BrowserContext) => context.addInitScript(() => localStorage.setItem("exxperts.first-run-guide-seen", "1"));
 	const desktop = await launched.newContext({ viewport: { width: 1280, height: 900 } });
+	await guideSeen(desktop);
 
 	// Right after start, the model status on its way: Home claims nothing yet.
 	await check("right after start: no \"You're set up\" while the model status is on its way, then AI setup needed", async () => {

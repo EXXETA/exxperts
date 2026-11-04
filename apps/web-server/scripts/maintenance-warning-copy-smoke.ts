@@ -29,7 +29,7 @@ function assert(condition: unknown, message: string): asserts condition {
 	assert(!/HTTP|502/.test(http) && http.includes("Nothing was saved."), `a bare HTTP failure is a plain sentence (got: ${http})`);
 	const other = formatAbsorbRunSaveError("ENOENT: something raw");
 	assert(other.includes("Your memory is unchanged") && !/ENOENT|Details/.test(other), `anything else keeps the reassurance, never the detail (got: ${other})`);
-	for (const message of ["this memory proposal is stale", "the conversation this proposal came from is missing; this memory proposal is stale", "Request failed (413)", "assessmentHandoff.text is too large", "memory budget changed", "token growth exceeds the limit", "The file could not be saved to this room's Files."]) {
+	for (const message of ["this memory proposal is stale", "the conversation this proposal came from is missing; this memory proposal is stale", "Request failed (413)", "assessmentHandoff.text is too large", "memory budget changed", "token growth exceeds the limit", "The file could not be saved to this room's Attachments."]) {
 		const own = formatAbsorbRunSaveError(message).replace(message, "");
 		assert(!/proposal|draft/i.test(own), `no save sentence says proposal or draft (got: ${own})`);
 	}

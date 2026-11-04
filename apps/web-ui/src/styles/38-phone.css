@@ -11,6 +11,45 @@
 	select {
 		font-size: 16px !important;
 	}
+	/* The guide: the flow stays one sequence, top to bottom, each stage on one
+	   line so the numbered steps start sooner. */
+	.help-tiles { grid-template-columns: minmax(0, 1fr); }
+	/* The first tap the guide asks of a new person: a 44 px area, the same
+	   drawing. The inset counts from inside the button's 1 px border. */
+	.help-head .icon-btn { position: relative; }
+	.help-head .icon-btn::after {
+		content: "";
+		position: absolute;
+		inset: -10px -7px;
+	}
+	.help-flow {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 14px;
+	}
+	.help-flow li {
+		flex-direction: row;
+		align-items: baseline;
+		gap: 8px;
+		padding: 7px 12px;
+	}
+	.help-flow li + li::before {
+		content: "↓";
+		left: 50%;
+		top: -14px;
+		transform: translateX(-50%);
+		font-size: 12px;
+		line-height: 14px;
+	}
+	.home-connect-card {
+		padding: 20px;
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.home-connect-card .landing-action {
+		grid-column: 1;
+		grid-row: auto;
+		margin-top: 10px;
+		justify-self: start;
+	}
 	/* Controls respond to the first tap: no double-tap-zoom wait and no
 	   accidental zoom on fast taps. Content areas keep pinch zoom. */
 	button,
@@ -214,3 +253,70 @@
 	}
 }
 
+/* The room's Attachments on a phone: the cards as a sheet from the bottom, two
+   a row, and a file full screen, the chat whole beneath them. */
+@media (max-width: 760px) {
+	.workbench.with-file-pane.with-right-pane {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr);
+	}
+	.workbench.with-file-pane .artifact-viewer {
+		position: fixed;
+		inset: 0;
+		z-index: 55;
+		border-top: none;
+	}
+	.workbench.with-file-pane .artifact-viewer-actions .artifact-viewer-icon:not(.artifact-viewer-open-tab) { display: none; }
+	.att-grid,
+	.attachments-panel .att-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+		padding: 2px 14px 28px;
+	}
+	.att-backdrop {
+		display: block;
+		position: fixed;
+		inset: 0;
+		z-index: 54;
+		background: color-mix(in srgb, var(--bg) 72%, transparent);
+		backdrop-filter: blur(6px);
+	}
+	.attachments-panel {
+		position: fixed;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: 86dvh;
+		z-index: 55;
+		border-left: none;
+		border-top: 1px solid var(--border);
+		border-radius: 16px 16px 0 0;
+		box-shadow: var(--exx-shadow-popover);
+	}
+	.attachments-panel .att-head { min-height: 56px; padding: 10px 14px; border-bottom: none; }
+	/* On touch ⋯ sits in the foot, off the preview, with a 44px tap area. */
+	.att-more {
+		top: auto;
+		right: 4px;
+		bottom: 4px;
+		width: 36px;
+		height: 36px;
+		border-color: transparent;
+		background: none;
+	}
+	.att-more::after { content: ""; position: absolute; inset: -4px; }
+	.att-menu { right: 6px; }
+	.att-menu a,
+	.att-menu button { padding: 9px; }
+	/* The Undo notice lives in the composer: lift it above the sheet and the
+	   full-screen file, the rest of the composer unseen and unclickable there. */
+	.workbench.with-file-pane .composer {
+		position: relative;
+		z-index: 56;
+		visibility: hidden;
+	}
+	.workbench.with-file-pane .composer-toasts {
+		visibility: visible;
+		bottom: calc(100% - 96px + env(safe-area-inset-bottom, 0px));
+	}
+}

@@ -9,7 +9,6 @@ import { resolvePersistentRoomEffectiveWorkspacePolicy, resolvePersistentRoomNew
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
 import { createRoomModelCatalog, type RoomModelCatalog } from "./room-models.js";
 import { checkpointPromptTokenBudget } from "./persistent-agent-boot.js";
-import { buildSpecialistTemplatesIndexSection } from "./persistent-room-delegate-tool.js";
 import { effectiveConversationEffortChoice, isRoomEffortLevel, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
 import type { PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import type { PersistentAgentThreadRecord } from "./persistent-agent-types.js";
@@ -381,8 +380,7 @@ function freshConversationNeeds(agentId: string, threadId: string, model: Persis
 	const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(policy, REPO_ROOT);
 	const boot = buildPersistentAgentBootContext({ agentId, conversationId: threadId, sessionId: null, model, ...(workspaceCapability ? { workspaceCapability } : {}) });
 	return {
-		// The boot gate measures the prompt with the specialist index the connect appends.
-		bootTokens: estimateTokens(`${boot.systemPrompt}${buildSpecialistTemplatesIndexSection()}`) + extraTokens,
+		bootTokens: estimateTokens(boot.systemPrompt) + extraTokens,
 		tools: roomToolListTokens(agentId, policy),
 		reserve: SettingsManager.create(runtimeCwd, getAgentDir()).getCompactionSettings().reserveTokens,
 	};

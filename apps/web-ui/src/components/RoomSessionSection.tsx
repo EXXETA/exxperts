@@ -1,9 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { apiFetch } from "../api";
 import type { PersistentAgentMementoBoundaryResponse, PersistentAgentStatus } from "../types";
 import { modelDisplayName, modelTooltipName } from "../model-names";
+import { confirmDialog } from "./confirm-dialog";
 import { RsInfo } from "./rs-info";
 import { PaneHeader } from "./pane-header";
+
+/** The one question before a conversation is forgotten, from the room's bin or from this pane. */
+export function confirmForgetConversation(answerRunning: boolean): Promise<boolean> {
+	const stopped = answerRunning ? "The response currently being written will be stopped. " : "";
+	return confirmDialog({
+		title: "Forget this conversation and start fresh?",
+		body: `${stopped}This deletes this conversation for good. Nothing from it is saved to memory.`,
+		confirmLabel: "Forget",
+		danger: true,
+	});
+}
 
 async function applyMemento(agentId: string, conversationId: string): Promise<PersistentAgentMementoBoundaryResponse> {
 	const response = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/memento`, {
@@ -28,31 +40,25 @@ function sessionModelLabel(status: PersistentAgentStatus): { name: string; title
 	return { name: modelDisplayName(input) || model.model, title: modelTooltipName(input) || model.model };
 }
 
-export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
-	const [confirming, setConfirming] = useState(false);
+export function RoomSessionSection({ status, answering, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; answering: boolean; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
 	const [submitting, setSubmitting] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const activeThread = status.activeThread;
 	const modelLabel = sessionModelLabel(status);
 	const busy = Boolean(activeThread?.inFlight || activeThread?.working || status.activeLock);
-	const confirmRef = useRef<HTMLDivElement | null>(null);
 
-	useEffect(() => {
-		if (confirming) confirmRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-	}, [confirming]);
-
-	async function submitMemento(): Promise<void> {
+	async function forgetConversation(): Promise<void> {
 		if (!activeThread) return;
-		setSubmitting(true);
 		setError(null);
 		setMessage(null);
+		if (!(await confirmForgetConversation(answering))) return;
+		setSubmitting(true);
 		try {
 			await applyMemento(status.id, activeThread.threadId);
 			// A memento is a forget flow wherever it is applied from: any parked
 			// draft for this room dies with the conversation.
 			onMementoForget?.();
-			setConfirming(false);
 			// From inside the open room the caller leaves the room instead: the
 			// conversation this view is bound to no longer exists server-side, so
 			// there is nothing here to keep showing a success note over.
@@ -84,31 +90,20 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 	return (
 		<div className="room-session-section">
 			{head}
-			{!confirming && (
-				<div className="settings-rows">
-					<div className="settings-row">
-						<div className="settings-row-main">
-							<span className="settings-row-label">
-								Open conversation{modelLabel ? <> on <strong title={modelLabel.title}>{modelLabel.name}</strong></> : null}{busy ? " (in use)" : ""}
-							</span>
-							<span className="settings-row-sub">
-								Forget ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
-								<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
-							</span>
-						</div>
-						<button className="rs-btn" disabled={submitting} onClick={() => { setConfirming(true); setError(null); setMessage(null); }}>Forget…</button>
+			<div className="settings-rows">
+				<div className="settings-row">
+					<div className="settings-row-main">
+						<span className="settings-row-label">
+							Open conversation{modelLabel ? <> on <strong title={modelLabel.title}>{modelLabel.name}</strong></> : null}{busy ? " (in use)" : ""}
+						</span>
+						<span className="settings-row-sub">
+							Forget ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
+							<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
+						</span>
 					</div>
+					<button className="rs-btn" disabled={submitting} onClick={() => void forgetConversation()}>{submitting ? "Forgetting…" : "Forget…"}</button>
 				</div>
-			)}
-			{confirming && (
-				<div className="room-session-confirm" ref={confirmRef}>
-					<p className="room-danger-note"><strong>Forget this conversation?</strong> It is discarded and the room starts fresh. The room keeps its memory, and nothing from this conversation is added to it.{busy ? " The room is in use right now: any response being written will be stopped and an open chat with it will be closed." : ""}</p>
-					<div className="room-danger-confirm-actions">
-						<button className="rs-btn" disabled={submitting} onClick={() => void submitMemento()}>{submitting ? "Forgetting…" : "Forget conversation"}</button>
-						<button className="rs-btn" type="button" disabled={submitting} onClick={() => { setConfirming(false); setError(null); }}>Cancel</button>
-					</div>
-				</div>
-			)}
+			</div>
 			{message && <div className="workspaces-success">{message}</div>}
 			{error && <div className="workspaces-error">{error}</div>}
 		</div>

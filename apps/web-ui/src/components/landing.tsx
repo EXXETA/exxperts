@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { shownRoomName } from "../../../web-server/src/room-name";
 import { CreateRoomPanel } from "./create-room-panel";
+import { Help, useFirstRunGuide } from "./Help";
 import { CloseIcon } from "./icons";
 import { useEscapeKey } from "./use-escape-key";
 import { PersistentAgentCard, noModelSentence } from "./launcher-room-card";
@@ -42,7 +43,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 	// (home-room-order.ts: on every arrival, until that arrival's read has
 	// settled) nothing is drawn in the grid, the "New room" card included, so
 	// no card appears in one place and moves to another. With no rooms there
-	// is nothing to order and the empty state shows at once, as it always did.
+	// is nothing to order, so the order holds nothing back.
 	const roomStatuses = persistentAgentStatuses;
 	// On a shared server the order is A to Z and cannot be changed (use-home-room-order.ts).
 	const remoteClientContext = useRemoteClientContext();
@@ -258,11 +259,17 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 	// default for new rooms cannot run, which the setup pill points to.
 	const emptyHome = roomStatuses.length > 0 ? null : aiReadiness === "no-model" ? "connect-first" : aiReadiness === "ready" ? "create-first" : null;
 	const showSetupPill = roomStatuses.length > 0 ? aiReadiness === "no-model" : aiReadiness === "default-unavailable";
-	// Where AI setup is read-only (a shared server's member, a paired device),
-	// Home offers a look at it and says who connects one.
+	// Where AI setup is read-only, Home says who connects one: a paired device
+	// is offered a look at it, and a shared server's member is sent to the
+	// admin, with nothing to press.
 	const aiSetupRole = sharedServerRole(remoteClientContext);
 	const aiSetupReadOnly = aiSetupLocked(remoteClientContext);
 	const connectLine = aiSetupRole ? noModelSentence(aiSetupRole) : aiSetupReadOnly ? "Connect one on the computer this app runs on, in Settings, AI setup." : "Use a subscription you already pay for, an API key, your company's gateway, or a model running on this computer.";
+	// The empty Home with nothing to answer offers only the way to connect one,
+	// and waits to know that before it draws New room, so no box comes and goes.
+	const aiKnown = modelStatus !== null || aiProfileSelection !== null;
+	const newRoomShown = gridDrawn && (roomStatuses.length > 0 || (aiKnown && emptyHome !== "connect-first"));
+	const firstRunGuide = useFirstRunGuide();
 	const providerLabels = Object.fromEntries((modelStatus?.providers ?? []).map((provider) => [provider.id, provider.label]));
 	const offeredModels = (modelStatus?.providers ?? []).flatMap((provider) => [...provider.conversation, ...provider.memory]);
 	// A room is created to be talked to: after Create, enter it the way its
@@ -295,7 +302,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 					<div className="home-connect-card">
 						<h2>Connect an AI to get started</h2>
 						<p>{connectLine}</p>
-						<button type="button" className={`landing-action${aiSetupReadOnly ? " secondary" : ""}`} onClick={() => onOpenSettings("ai-setup")}>{aiSetupReadOnly ? "See AI setup" : "Connect AI"}</button>
+						{aiSetupRole !== "member" && <button type="button" className={`landing-action${aiSetupReadOnly ? " secondary" : ""}`} onClick={() => onOpenSettings("ai-setup")}>{aiSetupReadOnly ? "See AI setup" : "Connect AI"}</button>}
 					</div>
 				)}
 				{showSetupPill && (
@@ -336,7 +343,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 						</div>
 					);
 				})}
-				{gridDrawn && (
+				{newRoomShown && (
 					<button type="button" className={`landing-card add-room-card${emptyHome === "create-first" ? " is-primary" : ""}`} disabled={arranging} onClick={() => setCreateOpen(true)} aria-label="Create a new room" aria-describedby={aiReadiness === "no-model" ? "add-room-hint" : undefined}>
 						<span className="add-room-plus" aria-hidden="true">+</span>
 						<span className="add-room-label">New room</span>
@@ -346,6 +353,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 			</section>
 			{!arranging && <ArchivedRoomsSection activeRoomCount={roomStatuses.length} serviceBack={serviceBack} onRestored={onRefreshPersistentAgent} />}
 			</div>
+			{firstRunGuide.open && <Help onClose={firstRunGuide.close} />}
 			{createOpen && (
 				<div className="room-settings-overlay create-room-overlay" role="dialog" aria-modal="true" aria-label="Create room" onClick={() => setCreateOpen(false)}>
 					<div className="room-settings-modal create-room-modal" onClick={(e) => e.stopPropagation()}>

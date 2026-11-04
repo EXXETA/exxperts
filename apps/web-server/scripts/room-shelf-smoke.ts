@@ -175,7 +175,7 @@ try {
 	createTaskLedgerRecord({ taskId: "tsk-shelf01", roomId, conversationId: "conv-1", templateId: "deck", templateVersion: 1, title: "Deck" }, {}, new Date("2026-07-20T09:00:00.000Z"));
 	finalizeTaskLedgerRecord(roomId, "tsk-shelf01", { outcome: "ok", summary: "made notes", artifacts: [{ relativePath: "files/notes.md", bytes: 10, extension: ".md" }] }, {}, new Date("2026-07-21T09:00:00.000Z"));
 	const manifest = buildShelfManifestSection(roomId) ?? "";
-	assert(manifest.includes("## Files in this room"), "manifest must carry its section header");
+	assert(manifest.includes("## Attachments in this room"), "manifest must carry its section header");
 	assert(manifest.includes("- notes.md ·"), "manifest must list notes.md");
 	assert(!manifest.includes(".internal"), "dotfiles never reach the manifest");
 
@@ -245,11 +245,11 @@ try {
 	const cacheDir = persistentRoomReadingCacheDirPath(roomId);
 	assert(fs.readdirSync(cacheDir).some((name) => name.endsWith(".json")), "reading cache must hold meta files");
 	const pdfEntry = listShelfFiles(roomId).find((entry) => entry.name === "terms.pdf")!;
-	assert(cachedShelfPageCount(roomId, "terms.pdf", pdfEntry) === 1, "the Files panel's page lookup must answer from cache");
+	assert(cachedShelfPageCount(roomId, "terms.pdf", pdfEntry) === 1, "the Attachments panel's page lookup must answer from cache");
 	assert(cachedShelfPageCount(roomId, "terms.pdf", { ...pdfEntry, bytes: pdfEntry.bytes + 1 }) === null, "stale size must miss the cache");
 	const pdfAgain = await readShelfFileText(roomId, "terms.pdf");
 	assert(pdfAgain.text === pdf.text, "second read must reproduce the cached extraction");
-	// The model's list keeps the size once a file is parsed; only the Files panel shows pages.
+	// The model's list keeps the size once a file is parsed; only the Attachments panel shows pages.
 	const manifestAfterParse = buildShelfManifestSection(roomId) ?? "";
 	assert(/terms\.pdf · [\d.]+ (B|KB|MB) ·/.test(manifestAfterParse) && !/\d+ pages?\b/.test(manifestAfterParse), `the manifest shows the size, never pages, once a file is parsed (got: ${manifestAfterParse})`);
 

@@ -221,7 +221,7 @@ try {
 	fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "notes\n");
 	const workspace = await requestJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, displayLabel: "Batch Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }) });
 	assert(workspace.status === 200, `Full access with the terminal on, got ${workspace.status}: ${JSON.stringify(workspace.body).slice(0, 300)}`);
-	// A PDF in the room's Files that has never been read: reading it means extracting it.
+	// A PDF in the room's Attachments that has never been read: reading it means extracting it.
 	const { persistentRoomShelfDirPath, persistentRoomReadingCacheDirPath } = await import("../src/persistent-room-shelf.js");
 	const shelfDir = persistentRoomShelfDirPath(agentId);
 	fs.mkdirSync(shelfDir, { recursive: true, mode: 0o700 });

@@ -27,6 +27,12 @@ const LINE = "type: line\ntitle: Requests per day\nDay, Served, Refused\nMon, 12
 const PIE = "type: pie\nClient, Refused\nNightly sync, 84\nMobile app, 41\nPartner API, 30";
 const fence = (body: string) => `Most refusals came in one hour:\n\n\`\`\`chart\n${body}\n\`\`\`\n\nThat is the sync.`;
 
+await check("a table carries its Copy in an answer and not on the other surfaces", () => {
+	const TABLE = "| Team | Left |\n| --- | --- |\n| Sales | 8 |";
+	assert(render(TABLE).includes('aria-label="Copy table"'), "an answer's table has Copy");
+	assert(!render(TABLE, { answer: false }).includes("figure-strip") && render(TABLE, { answer: false }).includes("md-table-frame"), "a table elsewhere stays as it was");
+});
+
 await check("the block's form is read once, into named fields; anything else is not a chart", () => {
 	const bar = readChart(BAR);
 	assert(bar.ok && bar.chart.kind === "bar" && bar.chart.title === "Requests refused per hour" && bar.chart.note === "Today, example numbers", `the settings are read, got ${JSON.stringify(bar)}`);
@@ -80,6 +86,10 @@ globals.window = dom.window;
 globals.document = dom.window.document;
 if (!("navigator" in globalThis)) globals.navigator = dom.window.navigator;
 globals.IS_REACT_ACT_ENVIRONMENT = true;
+globals.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+// No canvas here: words measure a fixed share of their font's size per letter, so the lines below can be counted.
+const LETTER = 0.55;
+(dom.window.HTMLCanvasElement.prototype as any).getContext = () => ({ font: "", measureText(this: { font: string }, text: string) { return { width: text.length * LETTER * Number(/([\d.]+)px/.exec(this.font)![1]) }; } });
 const { createRoot } = pageRequire("react-dom/client");
 const { act } = pageRequire("react");
 const container = dom.window.document.getElementById("root")!;
@@ -115,13 +125,17 @@ await check("a bar chart is drawn, and hover shows the value", async () => {
 await check("Table shows the same numbers, and Chart brings the drawing back", async () => {
 	await show(fence(BAR));
 	const button = (name: string) => [...container.querySelectorAll("button")].find((b) => b.textContent === name)!;
+	const toolsInOrder = () => [...container.querySelectorAll(".figure-tools > *, .figure-switch > *")].filter((tool) => !tool.classList.contains("figure-switch")).map((tool) => tool.querySelector("button")?.getAttribute("aria-label") ?? tool.textContent).join();
 	assert(button("Chart").getAttribute("aria-pressed") === "true" && button("Table").getAttribute("aria-pressed") === "false", "the chart view is the first");
 	await act(async () => button("Table").click());
 	const rows = [...container.querySelectorAll(".answer-chart-table tr")].map((tr) => [...tr.children].map((c) => c.textContent).join("|"));
 	assert(rows.join("\n") === "Hour|Refused\n09:00|12\n10:00|30\n11:00|84\n12:00|41", `the table holds the header and every row, got ${rows.join(" / ")}`);
-	assert(!container.querySelector(".answer-chart-svg") && button("Table").getAttribute("aria-pressed") === "true" && !container.textContent!.includes("Copy image"), "the drawing and Copy image give way to the table");
+	assert(!container.querySelector(".answer-chart-svg") && button("Table").getAttribute("aria-pressed") === "true" && !container.querySelector('[aria-label="Copy image"]'), "the drawing and Copy image give way to the table");
+	assert(toolsInOrder() === "Chart,Table,", "Copy's slot stays with nothing in it, so the switch does not move");
 	await act(async () => button("Chart").click());
-	assert(container.querySelectorAll(".answer-chart-bar").length === 4 && container.textContent!.includes("Copy image"), "Chart draws it again");
+	assert(container.querySelectorAll(".answer-chart-bar").length === 4 && toolsInOrder() === "Chart,Table,Copy image", `Chart draws it again, Copy image last, got ${toolsInOrder()}`);
+	const copy = container.querySelector('[aria-label="Copy image"]')!;
+	assert(copy.getAttribute("data-tip") === "Copy image" && !copy.textContent, "Copy image is an icon with a tooltip and a name");
 });
 
 await check("a line chart draws a line per series and lists them all on hover", async () => {
@@ -196,8 +210,7 @@ await check("Copy image takes the chart with its title, note and series names", 
 	// The page's copy: the picture is drawn from the SVG it serialises; this records that SVG and stops there.
 	const pictures: string[] = [];
 	// The page reads the global navigator, which is Node's own here.
-	const saved = { createObjectURL: (globalThis.URL as any).createObjectURL, revoke: (globalThis.URL as any).revokeObjectURL, item: globals.ClipboardItem, clipboard: Object.getOwnPropertyDescriptor(globals.navigator, "clipboard"), style: globals.getComputedStyle, serializer: globals.XMLSerializer };
-	globals.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
+	const saved = { createObjectURL: (globalThis.URL as any).createObjectURL, revoke: (globalThis.URL as any).revokeObjectURL, item: globals.ClipboardItem, clipboard: Object.getOwnPropertyDescriptor(globals.navigator, "clipboard"), serializer: globals.XMLSerializer };
 	globals.XMLSerializer = dom.window.XMLSerializer;
 	const recorded: Promise<void>[] = [];
 	(globalThis.URL as any).createObjectURL = (blob: Blob) => { recorded.push(blob.text().then((text) => { pictures.push(text); })); return "blob:picture"; };
@@ -206,14 +219,63 @@ await check("Copy image takes the chart with its title, note and series names", 
 	Object.defineProperty(globals.navigator, "clipboard", { configurable: true, value: { write: async () => {} } });
 	try {
 		const copied = async () => {
-			const copy = [...container.querySelectorAll("button")].find((b) => b.textContent === "Copy image")!;
+			const copy = container.querySelector('[aria-label="Copy image"]') as HTMLButtonElement;
 			await act(async () => copy.click());
 			await Promise.all(recorded);
 			return pictures.pop() ?? "";
 		};
+		const lines = (picture: string) => {
+			const host = dom.window.document.createElement("div");
+			host.innerHTML = picture;
+			const svg = host.querySelector("svg")!;
+			const head = [...svg.children].filter((child) => !child.hasAttribute("transform"));
+			return { svg, words: head.flatMap((child) => (child.tagName === "text" ? [child] : [...child.querySelectorAll("text")])).map((text) => ({ text: text.textContent!, x: Number(text.getAttribute("x")), y: Number(text.getAttribute("y")), size: text.getAttribute("class") === "answer-chart-copy-title" ? 14.5 : text.getAttribute("class") === "answer-chart-copy-note" ? 12.5 : 11 })), top: Number(/translate\(0 ([\d.]+)\)/.exec(svg.querySelector("g[transform]")!.getAttribute("transform")!)![1]) };
+		};
 		const svg = await copied();
 		assert(svg.includes("Requests per day") && svg.includes("Last week") && svg.includes(">Served<") && svg.includes(">Refused<") && svg.includes("answer-chart-line"), `the copied picture holds the drawing, its title, note and series names, got ${svg.slice(0, 600)}`);
 		assert(!container.querySelector(".answer-chart-copy"), "the picture made for the copy leaves the page once copied");
+		const short = lines(svg);
+		assert(JSON.stringify(short.words.map((word) => [word.text, word.x, word.y])) === JSON.stringify([["Requests per day", 12, 22], ["Last week", 12, 40], ["Served", 26, 62], ["Refused", short.words[3]?.x, 62]]) && short.top === 72, `short words stay on their lines, in their places, got ${JSON.stringify(short)}`);
+		const TITLE = "Quarterly revenue of every northern European enterprise customer compared with the same quarter of the previous financial year";
+		const NOTE = "Figures are in thousands of euros, before the one-off adjustment for the spring acquisition, and they leave out every partner who joined after the close of the financial year, so these totals differ from the annual report.";
+		const NAMES = ["Northern Europe enterprise customers", "Southern Europe enterprise customers", "Everyone else in every other region whichever market or channel or partner they first signed through over all of the years"];
+		// Wider than the picture with no space to break at.
+		const WORD = "https://reports.example.com/".repeat(5);
+		for (const [kind, names, rows] of [["bar", NAMES, "Q1, 1, 2, 3\nQ2, 2, 3, 4"], ["line", NAMES, "Q1, 1, 2, 3\nQ2, 2, 3, 4"], ["pie", NAMES.slice(0, 1), "Q1, 1\nQ2, 2"]] as const) {
+			await show(fence(`type: ${kind}\ntitle: ${TITLE}\nnote: ${NOTE} ${WORD}\nQuarter, ${names.join(", ")}\n${rows}`));
+			const long = lines(await copied());
+			const said = long.words.map((word) => word.text).join(" ");
+			for (const whole of [TITLE, NOTE, ...names]) assert(said.includes(whole), `${kind}: the copy holds "${whole}" in full, got "${said}"`);
+			assert(long.words.map((word) => word.text).join("").includes(WORD), `${kind}: a word wider than the picture is broken, not cut, got "${said}"`);
+			assert(long.words.every((word) => word.x + word.text.length * LETTER * word.size <= 560 - 12), `${kind}: every line ends inside the picture, got ${JSON.stringify(long.words)}`);
+			const lowest = Math.max(...long.words.map((word) => word.y));
+			assert(long.top === lowest + 10 && long.svg.getAttribute("viewBox")!.endsWith(` ${long.top + (kind === "pie" ? Number(container.querySelector(".answer-chart-svg")!.getAttribute("height")) : 220)}`), `${kind}: the drawing is pushed below the words, whole, got ${long.top} under ${lowest}, ${long.svg.getAttribute("viewBox")}`);
+		}
+		// A pie's legend: whole in the copy, as it is on screen.
+		const SLICES = ["Salaries and social security contributions of every office in the group", "Cloud infrastructure and software licences for all of the teams", "Travel"];
+		await show(fence(`type: pie\nClient, Spend\n${SLICES[0]}, 40\n${SLICES[1]}, 30\n${SLICES[2]}, 30`));
+		const onScreen = [...container.querySelectorAll(".answer-chart-svg .answer-chart-legend")].map((row) => row.textContent!);
+		const pieCopy = lines(await copied());
+		const legend = [...pieCopy.svg.querySelectorAll(".answer-chart-legend")].map((row) => [...row.querySelectorAll("text")].map((text) => text.textContent!));
+		for (const [i, name] of SLICES.entries()) assert(legend[i]?.slice(0, -1).join(" ") === name && /^\d+%$/.test(legend[i].at(-1)!), `a pie's copy holds "${name}" in full beside its share, got ${JSON.stringify(legend)}`);
+		const legendWords = [...pieCopy.svg.querySelectorAll(".answer-chart-legend text")].filter((text) => !text.textContent!.endsWith("%"));
+		assert(legendWords.every((text) => Number(text.getAttribute("x")) + text.textContent!.length * LETTER * 11 <= 560 - 12), `every legend line ends inside the picture, got ${legendWords.map((text) => text.textContent)}`);
+		const heights = [...pieCopy.svg.querySelectorAll(".answer-chart-legend text")].map((text) => Number(text.getAttribute("y")));
+		assert(new Set(heights).size === heights.length - SLICES.length, `the legend's lines never overlap, got ${heights}`);
+		const pictureHeight = Number(pieCopy.svg.getAttribute("height"));
+		assert(Math.max(...heights) + pieCopy.top < pictureHeight, `the legend ends inside the picture, ${pictureHeight} high, got ${Math.max(...heights)} under ${pieCopy.top}`);
+		assert([...container.querySelectorAll(".answer-chart-svg .answer-chart-legend")].map((row) => row.textContent!).join() === onScreen.join(), `copying leaves the screen's legend as it was, got ${onScreen}`);
+		// A value being read on screen is no part of the picture.
+		await show(fence(LINE));
+		await fire(container.querySelector('.answer-chart-hit[data-i="1"]')!, "pointerover");
+		assert(container.querySelector(".answer-chart-guide"), "the hovered value shows its guide on screen");
+		const hovered = await copied();
+		assert(!hovered.includes("answer-chart-guide"), `the copy leaves the hovered value's marks out, got ${hovered.slice(0, 600)}`);
+		await fire(container.querySelector(".answer-chart-svg")!, "pointerout");
+		// A name of nothing but spaces keeps its row: the words below it stay in their places.
+		await show(fence('type: bar\ntitle: Requests\nDay, " ", Refused\nMon, 1, 2'));
+		const blank = lines(await copied());
+		assert(blank.words.every((word) => word.y >= 22) && blank.top === 54, `a blank series name moves nothing, got ${JSON.stringify(blank.words)} and ${blank.top}`);
 		// One series, no title: its name is what says what the numbers are.
 		await show(fence("type: bar\nQuarter, Revenue (USD)\nQ1, 3\nQ2, 4"));
 		const single = await copied();
@@ -227,8 +289,42 @@ await check("Copy image takes the chart with its title, note and series names", 
 		globals.ClipboardItem = saved.item;
 		if (saved.clipboard) Object.defineProperty(globals.navigator, "clipboard", saved.clipboard);
 		else delete globals.navigator.clipboard;
-		globals.getComputedStyle = saved.style;
 		globals.XMLSerializer = saved.serializer;
+	}
+});
+
+await check("a pie's legend wraps long names, beside the ring on a wide card and under it on a phone's", async () => {
+	const SLICES = ["Salaries and social security contributions of every office in the group", "Cloud infrastructure and software licences for all of the teams", "Travel"];
+	const legendAt = async () => {
+		await show(fence(`type: pie\nClient, Spend\n${SLICES[0]}, 40\n${SLICES[1]}, 30\n${SLICES[2]}, 30`));
+		const rows = [...container.querySelectorAll(".answer-chart-svg .answer-chart-legend")];
+		const words = rows.map((row) => [...row.querySelectorAll("text")].filter((text) => !text.textContent!.endsWith("%")));
+		for (const [i, name] of SLICES.entries()) assert(words[i].map((text) => text.textContent).join(" ") === name, `"${name}" shows in full, got ${words[i].map((text) => text.textContent)}`);
+		const lows = words.map((lines) => Number(lines.at(-1)!.getAttribute("y")));
+		const tops = words.map((lines) => Number(lines[0].getAttribute("y")));
+		assert(tops[1] > lows[0] && tops[2] > lows[1], `a wrapped name pushes the rows below it down, got ${tops} after ${lows}`);
+		const ring = Math.max(...[...container.querySelectorAll(".answer-chart-slice")].map((slice) => Number(/^M([\d.]+)/.exec(slice.getAttribute("d")!)![1])));
+		const hit = rows[0].querySelector("rect.answer-chart-hit")!;
+		assert(Number(hit.getAttribute("height")) === 20 + (words[0].length - 1) * 15, `the whole of a wrapped row reads its value, got ${hit.getAttribute("height")}`);
+		return { rows, words, ring, legendX: Number(words[0][0].getAttribute("x")), legendY: tops[0], height: Number(container.querySelector(".answer-chart-svg")!.getAttribute("height")), lows };
+	};
+	const wide = await legendAt();
+	assert(wide.words[0].length > 1 && wide.words[2].length === 1, `the long name takes the lines it needs, the short one its one, got ${wide.words.map((lines) => lines.length)}`);
+	assert(wide.legendX > wide.ring && wide.legendY < 220, `on a wide card the legend stands beside the ring, got x ${wide.legendX} past the ring's ${wide.ring}, y ${wide.legendY}`);
+	// Read from a row, the value stands in the ring's hole: over no other row, wrapped to the ring.
+	await fire(wide.rows[1], "pointerover");
+	const beside = container.querySelector(".answer-chart-tip") as HTMLElement;
+	assert(beside.textContent!.includes(SLICES[1]) && beside.classList.contains("answer-chart-tip-ring") && Number.parseFloat(beside.style.left) < wide.legendX, `the value shows over the ring, got ${beside.outerHTML}`);
+	await fire(container.querySelector(".answer-chart-svg")!, "pointerout");
+	await act(async () => root.render(null));
+	const Observer = globals.ResizeObserver;
+	globals.ResizeObserver = class { constructor(private tell: (entries: unknown[]) => void) {} observe() { this.tell([{ contentRect: { width: 340 } }]); } disconnect() {} };
+	try {
+		const phone = await legendAt();
+		assert(phone.words[0].length > 1, `on a phone's card the name takes the lines it needs, got ${phone.words[0].length}`);
+		assert(phone.legendY > 220 && Math.max(...phone.lows) < phone.height, `on a phone's card the legend stands under the ring, inside the drawing, got ${phone.legendY} to ${phone.lows} of ${phone.height}`);
+	} finally {
+		globals.ResizeObserver = Observer;
 	}
 });
 

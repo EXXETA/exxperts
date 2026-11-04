@@ -220,6 +220,7 @@ try {
 	const exposed = capturedToolResults[0];
 	assert(exposed.includes("Run the bundled script to convert documents."), `the tool result must carry the skill body, got: ${exposed.slice(0, 400)}`);
 	assert(exposed.includes(skillDir), `the tool result must carry the on-disk skill dir (the gate must OPEN on a real turn), got: ${exposed.slice(0, 600)}`);
+	assert(exposed.includes("do NOT appear in this room's Attachments panel") && exposed.includes("never the Attachments panel") && !exposed.includes("Files panel"), `the outputs line names the panel as the screen does, got: ${exposed.slice(-700)}`);
 	assert(exposed.includes(JSON.stringify("scripts/convert.py")), `the tool result must list the bundled script, got: ${exposed.slice(0, 600)}`);
 
 	// 2. Revoked: same room, next conversation — the body serves path-free.

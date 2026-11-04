@@ -452,8 +452,7 @@ try {
 		await page.waitForTimeout(800);
 		const closedId = await page.evaluate(async (id) => (await (await fetch(`/api/persistent-agents/${encodeURIComponent(id)}/status`)).json()).activeThread?.threadId as string, savedRoom.agentId);
 		const dialog = page.getByRole("dialog", { name: "Remember this conversation" });
-		await page.getByRole("button", { name: "More ways to remember" }).click();
-		await page.getByRole("menuitem", { name: "Remember with options…" }).click();
+		await page.getByRole("button", { name: "Choose what to keep…" }).click();
 		await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 		await dialog.getByRole("button", { name: "Save to memory" }).click({ timeout: 20_000 });
 		await dialog.getByText("Memory updated").waitFor({ timeout: 15_000 });

@@ -8,6 +8,8 @@
 // message), none of them over 12,000 characters and no
 // compaction, is rendered at a fixed clock, and the prompt's sha256 must equal
 // the one taken on the code before the reader changed (main at dac10b1a).
+// The hash moved once for the list's new name, Attachments; the 43 of 50 was
+// measured on the text before that one line changed.
 //
 // Offline: no server, no provider, no network, no port.
 
@@ -40,8 +42,8 @@ const {
 } = await import("../src/persistent-agents.js");
 const { buildCheckpointCompressionPrompt } = await import("../src/checkpoint-compression.js");
 
-/** The prompt's sha256 on main at dac10b1a, before the full-path reader. */
-const PINNED_PROMPT_SHA256 = "785a8997a1a5ee17192a1960992ab0abfb4a577c8816af63b498363fe544a976";
+/** The prompt's sha256 on main at dac10b1a, before the full-path reader, with the list's new name in its one line. */
+const PINNED_PROMPT_SHA256 = "bcdca7f803e50b3493d5e51608e54e794b27d9b53c9604ba92b331660d62b921";
 /** The transcript items' sha256 on the same commit: ids, kinds and texts. */
 const PINNED_ITEMS_SHA256 = "10cada81a69d71d49f03ef52fb392a303a05fc52d13413de8cbec958d18c17cb";
 

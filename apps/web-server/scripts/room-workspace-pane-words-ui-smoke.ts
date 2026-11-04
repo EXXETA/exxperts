@@ -519,6 +519,7 @@ try {
 			await page.locator(".stop-btn").first().waitFor({ timeout: 10_000 });
 
 			await page.getByRole("button", { name: "Room settings" }).first().click();
+			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 			const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
 			const head = pane.locator(".pane-head");
 			const clear = pane.getByRole("button", { name: "Clear" });
@@ -628,6 +629,7 @@ try {
 			await waitUntil(() => heldAnswers.length > 0, "the room is answering");
 			await page.locator(".stop-btn").first().waitFor({ timeout: 10_000 });
 			await page.getByRole("button", { name: "Room settings" }).first().click();
+			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 			const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
 			const head = pane.locator(".pane-head");
 			const clear = pane.getByRole("button", { name: "Clear" });

@@ -75,7 +75,16 @@ type ContextHealthStatus = {
 	source: "runtime-context-usage" | "unknown";
 };
 
-const PERSISTENT_ROOM_CONTEXT_CHECKPOINT_TOKENS = 125_000;
+// The meter's 100%, after which Remember is advised: two fifths of the model's
+// window, so a 1M model is not called full at an eighth of what it reads and a
+// 128K one is called full before the runtime shortens the conversation (at the
+// window minus its reserve). A reading with no window keeps the fixed size.
+const CONTEXT_CHECKPOINT_SHARE_OF_WINDOW = 0.4;
+const CONTEXT_CHECKPOINT_TOKENS_WITHOUT_WINDOW = 125_000;
+
+function contextCheckpointTokens(contextWindow: number | null): number {
+	return contextWindow == null ? CONTEXT_CHECKPOINT_TOKENS_WITHOUT_WINDOW : Math.round(contextWindow * CONTEXT_CHECKPOINT_SHARE_OF_WINDOW);
+}
 
 type ProfileModelDiagnostic = {
 	key?: string;
@@ -387,11 +396,12 @@ function contextHealthZone(checkpointPercent: number | null): ContextHealthZone 
 function contextHealthFromUsage(usage: { tokens: number | null; contextWindow?: number | null } | undefined, source: ContextHealthStatus["source"]): ContextHealthStatus {
 	const tokens = typeof usage?.tokens === "number" && usage.tokens >= 0 ? usage.tokens : null;
 	const contextWindow = typeof usage?.contextWindow === "number" && usage.contextWindow > 0 ? usage.contextWindow : null;
-	const checkpointPercent = tokens == null ? null : (tokens / PERSISTENT_ROOM_CONTEXT_CHECKPOINT_TOKENS) * 100;
+	const checkpointTokens = contextCheckpointTokens(contextWindow);
+	const checkpointPercent = tokens == null ? null : (tokens / checkpointTokens) * 100;
 	return {
 		tokens,
 		contextWindow,
-		checkpointTokens: PERSISTENT_ROOM_CONTEXT_CHECKPOINT_TOKENS,
+		checkpointTokens,
 		checkpointPercent,
 		zone: contextHealthZone(checkpointPercent),
 		source,

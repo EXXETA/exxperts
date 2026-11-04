@@ -134,7 +134,6 @@
  */
 
 import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
-import crypto from "node:crypto";
 import { createAgentSession, getAgentDir, DefaultResourceLoader, SessionManager } from "@exxeta/exxperts-runtime";
 import { createWebUiContext } from "./web-ui-context.js";
 import { type AnswerNote, serverStopNote, shownPart, withAnswerNote } from "./cut-answer-note.js";
@@ -143,7 +142,7 @@ import { createTurnFrameCoalescer } from "./turn-frame-coalescer.js";
 import { dropHeldMessages, holdMessages, readHeldMessageList, readHeldMessages } from "./held-messages-store.js";
 import { STOPPED_BEFORE_ANSWER_SENTENCE, type TurnEndedBy } from "./turn-ended-by.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { createPersistentAgentInstance, parsePersistentAgentL1aMarker, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, assertPersistentAgentAcceptsSession, RECENT_CONTEXT_BLOCK_CAP, getPersistentAgentThread, getPersistentAgentActiveTurnState, clearPersistentAgentUnseenLandedAnswerForBind, markPersistentAgentTurnCancelling, writePersistentAgentThread, recordPersistentAgentUnseenLandedAnswer, switchPersistentAgentThreadModel, createPersistentRoomAutoDeclinedQuestionLog, refreshEmptyPersistentAgentThreadModel, persistentAgentThreadFollowsConversationPick, persistentAgentThreadIsEmpty, refreshEmptyPersistentAgentThreadBootSnapshot, getPersistentAgentRuntimeState, appendPersistentAgentThreadPendingHandoff, buildPersistentAgentCurrentIdentitySection, fingerprintPersistentAgentBootContextInstructions, buildPersistentRoomCurrentWorkspaceSection, buildPersistentAgentBootContext, readPersistentAgentBootPromptSnapshot, assertPersistentAgentBootPromptFitsWindow, openPersistentAgentPiSessionManager, PersistentAgentMemoryOverflowError, emptyPersistentAgentThreadModelTarget, beginPersistentAgentTurn, clearPersistentAgentThreadPendingHandoffs, finishPersistentAgentTurn, buildConsultAnswer } from "./persistent-agents.js";
+import { createPersistentAgentInstance, parsePersistentAgentL1aMarker, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, assertPersistentAgentAcceptsSession, RECENT_CONTEXT_BLOCK_CAP, getPersistentAgentThread, getPersistentAgentActiveTurnState, clearPersistentAgentUnseenLandedAnswerForBind, markPersistentAgentTurnCancelling, writePersistentAgentThread, recordPersistentAgentUnseenLandedAnswer, switchPersistentAgentThreadModel, createPersistentRoomAutoDeclinedQuestionLog, refreshEmptyPersistentAgentThreadModel, persistentAgentThreadFollowsConversationPick, persistentAgentThreadIsEmpty, refreshEmptyPersistentAgentThreadBootSnapshot, buildPersistentAgentCurrentIdentitySection, fingerprintPersistentAgentBootContextInstructions, buildPersistentRoomCurrentWorkspaceSection, buildPersistentAgentBootContext, readPersistentAgentBootPromptSnapshot, assertPersistentAgentBootPromptFitsWindow, openPersistentAgentPiSessionManager, PersistentAgentMemoryOverflowError, emptyPersistentAgentThreadModelTarget, beginPersistentAgentTurn, clearPersistentAgentThreadPendingHandoffs, finishPersistentAgentTurn, buildConsultAnswer } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import { getPersistentRoomToolPolicy, persistentRoomBlockedToolLeaks } from "./persistent-room-tool-policy.js";
 import { persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, resolvePersistentRoomEffectiveWorkspacePolicy, persistentRoomSettingsNotAppliedFrame } from "./persistent-room-workspace-policy.js";
@@ -157,18 +156,13 @@ import { readPersistentRoomInstructionsNow } from "./persistent-room-instruction
 import { nextRoomStateMessage } from "./room-state-message.js";
 import { readPersistentRoomSkillSettings, effectiveEnabledSkills } from "./persistent-room-skill-settings.js";
 import { createReadSkillTool, buildEnabledSkillsIndexSection } from "./persistent-room-skill-tool.js";
-import { createDelegateTaskTool, buildSpecialistTemplatesIndexSection, userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
-import { type SpecialistSessionPlan, runSpecialistWorker, listSpecialistTaskArtifacts, ingestShelfInputs, buildSpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
-import { type ShelfReviseConflict, absorbTaskArtifactsIntoShelf, commitReviseArtifactsOntoShelf, buildShelfManifestSection, resolveShelfFilePath } from "./persistent-room-shelf.js";
-import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
-import { reviseConflictNotice } from "./revise-conflict-notice.js";
+import { userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
+import { SPECIALISTS_OFF_SENTENCE } from "./room-approval-titles.js";
+import { buildShelfManifestSection } from "./persistent-room-shelf.js";
 import { createPersistentRoomShelfTools } from "./persistent-room-shelf-tools.js";
 import { createPersistentRoomMemoryRecallTool } from "./persistent-room-memory-recall-tool.js";
-import { createTaskLedgerRecord, finalizeTaskLedgerRecord, listTaskLedgerRecords, selectTaskLedgerReseedRows, selectTaskLedgerAwayNotices, markTaskLedgerRecordsAwayNoticed, resolveIterateSourceFromLedger } from "./persistent-room-task-ledger.js";
-import { conversationForgotten, eraseForgottenTask } from "./forget-erase.js";
-import { runningSpecialistCount, registerSpecialistTask, sendSpecialistFrame, emitSpecialistDelta, removeSpecialistTask, bindSpecialistSink, abortSpecialistTask, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
-import { getSpecialistTemplate } from "./specialist-templates.js";
-import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
+import { listTaskLedgerRecords, selectTaskLedgerAwayNotices, markTaskLedgerRecordsAwayNoticed } from "./persistent-room-task-ledger.js";
+import { bindSpecialistSink, abortSpecialistTask, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
 import type { PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import { gatewayModelFind } from "./gateway-model-find.js";
@@ -183,7 +177,7 @@ import { persistentRoomMcpGrantsFingerprint } from "./persistent-room-mcp-settin
 // register them with the SDK runtime.
 import contentPolicyExt from "../../../pi-package/extensions/content-policy/index.js";
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
-import artifactsExt, { artifactRoot } from "../../../pi-package/extensions/artifacts/index.js";
+import artifactsExt from "../../../pi-package/extensions/artifacts/index.js";
 import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp/index.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
@@ -195,10 +189,14 @@ import { emptyAnswer, answerlessCallMovedNothing, resolveUsageAuthType } from ".
 import { keptBeforeNextMessage, markAppPrompt, notEditableMessageId, notUndoneLine, readEditFrame, replacedItemIds, stepBackForEdit, withEditNote, type NotUndoneLine } from "./edit-last-message.js";
 import { keepAppTurnFailure, stepBackFromFailedPrompt, lastShownUserText, returnedPromptOf, type ReturnedPrompt, settleReturnedPrompt } from "./failed-prompt-step-back.js";
 import { lastUserItemIsScheduledPrompt } from "./persistent-room-background-execution.js";
-import { ModelUnreachableError, credentialKeyOf, failureCodesOf, failedTurnCredential, noteKeyOutcome, turnFailureOf, answerStarted, retryFailureOf, failedMessageError, quotaWayOf, compactionFailureOf, notOnAccountLine, notOfferedLine, failureWords } from "./model-call-causes.js";
+import { credentialKeyOf, failureCodesOf, failedTurnCredential, noteKeyOutcome, turnFailureOf, answerStarted, retryFailureOf, failedMessageError, quotaWayOf, compactionFailureOf, notOnAccountLine, notOfferedLine, failureWords } from "./model-call-causes.js";
 import { serverHooks, isSharedServer } from "./server-hooks.js";
 import { STOP_CUT_ANSWER_SENTENCE, trackLiveConnection, STOP_QUESTIONS_SENTENCE, answerAlreadyEnded, serverStopping, SERVER_STOPPING_SENTENCE, SERVER_STOPPING_CODE, trackRunningWork } from "./server-stop.js";
 import { REPO_ROOT, roomLock, roomLockBusyInstruction, roomLockBusyStatus } from "./server-install-root.js";
+import fs from "node:fs";
+import path from "node:path";
+import { readAppVersion } from "./whats-new.js";
+import { persistentAgentInstallationSection } from "./persistent-agent-constitution.js";
 import { DETACHED_TURN_LIMIT_MS, DETACHED_TURN_SILENCE_MS, detachedCookingRooms, type DetachedCookingTurnHandle, detachedCookingTurnHandles, OVERFLOW_RECOVERY_CEILING_MS, type PersistentRoomLiveSession, persistentRoomLiveSessions, REATTACH_REPLAY_CAP_BYTES, reattachBufferProbe, SWITCH_WHILE_ANSWERING_MESSAGE, TEST_INTROSPECTION_ENABLED } from "./room-live-sessions.js";
 import { app } from "./server-app.js";
 import { isLocalPromptDiagnosticsRequest, isPromptDiagnosticsEnabled, remoteRoomExposure } from "./request-checks.js";
@@ -210,7 +208,7 @@ import { acceptAnswerCut, removeEditedAwayItems } from "./persistent-agent-threa
 import { type AwayLimit, awayLimitLine, cutAnswerPart, endsOnAwayLimitStop, declinedNoticeIdPrefix, failureLineId, isAnswerPartId, isEmptyCut, keyOfId, landTurnItems, partialLineId, readShownPrompt, readTurnKey, type ShownPrompt, type ThreadItem } from "./thread-items-by-id.js";
 import { requestGetsLocalPaths } from "./room-settings-routes.js";
 import { applyRoomEffortToSession, contextHealthForSession, getWebChatModelRegistry, initialContextHealthForSession, modelContextWindow, modelStatusPayload, recordConversationEffortChoice, roomEffortStatusPayload, roomModelRefusal, webChatModelLabel } from "./ai-models.js";
-import { CONSULT_TRIGGER_PROMPT, consultModelWindow, resolveConsultModel, resolvePersistentAgentBindModel, resolveSpecialistModel, roomMemoryModelSelection } from "./ai-profile-models.js";
+import { CONSULT_TRIGGER_PROMPT, consultModelWindow, resolveConsultModel, resolvePersistentAgentBindModel, roomMemoryModelSelection } from "./ai-profile-models.js";
 import { resolveExecutableSkillFiles, resolveLibrarySkillManifest, skillLibraryFingerprint } from "./skills-library.js";
 import { logProviderCallFailed, recordUsage, recordWorkerUsage, safeConversationId } from "./usage-recording.js";
 
@@ -228,6 +226,12 @@ import { logProviderCallFailed, recordUsage, recordWorkerUsage, safeConversation
 // unreadable is opened exactly as it is and catches up at a later open, and the
 // reason is said once per room per process rather than on every connect.
 const constitutionUpgradeOnOpenSaidFor = new Set<string>();
+
+// Read once, when the server starts: an update restarts it.
+const PERSISTENT_ROOM_INSTALLATION_SECTION = persistentAgentInstallationSection({
+	version: readAppVersion(REPO_ROOT),
+	developmentBuild: fs.existsSync(path.join(REPO_ROOT, ".git")),
+});
 // The note the next message of a conversation carries after its answer was
 // cut or stopped, by room and conversation: the window that sends the next
 // message may not be the one whose session ran the stopped answer.
@@ -655,10 +659,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// times, not the moment the close handler ran.
 	type SettledTurnLandingSnapshot = { turnId: string; finalAssistantText: string; anchorItemId: string | null | undefined; earlierPromptsAfterAnchor: number | null; userText: string; startedAt?: number; settledAt: number; stepLog?: ReturnType<typeof createTurnStepLog>; stoppedByServer?: true };
 	let settledTurnLandingSnapshot: SettledTurnLandingSnapshot | null = null;
-	// The turn's user-authored prompt text, kept through settle: the consent
-	// variable (activeTurnUserAuthoredText) is deliberately nulled the moment
-	// the answer ends, but the landing may still need the prompt text to
-	// restore a never-persisted user item.
+	// The turn's user-authored prompt text, kept through settle: the landing
+	// may still need it to restore a never-persisted user item.
 	let currentTurnUserTextForLanding = "";
 	// The reattach handle THIS connection registered when its turn
 	// detached, plus the hooks the adopting connection registered on it. All
@@ -768,42 +770,6 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// consult runs; starting a consult while a turn is in flight is rejected.
 	type ActiveWebConsult = { consultId: string; abortController: AbortController; stoppedByUser: boolean };
 	let activeWebConsult: ActiveWebConsult | null = null;
-	// Specialist tasks: run-free beside the
-	// turn like consults, but model-proposed (delegate_task) rather than
-	// socket-initiated, so the only inbound frame is task_abort. Bookkeeping
-	// lives in the ROOM-SCOPED registry (persistent-room-specialist-registry) —
-	// a delegation belongs to the room, not to the tab that asked for it: the
-	// worker survives this connection, and this connection is merely the
-	// registry's current sink. Cap 1 per ROOM for v1 (was per connection; the
-	// registry made it what it always morally was).
-	const WEB_TASK_CAP = 1;
-	// Server-owned record of tasks that finished on THIS connection, so the
-	// one-click iterate path (task_iterate) can derive template and read scope
-	// from what the server itself produced instead of trusting client fields.
-	// This is what makes the user's Iterate click sufficient as the approval
-	// (the D7 shape: click-as-consent over a fully server-derived operation).
-	type CompletedWebTask = { templateId: string; artifacts: string[] };
-	const completedWebTasks = new Map<string, CompletedWebTask>();
-	const COMPLETED_WEB_TASK_MEMORY = 8;
-	// The approval card used to be the de-facto rate limiter on specialist
-	// spawns; with one-click iterate a short cooldown takes over that duty.
-	const ITERATE_COOLDOWN_MS = 5_000;
-	let lastIterateLaunchAt = 0;
-	// The shared specialist launch. Assigned during bindSession (it closes over
-	// the session's model-selection plumbing); the task_iterate frame handler
-	// refuses cleanly while it is still null.
-	let launchSpecialistTask: ((plan: SpecialistSessionPlan) => { ok: true } | { ok: false; reason: string; plain?: true }) | null = null;
-	// The user-authored text of the in-flight prompt turn (wire text minus the
-	// client-prepended handoff blocks / attachment notes), null between turns.
-	// The delegate tool verifies `userRequest` consent quotes against exactly
-	// this — set by the prompt handler, cleared the moment the model's answer
-	// settles (not merely when the turn's bookkeeping ends, so the auto-
-	// summarize recovery prompt can never dispatch on it). The budget bounds
-	// how many no-card launches one turn's consent can mint; exhaustion falls
-	// back to the approval card.
-	let activeTurnUserAuthoredText: string | null = null;
-	const AUTO_DISPATCH_BUDGET_PER_TURN = 3;
-	let autoDispatchBudgetRemaining = 0;
 	let sessionDisposed = false;
 	let autoSummaryRunning = false;
 	// The workspace policy this connection's session was built against. The
@@ -967,11 +933,6 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			return Promise.resolve((sessionToAbort as any).abort?.()).then(() => undefined);
 		}
 		setActivePersistentWebTurnTerminalReason(reason);
-		// Consent dies with the answer, before any question is answered: a
-		// call already running when Stop lands can still finish, and none of
-		// it may start a specialist on this turn's message.
-		activeTurnUserAuthoredText = null;
-		autoDispatchBudgetRemaining = 0;
 		// The person's Stop answers the card the turn waits on; otherwise the
 		// abort below would wait for that answer forever.
 		if (reason === "cancelled") uiContext.declineOpenQuestions(STOPPED_BEFORE_ANSWER_SENTENCE);
@@ -1875,242 +1836,6 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 				return [];
 			}
 		};
-		// Visuals V2 (contract §5): the specialist launch, created per connection so
-		// it owns this socket's send + slot map. The worker itself is fire-and-forget
-		// — run-free beside the turn, exactly like a consult. Shared by BOTH
-		// initiation paths: the model-proposed delegate_task tool and the
-		// user-initiated task_iterate frame (§5 amendment) — same slot hygiene,
-		// same task_* event family, taskId always server-generated in the plan.
-		const launchSpecialistTaskForSession = (plan: SpecialistSessionPlan): { ok: true } | { ok: false; reason: string; plain?: true } => {
-			if (serverStopping()) return { ok: false, reason: SERVER_STOPPING_SENTENCE, plain: true };
-			if (runningSpecialistCount(persistentAgentIdForSession) >= WEB_TASK_CAP) return { ok: false, reason: `the specialist limit (${WEB_TASK_CAP}) is reached` };
-			// Resolve the model BEFORE claiming the slot: this closure's contract
-			// with the delegate tool is "must not throw", and a selection failure
-			// (profile/registry drift) after the registry claim would strand the
-			// room's cap slot.
-			let selection: ReturnType<typeof roomMemoryModelSelection>;
-			try {
-				selection = roomMemoryModelSelection(persistentAgentIdForSession);
-			} catch (e) {
-				// The room's Memory model cannot run: the person, and the room's model, read its row's refusal with the way out, as it is.
-				const catalog = createRoomModelCatalog();
-				const refusal = e instanceof ModelUnreachableError ? roomModelRefusal(resolveRoomModel(persistentAgentIdForSession, "memory", catalog), "memory", catalog) : null;
-				if (refusal || (e as { statusCode?: unknown }).statusCode === 409) return { ok: false, reason: (refusal ?? (e as Error)).message, plain: true };
-				return { ok: false, reason: (e as Error).message };
-			}
-			// A revise run names the shelf files it is rewriting, on the registry
-			// entry and on the frame (taste pass): the panel puts the working state
-			// on the target file's OWN row rather than adding a second row for the
-			// run, and the reconnect replay carries the same names so a reload
-			// mid-run does not fall back to a stray working row.
-			const reviseTargetNames = plan.reviseTargets?.map((target) => target.name).filter((name) => typeof name === "string" && name.length > 0) ?? [];
-			const task = registerSpecialistTask(persistentAgentIdForSession, {
-				taskId: plan.taskId,
-				templateId: plan.template.id,
-				templateVersion: plan.template.version,
-				templateLabel: plan.template.label,
-				title: plan.title,
-				model: selection.modelLock,
-				abortController: new AbortController(),
-				...(reviseTargetNames.length > 0 ? { reviseTargetNames } : {}),
-				conversationId: persistentConversationId,
-			});
-			// Forgetting the conversation throws the task's result away, even one that ends before the stop reaches it.
-			const roomDir = createPersistentAgentInstance(persistentAgentIdForSession).rootDir;
-			const taskDiscarded = () => task.discarded === true || conversationForgotten(roomDir, persistentConversationId);
-			sendSpecialistFrame(persistentAgentIdForSession, { type: "task_started", taskId: plan.taskId, template: plan.template.id, templateVersion: plan.template.version, templateLabel: plan.template.label, title: plan.title, model: selection.modelLock, ...(reviseTargetNames.length > 0 ? { reviseTargetNames } : {}) });
-			// Ledger row (assets contract §2): created once the task is announced,
-			// finalized on every terminal path below. Best-effort throughout — the
-			// ledger must never break a task.
-			try {
-				createTaskLedgerRecord({
-					taskId: plan.taskId,
-					roomId: persistentAgentIdForSession,
-					conversationId: persistentConversationId,
-					templateId: plan.template.id,
-					templateVersion: plan.template.version,
-					title: plan.title,
-					...(plan.iterateParentTaskId ? { iterateParentTaskId: plan.iterateParentTaskId } : {}),
-				});
-			} catch (e) {
-				app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger create failed");
-			}
-			// The handoff flip (revise-in-place slice): every terminal path enqueues
-			// the slimmed §2.2 block on the pending-transfer queue of the room's
-			// CURRENT active thread (a checkpoint may have minted a new conversation
-			// while the task ran), where it rides the user's next prompt — the same
-			// delivery transferred consults always used, just triggered by
-			// completion instead of a click. Returns the block only when it is
-			// truly persisted, so the frame mirrors it to a live client exactly
-			// when a reconnecting client would restore it too. Best-effort: a
-			// refusal (queue full, thread closed) degrades honestly — the manifest
-			// still lists the files on the very next request either way.
-			const enqueueTaskHandoff = (summary: string, artifactCount: number): string | undefined => {
-				if (taskDiscarded()) return undefined;
-				try {
-					const block = buildSpecialistHandoffBlock({
-						templateId: plan.template.id,
-						templateVersion: plan.template.version,
-						taskTitle: plan.title,
-						ranAtIso: new Date().toISOString(),
-						artifactCount,
-						summary,
-					});
-					const threadId = getPersistentAgentRuntimeState(persistentAgentIdForSession).activeThreadId ?? persistentConversationId;
-					return appendPersistentAgentThreadPendingHandoff(persistentAgentIdForSession, threadId, block) ? block : undefined;
-				} catch (e) {
-					app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task handoff enqueue failed");
-					return undefined;
-				}
-			};
-			// The two-writers guard's visible report: one sentence per refused
-			// overwrite, appended to the summary every consumer sees (frame, ledger,
-			// handoff) — the room and the user both learn what happened and where
-			// the work went instead. The sentence comes from the shared builder the
-			// CLIENT also renders, so the line in the conversation and the line in
-			// the room's context can never drift apart again.
-			const reviseConflictNote = (conflicts: ShelfReviseConflict[]): string => reviseConflictNotice(conflicts);
-			void (async () => {
-				try {
-					const result = await runSpecialistWorker({
-						plan,
-						modelLock: selection.modelLock,
-						resolveExpectedModel: resolveSpecialistModel,
-						modelRegistry: getWebChatModelRegistry(),
-						cwd: REPO_ROOT,
-						agentDir: getAgentDir(),
-						signal: task.abortController.signal,
-						onEvent: (event: any) => {
-							// Registry-routed: appends the replay tail and forwards to the
-							// room's CURRENT sink — which may be a later connection than the
-							// one that launched, or nobody (frames drop silently while away).
-							if (event?.type === "message_update") {
-								const update = event.assistantMessageEvent;
-								if (update?.type === "text_delta" && typeof update.delta === "string") {
-									emitSpecialistDelta(persistentAgentIdForSession, plan.taskId, update.delta);
-								}
-							} else if (event?.type === "tool_execution_start" && typeof event?.toolName === "string") {
-								emitSpecialistDelta(persistentAgentIdForSession, plan.taskId, `\n[${event.toolName}]\n`);
-							}
-						},
-					});
-					// Task usage bills to this room (the requester), consult precedent.
-					recordWorkerUsage(persistentAgentIdForSession, "task", selection.modelLock, result.usage);
-					if (task.abortController.signal.aborted || taskDiscarded()) {
-						// "Files already written are kept" — kept on the shelf, where
-						// every kept file lives (files core slice).
-						const stopMessage = task.stoppedByUser ? "Task stopped by you. Files already written are kept." : "The task was cancelled.";
-						// After Forget this card reaches no client: Forget closed the socket
-						// before the task ended, and the fresh conversation shows no card of
-						// it. That is intended (decision 32).
-						// A stopped revise run's partial outputs NEVER commit over the
-						// canonical file (a half-finished revision must not replace a
-						// whole document) — they absorb as new files like any task's.
-						const abortedArtifacts = taskDiscarded() ? [] : absorbTaskArtifactsIntoShelf(persistentAgentIdForSession, artifactRoot(), result.artifacts);
-						const abortedHandoff = enqueueTaskHandoff(stopMessage, abortedArtifacts.length);
-						const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: stopMessage, artifacts: abortedArtifacts, ...(abortedHandoff ? { handoff: abortedHandoff } : {}) });
-						try {
-							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "aborted", summary: stopMessage, artifacts: abortedArtifacts, usage: result.usage, noticed });
-						} catch (e) {
-							app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
-						}
-					} else {
-						// Write-time thumbnails (contract D8): rendered once here, stored
-						// under .thumbs/, shipped as data: URIs. Best-effort — no
-						// Playwright or a failed render just means the card shows chips.
-						// task_end waits on this call, so it is bounded + never-throw by
-						// construction; the .catch is the backstop guarantee that a
-						// cosmetic failure can never turn a finished task into
-						// task_error or strand the card in "running".
-						const thumbnails = await generateTaskArtifactThumbnails(plan.taskFolder, result.artifacts, (message) => app.log.warn(message)).catch(() => []);
-						// Canonical from birth (files core slice): outputs move onto the
-						// room's shelf the moment the task ends, so the manifest lists them
-						// on the very next request. Thumbnails rendered first — they read
-						// the task folder. Every consumer below (frame, iterate memory,
-						// ledger) sees the shelf paths. A revise run goes through the
-						// commit gate instead: outputs named like a hash-pinned target
-						// replace the canonical file in place (same row, no new file), and
-						// a target that changed mid-run refuses the overwrite honestly.
-						const committed = plan.reviseTargets?.length
-							? commitReviseArtifactsOntoShelf(persistentAgentIdForSession, artifactRoot(), result.artifacts, plan.reviseTargets)
-							: { artifacts: absorbTaskArtifactsIntoShelf(persistentAgentIdForSession, artifactRoot(), result.artifacts), conflicts: [] };
-						const shelfArtifacts = committed.artifacts;
-						const summaryText = committed.conflicts.length > 0 ? `${result.text}\n\n${reviseConflictNote(committed.conflicts)}` : result.text;
-						const endHandoff = enqueueTaskHandoff(summaryText, shelfArtifacts.length);
-						const noticed = sendSpecialistFrame(persistentAgentIdForSession, {
-							type: "task_end",
-							taskId: plan.taskId,
-							template: plan.template.id,
-							text: summaryText,
-							artifacts: shelfArtifacts,
-							...(thumbnails.length > 0 ? { thumbnails } : {}),
-							...(committed.conflicts.length > 0 ? { reviseConflicts: committed.conflicts } : {}),
-							...(endHandoff ? { handoff: endHandoff } : {}),
-							generatedAt: new Date().toISOString(),
-							...(result.usage ? { usage: result.usage } : {}),
-						});
-						// Remember the finished task so Iterate can re-derive it server-side.
-						completedWebTasks.set(plan.taskId, {
-							templateId: plan.template.id,
-							artifacts: shelfArtifacts.map((artifact: { relativePath: string }) => artifact.relativePath),
-						});
-						while (completedWebTasks.size > COMPLETED_WEB_TASK_MEMORY) {
-							const oldest = completedWebTasks.keys().next().value;
-							if (oldest === undefined) break;
-							completedWebTasks.delete(oldest);
-						}
-						try {
-							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "ok", summary: summaryText, artifacts: shelfArtifacts, usage: result.usage, noticed, ...(committed.conflicts.length > 0 ? { reviseConflicts: committed.conflicts } : {}) });
-						} catch (e) {
-							app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
-						}
-					}
-				} catch (e) {
-					const stopped = task.abortController.signal.aborted;
-					// Keep chips for files already on disk, same shape/derivation as the
-					// aborted-resolved branch (result.artifacts). Recomputing scans the
-					// task folder and can itself throw (fs races) — guard it so task_error
-					// ALWAYS fires (the task_end-always-fires doctrine); a listing failure
-					// degrades the card to no chips, never loses the error frame.
-					let writtenArtifacts: ReturnType<typeof listSpecialistTaskArtifacts> = [];
-					try { writtenArtifacts = listSpecialistTaskArtifacts(plan.taskFolder); } catch {}
-					// Files already on disk are kept on the shelf (files core slice) —
-					// absorb never throws per-file, so task_error still always fires.
-					try { writtenArtifacts = taskDiscarded() ? [] : absorbTaskArtifactsIntoShelf(persistentAgentIdForSession, artifactRoot(), writtenArtifacts); } catch {}
-					const errorMessage = stopped ? (task.stoppedByUser ? "Task stopped by you. Files already written are kept." : "The task was cancelled.") : (e as Error).message;
-					if (typeof (e as { providerMessage?: unknown }).providerMessage === "string") app.log.warn({ err: (e as { providerMessage: string }).providerMessage, taskId: plan.taskId }, "the provider refused the specialist's model");
-					const errorHandoff = enqueueTaskHandoff(errorMessage, writtenArtifacts.length);
-					const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: errorMessage, artifacts: writtenArtifacts, ...(errorHandoff ? { handoff: errorHandoff } : {}) });
-					try {
-						finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: stopped ? "aborted" : "error", summary: errorMessage, artifacts: writtenArtifacts, noticed });
-					} catch (ledgerError) {
-						app.log.warn({ err: (ledgerError as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
-					}
-				} finally {
-					if (taskDiscarded()) eraseForgottenTask(roomDir, plan.taskId);
-					removeSpecialistTask(persistentAgentIdForSession, plan.taskId);
-				}
-			})();
-			return { ok: true };
-		};
-		launchSpecialistTask = launchSpecialistTaskForSession;
-		const persistentRoomDelegateTools = [createDelegateTaskTool({
-			agentId: persistentAgentId,
-			taskCap: WEB_TASK_CAP,
-			runningCount: () => runningSpecialistCount(persistentAgentId),
-			generateTaskId: () => `tsk-${crypto.randomBytes(6).toString("hex")}`,
-			// Consent source for auto-dispatch (delegation-flow slice): the user-
-			// authored text of the turn being answered, set by the prompt handler
-			// below and cleared when the turn settles — a delegate call outside a
-			// user turn can never see stale consent.
-			currentUserMessage: () => activeTurnUserAuthoredText,
-			consumeAutoDispatch: () => {
-				if (autoDispatchBudgetRemaining <= 0) return false;
-				autoDispatchBudgetRemaining -= 1;
-				return true;
-			},
-			launch: launchSpecialistTaskForSession,
-		})];
 		// read_skill is registered unconditionally: gating registration on the
 		// connect-time enabled set meant a room that connected with zero skills
 		// had no tool for a skill enabled mid-session — the index now reaches it
@@ -2182,7 +1907,7 @@ ${lines.join("\n")}`;
 		// learn about a rename), the instructions against the ones the thread
 		// booted with, the current workspace (the default applies live, so the
 		// model never claims a stale one), the enabled skills (read_skill enforces
-		// the live set per call) and the Files list. Each is read fresh at every
+		// the live set per call) and the Attachments list. Each is read fresh at every
 		// message, and a copy is sent only when it says something the latest copy
 		// does not, so a change no longer rewrites the whole conversation to the
 		// provider's cache. A part that fails to build keeps the latest copy's.
@@ -2238,23 +1963,22 @@ ${lines.join("\n")}`;
 		// The enabled-skills index (skills MR-5, spec §5) used to be appended here
 		// at connect; it now rides the per-turn assembly above, so a skill enabled
 		// mid-session is listed on the very next message instead of the next open.
-		// The specialist-templates index (visuals V2, contract §5) stays a
-		// connect-time append: static registry content, identical for every room
-		// and every connect, so there is nothing for a turn to refresh.
-		const persistentRoomSpecialistIndex = buildSpecialistTemplatesIndexSection();
+		// The installation section is a connect-time append, not part of the
+		// frozen boot snapshot, so a conversation reopened after an update names
+		// the version now running and links its docs.
 		const persistentRoomRawBootPrompt = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
 			? readPersistentAgentBootPromptSnapshot(persistentAgentId, persistentRoomThreadRuntime)
 			: persistentRoomBootContext?.systemPrompt;
 		const persistentRoomRawSystemPrompt = persistentRoomRawBootPrompt != null
-			? `${persistentRoomRawBootPrompt}${persistentRoomSpecialistIndex}`
+			? `${persistentRoomRawBootPrompt}${PERSISTENT_ROOM_INSTALLATION_SECTION}`
 			: persistentRoomRawBootPrompt;
 		// Deadlock guard: a room whose memory alone fills this model's window can
 		// never recover in chat (compaction cannot shrink the system prompt), so
 		// refuse to start here, with the remedy, instead of failing on turn one.
-		// What it measures is the boot prompt plus the specialist index, not all a
+		// What it measures is the boot prompt and the installation section, not all a
 		// turn sends: the per-turn hook appends the room-tools stanza, and the
 		// room-state message (identity, instructions, workspace, skills and the
-		// Files list) rides after the person's message. Both ride in the headroom
+		// Attachments list) rides after the person's message. Both ride in the headroom
 		// this check leaves, unmeasured by it. The instructions are the one
 		// user-sized part: up to the 8,000-character cap when saved through the
 		// pane, and whatever a hand-written file holds, since the read takes the
@@ -2425,16 +2149,16 @@ ${lines.join("\n")}`;
 			model: webChatModel,
 			cacheRetention: callCacheRetention("chat", webChatModel),
 			...(persistentRoomRawSystemPrompt ? { rawSystemPrompt: persistentRoomRawSystemPrompt } : {}),
-			// read_skill and delegate_task ride beside the workspace tools: appended
+			// read_skill rides beside the workspace tools: appended
 			// AFTER the workspace-policy mismatch check (they are not workspace
 			// tools) and added to the allowlist explicitly, since customTools are
 			// allowlist-filtered.
-			...(persistentRoomToolPolicy ? { tools: [...persistentRoomToolPolicy.allowedToolNames, ...persistentRoomSkillTools.map((tool) => tool.name), ...persistentRoomDelegateTools.map((tool) => tool.name)] } : {}),
-			// Shelf tools and the archived-notes read ride beside skills/delegation:
+			...(persistentRoomToolPolicy ? { tools: [...persistentRoomToolPolicy.allowedToolNames, ...persistentRoomSkillTools.map((tool) => tool.name)] } : {}),
+			// Shelf tools and the archived-notes read ride beside skills:
 			// appended AFTER the workspace-policy mismatch check (they are not
 			// workspace tools); their names are already in the policy allowlist
 			// (default-on lane).
-			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomDelegateTools.length + persistentRoomShelfTools.length + persistentRoomMemoryTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomDelegateTools, ...persistentRoomShelfTools, ...persistentRoomMemoryTools] } : {}),
+			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomShelfTools.length + persistentRoomMemoryTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomShelfTools, ...persistentRoomMemoryTools] } : {}),
 		});
 		session = created.session;
 		// Steers go in all at once: messages the person sent while one step ran
@@ -2502,8 +2226,6 @@ ${lines.join("\n")}`;
 				const taken = turnPromptMessageSeen ? pendingSteers.shift() : undefined;
 				turnPromptMessageSeen = true;
 				if (taken) {
-					// The newest words are the turn's consent from here on: a request the message withdrew no longer starts a specialist on its own. The budget is the turn's, not refilled.
-					if (activeTurnUserAuthoredText !== null) activeTurnUserAuthoredText = userAuthoredPromptText(taken.text);
 					turnSteps.tookMessage(bubbleIdOf(taken.id), taken.text);
 					takenSteers.set(answerNoteKey(), [...(takenSteers.get(answerNoteKey()) ?? []), { id: taken.id }].slice(-TAKEN_STEERS_KEPT));
 					sendTurnFrame({ type: "steer_taken", id: taken.id, text: taken.text });
@@ -2930,11 +2652,6 @@ ${lines.join("\n")}`;
 	// must not block the session.
 	try {
 		const ledgerRows = listTaskLedgerRecords(persistentAgentIdForSession);
-		// Reseed the iterate memory: one-click iterate stays possible after a
-		// refresh, from the server's own record (D7 derivation unchanged).
-		for (const row of selectTaskLedgerReseedRows(ledgerRows, COMPLETED_WEB_TASK_MEMORY)) {
-			completedWebTasks.set(row.taskId, { templateId: row.templateId, artifacts: (row.artifacts ?? []).map((a) => a.relativePath) });
-		}
 		// Away-notice honesty: terminal rows the client was never told about.
 		// Stamp ONLY on confirmed delivery — a socket that died during connect
 		// setup must not permanently consume the notice.
@@ -2945,7 +2662,7 @@ ${lines.join("\n")}`;
 				// A refused overwrite that happened while the tab was closed reaches
 				// the user ONLY here (taste pass): task frames never replay, so
 				// without the conflicts on this notice the user would just find an
-				// unexplained collision-named file in Files.
+				// unexplained collision-named file in Attachments.
 				notices: away.notices.map((row) => ({ taskId: row.taskId, title: row.title, outcome: row.outcome, endedAt: row.endedAt ?? null, ...(row.reviseConflicts?.length ? { reviseConflicts: row.reviseConflicts } : {}) })),
 				moreCount: away.moreCount,
 			});
@@ -3292,14 +3009,11 @@ ${lines.join("\n")}`;
 					const turnEffortChoice = settleConversationEffortChoice(persistentAgentIdForSession, persistentConversationId, session.thinkingLevel);
 					if (turnEffortChoice) applyRoomEffortToSession(session, turnEffortChoice);
 				}
-				// A continued turn has no new text: no consent for delegate auto-dispatch, no prompt to land, nothing to hand back.
+				// A continued turn has no new text: no prompt to land, nothing to hand back.
 				const userText = continuing ? "" : String(msg.text ?? "");
-				// Consent scope for delegate auto-dispatch: only what the USER typed
-				// this turn — never the model-written handoff blocks or app-written
-				// attachment notes the client prepends to the wire text.
-				activeTurnUserAuthoredText = userAuthoredPromptText(userText);
-				currentTurnUserTextForLanding = activeTurnUserAuthoredText;
-				autoDispatchBudgetRemaining = AUTO_DISPATCH_BUDGET_PER_TURN;
+				// Only what the person typed lands: never the model-written handoff
+				// blocks or app-written attachment notes the client prepends.
+				currentTurnUserTextForLanding = userAuthoredPromptText(userText);
 				// Consult MR-5 hardening: this prompt has consumed any queued handoff
 				// blocks (the client prepended them to userText). Clear the persisted
 				// queue now, atomically with the consume, so a crash or a reordered
@@ -3325,12 +3039,6 @@ ${lines.join("\n")}`;
 					// What an edit's step back left done, for the edited message and for the same text sent again after a failed attempt.
 					await session!.prompt(withPersistentRoomRestoredLiveThreadContext(withAnswerNote(sentNote, withEditNote(continuing ? [] : keptBeforeNextMessage(session as any), userText))), serverHooks().promptOptions?.());
 				}
-				// Consent dies with the answer: everything after this line (event
-				// flush, auto-summarize recovery prompt) runs tools in the same
-				// session and must never be able to auto-dispatch on this turn's
-				// message. The finally below is the error-path backstop.
-				activeTurnUserAuthoredText = null;
-				autoDispatchBudgetRemaining = 0;
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("completed");
 				await flushSessionEvents();
 				returnUntakenSteers();
@@ -3384,12 +3092,7 @@ ${lines.join("\n")}`;
 				const typedOnly = userAuthoredPromptText(String(msg.text ?? ""));
 				if ((e as any)?.code !== "conversation_moved" && leafBeforePrompt !== undefined && (session as any)?.sessionManager?.getLeafId?.() === leafBeforePrompt && typedOnly.trim() && typedOnly.trim() === String(msg.text ?? "").trim()) returnedPrompt = { text: typedOnly.trim(), notice: true };
 			} finally {
-				// Clear the consent text only for a turn that actually began: a
-				// CONCURRENT prompt frame that 409s at beginPersistentAgentTurn never
-				// set it, and must not strip the running turn's consent mid-flight.
 				if (persistentTurnId) {
-					activeTurnUserAuthoredText = null;
-					autoDispatchBudgetRemaining = 0;
 					returnUntakenSteers();
 					const turn = activePersistentWebTurn?.turnId === persistentTurnId ? activePersistentWebTurn : null;
 					if (turn) turn.promptSettled = true;
@@ -3681,107 +3384,9 @@ ${lines.join("\n")}`;
 				send({ type: "task_iterate_result", ok: false, reason: SERVER_STOPPING_SENTENCE, code: SERVER_STOPPING_CODE });
 				return;
 			}
-			// Iterate chip-chat: the ONE client-initiated
-			// delegation path. The brief is USER-authored (typed under the open file, in the viewer's footer)
-			// and the click IS the approval, the D7 shape (export precedent):
-			// legitimate because every other field is server-derived — the frame
-			// carries only {taskId, brief}; template and read scope come from
-			// completedWebTasks, the server's own record of what THIS connection
-			// finished; the write scope is a fresh server-named task folder; the
-			// plan builder re-validates every path; the shared launch closure
-			// re-checks the cap; and a cooldown replaces the approval card as the
-			// spawn rate limiter. Model-authored delegations (delegate_task,
-			// including "Iterate via room") keep the interactive approval — only
-			// the user-authored direct path is one-click.
-			void (async () => {
-				try {
-					const launch = launchSpecialistTask;
-					if (!launch) {
-						send({ type: "task_iterate_result", ok: false, reason: "The room session is not ready yet." });
-						return;
-					}
-					const sourceTaskId = String(msg.taskId ?? "").trim();
-					// Connection memory first; the ledger fallback (rung 3) covers panel
-					// rows older than the reseed window. Same D7 shape either way: the
-					// template and read scope come from the server's own records.
-					// Room-wide lookup: a row born in
-					// an earlier conversation is just as revisable — the B5 rule
-					// (ok+artifacts only) lives inside the resolver and still applies.
-					let source = completedWebTasks.get(sourceTaskId);
-					if (!source) {
-						try {
-							const fallback = resolveIterateSourceFromLedger(listTaskLedgerRecords(persistentAgentIdForSession), sourceTaskId);
-							if (fallback) source = { templateId: fallback.templateId, artifacts: fallback.artifacts };
-						} catch {
-							// Fall through to the friendly refusal.
-						}
-					}
-					if (!source) {
-						send({ type: "task_iterate_result", ok: false, reason: "That task can no longer take change requests. Ask the room to delegate a fresh one instead." });
-						return;
-					}
-					const template = getSpecialistTemplate(source.templateId);
-					if (!template) {
-						send({ type: "task_iterate_result", ok: false, reason: `"${source.templateId}" is not a specialist template.` });
-						return;
-					}
-					if (runningSpecialistCount(persistentAgentIdForSession) >= WEB_TASK_CAP) {
-						send({ type: "task_iterate_result", ok: false, reason: "A specialist is already running. Wait for it to finish or stop it first." });
-						return;
-					}
-					const sinceLast = Date.now() - lastIterateLaunchAt;
-					if (sinceLast < ITERATE_COOLDOWN_MS) {
-						send({ type: "task_iterate_result", ok: false, reason: "Give it a few seconds between change requests." });
-						return;
-					}
-					const iterateTaskId = `tsk-${crypto.randomBytes(6).toString("hex")}`;
-					// Shelf-canonical inputs (files core slice): a specialist reads only
-					// inside the artifact store, so `files/<name>` inputs are staged as
-					// copies of the CURRENT shelf bytes into the new task's inputs/ —
-					// which is also how hand-edits reach a revise run (the shelf is a
-					// real folder; staging always reads current bytes). This replaced
-					// the ingest-on-iterate workspace detour (G2-B) per the files spec:
-					// exports are snapshots now, never a revise source. Each staged file
-					// is hash-pinned as a revise target — the run REVISES the canonical
-					// file, committed by the server-side gate at completion.
-					let iterateInputArtifacts = source.artifacts;
-					let iterateReviseTargets: { name: string; baselineHash: string; outputName: string }[] = [];
-					try {
-						const shelfIngest = ingestShelfInputs(iterateInputArtifacts, `tasks/${iterateTaskId}`, (name) => resolveShelfFilePath(persistentAgentIdForSession, name).absolutePath);
-						for (const drop of shelfIngest.dropped) {
-							app.log.warn({ taskId: iterateTaskId, source: drop.sourceRelativePath, reason: drop.reason }, "iterate shelf ingest dropped an input");
-						}
-						iterateInputArtifacts = shelfIngest.inputArtifacts;
-						iterateReviseTargets = shelfIngest.reviseTargets;
-					} catch (e) {
-						app.log.warn({ err: (e as Error).message, taskId: iterateTaskId }, "iterate shelf ingest failed; proceeding without shelf inputs");
-						iterateInputArtifacts = iterateInputArtifacts.filter((artifact) => !artifact.startsWith("files/"));
-					}
-					let plan: SpecialistSessionPlan;
-					try {
-						plan = buildSpecialistSessionPlan({
-							taskId: iterateTaskId,
-							templateId: source.templateId,
-							brief: String(msg.brief ?? ""),
-							inputArtifacts: iterateInputArtifacts,
-							iterateParentTaskId: sourceTaskId,
-							...(iterateReviseTargets.length > 0 ? { reviseTargets: iterateReviseTargets } : {}),
-						});
-					} catch (e) {
-						send({ type: "task_iterate_result", ok: false, reason: `Change request not possible: ${(e as Error).message}` });
-						return;
-					}
-					const started = launch(plan);
-					if (!started.ok) {
-						send({ type: "task_iterate_result", ok: false, reason: started.plain ? started.reason : `The specialist could not start: ${started.reason}` });
-						return;
-					}
-					lastIterateLaunchAt = Date.now();
-					send({ type: "task_iterate_result", ok: true, taskId: plan.taskId });
-				} catch (e) {
-					try { send({ type: "task_iterate_result", ok: false, reason: (e as Error).message }); } catch { /* socket gone */ }
-				}
-			})();
+			// Specialists are switched off: a page from before still sending a
+			// change request is told so, after the stop's own refusal above.
+			send({ type: "task_iterate_result", ok: false, reason: SPECIALISTS_OFF_SENTENCE });
 		}
 	};
 
@@ -3845,8 +3450,8 @@ ${lines.join("\n")}`;
 		// A consult answer that was never transferred is re-derivable: kill the
 		// worker and discard silently.
 		activeWebConsult?.abortController.abort();
-		// Specialist tasks SURVIVE the connection (a delegation belongs to the
-		// room, not to the tab that asked for it). This connection merely stops being the room's sink;
+		// A specialist task started before they were switched off survives the
+		// connection (it belongs to the room, not to the tab). This connection merely stops being the room's sink;
 		// endings nobody hears finalize with noticed:false and arrive as
 		// away-notices on the next connect.
 		unbindSpecialistSink(persistentAgentIdForSession, sendChecked);

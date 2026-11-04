@@ -35,6 +35,11 @@ function checkpointAgo(value: string | null | undefined): { label: string; title
 	return { label, title: compactDateTime(value) };
 }
 
+/** The memory line's count, in Maintain's own word: what the person can do next. */
+function toMemorizeLabel(count: number): string {
+	return count === 0 ? "nothing to memorize" : `${count} to memorize`;
+}
+
 export type PersistentAgentCardProps = {
 	status: PersistentAgentStatus | null;
 	thread: LauncherRoomThread | null;
@@ -242,7 +247,7 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 						<div className="memory-meter" title={`Conversations you remembered but have not memorized yet: ${memory.recentContextCount} of the ${sessionBlockCap} this room can hold. Memorize turns them into lasting notes.`}>
 							<div className="memory-meter-head">
 								<span className="memory-meter-checkpoint" title={memoryCheckpoint?.title}>{memoryCheckpoint ? `memory saved ${memoryCheckpoint.label}` : "no memories saved yet"}</span>
-								<span className="memory-meter-label">{memory.recentContextCount === 0 ? "nothing waiting" : `${memory.recentContextCount} ${memory.recentContextCount === 1 ? "conversation" : "conversations"} waiting`}</span>
+								<span className="memory-meter-label">{toMemorizeLabel(memory.recentContextCount)}</span>
 							</div>
 							<div
 								className="memory-meter-track"
@@ -250,14 +255,14 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 								aria-valuemin={0}
 								aria-valuemax={sessionBlockCap}
 								aria-valuenow={memory.recentContextCount}
-								aria-label={`Conversations waiting to be memorized: ${memory.recentContextCount} of ${sessionBlockCap}`}
+								aria-label={`Conversations to memorize: ${memory.recentContextCount} of ${sessionBlockCap}`}
 							>
 								<div className="memory-meter-fill" style={{ width: `${memoryFill * 100}%` }} />
 							</div>
 						</div>
 					) : (
 						<div className="memory-meter-checkpoint" title={memoryCheckpoint?.title}>
-							{memory.recentContextCount} {memory.recentContextCount === 1 ? "conversation" : "conversations"} waiting · {memoryCheckpoint ? `memory saved ${memoryCheckpoint.label}` : "no memories saved yet"}
+							{toMemorizeLabel(memory.recentContextCount)} · {memoryCheckpoint ? `memory saved ${memoryCheckpoint.label}` : "no memories saved yet"}
 						</div>
 					)
 				) : (

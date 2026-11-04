@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { CopyButton } from "./CopyButton";
-import { CodeIcon, CopyImageButton, ExpandIcon } from "./figure-tools";
+import { CopyImageButton, CopyTextTool, ExpandIcon, FigureStrip, FigureSwitch, FigureTools, IconTool } from "./figure-tools";
 import { ZOOM_MAX, ZOOM_MIN, fitZoom, parseNaturalSize, scrollToKeepPoint, stepZoom, wheelZoom, type Size } from "../diagram-zoom";
 
 const MAX_MERMAID_CHARS = 12_000;
@@ -435,11 +435,13 @@ type WheelAnchor = {
 	newZoom: number;
 };
 
-/** The diagram's source in place of the picture, numbered by line, with Copy. */
-function DiagramCode({ source }: { source: string }) {
+const DIAGRAM_VIEWS = [{ value: "picture", word: "Picture" }, { value: "code", word: "Code" }] as const;
+
+/** The diagram's source in place of the picture, numbered by line. On the card Copy stands in the strip; the expanded window has no strip, so `ownCopy` puts one on the code. */
+function DiagramCode({ source, ownCopy = false }: { source: string; ownCopy?: boolean }) {
 	return (
 		<div className="figure-code">
-			<CopyButton text={source} className="figure-code-copy" what="code" />
+			{ownCopy && <CopyButton text={source} className="figure-code-copy" what="code" />}
 			<pre><code>{source.split("\n").map((line, i) => <span key={i}>{line}{"\n"}</span>)}</code></pre>
 		</div>
 	);
@@ -666,14 +668,13 @@ export function MermaidDiagram({ chart }: { chart: string }) {
 		const stageStyle = viewerNatural ? { width: `${Math.round(viewerNatural.width * viewerZoom)}px` } : undefined;
 		return (
 			<figure className="mermaid-diagram figure-card" aria-label="Rendered Mermaid diagram">
-				{/* Tools on hover, top right: Copy image, Code (the source in
-				    place of the picture) and expand. They sit beside the canvas,
-				    so a click on one never reaches the size toggle. */}
-				<div className="figure-tools">
-					{!codeShown && copyable(status.svg) && <CopyImageButton svg={() => canvasRef.current?.querySelector("svg")} />}
-					<button type="button" className="figure-tool" aria-pressed={codeShown} onClick={() => setCodeShown((shown) => !shown)}><CodeIcon /><span>Code</span></button>
-					<button type="button" className="figure-tool" onClick={openViewer} aria-label="Open expanded diagram" title="Open expanded diagram"><ExpandIcon /></button>
-				</div>
+				{/* The strip sits beside the canvas, so a click on a tool never reaches the size toggle. */}
+				<FigureStrip label="Diagram">
+					<FigureTools copy={codeShown ? <CopyTextTool text={status.renderedSource} what="code" /> : copyable(status.svg) && <CopyImageButton svg={() => canvasRef.current?.querySelector("svg")} />}>
+						<FigureSwitch options={DIAGRAM_VIEWS} value={codeShown ? "code" : "picture"} onChange={(view) => setCodeShown(view === "code")} />
+						<IconTool name="Open expanded diagram" onClick={openViewer}><ExpandIcon /></IconTool>
+					</FigureTools>
+				</FigureStrip>
 				{codeShown ? (
 					<DiagramCode source={status.renderedSource} />
 				) : (
@@ -710,7 +711,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
 							</div>
 							<div className="mermaid-viewer-body" ref={viewerBodyRef}>
 								{viewerCode ? (
-									<DiagramCode source={status.renderedSource} />
+									<DiagramCode source={status.renderedSource} ownCopy />
 								) : (
 									<div className="mermaid-viewer-stage" ref={viewerStageRef} style={stageStyle}>
 										{viewerStatus.state === "ready" && <div className="mermaid-viewer-svg" dangerouslySetInnerHTML={{ __html: viewerStatus.svg }} />}

@@ -1,5 +1,6 @@
 import { memo, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { ChatItem } from "../types";
+import { copyAnswer } from "../answer-copy";
 import { formatAbsoluteTime, formatRelativeTime } from "../message-time";
 import { CopyButton } from "./CopyButton";
 import { CloseIcon, PencilIcon } from "./icons";
@@ -79,7 +80,7 @@ export const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string;
 	find: { icon: "📁", running: "Finding files", done: "Looked for files", failed: "Couldn't look for files" },
 	grep: { icon: "🔎", running: "Searching files", done: "Searched files", failed: "Couldn't search files" },
 	read_skill: { icon: "🛠️", running: "Reading skill", done: "Read skill", failed: "Couldn't use the skill" },
-	// The room's Files tools (persistent-room-shelf-tools.ts): a chip reading
+	// The room's Attachments tools (persistent-room-shelf-tools.ts): a chip reading
 	// "Read file" says what happened, where the raw name "read_file" only said
 	// which tool did it.
 	read_file: { icon: "📄", running: "Reading file", done: "Read file", failed: "Couldn't read file" },
@@ -108,7 +109,7 @@ export function summariseToolArgs(name: string, args: any): string {
 	if (name === "bash") return clip(String(args.command ?? ""));
 	if (name === "read" || name === "write" || name === "edit" || name === "ls") return clip(pathSummary(String(args.path ?? "")));
 	if (name === "find" || name === "grep") return clip([args.pattern, args.path].filter((part) => typeof part === "string" && part.trim()).join(" · "));
-	// Files tools take a plain shelf filename (`name`), never a path; a search
+	// Attachments tools take a plain shelf filename (`name`), never a path; a search
 	// names its query first and the file it was fenced to, when it was.
 	if (name === "read_file") return String(args.name ?? "").slice(0, 160);
 	if (name === "search_file") {
@@ -690,7 +691,7 @@ export function isBundleableToolItem(item: ChatItem): item is ToolChatItem {
 }
 
 export interface MessageAttachmentAccess {
-	/** Open this shelf file in the right-pane viewer — the same act as clicking its Files row. */
+	/** Open this shelf file in the right-pane viewer: the same act as clicking its Attachments row. */
 	onOpen: (name: string) => void;
 	/**
 	 * The route that serves this shelf file inline, for the thumbnail an
@@ -941,7 +942,7 @@ function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCa
 							{/* Attachment chips (files UI slice): the file rode with THIS
 							    message — same chip grammar as task artifacts. The chip
 							    opens the file in the viewer (taste pass), exactly as its
-							    Files row does: a chip that names a file the room can read
+							    Attachments row does: a chip that names a file the room can read
 							    but the user cannot click was the odd one out. A file since
 							    deleted renders muted and inert — the chip stays as the
 							    honest record that it rode with this message. */}
@@ -968,7 +969,7 @@ function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCa
 												<span
 													key={attachment.name}
 													className={`task-file-chip user-attachment-chip${gone ? " gone" : ""}`}
-													title={gone ? `${attachment.name} — no longer in Files` : attachment.name}
+													title={gone ? `${attachment.name}: no longer in Attachments` : attachment.name}
 												>
 													<span className="task-kind">{kind}</span>
 													<span className="task-file-name">{attachment.name}</span>
@@ -1015,7 +1016,7 @@ function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCa
 					)
 					: copyText && (
 						<div className="message-actions assistant">
-							<CopyButton text={copyText} className="message-copy-assistant" />
+							<CopyButton text={copyText} className="message-copy-assistant" copy={copyAnswer} />
 							{replyTs !== undefined && <MessageTime ts={replyTs} />}
 						</div>
 					)}

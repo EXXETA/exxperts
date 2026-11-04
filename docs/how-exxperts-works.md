@@ -117,7 +117,7 @@ Freezes the active thread and asks a compression worker to distill it
 into a proposed summary of the conversation. The default Remember button
 runs a fast path at standard density and shows you the proposal before
 it is saved; a room can be set to save without that preview (Room
-settings, Memory, **Remember without the preview**). "Remember with options…" opens the full flow, where you
+settings, Memory, **Remember without the preview**). The arrow beside Remember opens "Choose what to keep…", the full flow, where you
 choose a density (compact/standard/rich) and can add an optional
 steering note. Things
 you explicitly asked the agent to remember are carried through and
@@ -216,13 +216,13 @@ Rooms get tools through a per-room policy rather than a global grant:
 - **`fetch_url`**: HTTP fetching with SSRF defenses (private-range and
   redirect protection).
 - **Web search**: built in via DuckDuckGo; local SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries ([`web-search.md`](web-search.md)).
-- **Files**: documents and outputs a room or its specialists produce,
-  viewable in a sandboxed file viewer; delegated tasks a room runs
-  live in the room's Files panel, with a click-to-watch run view. PDFs
+- **Attachments**: documents you add and outputs a room produced, shown
+  as cards beside the chat and opened in a sandboxed file viewer; files that earlier visual specialists
+  made stay there as ordinary files, marked as made by the room. PDFs
   and Word documents are read through an isolated parser, with page
   counts noted and offset/limit paging like any text file; a scanned
   PDF with no text layer is called out honestly instead of returning
-  nothing. An `.xlsx` added to Files is previewed as a readable table
+  nothing. The room reads an `.xlsx` added to Attachments as a table
   (the legacy `.xls` format stays refused).
 - **`read_skill`**: rooms read the skills enabled for them through this
   tool; skills are the sanctioned way to give rooms new instructions
@@ -246,9 +246,8 @@ approval gates, not process isolation.
 
 Where your file goes: when you attach a file to a room, it is stored
 on your machine under that room's own folder; it is not uploaded
-anywhere. The room can read it, and files you attach or the room
-creates show up in the room's Files panel, where you can download or
-delete them.
+anywhere. The room can read it, and files you attach show up in the
+room's Attachments panel, where you can download, rename or delete them.
 
 ## Security posture
 

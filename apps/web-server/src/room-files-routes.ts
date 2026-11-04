@@ -9,7 +9,7 @@ import { ARTIFACT_SECURITY_HEADERS, isLoopbackAddress, isLoopbackOrLocalhostOrig
 import { artifactContentType, nameIsTaken, writeReplacingNoLink } from "./artifact-routes.js";
 
 // ── Room files routes (files UI slice) ─────────────────────────────────────
-// The shelf's HTTP face: list rows for the Files panel, take uploads onto the
+// The shelf's HTTP face: list rows for the Attachments panel, take uploads onto the
 // shelf, serve/preview user-added files, undo a staged upload, and export a
 // snapshot to a user-picked folder. Room-made files keep flowing through the
 // task-scoped /api/artifacts routes; these routes exist for what has no task.
@@ -108,7 +108,7 @@ app.post("/api/persistent-agents/:id/files", { bodyLimit: 40 * 1024 * 1024 }, as
 	}
 	if (bytes.byteLength === 0) return reply.code(400).send({ error: "The file is empty." });
 	if (bytes.byteLength > SHELF_READ_MAX_FILE_BYTES) {
-		return reply.code(413).send({ error: `Files up to ${SHELF_READ_MAX_FILE_BYTES / (1024 * 1024)} MB can be added to this room's Files.` });
+		return reply.code(413).send({ error: `Files up to ${SHELF_READ_MAX_FILE_BYTES / (1024 * 1024)} MB can be added to this room's Attachments.` });
 	}
 	const sniff = sniffShelfFileBuffer(bytes.subarray(0, 8192), desiredName);
 	if (sniff.kind === "refused") {
@@ -122,7 +122,7 @@ app.post("/api/persistent-agents/:id/files", { bodyLimit: 40 * 1024 * 1024 }, as
 		fs.writeFileSync(path.join(shelfDir, name), bytes, { flag: "wx", mode: 0o600 });
 	} catch (e) {
 		app.log.warn({ err: (e as Error).message, roomId }, "shelf upload write failed");
-		return reply.code(500).send({ error: "The file could not be saved to this room's Files." });
+		return reply.code(500).send({ error: "The file could not be saved to this room's Attachments." });
 	}
 	// Parse once, honestly. A parse failure is reported, not hidden — the file
 	// stays on the shelf (read_file will state the same failure) and the chip

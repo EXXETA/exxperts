@@ -96,8 +96,8 @@ export function RoomInstructionsSection({ status, onDirtyChange, registerSave }:
 	const globalUnreadable = global?.instructions.unreadable ?? null;
 	const globalHint = switchHint(loaded);
 	const showGlobal = !!global && globalEnabled && !!globalText && !globalUnreadable;
-	// Clear sits just above the box: on the global link's row, or on a row of
-	// its own while the global text is shown between that row and the box.
+	// Clear hangs in the box's corner: from the global link's row, or from a
+	// row of its own while the global text is shown between that row and the box.
 	const clearOwnRow = showGlobal && globalOpen;
 	const clearButton = clearLink && (
 		<button className="rs-btn" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>

@@ -98,6 +98,8 @@ button.wk-head:hover:not(:disabled) { color: var(--exx-text-soft); }
 .wk-row-ic { display: inline-flex; flex: none; color: var(--exx-text-muted); }
 .wk-tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wk-tx b { font-weight: 400; color: var(--exx-text); }
+/* A sentence that says why, such as an old hand-off card's, takes the lines it needs rather than being cut. */
+.wk-tx.wk-wrap { white-space: normal; }
 /* A command named by itself, in the opened row's command style (.wk-command). The words' space before it is narrower than
    the code's own, so a little margin keeps the verb from reading as pinched against the command. */
 .wk-code { margin-left: 0.15em; font-family: var(--exx-font-mono); font-size: 12px; color: var(--exx-text); }

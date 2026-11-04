@@ -199,7 +199,7 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	max-height: 160px;
 }
 /* The attachment chip in a message (taste pass): it opens the file in the
-   viewer, exactly as its Files row does, so it carries the same affordance as
+   viewer, exactly as its Attachments row does, so it carries the same affordance as
    any other chip. `openable` is the button form; the plain span stays for a
    file that is gone — kept visible as the honest record that it rode with this
    message, but muted and inert so it never promises a click it cannot keep. */

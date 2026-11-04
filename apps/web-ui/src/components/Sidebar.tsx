@@ -10,7 +10,7 @@ interface Props {
 	onSetAppearance: (pref: AppearancePreference) => void;
 	/** Opens the Settings overlay over the room; the optional section targets it. */
 	onSettings: (section?: "remote") => void;
-	/** The Assets section (contract §2 rung 3) — the rail's first occupant below Home. */
+	/** The room's Attachments entry: a row of the list, under Home. */
 	assetsSlot?: ReactNode;
 }
 
@@ -25,8 +25,8 @@ export function Sidebar({ theme, appearance, onSetAppearance, onSettings, onHome
 			</div>
 			<nav className="sidebar-primary-nav" aria-label="Room navigation">
 				<button className="list-btn sidebar-home-btn" onClick={onHome}>Home</button>
+				{assetsSlot}
 			</nav>
-			{assetsSlot}
 
 			{/* No connection status here on purpose: the room's own reconnect
 			    affordance sits on the composer, where it can actually act. */}

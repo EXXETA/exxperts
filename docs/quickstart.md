@@ -108,7 +108,7 @@ Try this:
 
 1. Chat normally: ask it to help with something real.
 2. Tell it something worth keeping: *"Remember that I prefer concise summaries."*
-3. Paste a screenshot straight into the message box with Cmd+V (Ctrl+V on Windows): it stages as an attachment, exactly as if you had added it through Files.
+3. Paste a screenshot straight into the message box with Cmd+V (Ctrl+V on Windows): it stages as an attachment, exactly as if you had added it through Attachments.
 4. When you finish the session, press **Remember** next to the message box. The room keeps a short summary of the conversation, and anything you explicitly asked it to remember becomes a pinned note when the conversation is memorized.
 
 Nothing enters memory silently. Remember shows you the proposal before it saves, and a room can be set to save it without that preview. Later, as remembered conversations accumulate, the room offers **Memorize** (turning them into lasting notes, grouped by topic) and **Review** (tidying the notes it has), both approval-gated the same way, and both undoable. Each room also has a memory budget for its notes: Room settings and the Memory page show how full the memory is, and notes that would not fit move to an archive the room can still read, only when you save. Remember warns when one more save would fill the room's waiting list; Memorize then clears it. The full story: [Memory](memory.md).

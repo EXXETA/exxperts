@@ -480,6 +480,18 @@ async function checkDesktop(browser: Browser, platform: "Mac" | "Windows", userA
 		await waitUntil(async () => !(await shortcutsShown(page)), `${platform}: Esc closes the window over the question`).catch(() => {});
 		expect(!(await shortcutsShown(page)) && (await asks.count()) === 1 && (await deniedRows()) === 0, `${platform}: Esc closes only the window; the question still waits`);
 
+		// The room's Attachments over a waiting question: Esc closes them only, from the page and from the box.
+		const attachments = page.locator(".attachments-panel");
+		for (const from of ["the page", "the box"]) {
+			await page.locator(".attachments-entry").click();
+			await attachments.waitFor({ timeout: 5000 });
+			if (from === "the box") await composer.focus();
+			await page.keyboard.press("Escape");
+			await waitUntil(async () => (await attachments.count()) === 0, `${platform}: Esc from ${from} closes the Attachments`).catch(() => {});
+			expect((await attachments.count()) === 0 && (await asks.count()) === 1 && (await deniedRows()) === 0, `${platform}: Esc from ${from} closes only the Attachments; the question still waits`);
+		}
+		await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
 		// Deny it: Esc, the box empty.
 		await page.keyboard.press("Escape");
 		await waitUntil(async () => (await deniedRows()) === 1, `${platform}: Esc denies the waiting step`).catch(() => {});

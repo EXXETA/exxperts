@@ -5,6 +5,7 @@ import {
 	findInitialModel,
 	parseModelPattern,
 	resolveCliModel,
+	resolveModelScope,
 } from "../src/core/model-resolver.js";
 
 // Mock models for testing
@@ -468,5 +469,31 @@ describe("default model selection", () => {
 describe("xai default model", () => {
 	test("xai default tracks the current Grok model", () => {
 		expect(defaultModelPerProvider.xai).toBe("grok-4.7");
+	});
+});
+
+describe("resolveModelScope glob patterns", () => {
+	const registry = {
+		getAvailable: async () => allModels,
+	} as unknown as Parameters<typeof resolveModelScope>[1];
+	const scoped = async (patterns: string[]) =>
+		(await resolveModelScope(patterns, registry)).map((s) => `${s.model.provider}/${s.model.id} ${s.thinkingLevel}`);
+
+	test("a glob matches the bare model id, ignoring case", async () => {
+		expect(await scoped(["*SONNET*"])).toEqual(["anthropic/claude-sonnet-4-5 undefined"]);
+	});
+
+	test("a provider glob keeps its thinking level, and * stops at a slash", async () => {
+		// "openai/*" matches openai's gpt-4o by provider/id, and OpenRouter's
+		// "openai/gpt-4o:extended" by its bare id; "qwen/qwen3-coder:exacto" has no "openai/" part.
+		expect(await scoped(["openai/*:high"])).toEqual(["openai/gpt-4o high", "openrouter/openai/gpt-4o:extended high"]);
+	});
+
+	test("? and [...] match one character of provider/id", async () => {
+		expect(await scoped(["anthropic/claude-?onnet-4-[0-9]"])).toEqual(["anthropic/claude-sonnet-4-5 undefined"]);
+	});
+
+	test("a glob that matches no model adds nothing", async () => {
+		expect(await scoped(["*gemini*"])).toEqual([]);
 	});
 });

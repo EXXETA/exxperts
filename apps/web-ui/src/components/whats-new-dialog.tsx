@@ -130,8 +130,20 @@ function MinorRow({ release, open, onToggle }: { release: WhatsNewRelease; open:
 	);
 }
 
+const closeListeners = new Set<() => void>();
+
+/** Told when a person closes the window, not when Home unmounts it: the first-run guide waits for that. Returns the way to stop listening. */
+export function onWhatsNewClosed(listener: () => void): () => void {
+	closeListeners.add(listener);
+	return () => { closeListeners.delete(listener); };
+}
+
 export function WhatsNewDialog({ sections, onClose }: { sections: WhatsNewSections; onClose: () => void }) {
-	useEscapeKey(onClose);
+	const close = (): void => {
+		onClose();
+		for (const listener of closeListeners) listener();
+	};
+	useEscapeKey(close);
 	// The keyboard starts on the window itself, so no ring shows until the first Tab.
 	const dialogRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => dialogRef.current?.focus(), []);
@@ -139,9 +151,9 @@ export function WhatsNewDialog({ sections, onClose }: { sections: WhatsNewSectio
 	const [open, setOpen] = useState<string[]>(() => (sections.major.length === 0 && sections.minor[0] ? [sections.minor[0].version] : []));
 	const toggle = (version: string): void => setOpen((current) => (current.includes(version) ? current.filter((v) => v !== version) : [...current, version]));
 	return (
-		<div className="whats-new-backdrop" onClick={onClose}>
+		<div className="whats-new-backdrop" onClick={close}>
 			<div ref={dialogRef} tabIndex={-1} className="whats-new-dialog" role="dialog" aria-modal="true" aria-label="What's new" onClick={(e) => e.stopPropagation()}>
-				<button type="button" className="whats-new-close" onClick={onClose} aria-label="Close">✕</button>
+				<button type="button" className="whats-new-close" onClick={close} aria-label="Close">✕</button>
 				<h1 className="whats-new-title">What's new</h1>
 				<div className="whats-new-entries">
 					{sections.major.length > 0 && (

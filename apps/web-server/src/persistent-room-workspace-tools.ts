@@ -1177,7 +1177,7 @@ export function sniffWorkspaceDocumentKind(absolutePath: string, name: string): 
 	return sniff.kind === "pdf" || sniff.kind === "docx" ? sniff.kind : null;
 }
 
-const WORKSPACE_DOCUMENT_SCANNED_PDF_NOTE = "This PDF has no extractable text (likely a scanned document). Add it to this room's Files to read its pages visually.";
+const WORKSPACE_DOCUMENT_SCANNED_PDF_NOTE = "This PDF has no extractable text (likely a scanned document). Add it to this room's Attachments to read its pages visually.";
 
 /**
  * The shared pdf/docx read path: the shelf's isolated extraction worker, then

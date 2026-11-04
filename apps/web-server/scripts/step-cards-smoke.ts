@@ -74,7 +74,7 @@ const markup = (items: Record<string, unknown>[], props: Record<string, unknown>
 };
 const card = (items: Record<string, unknown>[], props: Record<string, unknown> = {}): string => decode(markup(items, props));
 // Each row of a card: its state and its words, tags dropped.
-const cardRows = (html: string) => [...html.matchAll(/<div class="wk-row[^"]*" data-s="([^"]+)">([\s\S]*?)<span class="wk-mk">/g)].map((match) => ({ state: match[1], words: match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() }));
+const cardRows = (html: string) => [...html.matchAll(/<div class="wk-row[^"]*" data-s="([^"]+)">([\s\S]*?)<span class="wk-mk">/g)].map((match) => ({ state: match[1], words: match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim(), square: /wk-row-ic"><svg[^>]*><rect /.test(match[2]) }));
 const toolItem = (id: string, item: Record<string, unknown>) => ({ kind: "tool", id, args: {}, ...item });
 
 await check("a step's result shows as written unless it is a Markdown document", () => {
@@ -174,10 +174,15 @@ await check("a specialist's notes keep their single line breaks", () => {
 
 await check("the approval questions have one source", async () => {
 	const titles = await import("../src/room-approval-titles.js");
-	assert(titles.handOffApprovalTitle("an SVG chart") === "Have a specialist create an SVG chart?" && titles.handOffApprovalSubject("Have a specialist create an SVG chart?") === "an SVG chart" && titles.handOffApprovalSubject("Run this command?") === null, "the hand-off question is built and read in one place");
-	for (const file of ["../src/persistent-room-delegate-tool.ts", "../src/thread-items-by-id.ts", "../../web-ui/src/components/Approval.tsx", "../src/persistent-room-bash-approval.ts"]) {
+	assert(titles.handOffApprovalSubject("Have a specialist create an SVG chart?") === "an SVG chart" && titles.handOffApprovalSubject("Run this command?") === null, "an old hand-off question is read in one place");
+	for (const file of ["../src/thread-items-by-id.ts", "../../web-ui/src/components/Approval.tsx", "../src/persistent-room-bash-approval.ts"]) {
 		const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
 		assert(source.includes("room-approval-titles") && !/[`/^]Have a specialist create/.test(source) && !source.includes('"Run this command?"'), `${file} takes the questions from room-approval-titles.ts`);
+	}
+	// Specialists are switched off: the old card and the refused change request say so in the same words.
+	for (const file of ["../src/room-socket.ts", "../../web-ui/src/components/work-card.tsx"]) {
+		const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
+		assert(source.includes("SPECIALISTS_OFF_SENTENCE") && !source.includes("Specialists are switched off,"), `${file} takes the specialists-off sentence from room-approval-titles.ts`);
 	}
 });
 
@@ -202,6 +207,28 @@ await check("a question nobody was there to answer never offers its buttons or c
 	assert(/items=\{shownItems\}/.test(app) && /withUnansweredApprovals\(items, liveApprovalIds\)/.test(app), "the room's chat shows its items with ended questions resolved");
 	const resolve = app.slice(app.indexOf("const resolveApproval = useCallback"), app.indexOf("const openApprovalPreview"));
 	assert(/if \(!liveApprovalIdsRef\.current\.has\(requestId\)\) return;/.test(resolve), "an answer to a question that ended is never sent or recorded");
+});
+
+await check("an old hand-off card left waiting says specialists are switched off, in the room's card", async () => {
+	const titles = await import("../src/room-approval-titles.js");
+	// An old conversation as the room draws it after a reload: the hand-off step
+	// that was under way is stopped, so its card is a row of its own, and no
+	// window answers it any more.
+	const handOff = "Have a specialist create an SVG diagram?";
+	const rowsFor = (ask: Record<string, unknown>) => cardRows(card(approval.withUnansweredApprovals([toolItem("t1", { name: "delegate_task", status: "stopped", args: { template: "diagram-svg" } }), { kind: "approval", id: "a1", requestId: "r1", uiKind: "confirm", ...ask }] as any, new Set())));
+	const left = rowsFor({ title: handOff });
+	const said = left.filter((row) => row.words.includes(titles.SPECIALISTS_OFF_SENTENCE));
+	assert(said.length === 1 && said[0].words === titles.SPECIALISTS_OFF_SENTENCE && said[0].state === "denied" && said[0].square && !left.some((row) => row.words.includes("Not answered")), `the old hand-off card says once, by itself and with the Stopped row's square, that specialists are switched off, got ${JSON.stringify(left)}`);
+	// Saved while its turn was still under way and never closed (the app quit), the step still reads running, so the card is that step's row.
+	const running = cardRows(card(approval.withUnansweredApprovals([toolItem("t2", { name: "delegate_task", status: "running", args: { template: "diagram-svg" }, startedAt: 1_000 }), { kind: "approval", id: "a2", requestId: "r2", uiKind: "confirm", title: handOff }] as any, new Set())));
+	assert(running.length === 1 && running[0].state === "denied" && running[0].words === titles.SPECIALISTS_OFF_SENTENCE && running[0].square, `the old hand-off card on a step saved running says, with the square, specialists are switched off, by itself, got ${JSON.stringify(running)}`);
+	// Its neighbours keep their own words: any other question left waiting, and a hand-off the person answered or stopped.
+	const other = rowsFor({ title: "Overwrite notes.txt?" });
+	assert(other.some((row) => row.words === "Not answered · Overwrite notes.txt?" && !row.square) && !JSON.stringify(other).includes(titles.SPECIALISTS_OFF_SENTENCE), `any other question left waiting reads Not answered, got ${JSON.stringify(other)}`);
+	const declined = rowsFor({ title: handOff, done: "No" });
+	assert(declined.some((row) => row.words === `Not done · you said no · ${handOff}` && !row.square) && !JSON.stringify(declined).includes(titles.SPECIALISTS_OFF_SENTENCE), `a hand-off the person said no to says so, got ${JSON.stringify(declined)}`);
+	const stopped = rowsFor({ title: handOff, stopped: true });
+	assert(stopped.some((row) => row.words === `Not done · you pressed Stop · ${handOff}` && !row.square) && !JSON.stringify(stopped).includes(titles.SPECIALISTS_OFF_SENTENCE), `a hand-off Stop closed says so, got ${JSON.stringify(stopped)}`);
 });
 
 await check("a step that did not run, or was stopped, names its state, a dot, then what it was about", () => {
@@ -451,6 +478,40 @@ await check("a formatted .md read wraps a long word inside its box, so the conve
 	const sideways = measured.filter((m) => m.scroll > m.shown);
 	assert(sideways.length === 0, `the conversation scrolls sideways: ${sideways.map((m) => `at ${m.width} px, ${m.scroll} for ${m.shown}`).join("; ")}`);
 	assert(measured.every((m) => m.preWraps && m.tableScrolls), `a long code line wraps inside the box and a wide table scrolls inside its own frame, got ${JSON.stringify(measured)}`);
+});
+
+await check("an old hand-off card's off line shows in full on a phone, beside a row that keeps its one line", async () => {
+	const { chromium } = await import("playwright");
+	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
+	if (!executable || !fs.existsSync(executable)) {
+		console.log("  (Chromium not installed: this section is skipped)");
+		return;
+	}
+	const css = readPageStyles();
+	const old = (ask: Record<string, unknown>) => approval.withUnansweredApprovals([toolItem("w1", { name: "delegate_task", status: "stopped", args: { template: "diagram-svg" } }), { kind: "approval", id: "w2", requestId: "w2", uiKind: "confirm", ...ask }] as any, new Set());
+	// Opened, as the person sees it after a click on the card's head.
+	const opened = (items: unknown[]) => markup(items as Record<string, unknown>[]).replace('data-open="0"', 'data-open="1"');
+	const browser = await chromium.launch();
+	const measured: Array<{ width: number; off: { cut: boolean; text: string }; other: { lines: number } }> = [];
+	try {
+		for (const width of [1280, 390]) {
+			const page = await browser.newPage({ viewport: { width, height: 800 } });
+			await page.setContent(`<!doctype html><html data-theme="light"><head><style>${css}</style></head><body><div class="messages">${opened(old({ title: "Have a specialist create an SVG diagram?" }))}${opened(old({ title: `Overwrite ${"quarterly-report-final-".repeat(4)}notes.txt?` }))}</div></body></html>`);
+			measured.push({ width, ...(await page.evaluate(() => {
+				const [first, second] = [...document.querySelectorAll(".wk-card")];
+				const offText = [...first.querySelectorAll(".wk-tx")].at(-1) as HTMLElement;
+				const otherText = [...second.querySelectorAll(".wk-tx")].at(-1) as HTMLElement;
+				const otherLine = parseFloat(getComputedStyle(otherText).lineHeight) || 20;
+				return { off: { cut: offText.scrollWidth > offText.clientWidth, text: offText.textContent ?? "" }, other: { lines: Math.round(otherText.getBoundingClientRect().height / otherLine) } };
+			})) });
+			await page.close();
+		}
+	} finally {
+		await browser.close();
+	}
+	const titles = await import("../src/room-approval-titles.js");
+	assert(measured.every((m) => !m.off.cut && m.off.text === titles.SPECIALISTS_OFF_SENTENCE), `the off line is never cut, got ${JSON.stringify(measured)}`);
+	assert(measured.every((m) => m.other.lines === 1), `another question's row keeps its one line, got ${JSON.stringify(measured)}`);
 });
 
 // Opening one is a click: thinking-open-smoke and memory-recall-chip-smoke open one in a room.

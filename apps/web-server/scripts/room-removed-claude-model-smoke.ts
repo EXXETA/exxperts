@@ -12,8 +12,6 @@
 // - Remember, Memorize and Review with it as the Memory model end in the
 //   shared notice, which names the model and says nothing was lost;
 // - a scheduled run in that room is refused with the room's code;
-// - a specialist asked for with it as the Memory model refuses with the
-//   room's sentence, the same to the chat and to the room's model;
 // - AI setup's default set to it says it is no longer offered.
 // The rest of the removed models are checked to be off the list and still in
 // the catalogue.
@@ -26,7 +24,6 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
@@ -77,10 +74,7 @@ function sse(res: http.ServerResponse, event: string, payload: unknown): void {
 }
 
 // The Anthropic API, as far as a turn needs it: every request answers with
-// the model it was sent to. A message asking for a deck is answered with the
-// delegate_task call that quotes it; the tool's result is kept.
-const DECK_REQUEST = "Make me a deck about the kickoff.";
-const delegateResults: string[] = [];
+// the model it was sent to.
 const provider = http.createServer((req, res) => {
 	let raw = "";
 	req.on("data", (chunk) => { raw += chunk; });
@@ -89,22 +83,6 @@ const provider = http.createServer((req, res) => {
 		requests.push(String(body.model));
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		sse(res, "message_start", { type: "message_start", message: { id: `msg_${requests.length}`, type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 1 } } });
-		const partsOf = (message: any): any[] => Array.isArray(message?.content) ? message.content : [{ type: "text", text: String(message?.content ?? "") }];
-		const last = Array.isArray(body.messages) ? body.messages[body.messages.length - 1] : undefined;
-		const toolResult = partsOf(last).find((part) => part?.type === "tool_result");
-		// The person's newest message: a room-state copy after it is the app's.
-		const isCopy = (message: any) => partsOf(message).some((part) => part?.type === "text" && String(part.text).startsWith(ROOM_STATE_HEADING));
-		const parts = partsOf(Array.isArray(body.messages) ? [...body.messages].reverse().find((message: any) => message?.role === "user" && !isCopy(message)) : undefined);
-		if (toolResult) delegateResults.push((Array.isArray(toolResult.content) ? toolResult.content : [{ text: toolResult.content }]).map((part: any) => String(part?.text ?? "")).join("\n"));
-		else if (parts.some((part) => part?.type === "text" && String(part.text).includes(DECK_REQUEST))) {
-			sse(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_deck", name: "delegate_task", input: {} } });
-			sse(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ template: "deck", brief: "A deck about the kickoff.", userRequest: DECK_REQUEST }) } });
-			sse(res, "content_block_stop", { type: "content_block_stop", index: 0 });
-			sse(res, "message_delta", { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 20 } });
-			sse(res, "message_stop", { type: "message_stop" });
-			res.end();
-			return;
-		}
 		sse(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
 		sse(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `Answer from ${body.model}.` } });
 		sse(res, "content_block_stop", { type: "content_block_stop", index: 0 });
@@ -244,31 +222,6 @@ try {
 	const shown = modelNoticeFromError(new ApiRequestError(rememberWork.body.error, rememberWork.status, rememberWork.body.code, rememberWork.body.details));
 	assert(shown?.detail === "not-offered" && shown.sentence === notice, `the screens read it as the not-offered notice (Try again, Choose another model), got ${JSON.stringify(shown)}`);
 	pass("Remember, Memorize and Review with Opus 4.8 as the Memory model end in the one shared notice");
-
-	// --- A specialist task with it as the Memory model ----------------------------------------
-	// The room talks on Opus 5.5; the specialist would run on the Memory model.
-	const delegateRoom = agents.createPersistentAgentFromScaffoldInput({ displayName: "Delegates On Opus 4.8 Memory", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
-	roomModels.writeRoomModels(delegateRoom, { conversation: CURRENT, memory: REMOVED });
-	const seeded = await api(`/api/persistent-agents/${delegateRoom}/threads/c_delegate`, { method: "PUT", body: { state: "active", origin: "launcher", model: CURRENT, items: [] } });
-	assert(seeded.status === 200, `the conversation opens on Opus 5.5, got ${seeded.status} ${JSON.stringify(seeded.body)}`);
-	const delegateSocket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${delegateRoom}&conversationId=c_delegate&modelProvider=${CURRENT.provider}&model=${CURRENT.model}&reattach=1`, { headers: { ...SMOKE_AUTH_HEADERS } });
-	const delegateFrames: any[] = [];
-	delegateSocket.addEventListener("message", (event: { data: unknown }) => { try { delegateFrames.push(JSON.parse(String(event.data))); } catch {} });
-	try {
-		await new Promise<void>((resolve, reject) => { delegateSocket.addEventListener("open", () => resolve()); delegateSocket.addEventListener("error", () => reject(new Error("the room's socket did not open"))); });
-		await waitUntil(() => delegateFrames.some((frame) => frame.type === "ready"), "the room is ready");
-		delegateSocket.send(JSON.stringify({ type: "prompt", text: DECK_REQUEST }));
-		await waitUntil(() => delegateResults.length > 0 && delegateFrames.some((frame) => frame?.type === "event" && frame.event?.type === "agent_end"), "the turn ends", 30_000);
-	} finally {
-		try { delegateSocket.close(); } catch {}
-	}
-	const specialistLine = "This room's memory model, Claude Opus 4.8, is no longer offered. Choose another Memory model in Room settings, Model.";
-	const shownResult = delegateFrames.find((frame) => frame?.type === "event" && frame.event?.type === "message_end" && frame.event.message?.role === "toolResult")?.event.message;
-	const shownText = (shownResult?.content ?? []).filter((part: any) => part?.type === "text").map((part: any) => part.text).join("\n");
-	assert(shownText === specialistLine, `the chat reads the plain sentence, got ${JSON.stringify(shownText)}`);
-	assert(delegateResults[0] === specialistLine, `the room's model reads the same sentence, got ${JSON.stringify(delegateResults[0])}`);
-	assert(!delegateFrames.some((frame) => frame.type === "task_started"), "no specialist started");
-	pass("a specialist asked for in a room with Opus 4.8 as the Memory model refuses with the plain sentence, to the chat and the room's model");
 
 	const browser = await chromium.launch();
 	try {

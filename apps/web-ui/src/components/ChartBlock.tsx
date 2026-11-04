@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { flushSync } from "react-dom";
 import { niceTicks, type ChartData } from "./chart-block";
-import { BarsIcon, CopyImageButton, TableIcon } from "./figure-tools";
+import { CopyImageButton, FigureSwitch, FigureTools } from "./figure-tools";
 
 // A chart block drawn by our own code as SVG, in the theme's chart colours
 // (--chart-1 to --chart-6, styles/01-base.css): a bar, line or pie chart,
@@ -11,7 +11,11 @@ import { BarsIcon, CopyImageButton, TableIcon } from "./figure-tools";
 const HEIGHT = 220;
 const FALLBACK_WIDTH = 560;
 const PIE_SLICES = 6;
+// The fewest letters a line of a pie's legend may hold for it to stay beside the ring, and how wide it grows there.
+const BESIDE_LETTERS = 16;
+const BESIDE_WIDTH = 400;
 const TICK_CHAR = 6.4;
+const CHART_VIEWS = [{ value: "chart", word: "Chart" }, { value: "table", word: "Table" }] as const;
 const formats = new Map<number, Intl.NumberFormat>();
 
 /** Numbers in the reader's own form, with at most `digits` after the point. */
@@ -30,6 +34,37 @@ function stepDigits(step: number): number {
 
 const colour = (i: number) => `answer-chart-c${(i % PIE_SLICES) + 1}`;
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
+
+/** How wide `font` sets a text, the page's own face loaded. With no canvas every text measures zero, so nothing wraps. */
+function measurer(font: string): (text: string) => number {
+	const context = document.createElement("canvas").getContext("2d");
+	if (context) context.font = `${font} ${getComputedStyle(document.documentElement).getPropertyValue("--exx-font-sans")}`;
+	return (text) => context?.measureText(text).width ?? 0;
+}
+
+/** `text` over as many lines as it needs, at least one, none wider than `room`; a word wider than that breaks where it must. */
+function wrap(text: string, room: number, width: (text: string) => number): string[] {
+	const lines: string[] = [];
+	let line = "";
+	for (const word of text.split(/\s+/).filter(Boolean)) {
+		const joined = line ? `${line} ${word}` : word;
+		if (width(joined) <= room) {
+			line = joined;
+			continue;
+		}
+		if (line) lines.push(line);
+		line = "";
+		for (const letter of word) {
+			if (line && width(line + letter) > room) {
+				lines.push(line);
+				line = "";
+			}
+			line += letter;
+		}
+	}
+	if (line || !lines.length) lines.push(line);
+	return lines;
+}
 
 /** The width the chart has, so its text stays at its own size on a phone. */
 function useWidth(): [(element: HTMLDivElement | null) => void, number] {
@@ -59,6 +94,8 @@ interface Tip {
 	x: number;
 	y: number;
 	body: ReactNode;
+	/** Over a pie's ring, so its words wrap to the ring's width. */
+	overRing?: boolean;
 }
 
 /** What a value is being read from: a point of the drawing (or the arrow keys), or a row of a pie's legend. */
@@ -184,20 +221,25 @@ function slices(chart: ChartData): { label: string; value: number; index: number
 function drawPie(chart: ChartData, width: number, hover: number | null, setHover: SetHover, from: HoverFrom = "point"): Drawn {
 	const parts = slices(chart);
 	const total = parts.reduce((sum, slice) => sum + slice.value, 0);
-	// The legend sits beside the ring while its names fit there; on a narrow card (a phone) it goes under the ring, so no name is cut.
+	// Every name shows in full, over the lines it needs. The legend sits beside the ring unless a line there would hold too little (a phone): then it goes under it.
 	const besideOuter = Math.min(HEIGHT / 2 - 12, width / 4);
 	const besideX = 2 * besideOuter + 40;
-	const besideRoom = Math.floor((Math.min(width - 12, besideX + 260) - besideX - 58) / TICK_CHAR);
+	const stacked = Math.floor((Math.min(width - 12, besideX + BESIDE_WIDTH) - besideX - 58) / TICK_CHAR) < BESIDE_LETTERS;
 	const legendWidth = Math.min(width - 24, 300);
-	// Stacked only when that shows more of the longest name than beside does.
-	const stacked = besideRoom < Math.min(Math.floor((legendWidth - 58) / TICK_CHAR), Math.max(...parts.map((slice) => slice.label.length)));
 	const outer = stacked ? Math.min(HEIGHT / 2 - 12, (width - 24) / 2) : besideOuter;
 	const inner = outer * 0.58;
 	const cx = stacked ? width / 2 : outer + 12;
-	const cy = stacked ? outer + 12 : HEIGHT / 2;
 	const legendX = stacked ? (width - legendWidth) / 2 : besideX;
-	const legendTop = stacked ? cy + outer + 26 : cy - (parts.length * 22) / 2;
-	const height = stacked ? legendTop + parts.length * 22 + 4 : undefined;
+	// The share sits beside its name, not at the far edge of a wide card.
+	const legendRight = stacked ? legendX + legendWidth : Math.min(width - 12, legendX + BESIDE_WIDTH);
+	const measure = measurer(TICK_WORDS.font);
+	const names = parts.map((slice) => wrap(slice.label, legendRight - legendX - 58, measure));
+	const legendRows = names.reduce<number[]>((tops, lines, i) => [...tops, tops[i] + 22 + (lines.length - 1) * TICK_WORDS.line], [0]);
+	const legendHeight = legendRows[parts.length];
+	const besideHeight = Math.max(HEIGHT, legendHeight + 8);
+	const cy = stacked ? outer + 12 : besideHeight / 2;
+	const legendTop = stacked ? cy + outer + 26 : cy - legendHeight / 2;
+	const height = stacked ? legendTop + legendHeight + 4 : besideHeight;
 	const point = (angle: number, r: number) => [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
 	let angle = -Math.PI / 2;
 	const drawn = parts.map((slice, i) => {
@@ -219,7 +261,7 @@ function drawPie(chart: ChartData, width: number, hover: number | null, setHover
 		return { slice, i, d, tx, ty };
 	});
 	// A legend row's top: a value read there shows by its row, which may be all of the chart in view.
-	const rowY = (i: number) => legendTop + i * 22 + 1;
+	const rowY = (i: number) => legendTop + legendRows[i] + 1;
 	const svg = (
 		<>
 			{drawn.map(({ i, d }) => (
@@ -229,22 +271,24 @@ function drawPie(chart: ChartData, width: number, hover: number | null, setHover
 			{drawn.map(({ i, slice }) => {
 				const y = rowY(i) + 14;
 				const x = legendX;
-				// The share sits beside its name, not at the far edge of a wide card.
-				const right = stacked ? x + legendWidth : Math.min(width - 12, x + 260);
+				const right = legendRight;
 				return (
 					<g key={`l${i}`} className={`answer-chart-legend${hover === i ? " on" : ""}`} onPointerEnter={() => setHover(i, "legend")}>
 						<rect className={colour(i)} x={x} y={y - 9} width={10} height={10} rx={2} />
-						<text className="answer-chart-tick" x={x + 16} y={y}>{cut(slice.label, Math.max(6, Math.floor((right - x - 58) / TICK_CHAR)))}</text>
+						{names[i].map((line, n) => <text key={n} className="answer-chart-tick" x={x + 16} y={y + n * TICK_WORDS.line}>{line}</text>)}
 						<text className="answer-chart-tick" x={right} y={y} textAnchor="end">{Math.round((slice.value / total) * 100)}%</text>
-						<rect className="answer-chart-hit" x={x - 4} y={y - 14} width={Math.max(0, right + 4 - x)} height={20} />
+						<rect className="answer-chart-hit" x={x - 4} y={y - 14} width={Math.max(0, right + 4 - x)} height={20 + (names[i].length - 1) * TICK_WORDS.line} />
 					</g>
 				);
 			})}
 		</>
 	);
+	// Read from a legend beside the ring, the value shows in the ring's hole and covers no other row.
+	const overRing = from === "legend" && !stacked;
 	const tip = hover === null || !drawn[hover] ? null : {
-		x: from === "legend" ? legendX + 60 : drawn[hover].tx,
-		y: from === "legend" ? rowY(hover) : drawn[hover].ty,
+		x: overRing ? cx : from === "legend" ? legendX + 60 : drawn[hover].tx,
+		y: overRing ? cy + 30 : from === "legend" ? rowY(hover) : drawn[hover].ty,
+		overRing,
 		body: (
 			<>
 				<b>{drawn[hover].slice.label}</b>
@@ -257,43 +301,52 @@ function drawPie(chart: ChartData, width: number, hover: number | null, setHover
 
 const DRAW = { bar: drawBars, line: drawLines, pie: drawPie } as const;
 
+// Words set over lines, with the step between their lines: the fonts of
+// .answer-chart-copy-title, .answer-chart-copy-note and .answer-chart-tick
+// in styles/14-answer-content.css, which must change together with these.
+const COPY_TITLE = { font: "700 14.5px", line: 19 };
+const COPY_NOTE = { font: "12.5px", line: 16 };
+const TICK_WORDS = { font: "11px", line: 15 };
+
 /**
  * What Copy image takes: the drawing with the chart's title, note and series
- * names above it, so the picture says what it shows away from the answer.
- * Several series get their colours beside their names; one series (a pie's
- * too) is named on a line of its own.
+ * names whole above it, wrapped in the words' real widths, so the picture
+ * says what it shows away from the answer. Several series get their colours
+ * beside their names; one series (a pie's too) is named on a line of its own.
  */
 function CopyPicture({ chart, width, height, drawing, svgRef }: { chart: ChartData; width: number; height: number; drawing: ReactNode; svgRef: Ref<SVGSVGElement> }) {
 	const head: ReactNode[] = [];
-	const room = Math.max(6, Math.floor((width - 24) / 7));
+	const room = width - 24;
 	let y = 0;
-	if (chart.title) {
-		y += 22;
-		head.push(<text key="title" className="answer-chart-copy-title" x={12} y={y}>{cut(chart.title, room)}</text>);
-	}
-	if (chart.note) {
-		y += 18;
-		head.push(<text key="note" className="answer-chart-copy-note" x={12} y={y}>{cut(chart.note, room)}</text>);
-	}
+	const stack = (text: string, { font, line }: { font: string; line: number }, className: string, gap: number) => {
+		wrap(text, room, measurer(font)).forEach((words, i) => {
+			y += i ? line : gap;
+			head.push(<text key={head.length} className={className} x={12} y={y}>{words}</text>);
+		});
+	};
+	if (chart.title) stack(chart.title, COPY_TITLE, "answer-chart-copy-title", 22);
+	if (chart.note) stack(chart.note, COPY_NOTE, "answer-chart-copy-note", 18);
 	if (chart.series.length === 1) {
-		y += 20;
-		head.push(<text key="series" className="answer-chart-tick" x={12} y={y}>{cut(chart.series[0].name, room)}</text>);
+		stack(chart.series[0].name, TICK_WORDS, "answer-chart-tick", 20);
 	} else {
+		const measure = measurer(TICK_WORDS.font);
 		let x = 12;
 		y += 22;
 		chart.series.forEach((series, s) => {
-			const name = cut(series.name, 24);
-			const size = 30 + name.length * TICK_CHAR;
+			// A name too wide for a row takes the rows it needs, alone: its size outruns the row, so the next name starts on the next.
+			const size = 30 + measure(series.name);
 			if (x > 12 && x + size > width - 12) {
 				x = 12;
 				y += 18;
 			}
+			const names = wrap(series.name, room - 14, measure);
 			head.push(
 				<g key={`series${s}`}>
 					<rect className={colour(s)} x={x} y={y - 9} width={9} height={9} rx={2} />
-					<text className="answer-chart-tick" x={x + 14} y={y}>{name}</text>
+					{names.map((words, i) => <text key={i} className="answer-chart-tick" x={x + 14} y={y + i * TICK_WORDS.line}>{words}</text>)}
 				</g>,
 			);
+			y += (names.length - 1) * TICK_WORDS.line;
 			x += size;
 		});
 	}
@@ -316,6 +369,8 @@ export default function ChartBlock({ chart }: { chart: ChartData }) {
 	const copyRef = useRef<SVGSVGElement | null>(null);
 	const drawn = DRAW[chart.kind](chart, width, hover, setHover, hovered?.from);
 	// The copy's picture is drawn for the click alone: the PNG reads its styles and shape at once, before it awaits anything.
+	// Its drawing is its own: no value being read.
+	const copied = copying ? DRAW[chart.kind](chart, width, null, setHover) : null;
 	const copyPicture = () => {
 		flushSync(() => setCopying(true));
 		queueMicrotask(() => setCopying(false));
@@ -332,15 +387,14 @@ export default function ChartBlock({ chart }: { chart: ChartData }) {
 	return (
 		<figure className="figure-card answer-chart-card" aria-label={label}>
 			<div className="answer-chart-head">
+				{/* First, so the words flow around the tools and take the full width below them. */}
+				<FigureTools copy={view === "chart" && <CopyImageButton svg={copyPicture} />}>
+					<FigureSwitch options={CHART_VIEWS} value={view} onChange={setView} />
+				</FigureTools>
 				<div className="answer-chart-heading">
 					{chart.title && <div className="answer-chart-title">{chart.title}</div>}
 					{chart.note && <div className="answer-chart-note">{chart.note}</div>}
 				</div>
-				<span className="figure-toolgroup" role="group" aria-label="View">
-					<button type="button" className="figure-tool" aria-pressed={view === "chart"} onClick={() => setView("chart")}><BarsIcon /><span>Chart</span></button>
-					<button type="button" className="figure-tool" aria-pressed={view === "table"} onClick={() => setView("table")}><TableIcon /><span>Table</span></button>
-				</span>
-				{view === "chart" && <CopyImageButton svg={copyPicture} />}
 			</div>
 			{chart.kind !== "pie" && chart.series.length > 1 && view === "chart" && (
 				<div className="answer-chart-legend-row">
@@ -352,8 +406,8 @@ export default function ChartBlock({ chart }: { chart: ChartData }) {
 					<svg className={`answer-chart-svg answer-chart-kind-${chart.kind}${hover !== null ? " focus" : ""}`} width={width} height={drawn.height ?? HEIGHT} viewBox={`0 0 ${width} ${drawn.height ?? HEIGHT}`} role="img" aria-label={label} tabIndex={0} onKeyDown={onKeyDown} onPointerLeave={() => setHover(null)} onBlur={() => setHover(null)}>
 						{drawn.svg}
 					</svg>
-					{drawn.tip && <div className="answer-chart-tip" style={{ left: tipX, top: drawn.tip.y }}>{drawn.tip.body}</div>}
-					{copying && <CopyPicture chart={chart} width={width} height={drawn.height ?? HEIGHT} drawing={drawn.svg} svgRef={copyRef} />}
+					{drawn.tip && <div className={`answer-chart-tip${drawn.tip.overRing ? " answer-chart-tip-ring" : ""}`} style={{ left: tipX, top: drawn.tip.y }}>{drawn.tip.body}</div>}
+					{copied && <CopyPicture chart={chart} width={width} height={copied.height ?? HEIGHT} drawing={copied.svg} svgRef={copyRef} />}
 				</div>
 			) : (
 				<div className="answer-chart-table md-table-frame">

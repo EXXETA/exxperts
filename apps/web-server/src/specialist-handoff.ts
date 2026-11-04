@@ -138,7 +138,7 @@ export function buildSpecialistHandoffBlock(input: SpecialistHandoffInput): stri
 		`Task: ${task}`,
 		`Template: ${templateId} v${version} · ran ${ranAt} · ${count} file${count === 1 ? "" : "s"}`,
 		`Source: ephemeral specialist session, no memory access; this room only knows this`,
-		`distilled result; the room's current files are listed in the 'Files in this room' list.`,
+		`distilled result; the room's current files are listed in the 'Attachments in this room' list.`,
 	];
 	const closing = `[/SPECIALIST RESULT: ${templateId}]`;
 

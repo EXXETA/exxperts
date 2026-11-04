@@ -22,17 +22,18 @@ import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_
 //   2. a room with a landed answer reports real tokens on the ready frame of a
 //      BRAND-NEW connection that never sends a prompt, under the live
 //      runtime-context-usage source, with a percentage of the recommended
-//      checkpoint threshold and a zone;
-//   3. the window on that reading is the current thread's model's, and the
-//      percentage is anchored to the fixed checkpoint threshold rather than to
-//      the window, so a thread on a different model reports a different window
-//      and the same percentage for the same history;
+//      size and a zone;
+//   3. the recommended size is two fifths of the current thread's model's
+//      window (400K on a 1M model, 80K on a 200K one), so a thread on a
+//      different model reports a different window, recommended size and
+//      percentage for the same history;
 //   4. a room whose session was compacted with no answer since reports unknown
 //      rather than the pre-compaction size: the runtime deliberately declines
 //      to size a just-compacted context, and that silence must reach the user
 //      as silence instead of a red chip on a room that was just emptied. This
 //      is the one entry that stays quiet, and it is why the zero above has to
-//      be told apart from a decline rather than lumped in with it.
+//      be told apart from a decline rather than lumped in with it;
+//   5. a reading that carries no window keeps the fixed 125K recommendation.
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-room-context-entry-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -43,12 +44,13 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const productAppRoot = path.join(tempHome, ".exxperts", "app");
 
-// The recommended-checkpoint threshold the server anchors its percentage to.
-// It is machine-wide and has nothing to do with the model's context window,
-// which is reported beside it as its own field.
-const CHECKPOINT_TOKENS = 125_000;
-const WIDE_WINDOW = 400_000;
-const NARROW_WINDOW = 64_000;
+// The recommended size the percentage is of: two fifths of the model's window,
+// and the fixed size only when no window is known.
+const WIDE_WINDOW = 1_000_000;
+const WIDE_CHECKPOINT_TOKENS = 400_000;
+const NARROW_WINDOW = 200_000;
+const NARROW_CHECKPOINT_TOKENS = 80_000;
+const CHECKPOINT_TOKENS_WITHOUT_WINDOW = 125_000;
 const PROMPT_TOKENS = 1200;
 const COMPLETION_TOKENS = 40;
 const ANSWER_CHUNKS = ["Short ", "answer."];
@@ -338,10 +340,10 @@ try {
 	assert(typeof entryHealth?.tokens === "number" && entryHealth.tokens > 0, `entering a room with history must report a size, got ${JSON.stringify(entryHealth)}`);
 	assert(entryHealth?.source === "runtime-context-usage", `the entry reading should be the live one, got ${JSON.stringify(entryHealth?.source)}`);
 	assert(entryHealth?.tokens === liveTokens, `the entry reading should match what the last turn measured, got ${JSON.stringify(entryHealth?.tokens)} against ${liveTokens}`);
-	assert(entryHealth?.checkpointTokens === CHECKPOINT_TOKENS, `the reading should name the checkpoint threshold, got ${JSON.stringify(entryHealth?.checkpointTokens)}`);
+	assert(entryHealth?.checkpointTokens === WIDE_CHECKPOINT_TOKENS, `a 1M-window model should be recommended 400K, got ${JSON.stringify(entryHealth?.checkpointTokens)}`);
 	assert(
-		typeof entryHealth?.checkpointPercent === "number" && Math.abs(entryHealth.checkpointPercent - (liveTokens / CHECKPOINT_TOKENS) * 100) < 0.0001,
-		`the percentage should be of the checkpoint threshold, got ${JSON.stringify(entryHealth?.checkpointPercent)}`,
+		typeof entryHealth?.checkpointPercent === "number" && Math.abs(entryHealth.checkpointPercent - (liveTokens / WIDE_CHECKPOINT_TOKENS) * 100) < 0.0001,
+		`the percentage should be of the recommended size, got ${JSON.stringify(entryHealth?.checkpointPercent)}`,
 	);
 	assert(entryHealth?.zone !== "unknown", `a reading with tokens must not sit in the unknown zone, got ${JSON.stringify(entryHealth?.zone)}`);
 	assert(entryHealth?.contextWindow === WIDE_WINDOW, `the reading should carry this thread's model window, got ${JSON.stringify(entryHealth?.contextWindow)}`);
@@ -354,10 +356,9 @@ try {
 	ws2 = null;
 	pass("entering a room with a landed answer reports its real size on the ready frame, with no prompt sent");
 
-	// --- 3. Window follows the model, percentage follows the threshold -------
-	// The same room's history on a thread locked to a much narrower model. Only
-	// the window moves: the percentage is a fraction of the machine-wide
-	// checkpoint threshold and has nothing to do with the model.
+	// --- 3. The recommended size follows the model's window -----------------
+	// The same history on a thread locked to a narrower model: the window, the
+	// recommended size and so the percentage all move with the model.
 	const narrowRoomId = await createRoom("Narrow Entry Room");
 	const narrowConversationId = `ctxnarrow_${Date.now().toString(36)}`;
 	await putThread(narrowRoomId, narrowConversationId, "narrow-model", []);
@@ -373,13 +374,14 @@ try {
 	const narrowReadyIndex = await ws3.waitFor((frame) => frame.type === "ready", "ready frame after re-entering the narrow room");
 	const narrowHealth = ws3.frames[narrowReadyIndex].contextHealth;
 	assert(narrowHealth?.contextWindow === NARROW_WINDOW, `the window must be the thread model's, got ${JSON.stringify(narrowHealth?.contextWindow)}`);
+	assert(narrowHealth?.checkpointTokens === NARROW_CHECKPOINT_TOKENS, `a 200K-window model should be recommended 80K, got ${JSON.stringify(narrowHealth?.checkpointTokens)}`);
 	assert(
-		typeof narrowHealth?.checkpointPercent === "number" && Math.abs(narrowHealth.checkpointPercent - (narrowHealth.tokens / CHECKPOINT_TOKENS) * 100) < 0.0001,
-		`the percentage should stay anchored to the checkpoint threshold on any model, got ${JSON.stringify(narrowHealth)}`,
+		typeof narrowHealth?.checkpointPercent === "number" && Math.abs(narrowHealth.checkpointPercent - (narrowHealth.tokens / NARROW_CHECKPOINT_TOKENS) * 100) < 0.0001,
+		`the percentage should be of the narrow model's recommended size, got ${JSON.stringify(narrowHealth)}`,
 	);
 	ws3.close();
 	ws3 = null;
-	pass("the window on the reading is the thread model's while the percentage stays anchored to the checkpoint threshold");
+	pass("the recommended size is two fifths of the thread model's window: 400K on 1M, 80K on 200K");
 
 	// --- 4. A just-compacted room stays quiet --------------------------------
 	// The runtime declines to size a context whose latest compaction has no
@@ -415,6 +417,23 @@ try {
 	ws4.close();
 	ws4 = null;
 	pass("a just-compacted room reports unknown rather than the size it had before the compaction");
+
+	// --- 5. No window, the fixed size -----------------------------------------
+	// Every registry model carries a window, so this reading cannot be made
+	// through a room; the server's own function is asked with a session that
+	// reports none. Its state follows HOME, which points at the scratch home.
+	process.env.HOME = tempHome;
+	process.env.USERPROFILE = tempHome;
+	process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
+	delete process.env.EXXPERTS_DATA_DIR;
+	delete process.env.EXXPERTS_STATE_HOME;
+	const { contextHealthForSession } = await import("../src/ai-models.js");
+	const windowless = contextHealthForSession({ getContextUsage: () => ({ tokens: 50_000 }), model: {} });
+	assert(windowless.checkpointTokens === CHECKPOINT_TOKENS_WITHOUT_WINDOW, `a reading with no window should keep the fixed 125K, got ${JSON.stringify(windowless)}`);
+	assert(windowless.checkpointPercent === 40 && windowless.zone === "green", `50K of 125K should read 40% and green, got ${JSON.stringify(windowless)}`);
+	const windowed = contextHealthForSession({ getContextUsage: () => ({ tokens: 50_000, contextWindow: 128_000 }), model: {} });
+	assert(windowed.checkpointTokens === 51_200, `a 128K window beside it should be recommended 51.2K, got ${JSON.stringify(windowed)}`);
+	pass("a reading with no window keeps the fixed 125K recommendation");
 
 	console.log(`persistent-room-context-entry-smoke: ${passes} checks passed`);
 } catch (error) {

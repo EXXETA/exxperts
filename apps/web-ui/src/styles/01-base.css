@@ -175,6 +175,20 @@
 	--chat-rail-width: 768px;
 }
 
+/* Wide chat width (Settings, Appearance): the rail grows to 960 px, and what
+   is sized a little past the rail (the answer bubble, the notice above the
+   composer, the consult and task docks, the top bar's right edge) keeps that
+   same 12 px step instead of its fixed 780 px. */
+:root[data-chat-width="wide"] {
+	--chat-rail-width: 960px;
+}
+:root[data-chat-width="wide"] :is(.bubble, .room-workspace-nudge, .consult-dock, .task-dock, .approval-card.delegate, .consult-item > *, .task-item > *) {
+	max-width: calc(var(--chat-rail-width) + 12px);
+}
+:root[data-chat-width="wide"] .topbar {
+	--topbar-banner-edge: max(26px, calc((100% - var(--chat-rail-width) - 12px) / 2));
+}
+
 :root[data-theme="light"] {
 	--exx-canvas: #f3f0ea;
 	--exx-surface: #fffaf2;

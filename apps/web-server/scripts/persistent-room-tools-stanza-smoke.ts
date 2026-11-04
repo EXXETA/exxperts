@@ -10,7 +10,7 @@
 // over a websocket, and reads the system prompt out of the request body the
 // gateway received. It pins:
 //   1. the stanza is there, with the memory-recall line in its exact words and a
-//      line for each of the two Files tools;
+//      line for each of the two Attachments tools;
 //   2. it closes the system prompt, after the boot prompt, beside no live
 //      section (those ride the room-state message), and it is NOT in the
 //      frozen boot-prompt snapshot on disk;
@@ -20,7 +20,7 @@
 //   5. a second turn does not append it twice.
 // The omitted case (no room tool carries a snippet) is one branch of the same
 // helper: heading and lines are built together, so a list with nothing to say
-// renders nothing at all. It is not reachable from a real room — the Files pair
+// renders nothing at all. It is not reachable from a real room: the Attachments pair
 // and the memory read are default-on for every room — and the helper lives
 // inside the connection scope in src/index.ts, which exports nothing a smoke
 // could import, so what this smoke can prove about it is that the heading never
@@ -50,8 +50,8 @@ const STANZA_HEADING = "\n\n## Room tools\n\n";
 const STANZA_MAX_CHARS = 400;
 /** The recall tool's own line, word for word, so a rewrite has to come back here. */
 const MEMORY_RECALL_SNIPPET = "Search this room's memory, notes, archive and remembered conversations, by words, names or dates before saying you do not know";
-const SHELF_READ_SNIPPET = "Read this room's Files by exact filename (paged; pdf/docx extracted locally; .xlsx previewed; images and scanned PDFs shown visually)";
-const SHELF_SEARCH_SNIPPET = "Search across this room's Files for literal text (name:line matches)";
+const SHELF_READ_SNIPPET = "Read this room's Attachments by exact filename (paged; pdf/docx extracted locally; .xlsx previewed; images and scanned PDFs shown visually)";
+const SHELF_SEARCH_SNIPPET = "Search this room's Attachments for literal text (name:line matches)";
 /** Rides each prompt, so a captured request can be tied to the turn that caused it. */
 const TURN_TOKEN = "TURN_TOKEN_ROOM_TOOLS_STANZA";
 
@@ -285,8 +285,8 @@ try {
 	const stanza = stanzaIn(systemPrompt);
 	const stanzaLines = stanza.slice(STANZA_HEADING.length).split("\n");
 	assert(stanzaLines.includes(`- memory_recall: ${MEMORY_RECALL_SNIPPET}`), `the stanza should carry the memory-recall line word for word, got:\n${stanza}`);
-	assert(stanzaLines.includes(`- read_file: ${SHELF_READ_SNIPPET}`), `the stanza should carry the Files read line, got:\n${stanza}`);
-	assert(stanzaLines.includes(`- search_file: ${SHELF_SEARCH_SNIPPET}`), `the stanza should carry the Files search line, got:\n${stanza}`);
+	assert(stanzaLines.includes(`- read_file: ${SHELF_READ_SNIPPET}`), `the stanza should carry the Attachments read line, got:\n${stanza}`);
+	assert(stanzaLines.includes(`- search_file: ${SHELF_SEARCH_SNIPPET}`), `the stanza should carry the Attachments search line, got:\n${stanza}`);
 	assert(stanzaLines.length === 3, `today's room tools are three, so the stanza is three lines, got:\n${stanza}`);
 	assert(stanzaLines.every((line) => /^- [a-z_]+: \S/.test(line)), `every line is "- <tool name>: <its own snippet>", got:\n${stanza}`);
 	// The tool's description is long and belongs on the wire, not in the prompt.

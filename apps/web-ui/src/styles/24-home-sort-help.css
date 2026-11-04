@@ -184,7 +184,7 @@
 	color: var(--fg); /* drawn inside the gear menu, whose muted colour it would inherit */
 	border: 1px solid var(--exx-edge-dialog);
 	border-radius: 14px;
-	max-width: 600px;
+	max-width: 680px;
 	width: 100%;
 	max-height: 90vh;
 	display: flex;
@@ -195,7 +195,7 @@
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
-	padding: 18px 22px;
+	padding: 18px 26px;
 	border-bottom: 1px solid var(--border);
 }
 .help-head h2 {
@@ -213,6 +213,7 @@
 	font-size: 14px;
 	line-height: 1.55;
 	color: var(--fg-soft);
+	outline: none; /* it takes the focus when the guide opens, for the arrow keys; it is not a control */
 	/* The quiet scroll bar of Settings and What's new, not the page's dark one. */
 	scrollbar-width: thin;
 	scrollbar-color: var(--border) transparent;
@@ -227,17 +228,84 @@
 }
 .help-body strong,
 .help-body h3 { color: var(--fg); font-weight: 700; }
-.help-body h3 { font-size: inherit; margin: 28px 0 10px; }
-.help-steps,
-.help-notes {
-	margin: 0;
-	padding-left: 22px;
+.help-body h3 { font-size: inherit; margin: 18px 0 8px; }
+/* Talk, Remember, Memorize, Review: one line of tiles joined by arrows. */
+.help-flow {
+	list-style: none;
+	margin: 0 0 8px;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 22px;
+}
+.help-flow li {
+	position: relative;
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
+	gap: 2px;
+	padding: 10px 12px;
+	border: 1px solid var(--exx-divider);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--fg) 3%, var(--panel));
 }
-.help-notes { gap: 8px; }
-.help-steps li::marker { color: var(--fg); font-weight: 700; }
+.help-flow li + li::before {
+	content: "→";
+	position: absolute;
+	left: -17px;
+	top: 50%;
+	transform: translateY(-50%);
+	color: var(--muted);
+}
+.help-flow span {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.35;
+}
+.help-steps {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.help-steps li {
+	display: grid;
+	grid-template-columns: 24px minmax(0, 1fr);
+	gap: 12px;
+}
+.help-steps p {
+	margin: 0;
+	text-wrap: pretty;
+}
+.help-step-number {
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	background: var(--fg);
+	color: var(--panel);
+	font-weight: 700;
+	font-size: 12px;
+}
+.help-tiles {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px;
+}
+.help-tiles li {
+	padding: 12px 14px;
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--fg) 4%, var(--panel));
+	font-size: 13px;
+	line-height: 1.5;
+}
+/* A shared server has three: the last takes the row, so no hole is left. */
+.help-tiles li:last-child:nth-child(odd) { grid-column: 1 / -1; }
 /* A quiet aside, used by the Maintain screens. */
 .help-note {
 	font-size: 12px;

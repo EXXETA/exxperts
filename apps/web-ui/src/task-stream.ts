@@ -120,7 +120,7 @@ export interface TaskState {
 	errorMessage: string | null;
 	/**
 	 * Shelf files this run is REVISING in place, named by the server on
-	 * `task_started` (taste pass). The Files panel shows the working state on
+	 * `task_started` (taste pass). The Attachments panel shows the working state on
 	 * the target file's own row instead of adding a row for the run, so an
 	 * Ask-for-changes never looks like it produced a second file. Empty for
 	 * runs that make new files — those keep the working row.

@@ -53,8 +53,8 @@ const WORDMARK = ".brand img.logo";
 // The mac window buttons' row: its centre in window points, and how far an ink centre may sit off it.
 const MAC_ROW_CENTRE = 25;
 const ON_ROW = 0.5;
-// The sidebar wordmark's ink centre in the mac app, in CSS px: the row change leaves the sidebar as it was.
-const MAC_WORDMARK_CENTRE = 72;
+// The sidebar wordmark's ink centre in the mac app, in CSS px: the header's 62px and half of the logo's 22.
+const MAC_WORDMARK_CENTRE = 73;
 // What sits on the mac row, by place.
 const TOPBAR_PARTS = { "the room name": ROOM_NAME, "the trash": '.topbar-actions button[aria-label="Forget"] svg', "the gear": '.topbar-actions button[aria-label="Room settings"] svg' };
 const FILE_ICONS = { "open in a new tab": ".artifact-viewer-actions > :nth-child(1)", "maximize": ".artifact-viewer-actions > :nth-child(2)", "close": ".artifact-viewer-actions > :nth-child(3) svg" };
@@ -260,9 +260,10 @@ try {
 		if (viewer) {
 			await page.setViewportSize({ width: 1600, height: 900 });
 			await setSidebar(false);
-			const fileRow = page.locator(".assets-row").filter({ hasText: FILE.replace(/\.md$/, "") }).first();
-			await fileRow.waitFor({ timeout: 10_000 }).catch(async () => { throw new Error(`the sidebar lists no ${FILE} to open; it shows ${JSON.stringify(await page.locator(".sidebar").first().innerText().catch(() => ""))}`); });
-			await fileRow.click();
+			await page.locator(".attachments-entry").click();
+			const fileCard = page.locator(".att-card").filter({ hasText: FILE.replace(/\.md$/, "") }).first();
+			await fileCard.waitFor({ timeout: 10_000 }).catch(async () => { throw new Error(`the Attachments show no ${FILE} to open; the sidebar shows ${JSON.stringify(await page.locator(".sidebar").first().innerText().catch(() => ""))}`); });
+			await fileCard.locator(".att-open").click();
 			await page.locator(".workbench.with-right-pane aside.artifact-viewer").waitFor({ timeout: 10_000 });
 		}
 		for (const collapsed of [false, true]) {
@@ -330,7 +331,8 @@ try {
 			document.documentElement.style.setProperty("--window-zoom", String(windowZoom));
 		}, zoom);
 		const openFile = async () => {
-			await mac.locator(".assets-row").filter({ hasText: FILE.replace(/\.md$/, "") }).first().click();
+			await mac.locator(".attachments-entry").click();
+			await mac.locator(".att-card").filter({ hasText: FILE.replace(/\.md$/, "") }).first().locator(".att-open").click();
 			await mac.locator(".workbench.with-right-pane aside.artifact-viewer").waitFor({ timeout: 10_000 });
 		};
 		await mac.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
@@ -379,7 +381,8 @@ try {
 		await checkMacDrag(mac, `${at}, approval preview open`, zoom, [".topbar", ".preview-head"]);
 		await mac.locator(".preview-close").click();
 		// The deck: two lines, kicker and name, no taller than the row, its icons on the row.
-		await mac.locator(".assets-row").filter({ hasText: "offsite deck" }).first().click();
+		await mac.locator(".attachments-entry").click();
+		await mac.locator(".att-card").filter({ hasText: "offsite deck" }).first().locator(".att-open").click();
 		await mac.locator(".artifact-viewer-kicker:not(.artifact-viewer-kicker-noun)").filter({ hasText: "Deck" }).waitFor({ timeout: 10_000 });
 		await mac.locator(".artifact-viewer-open-tab:enabled").waitFor({ timeout: 10_000 });
 		const deckHead = await mac.evaluate(() => ({ height: document.querySelector(".artifact-viewer-head")?.getBoundingClientRect().height ?? 0, origin: document.querySelectorAll(".artifact-viewer-origin").length }));

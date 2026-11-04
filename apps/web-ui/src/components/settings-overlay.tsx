@@ -1,7 +1,7 @@
 import { type ReactNode } from "react";
 import { SettingsDialog } from "./settings-dialog";
 
-export type SettingsSection = "ai-setup" | "web-search" | "instructions" | "connectors" | "skills" | "remote" | "profile";
+export type SettingsSection = "ai-setup" | "instructions" | "skills" | "connectors" | "web-search" | "appearance" | "remote" | "profile";
 
 export type SettingsOverlaySectionDef = { id: SettingsSection; label: string; title?: string; content: ReactNode };
 

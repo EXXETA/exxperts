@@ -199,7 +199,7 @@ Do not restate stable memory unless the session changed it, contradicted it, ref
 
 ## Ephemeral Signal
 
-Ephemeral signal is the primary compression target: decisions, interpretations, rationale, tensions, commitments, preferences, and parked context that exist only in the conversation. The room's files are inventory the room re-learns fresh every request from its 'Files in this room' list — never spend density cataloguing which files exist or reproducing content that can be re-read; compress the conclusions the session drew from them.
+Ephemeral signal is the primary compression target: decisions, interpretations, rationale, tensions, commitments, preferences, and parked context that exist only in the conversation. The room's files are inventory the room re-learns fresh every request from its 'Attachments in this room' list; never spend density cataloguing which files exist or reproducing content that can be re-read; compress the conclusions the session drew from them.
 
 When a decision or recorded fact rests on something a tool, file, or external source revealed, preserve the distilled finding together with its provenance — what was learned and where it came from — because a future session can only trust or re-verify a claim that carries its source. One sourced line beats a raw excerpt, and beats an unsourced claim.
 

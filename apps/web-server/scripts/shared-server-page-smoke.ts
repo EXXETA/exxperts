@@ -417,7 +417,8 @@ async function openRoomWorkspace(page: Page): Promise<void> {
 
 async function openShelfFile(page: Page): Promise<void> {
 	// The panel names a shelf file without its extension.
-	await page.locator(".sidebar-assets .assets-row").filter({ hasText: SHELF_FILE.replace(/\.txt$/, "") }).first().click();
+	await page.locator(".attachments-entry").click();
+	await page.locator(".att-card").filter({ hasText: SHELF_FILE.replace(/\.txt$/, "") }).first().locator(".att-open").click();
 	await page.locator(".artifact-viewer-quiet").filter({ hasText: "Download" }).first().waitFor({ timeout: 10000 });
 }
 
@@ -1424,7 +1425,7 @@ try {
 			await page.locator(".product-sidebar-footer button").first().click();
 			await page.locator(".sidebar-config-menu").getByRole("menuitem", { name: /^Help/ }).click();
 			await page.locator(".sidebar-config-menu").getByRole("menuitem", { name: "How it works" }).click();
-			const firstStep = (await page.locator(".help-steps li").first().innerText()).replace(/\s+/g, " ").trim();
+			const firstStep = (await page.locator(".help-steps p").first().innerText()).replace(/\s+/g, " ").trim();
 			assert(firstStep === words.help, `${where}: Help's first step reads ${JSON.stringify(firstStep)}`);
 			await page.keyboard.press("Escape");
 			pass(`${where}: Help's first step says who sets up the models`);

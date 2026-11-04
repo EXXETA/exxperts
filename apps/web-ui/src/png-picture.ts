@@ -1,3 +1,5 @@
+import { parseNaturalSize } from "./diagram-zoom";
+
 /**
  * Pictures made into PNG for the clipboard: Chromium takes only PNG there.
  * Used by the picture actions (ImageActions.tsx) and by a figure's Copy
@@ -30,9 +32,18 @@ export async function encodePng(url: string, { size, scale = 1, background }: { 
 // on its own, where neither our classes nor our colour variables reach.
 const PAINT = ["fill", "fill-opacity", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity", "font-family", "font-size", "font-weight", "text-anchor", "dominant-baseline", "color", "visibility", "display"];
 
-/** A drawn SVG as PNG, twice its size on screen, every colour it takes from the page written into it. */
+// The most a copy asks of a canvas: past its limits a browser gives no picture
+// at all, and iOS Safari stops at 4096 × 4096 in area, the tightest of them.
+const MAX_SIDE = 16384;
+const MAX_PIXELS = 16_000_000;
+
+/**
+ * A drawn SVG as PNG, twice its own size (a column may show it smaller) or
+ * as near as a canvas allows, every colour it takes from the page written
+ * into it.
+ */
 export async function svgPng(svg: SVGSVGElement, background: string): Promise<Blob> {
-	const { width, height } = svg.getBoundingClientRect();
+	const { width, height } = parseNaturalSize({ inlineMaxWidth: svg.style.maxWidth, viewBox: svg.getAttribute("viewBox") }) ?? svg.getBoundingClientRect();
 	const copy = svg.cloneNode(true) as SVGSVGElement;
 	const from = [svg, ...svg.querySelectorAll("*")];
 	const to = [copy, ...copy.querySelectorAll("*")];
@@ -47,7 +58,8 @@ export async function svgPng(svg: SVGSVGElement, background: string): Promise<Bl
 	copy.style.removeProperty("max-width");
 	const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(copy)], { type: "image/svg+xml" }));
 	try {
-		return await encodePng(url, { size: { width, height }, scale: 2, background });
+		const scale = Math.min(2, MAX_SIDE / Math.max(width, height), Math.sqrt(MAX_PIXELS / (width * height)));
+		return await encodePng(url, { size: { width, height }, scale, background });
 	} finally {
 		URL.revokeObjectURL(url);
 	}

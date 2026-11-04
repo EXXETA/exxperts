@@ -181,7 +181,7 @@ try {
 	const effectiveCleared = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage);
 	assert(effectiveCleared.source === "none" && effectiveCleared.workspaceToolsEnabled === false, "cleared default should resolve to no workspace for the running thread");
 	const sectionCleared = buildPersistentRoomCurrentWorkspaceSection(effectiveCleared);
-	assert(sectionCleared.includes("No workspace is configured"), "live workspace stanza should state that no workspace is configured");
+	assert(sectionCleared.includes("No folder is set for this room"), "live workspace stanza should state that no folder is set");
 	writePersistentRoomDefaultCapabilityPolicy(defaultB, storage);
 
 	// A deliberate per-conversation override (the workspace/validate flow) still

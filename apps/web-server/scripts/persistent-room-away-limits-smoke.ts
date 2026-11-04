@@ -314,7 +314,7 @@ try {
 			}
 			console.log("ok 7 each stop's line reads as approved after a reload, one with nothing finished too, and Try again sends the message again with the finished steps kept");
 
-			// A stop whose message carried a file no longer in the room's Files, as a keyed landing saves it.
+			// A stop whose message carried a file no longer in the room's Attachments, as a keyed landing saves it.
 			const filesRoom = await createRoom("Away Files Room");
 			const filesConversation = "awayconv_files";
 			const filesText = "Read the file I sent.";

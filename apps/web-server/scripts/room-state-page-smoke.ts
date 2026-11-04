@@ -16,7 +16,7 @@ import { SMOKE_AUTH_TOKEN } from "./smoke-server-process.js";
 	}
 }
 
-const COPY_WORDS = ["Room state", "Live runtime state", "Your name is now", "Files in this room", "Current workspace", "replaces every earlier"];
+const COPY_WORDS = ["Room state", "Live runtime state", "Your name is now", "Attachments in this room", "Current workspace", "replaces every earlier"];
 let passes = 0;
 const pass = (label: string) => { passes++; console.log(`  ok ${label}`); };
 

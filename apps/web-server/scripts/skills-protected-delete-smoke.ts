@@ -59,6 +59,8 @@ try {
 	try {
 		const openSkills = async (remote: boolean) => {
 			const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+			// A Home with no rooms: the guide has had its turn, so it leaves the gear free.
+			await ctx.addInitScript(() => localStorage.setItem("exxperts.first-run-guide-seen", "1"));
 			const page = await ctx.newPage();
 			if (remote) {
 				await page.route("**/api/remote/client-context", (route) =>

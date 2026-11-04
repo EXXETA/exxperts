@@ -1,4 +1,5 @@
-// Remember in the browser, as a job on the server: a note typed in the dialog
+// Remember in the browser, as a job on the server: its arrow is off before any
+// message and then opens the options form in one click; a note typed in the dialog
 // stays through a reconnect after the server restarts; the dialog follows a
 // Remember that started before a reload (the job reads on, and entering the
 // room opens the dialog in its reading state), shows the proposal when the
@@ -161,6 +162,11 @@ try {
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await readyAfter(0);
+		// Before any message, Remember's arrow is off like Remember itself and says why.
+		const arrow = page.getByRole("button", { name: "Choose what to keep…", exact: true });
+		await arrow.waitFor({ timeout: 10000 });
+		const arrowBefore = { off: await arrow.isDisabled(), title: await arrow.getAttribute("title") };
+		assert(arrowBefore.off && arrowBefore.title === "Send a message before remembering", `before any message the arrow is off with "Send a message before remembering", got ${JSON.stringify(arrowBefore)}`);
 		await composer.fill("We moved the launch to May.");
 		await composer.press("Enter");
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer");
@@ -179,8 +185,7 @@ try {
 			// Entering a room whose Remember finished opens the dialog on the entry by itself.
 			await page.waitForTimeout(500);
 			if (await dialog.isVisible().catch(() => false)) return;
-			await page.getByRole("button", { name: "More ways to remember" }).click();
-			await page.getByRole("menuitem", { name: "Remember with options…" }).click();
+			await arrow.click();
 			await dialog.waitFor({ timeout: 10000 });
 		};
 		const activeConversation = () => page.evaluate(async (id) => {
@@ -188,6 +193,21 @@ try {
 			return (await res.json()).activeThread?.threadId as string;
 		}, agentId);
 		let conversationId = await activeConversation();
+
+		// Remember's arrow opens the options form in one click, with no menu between, at desktop and phone width.
+		for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 740 }]) {
+			await page.setViewportSize(viewport);
+			const title = await arrow.getAttribute("title");
+			assert(await arrow.isEnabled() && title === "Choose what to keep…", `after a message the arrow is on with "Choose what to keep…" at ${viewport.width}, got ${JSON.stringify(title)}`);
+			await arrow.click();
+			await dialog.waitFor({ timeout: 10000 });
+			assert(await dialog.getByRole("button", { name: "Generate memory proposal" }).isVisible(), `the arrow opens the options form at ${viewport.width}`);
+			assert(await page.getByRole("menu").count() === 0 && await page.getByRole("menuitem").count() === 0, `the arrow opens no menu at ${viewport.width}`);
+			await dialog.getByRole("button", { name: "Close", exact: true }).click();
+			await dialog.waitFor({ state: "detached", timeout: 5000 });
+		}
+		await page.setViewportSize({ width: 1280, height: 900 });
+		console.log("  ok  Remember's arrow is off before any message, then opens the options form in one click, desktop and phone");
 		const progress = () => authedFetch(`${baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(conversationId)}`).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
 
 		// 0. A note typed in Remember stays through a restart of the server while the page stays open: the room reconnects, and the dialog and the note are as they were.

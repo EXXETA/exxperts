@@ -37,40 +37,16 @@
 	overflow-x: auto;
 }
 .md pre code { padding: 0; border: none; font-size: inherit; }
-/* Fenced code block (Markdown.tsx `pre`): a header strip above the block
-   carries the language label and a copy control, so nothing sits on top of
-   the code and a long line scrolling sideways never carries them away. The
-   strip shares the block's border and background and reads as its top edge;
-   the copy control is understated at rest, like the reply's. */
+/* Fenced code block (Markdown.tsx `pre`): a figure strip above the block
+   carries the language label and Copy, so nothing sits on top of the code and
+   a long line scrolling sideways never carries them away. The strip shares
+   the block's border and background and reads as its top edge. */
 .code-block { margin: 0.6em 0; }
 .code-block > pre { margin: 0; border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
 .code-block-tools {
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	gap: 8px;
-	min-height: 24px;
-	padding: 2px 6px 2px 11px;
 	border: 1px solid var(--border-soft);
-	border-bottom: 1px solid var(--border-soft);
 	border-radius: 6px 6px 0 0;
 }
-/* Trimmed to its capitals, so the name's letters, not the font's taller line
-   box, sit in the strip's middle, in line with the Copy icon. */
-.code-block-lang {
-	margin-right: auto;
-	text-box: trim-both cap alphabetic;
-	font-family: var(--exx-font-sans);
-	font-variant-numeric: tabular-nums;
-	font-size: 10.5px;
-	letter-spacing: .04em;
-	color: var(--muted);
-	user-select: none;
-}
-.code-block-copy { margin-top: 0; width: 20px; height: 20px; opacity: 0.55; }
-.code-block-copy:hover,
-.code-block-copy:focus-visible,
-.code-block-copy.is-copied { opacity: 1; }
 .md blockquote {
 	margin: 0.6em 0;
 	padding: 2px 12px;
@@ -174,9 +150,9 @@
 }
 
 /* A drawn figure in an answer (a diagram, a chart): a card in the surface
-   colour, drawn in the app's own colours, its tools small labelled buttons.
-   A diagram's show on hover and sit beside the canvas, so a click on one is
-   never a click on the size toggle, and they stay put while it scrolls. */
+   colour, drawn in the app's own colours. Its tools sit beside the drawing,
+   so a click on one is never a click on a diagram's size toggle, and they stay
+   put while it scrolls. */
 .figure-card {
 	position: relative;
 	margin: 0.75em 0;
@@ -185,45 +161,106 @@
 	background: var(--panel);
 	overflow: visible;
 }
-.figure-tools {
-	position: absolute;
-	top: 8px;
-	right: 8px;
-	z-index: 2;
+/* The strip on top of a diagram or code. Its tools stand 4px from the top and
+   8px from the right, as a chart's do in its title row, so Copy is in one place
+   on all three. Above the drawing, so a tool's tooltip and tap area are too. */
+.figure-strip {
+	position: relative;
+	z-index: 1;
 	display: flex;
+	align-items: center;
 	gap: 4px;
-	opacity: 0;
-	transition: opacity 150ms ease;
+	box-sizing: border-box;
+	min-height: 34px;
+	padding: 4px 8px 4px 14px;
+	border-bottom: 1px solid var(--border-soft);
 }
-.figure-card:hover .figure-tools,
-.figure-card:focus-within .figure-tools { opacity: 1; }
-/* No hover on a touch screen: the tools stay in view. */
-@media (hover: none) { .figure-tools { opacity: 1; } }
-.figure-tool {
+/* Code's strip has a border on top that takes a pixel of the 4. */
+.figure-strip.code-block-tools { padding-block: 3px; }
+/* A table's and a formula's strip: only the Copy icon, with no rule, as a
+   chart's title row, so they keep their own look. They have no card, so the
+   margin stands for the card's border and Copy lines up with the others. */
+.figure-strip.figure-strip-plain { min-height: 0; margin-right: 1px; padding-block: 0 2px; border-bottom: 0; }
+.figure-table { margin: 0.6em 0; }
+.figure-maths { display: block; margin: 0.6em 0; }
+/* Trimmed to its capitals, so the name's letters, not the font's taller line
+   box, sit in the strip's middle, in line with the tools. */
+.figure-strip-label {
+	text-box: trim-both cap alphabetic;
+	font-family: var(--exx-font-sans);
+	font-variant-numeric: tabular-nums;
+	font-size: 10.5px;
+	letter-spacing: .04em;
+	color: var(--muted);
+	user-select: none;
+}
+.figure-tools { display: flex; flex: none; align-items: center; gap: 4px; margin-left: auto; }
+.figure-copy-slot { display: inline-flex; width: 26px; height: 26px; }
+.figure-icon,
+.figure-switch-option {
+	position: relative;
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
-	padding: 4px 8px;
-	border: 1px solid var(--border-soft);
-	border-radius: 7px;
-	background: var(--panel);
+	justify-content: center;
+	border: 0;
+	background: transparent;
 	color: var(--fg-soft);
 	font: inherit;
 	font-size: 12px;
-	line-height: 1.2;
+	line-height: 1;
 	cursor: pointer;
 }
-/* A finger needs a 44px target: on a touch screen each tool's tap area
-   reaches past its outline, so the tools keep their small look and still
-   end above the drawing. */
-@media (hover: none) {
-	.figure-tool { position: relative; min-width: 44px; justify-content: center; }
-	.figure-tool::after { content: ""; position: absolute; inset: -10px 0; }
+.figure-icon { width: 26px; height: 26px; border-radius: 7px; }
+.figure-icon svg { display: block; }
+.figure-icon:hover,
+.figure-icon:focus-visible,
+.figure-icon.is-copied { color: var(--fg); background-color: var(--panel-2); }
+.figure-icon:focus-visible,
+.figure-switch-option:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: 1px; }
+.figure-switch { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--panel-2); }
+.figure-switch-option { height: 22px; min-width: 26px; padding: 0 8px; border-radius: 6px; }
+.figure-switch-option:hover { color: var(--fg); }
+.figure-switch-option[aria-pressed="true"] { background: var(--panel); color: var(--fg); box-shadow: 0 0 0 1px var(--border-soft); }
+/* The tooltip: drawn by the page, so it matches in both themes, shows on
+   keyboard focus and never doubles a browser's own. */
+@media (hover: hover) {
+	.figure-icon:hover::before,
+	.figure-icon:focus-visible::before {
+		content: attr(data-tip);
+		position: absolute;
+		top: calc(100% + 6px);
+		right: 0;
+		z-index: 6;
+		padding: 4px 7px;
+		border: 1px solid var(--border-soft);
+		border-radius: 6px;
+		background: var(--panel-3);
+		color: var(--fg);
+		font-family: var(--exx-font-sans);
+		font-size: 11.5px;
+		line-height: 1.2;
+		white-space: nowrap;
+		pointer-events: none;
+	}
+	/* What is below the strip stays readable: the tooltip opens to the tool's left, inside the strip. */
+	.code-block-tools .figure-icon:hover::before,
+	.code-block-tools .figure-icon:focus-visible::before,
+	.figure-strip-plain .figure-icon:hover::before,
+	.figure-strip-plain .figure-icon:focus-visible::before { top: 50%; right: calc(100% + 6px); transform: translateY(-50%); }
 }
-.figure-tool:hover,
-.figure-tool:focus-visible { color: var(--fg); background: var(--panel-3); }
-.figure-tool[aria-pressed="true"] { background: var(--panel-2); color: var(--fg); }
-.figure-toolgroup { display: inline-flex; gap: 4px; }
+/* A finger needs a 44px target: on a touch screen each tool is 44 wide, its
+   tap area reaches 44 tall past its outline, and the row loses its right inset
+   so the icon stays where it stands on a desktop. The radius is the tile's
+   7px once the side padding is taken off it. */
+@media (hover: none) {
+	.figure-icon { box-sizing: border-box; width: 44px; height: 28px; padding: 0 9px; border-radius: 16px / 7px; background-clip: content-box; }
+	.figure-icon::after { content: ""; position: absolute; inset: -8px 0; }
+	.figure-switch-option { height: 24px; min-width: 44px; }
+	.figure-switch-option::after { content: ""; position: absolute; inset: -10px 0; }
+	.figure-copy-slot { width: 44px; height: 28px; }
+	.figure-tools { gap: 0; }
+	.figure-strip { min-height: 36px; padding-right: 0; }
+}
 /* "Drawing diagram…": a light sweeps across the words while the code arrives. */
 .figure-sweep {
 	font-size: 13px;
@@ -236,11 +273,11 @@
 }
 @keyframes figure-sweep { from { background-position: 100% 0; } to { background-position: 0% 0; } }
 @media (prefers-reduced-motion: reduce) { .figure-sweep { animation: none; color: var(--muted); background: none; } }
-/* The diagram's code in place of its picture: numbered lines, with Copy. */
+/* The diagram's code in place of its picture: numbered lines. */
 .figure-code { position: relative; }
 .figure-code pre {
 	margin: 0;
-	padding: 44px 14px 16px;
+	padding: 14px 14px 16px;
 	border: 0;
 	background: transparent;
 	color: var(--fg-soft);
@@ -267,10 +304,11 @@
 /* An answer's bubble is as wide as its content: a chart asks for the whole
    column (the bubble's own cap stops it), and on a narrow screen fits it. */
 .figure-card.answer-chart-card { width: 100vw; max-width: 100%; }
-.answer-chart-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; padding: 14px 14px 0; }
-.answer-chart-heading { flex: 1; min-width: 140px; }
-/* On a phone the title and note take their own rows, and the three buttons share one below. */
-@media (max-width: 520px) { .answer-chart-heading { flex-basis: 100%; } }
+/* The title row plays the strip's part, with no rule; the words flow around the tools. */
+.answer-chart-head { position: relative; z-index: 1; display: flow-root; padding: 4px 8px 0 14px; }
+@media (hover: none) { .answer-chart-head { padding-right: 0; } }
+.answer-chart-head .figure-tools { float: right; margin: 0 0 4px 10px; }
+.answer-chart-heading { padding-top: 3px; }
 .answer-chart-title { font-weight: 700; font-size: 14.5px; color: var(--fg); }
 .answer-chart-note { font-size: 12.5px; color: var(--muted); }
 .answer-chart-legend-row { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 8px 14px 0; font-size: 12.5px; color: var(--fg-soft); }
@@ -319,6 +357,7 @@ g.answer-chart-c1, g.answer-chart-c2, g.answer-chart-c3, g.answer-chart-c4, g.an
 	pointer-events: none;
 	z-index: 3;
 }
+.answer-chart-tip.answer-chart-tip-ring { width: max-content; max-width: 190px; white-space: normal; }
 .answer-chart-tip b { color: var(--fg); }
 .answer-chart-tip strong { color: var(--fg); font-variant-numeric: tabular-nums; }
 .answer-chart-tip-row { display: flex; align-items: center; gap: 6px; }
@@ -355,16 +394,12 @@ g.answer-chart-c1, g.answer-chart-c2, g.answer-chart-c3, g.answer-chart-c4, g.an
 .mermaid-diagram-canvas {
 	position: relative;
 	min-height: 180px;
-	padding: 18px 14px 12px;
+	padding: 14px 14px 12px;
 	overflow: auto;
 	display: flex;
 	align-items: center;
 	cursor: zoom-in;
 }
-/* No hover on a touch screen, so the tools stay in view: the drawing starts
-   below them, as the code does, and they never cover its top (a gantt's
-   title, a sequence's first actors). */
-@media (hover: none) { .mermaid-diagram-canvas { padding-top: 44px; } }
 .mermaid-diagram-canvas.enlarged {
 	cursor: zoom-out;
 }
@@ -617,16 +652,18 @@ g.answer-chart-c1, g.answer-chart-c2, g.answer-chart-c3, g.answer-chart-c4, g.an
 }
 /* The wrapper carries the block's vertical margin (see .code-block). */
 .assistant-markdown .code-block { margin: 0.8em 0; }
-.assistant-markdown .code-block-tools { border-radius: 8px 8px 0 0; padding-left: 13px; background: var(--code-bg); }
+.assistant-markdown .code-block-tools { border-radius: 8px 8px 0 0; background: var(--code-bg); }
 /* Same specificity as `.assistant-markdown pre` above, stated after it, so the
    block joins its header strip here too. */
 .assistant-markdown .code-block > pre { margin: 0; border-top: none; border-top-left-radius: 0; border-top-right-radius: 0; }
-/* A diagram's code (.figure-code) sits on its card, clear of the card's
-   tools: it outranks an answer's code blocks above and their light theme
-   (20-approvals.css). */
-.assistant-markdown .mermaid-diagram.figure-card .figure-code pre { margin: 0; padding: 44px 14px 16px; border: 0; border-radius: 0; background: transparent; font-size: 12.5px; line-height: 1.7; }
+/* A diagram's code (.figure-code) sits on its card: it outranks an answer's
+   code blocks above and their light theme (20-approvals.css). */
+.assistant-markdown .mermaid-diagram.figure-card .figure-code pre { margin: 0; padding: 14px 14px 16px; border: 0; border-radius: 0; background: transparent; font-size: 12.5px; line-height: 1.7; }
 .assistant-markdown .mermaid-diagram .mermaid-viewer-body .figure-code pre { padding-top: 16px; }
 .assistant-markdown .md-table-frame { margin: 0.8em 0; }
+.assistant-markdown .figure-table { margin: 0.8em 0; }
+.figure-table .md-table-frame,
+.figure-maths .maths-display { margin: 0; }
 .assistant-markdown table {
 	width: 100%;
 	margin: 0;

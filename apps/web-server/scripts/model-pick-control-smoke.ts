@@ -229,17 +229,29 @@ try {
 	await click(rowNamed("Narrow Model"), "Narrow Model");
 	assert(calls.join(", ") === "pick narrow" && !$(".model-pick-panel") && focused() === trigger(), `a one-rung pick closes the panel, focus on the control: ${calls.join(", ")} ${describeFocus()}`);
 
-	// ---- a held pick: its effort from the read, the slider waiting ----
-	await mountControl({ held: { provider: "acme", model: "mid" }, effortWaits: true });
+	// ---- a held pick: its effort from the read, the slider working on it ----
+	await mountControl({ held: { provider: "acme", model: "mid" } });
 	await until(() => trigger()?.getAttribute("aria-label") === "Model and effort: Mid Model High", `a held pick shows the picked model and the read's level for it: ${trigger()?.getAttribute("aria-label")}`);
 	await click(trigger(), "the trigger");
-	await until(() => $(".model-pick-effort-hint") !== null, "the held pick's panel says the effort waits");
-	assert($(".model-pick-effort-hint")?.textContent === "Effort can be changed once Mid Model is in use." && $(".effort-slider")?.getAttribute("aria-disabled") === "true", `the slider waits with its line: ${$(".model-pick-effort-hint")?.textContent}`);
-	assert(focused()?.classList.contains("model-pick-effort-model"), `focus goes to the name while the slider waits: ${describeFocus()}`);
-	await key($(".effort-slider"), "ArrowRight");
-	assert(calls.length === 0, `a waiting slider sends nothing: ${calls.join(", ")}`);
+	await until(() => $(".effort-slider") !== null, "the held pick's panel shows its dial");
+	assert($(".effort-slider")?.getAttribute("aria-disabled") === null && focused() === $(".effort-slider"), `the slider works on the held pick: ${describeFocus()}`);
+	await key($(".effort-slider"), "ArrowLeft");
+	assert(calls.join(", ") === "effort low", `the slider picks on the held model's ladder: ${calls.join(", ")}`);
+	calls.length = 0;
 	await click($(".model-pick-effort-model"), "the model's name");
 	assert(rowLine(rowNamed("Mid Model")!) === "Mid Model ✓" && rowLine(rowNamed("Big Model")!) === "Big Model [Recommended]", "the list checks the held model; the model in use stays pickable");
+
+	// ---- a level set on a held pick's dial stands on it ----
+	await mountControl({ held: { provider: "acme", model: "mid", level: "low" } });
+	await until(() => trigger()?.getAttribute("aria-label") === "Model and effort: Mid Model Low", `the held level shows on the control: ${trigger()?.getAttribute("aria-label")}`);
+
+	// ---- a slider that is off: focus on the name, nothing sent ----
+	await mountControl({ effortDisabled: true });
+	await click(trigger(), "the trigger");
+	await until(() => $(".effort-slider") !== null, "the panel shows the dial");
+	assert($(".effort-slider")?.getAttribute("aria-disabled") === "true" && focused()?.classList.contains("model-pick-effort-model"), `focus goes to the name while the slider is off: ${describeFocus()}`);
+	await key($(".effort-slider"), "ArrowRight");
+	assert(calls.length === 0, `a slider that is off sends nothing: ${calls.join(", ")}`);
 
 	// ---- a one-rung model: the models view alone, Escape closes ----
 	await mountControl({ current: { provider: "acme", model: "narrow", label: "acme/narrow" }, effort: { level: "off", ladder: ONE_RUNG } });

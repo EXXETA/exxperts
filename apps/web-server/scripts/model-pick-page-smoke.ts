@@ -13,6 +13,15 @@
 //   switch runs Remember, and the new conversation runs on the picked model
 //   with its one "Continued on" line;
 // - in a room this save would fill, the window offers Remember only.
+// - the level's name under the dial draws as a real semibold, 16px at desktop
+//   and 17px in the phone's sheet, light and dark; the chosen level's word
+//   around the arc alone is lit, after a click, an arrow key and a drag, and
+//   while a pick waits;
+// - the dial's arc deepens from Low to Max in the colours a person sees, the
+//   grey track past the knob, on ladders of two to six rungs, light and dark;
+// - the needle swings on a key or a click and settles after a drag, under half
+//   a second, follows a drag with no lag, and stands at rest on opening; a page
+//   that asks for reduced motion gets no motion at all;
 // - the context ring's number reaches 4.5:1 in each state it shows (each zone,
 //   unknown, waiting, offline), dark and light, under the box and in the
 //   phone's box;
@@ -244,6 +253,134 @@ async function pillContrast(page: Page, selector: string): Promise<number> {
 	return contrast(painted([text, ...layers]), under);
 }
 
+/** The level's name as drawn beside the same words in each display face: the computed weight alone would say 600 over a 700 file. */
+function levelNameDrawn(page: Page) {
+	return page.locator(".model-pick-effort-title").evaluate(async (name) => {
+		const { fontSize, fontWeight, letterSpacing } = getComputedStyle(name);
+		const widths: number[] = [];
+		for (const family of ["Bandeins Strange Variable", "Bandeins Strange"]) {
+			await document.fonts.load(`${fontWeight} ${fontSize} "${family}"`);
+			const probe = document.createElement("span");
+			probe.textContent = name.textContent;
+			probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${fontWeight} ${fontSize} "${family}";letter-spacing:${letterSpacing}`;
+			document.body.append(probe);
+			widths.push(probe.getBoundingClientRect().width);
+			probe.remove();
+		}
+		await document.fonts.ready;
+		return { fontSize, fontWeight, width: name.getBoundingClientRect().width, variable: widths[0]!, staticBold: widths[1]! };
+	});
+}
+
+/** Waits for the slider to say `level`, then holds the words around the arc to it: that word in the text colour, every other one muted. */
+async function assertLevelLit(page: Page, level: string, moment: string): Promise<void> {
+	const slider = page.locator(".model-pick-panel [role=slider], .model-pick-sheet [role=slider]").first();
+	await waitUntil(async () => (await slider.getAttribute("aria-valuetext")) === level, `${moment}: the slider says ${level}`);
+	const words = await page.locator(".effort-dial").evaluate((dial) => {
+		const probe = document.createElement("span");
+		dial.append(probe);
+		probe.style.color = "var(--fg)";
+		const text = getComputedStyle(probe).color;
+		probe.style.color = "var(--muted)";
+		const muted = getComputedStyle(probe).color;
+		probe.remove();
+		const all = [...dial.querySelectorAll(".effort-dial-label")].map((label) => ({ word: label.textContent ?? "", colour: getComputedStyle(label).color }));
+		return { all, lit: all.filter((label) => label.colour === text).map((label) => label.word), greyed: all.filter((label) => label.colour === muted).length };
+	});
+	assert(words.lit.join("|") === level && words.greyed === words.all.length - 1, `${moment}: only ${level} is lit, got ${JSON.stringify(words)}`);
+}
+
+/** The needle's angle as drawn, 0 straight up; `at` first holds the dial's running motion at that time. */
+function needle(page: Page, at?: number) {
+	return page.locator(".effort-dial").evaluate((dial, time) => {
+		const [motion] = dial.getAnimations();
+		if (motion && time !== undefined) {
+			motion.pause();
+			motion.currentTime = time;
+		}
+		const line = dial.querySelector(".effort-dial-needle") as SVGLineElement;
+		const screen = line.getScreenCTM()!;
+		const x = line.x2.baseVal.value - line.x1.baseVal.value;
+		const y = line.y2.baseVal.value - line.y1.baseVal.value;
+		const angle = (Math.atan2(screen.a * x + screen.c * y, -(screen.b * x + screen.d * y)) * 180) / Math.PI;
+		return { angle, running: dial.getAnimations().length, ms: motion ? Number(motion.effect?.getComputedTiming().endTime) : 0 };
+	}, at);
+}
+
+/** Where the needle rests on the slider's rung: the arc runs 115 degrees to each side. */
+async function restAngle(page: Page): Promise<number> {
+	const slider = page.locator("[role=slider]").first();
+	const [now, max] = await Promise.all([slider.getAttribute("aria-valuenow"), slider.getAttribute("aria-valuemax")]);
+	return -115 + (230 * (Number(now) - 1)) / (Number(max) - 1);
+}
+
+const afterTwoFrames = (page: Page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+const dialMotionLog = (page: Page): Promise<string[]> => page.evaluate(() => (window as any).dialMotion);
+
+/** Walks the motion the dial just started, held at its start by the page's listener so any machine's speed sees the same curve, then lets it end. */
+async function walkDialMotion(page: Page, moment: string): Promise<{ ms: number; angles: number[] }> {
+	await waitUntil(async () => (await needle(page)).running > 0, `${moment}: the dial moves`);
+	const { ms } = await needle(page);
+	const angles: number[] = [];
+	for (let at = 0; at <= ms; at += 10) angles.push((await needle(page, at)).angle);
+	await page.locator(".effort-dial").evaluate((dial) => { for (const motion of dial.getAnimations()) motion.finish(); });
+	await waitUntil(async () => (await needle(page)).running === 0, `${moment}: the motion ends`);
+	return { ms, angles };
+}
+
+/** The colours on screen at these shares of the arc from Low, and on the knob's ring, read from a real picture of the page. */
+async function arcPixels(page: Page, shares: number[]): Promise<{ arc: number[][]; ring: number[] }> {
+	const spots = await page.locator(".effort-dial").evaluate((dial, onArc) => {
+		const track = dial.querySelector(".effort-dial-track") as SVGPathElement;
+		const screen = track.getScreenCTM()!;
+		const length = track.getTotalLength();
+		const points = onArc.map((share) => {
+			const { x, y } = track.getPointAtLength(length * share);
+			return { x: screen.a * x + screen.c * y + screen.e, y: screen.b * x + screen.d * y + screen.f };
+		});
+		const knob = dial.querySelector(".effort-slider-thumb") as SVGCircleElement;
+		const turned = knob.getScreenCTM()!;
+		// The stroke is centred on the circle's own radius, so that point is the ring's middle.
+		const [x, y] = [knob.cx.baseVal.value + knob.r.baseVal.value, knob.cy.baseVal.value];
+		return { points, ring: { x: turned.a * x + turned.c * y + turned.e, y: turned.b * x + turned.d * y + turned.f } };
+	}, shares);
+	const picture = (await page.screenshot()).toString("base64");
+	const reader = await page.context().newPage();
+	const read = await reader.evaluate(async ({ picture, wanted }) => {
+		const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${picture}`)).blob());
+		const canvas = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+		canvas.drawImage(bitmap, 0, 0);
+		return wanted.map(({ x, y }) => [...canvas.getImageData(Math.round(x), Math.round(y), 1, 1).data.slice(0, 3)]);
+	}, { picture, wanted: [...spots.points, spots.ring] });
+	await reader.close();
+	return { arc: read.slice(0, -1), ring: read[read.length - 1]! };
+}
+
+/** The page's own colours the ramp and the track are mixed from, as [r, g, b]. */
+function dialTokens(page: Page) {
+	return page.locator(".effort-dial").evaluate((dial) => {
+		const probe = document.createElement("span");
+		dial.append(probe);
+		const [paper, plan, shape, text] = ["--exx-paper", "--exx-plan", "--exx-plan-shape", "--fg"].map((token) => {
+			probe.style.color = `var(${token})`;
+			return getComputedStyle(probe).color;
+		});
+		probe.remove();
+		return { paper: paper!, plan: plan!, shape: shape!, text: text!, panel: getComputedStyle(dial.closest(".model-pick-panel")!).backgroundColor };
+	});
+}
+
+const mixed = (a: number[], b: number[], share: number) => a.map((value, i) => value * share + b[i]! * (1 - share));
+
+/** The arc's ramp at a share from Low: pale, the brand lila at the middle, deep at the top. */
+function rampAt(share: number, tokens: Awaited<ReturnType<typeof dialTokens>>): number[] {
+	const [paper, plan, shape, text] = [tokens.paper, tokens.plan, tokens.shape, tokens.text].map((colour) => cssColour(colour).rgb);
+	if (share <= 0.5) return mixed(shape!, mixed(shape!, paper!, 0.55), share * 2);
+	return mixed(mixed(plan!, text!, 0.8), shape!, share * 2 - 1);
+}
+
+const closeTo = (a: number[], b: number[]) => a.every((value, i) => Math.abs(value - b[i]!) <= 6);
+
 function setRecentContextEntries(agents: any, agentId: string, count: number): void {
 	const instance = agents.createPersistentAgentInstance(agentId);
 	const l1bPath = instance.l1bCurrentPath(instance.readAgentJson());
@@ -285,6 +422,8 @@ try {
 	const cancelId = newRoom("Cancel Room");
 	const pinId = newRoom("Pin Room");
 	const gatewayId = newRoom("Gateway Room");
+	newRoom("Dial Room");
+	newRoom("Spring Room");
 	setRecentContextEntries(agents, fullId, 19);
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
@@ -392,6 +531,263 @@ try {
 		await waitUntil(async () => (await focused(phonePage)).role === "option", "once the models are read, focus is on one of them");
 		await phoneCtx.close();
 		pass("on the phone, Try again by keyboard keeps focus in the sheet and lands on the models");
+	}
+
+	// --- The dial's words: the level's name as drawn, the chosen word lit -------------------
+	{
+		const widths = [
+			{ name: "at desktop width", viewport: { width: 1440, height: 900 }, phone: false, size: "16px" },
+			{ name: "in the phone's sheet", viewport: { width: 390, height: 844 }, phone: true, size: "17px" },
+		];
+		for (const theme of ["light", "dark"]) for (const width of widths) {
+			const nameCtx = await browser.newContext({ viewport: width.viewport, ...(width.phone ? { isMobile: true, hasTouch: true } : {}) });
+			await nameCtx.addInitScript((appearance) => { localStorage.setItem("exxperts.appearance", appearance); }, theme);
+			const namePage = await nameCtx.newPage();
+			await enterRoom(namePage, "Dial Room");
+			await namePage.locator(width.phone ? ".model-pick-in-header .model-pick-trigger" : ".model-pick-trigger").first().click();
+			await namePage.locator(`${width.phone ? ".model-pick-sheet " : ""}.model-pick-effort-title`).waitFor({ timeout: 10000 });
+			const shown = await levelNameDrawn(namePage);
+			assert(shown.fontSize === width.size && shown.fontWeight === "600", `the level's name ${width.name} in ${theme} is ${width.size} at 600, got ${JSON.stringify(shown)}`);
+			assert(Math.abs(shown.variable - shown.staticBold) > 0.1, `the two faces set this name apart, got ${JSON.stringify(shown)}`);
+			await waitUntil(async () => Math.abs((await levelNameDrawn(namePage)).width - shown.variable) < 0.1, `the level's name ${width.name} in ${theme} draws from the variable face, not the static Bold`);
+			await assertLevelLit(namePage, String(await namePage.locator("[role=slider]").first().getAttribute("aria-valuetext")), `on opening ${width.name} in ${theme}`);
+			await nameCtx.close();
+		}
+		pass("the level's name draws at 600 from the variable face, 16px at desktop and 17px in the phone's sheet, light and dark");
+
+		const dialCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		const dialPage = await dialCtx.newPage();
+		await enterRoom(dialPage, "Dial Room");
+		await dialPage.locator(".model-pick-trigger").first().click();
+		const dialSlider = dialPage.locator(".model-pick-panel [role=slider]");
+		await dialSlider.waitFor({ timeout: 10000 });
+		const rungs = await dialPage.locator(".effort-dial-label").allInnerTexts();
+		assert(rungs.length >= 3, `the dial has rungs to move over, got ${JSON.stringify(rungs)}`);
+		const rungAt = async (word: string) => {
+			const box = await dialPage.locator(".effort-dial-label").filter({ hasText: new RegExp(`^${word}$`) }).boundingBox();
+			assert(box, `the word ${word} shows around the arc`);
+			return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+		};
+		const [first, second] = rungs;
+		const beforeLast = rungs[rungs.length - 2]!;
+		const last = rungs[rungs.length - 1]!;
+		const lastAt = await rungAt(last);
+		await dialPage.mouse.click(lastAt.x, lastAt.y);
+		await assertLevelLit(dialPage, last, "after a click");
+		await dialSlider.focus();
+		await dialPage.keyboard.press("ArrowLeft");
+		await assertLevelLit(dialPage, beforeLast, "after an arrow key");
+		const firstAt = await rungAt(first!);
+		const secondAt = await rungAt(second!);
+		await dialPage.mouse.move(firstAt.x, firstAt.y);
+		await dialPage.mouse.down();
+		await assertLevelLit(dialPage, first!, "on a press");
+		await dialPage.mouse.move(secondAt.x, secondAt.y);
+		await assertLevelLit(dialPage, second!, "in the middle of a drag");
+		await dialPage.mouse.up();
+		await assertLevelLit(dialPage, second!, "after a drag");
+		await dialPage.keyboard.press("Escape");
+		await waitUntil(async () => (await dialPage.locator(".model-pick-panel").count()) === 0, "the panel closes");
+		pass("the chosen level's word alone is lit after a click, an arrow key and a drag");
+
+		const releaseDial = holdAnswers();
+		const dialComposer = dialPage.locator("textarea").first();
+		await dialComposer.fill("A question held while a pick waits.");
+		await dialComposer.press("Enter");
+		await dialPage.locator(".stop-btn").waitFor({ timeout: 15000 });
+		await pick(dialPage, "GPT Fake");
+		await dialPage.locator(".model-pick-trigger").first().click();
+		await dialSlider.waitFor({ timeout: 10000 });
+		// The held model's options arrive after the panel opens and carry the room's level, the one the drag picked.
+		await assertLevelLit(dialPage, second!, "while a pick waits");
+		releaseDial();
+		await dialPage.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 15000 });
+		await dialCtx.close();
+		pass("while a pick waits, the chosen word stays lit");
+	}
+
+	// --- The dial's arc and needle: the colours on screen, then the motion ------------------
+	{
+		// A share of the arc clear of the ticks on every ladder here, and clear of a knob at the top.
+		const shares = [0.06, 0.45, 0.93];
+		const knobReach = 0.04;
+		const cases = [
+			{ name: "Low on five rungs", rungs: ["Low", "Medium", "High", "Extra high", "Max"], at: 0 },
+			{ name: "Max on five rungs", rungs: ["Low", "Medium", "High", "Extra high", "Max"], at: 4 },
+			{ name: "the top of two rungs", rungs: ["Low", "High"], at: 1 },
+			{ name: "the bottom of two rungs", rungs: ["Low", "High"], at: 0 },
+			{ name: "the third of six rungs", rungs: ["Minimal", "Low", "Medium", "High", "Extra high", "Max"], at: 2 },
+		];
+		for (const theme of ["light", "dark"]) for (const { name, rungs, at } of cases) {
+			const arcCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+			await arcCtx.addInitScript((appearance) => { localStorage.setItem("exxperts.appearance", appearance); }, theme);
+			const arcPage = await arcCtx.newPage();
+			const ladder = rungs.map((label) => ({ level: label.toLowerCase().replace(" ", ""), label }));
+			await arcPage.routeWebSocket(/\/ws\?/, (ws) => {
+				const room = ws.connectToServer();
+				room.onMessage((message) => {
+					const frame = typeof message === "string" ? JSON.parse(message) : null;
+					if (!frame?.effort) return ws.send(message);
+					frame.effort = { ...frame.effort, level: ladder[at]!.level, ladder };
+					ws.send(JSON.stringify(frame));
+				});
+				ws.onMessage((message) => room.send(message));
+			});
+			await enterRoom(arcPage, "Spring Room");
+			await arcPage.locator(".model-pick-trigger").first().click();
+			await arcPage.locator(".model-pick-panel [role=slider]").waitFor({ timeout: 10000 });
+			await assertLevelLit(arcPage, rungs[at]!, `${name} in ${theme}`);
+			await waitUntil(async () => (await needle(arcPage)).running === 0, "the dial is at rest");
+			const tokens = await dialTokens(arcPage);
+			const panel = cssColour(tokens.panel).rgb;
+			const track = mixed(cssColour(tokens.text).rgb, panel, 0.12);
+			const knobShare = at / (rungs.length - 1);
+			const seen = await arcPixels(arcPage, shares);
+			shares.forEach((share, i) => {
+				const wanted = share < knobShare - knobReach ? rampAt(share, tokens) : track;
+				assert(closeTo(seen.arc[i]!, wanted), `${name} in ${theme}: the arc at ${share} shows ${seen.arc[i]}, wanted ${wanted.map(Math.round)}`);
+			});
+			assert(closeTo(seen.ring, rampAt(knobShare, tokens)), `${name} in ${theme}: the knob's ring shows ${seen.ring}, wanted ${rampAt(knobShare, tokens).map(Math.round)}`);
+			await arcCtx.close();
+		}
+		pass("the arc deepens from Low to Max as far as the knob, grey past it, on two to six rungs, light and dark");
+
+		// Records each motion the dial starts and holds it there; on a reduced-motion page the record stays empty.
+		const recordDialMotion = () => {
+			(window as any).dialMotion = [];
+			for (const kind of ["transitionrun", "animationstart"]) document.addEventListener(kind, (event) => {
+				const dial = event.target as Element;
+				if (!dial.classList?.contains("effort-dial")) return;
+				(window as any).dialMotion.push(kind);
+				for (const motion of dial.getAnimations()) motion.pause();
+			}, true);
+		};
+		const atRest = async (page: Page, moment: string) => {
+			const { angle, running } = await needle(page);
+			const rest = await restAngle(page);
+			assert(running === 0 && Math.abs(angle - rest) < 0.5, `${moment}: the needle rests at ${rest}, got ${angle} with ${running} running`);
+		};
+
+		const springCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		await springCtx.addInitScript(recordDialMotion);
+		const springPage = await springCtx.newPage();
+		await enterRoom(springPage, "Spring Room");
+		await springPage.locator(".model-pick-trigger").first().click();
+		const springSlider = springPage.locator(".model-pick-panel [role=slider]");
+		await springSlider.waitFor({ timeout: 10000 });
+		await afterTwoFrames(springPage);
+		await atRest(springPage, "on opening");
+		assert((await dialMotionLog(springPage)).length === 0, `the panel opens with the needle at rest, got ${await dialMotionLog(springPage)}`);
+
+		// A swing passes its rung, comes back and ends on it.
+		const swung = async (moment: string, from: number) => {
+			const { ms, angles } = await walkDialMotion(springPage, moment);
+			const rest = await restAngle(springPage);
+			const up = Math.sign(rest - from);
+			const past = Math.max(...angles.map((angle) => (angle - rest) * up));
+			assert(ms > 0 && ms < 500, `${moment}: the swing takes under half a second, got ${ms}`);
+			assert(Math.abs(angles[0]! - from) < 1, `${moment}: the swing starts where the needle stood, ${from}, got ${angles[0]}`);
+			assert(past > 1, `${moment}: the needle swings past its rung, got ${past} degrees`);
+			await atRest(springPage, `${moment}, at the end`);
+			return past;
+		};
+		await springSlider.focus();
+		if ((await springSlider.getAttribute("aria-valuenow")) !== "1") {
+			await springPage.keyboard.press("Home");
+			await walkDialMotion(springPage, "going to the first rung");
+		}
+		await springPage.keyboard.press("ArrowRight");
+		await swung("after an arrow key", -115);
+		const words = await springPage.locator(".effort-dial-label").allInnerTexts();
+		const wordAt = async (page: Page, word: string) => {
+			const box = await page.locator(".effort-dial-label").filter({ hasText: new RegExp(`^${word}$`) }).boundingBox();
+			assert(box, `the word ${word} shows around the arc`);
+			return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+		};
+		const fromSecond = await restAngle(springPage);
+		const lastWord = await wordAt(springPage, words[words.length - 1]!);
+		await springPage.mouse.click(lastWord.x, lastWord.y);
+		const pastEnd = await swung("after a click on the last rung", fromSecond);
+		assert(pastEnd < 5, `at the arc's end the swing stops short of the word beside it, got ${pastEnd} degrees past`);
+		await springPage.keyboard.press("Home");
+		await swung("after the Home key over the whole arc", 115);
+		const springTokens = await dialTokens(springPage);
+		await springPage.keyboard.press("End");
+		await waitUntil(async () => (await needle(springPage)).running > 0, "the End key starts a swing");
+		await needle(springPage, 200);
+		const [pastTop] = (await arcPixels(springPage, [0.06])).arc;
+		assert(closeTo(pastTop!, rampAt(0.06, springTokens)), `while the swing is past the top the arc's start stays filled, got ${pastTop}, wanted ${rampAt(0.06, springTokens).map(Math.round)}`);
+		await walkDialMotion(springPage, "after the End key");
+
+		// A drag: the press swings, each rung crossed is on the pointer at once, the release
+		// settles the way the drag was going, here upwards from below the level it had.
+		const firstWord = await wordAt(springPage, words[0]!);
+		const secondWord = await wordAt(springPage, words[1]!);
+		const thirdWord = await wordAt(springPage, words[2]!);
+		await springPage.mouse.move(firstWord.x, firstWord.y);
+		await springPage.mouse.down();
+		await springPage.mouse.move(secondWord.x, secondWord.y);
+		await waitUntil(async () => (await springSlider.getAttribute("aria-valuenow")) === "2", "the drag reaches the second rung");
+		await atRest(springPage, "in the middle of a drag, on the second rung");
+		await springPage.mouse.move(thirdWord.x, thirdWord.y);
+		await waitUntil(async () => (await springSlider.getAttribute("aria-valuenow")) === "3", "the drag reaches the third rung");
+		await atRest(springPage, "in the middle of a drag, on the third rung");
+		await afterTwoFrames(springPage);
+		await atRest(springPage, "still in the drag, two frames on");
+		const movesInDrag = (await dialMotionLog(springPage)).length;
+		await springPage.mouse.up();
+		const settle = await walkDialMotion(springPage, "at the end of a drag");
+		const rung = await restAngle(springPage);
+		// The way it first leaves the rung: a settle also swings back a little the other way.
+		const firstLeaves = (angles: number[], from: number) => (angles.find((angle) => Math.abs(angle - from) > 1) ?? from) - from;
+		assert(settle.ms > 0 && settle.ms < 500, `the settle takes under half a second, got ${settle.ms}`);
+		assert(firstLeaves(settle.angles, rung) > 0 && Math.abs(settle.angles[0]! - rung) < 0.5, `the drag ended rising: the needle leaves its rung upwards and comes back, got ${settle.angles.slice(0, 12)}`);
+		await atRest(springPage, "after the settle");
+		assert((await dialMotionLog(springPage)).length === movesInDrag + 1, `the release starts one motion, got ${await dialMotionLog(springPage)}`);
+		await springPage.mouse.move(thirdWord.x, thirdWord.y);
+		await springPage.mouse.down();
+		await springPage.mouse.move(secondWord.x, secondWord.y);
+		await waitUntil(async () => (await springSlider.getAttribute("aria-valuenow")) === "2", "a falling drag reaches the second rung");
+		await springPage.mouse.up();
+		const fall = await walkDialMotion(springPage, "at the end of a falling drag");
+		const lower = await restAngle(springPage);
+		assert(firstLeaves(fall.angles, lower) < 0, `the drag ended falling: the needle leaves its rung downwards, got ${fall.angles.slice(0, 12)}`);
+		await springCtx.close();
+		pass("the needle stands at rest on opening, swings under half a second on a key or a click, stays with a drag and settles at its end");
+
+		const stillCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+		await stillCtx.addInitScript(recordDialMotion);
+		const stillPage = await stillCtx.newPage();
+		await enterRoom(stillPage, "Spring Room");
+		await stillPage.locator(".model-pick-trigger").first().click();
+		const stillSlider = stillPage.locator(".model-pick-panel [role=slider]");
+		await stillSlider.waitFor({ timeout: 10000 });
+		const stands = async (moment: string, valueNow: string) => {
+			await waitUntil(async () => (await stillSlider.getAttribute("aria-valuenow")) === valueNow, `${moment}: the slider says rung ${valueNow}`);
+			await atRest(stillPage, moment);
+			await afterTwoFrames(stillPage);
+			await atRest(stillPage, `${moment}, two frames on`);
+			assert((await dialMotionLog(stillPage)).length === 0, `${moment}: no motion on a reduced-motion page, got ${await dialMotionLog(stillPage)}`);
+		};
+		await stillSlider.focus();
+		await stillPage.keyboard.press("Home");
+		await stands("after the Home key", "1");
+		await stillPage.keyboard.press("ArrowRight");
+		await stands("after an arrow key", "2");
+		const stillLast = await wordAt(stillPage, words[words.length - 1]!);
+		await stillPage.mouse.click(stillLast.x, stillLast.y);
+		await stands("after a click", String(words.length));
+		const stillFirst = await wordAt(stillPage, words[0]!);
+		const stillSecond = await wordAt(stillPage, words[1]!);
+		await stillPage.mouse.move(stillFirst.x, stillFirst.y);
+		await stillPage.mouse.down();
+		await stands("on a press", "1");
+		await stillPage.mouse.move(stillSecond.x, stillSecond.y);
+		await stands("in a drag", "2");
+		await stillPage.mouse.up();
+		await stands("after a drag", "2");
+		await stillCtx.close();
+		pass("a page that asks for reduced motion jumps straight to rest, on a key, a click and a drag");
 	}
 
 	// --- The ring's number is readable in every state, theme and width ----------------------

@@ -124,7 +124,7 @@ Compared with a `CLAUDE.md` or rules file you keep by hand, a room drafts each u
 
 - **Search the web** through your AI plan's own search, DuckDuckGo, or a search engine you run yourself, and read the pages it finds.
 - **Work in a folder you choose.** *Full access* works with files like you do; *Bounded* keeps the room inside that folder. Either way, the room's file tools refuse common secret and key files, saved logins and the app's own data. Commands are off until you turn them on in Full access; the room then asks before each one, unless you tell it to run without asking.
-- **Write documents and slide decks** as web pages, with charts and diagrams, in the background while you keep talking.
+- **Draw charts, diagrams and formulas** right in its answer, and write files such as notes, tables and web pages into a folder you choose.
 - **Use your tools.** Connect GitHub, Notion, Linear, Atlassian, Google Drive, Gmail, Microsoft 365 and more, or any MCP server, and switch each one on per room.
 - **Learn skills.** Import skills from GitHub, including Anthropic's. A skill that changes waits for your review before a room uses it again.
 - **Run on a schedule.** Daily, weekly or one-time prompts, while the app is running.

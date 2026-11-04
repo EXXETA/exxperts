@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { ThemedToken } from "shiki/core";
 import { cacheColours, cachedColours, codeLanguage, codeLanguageLabel, colourLines, highlightVersion, prepareHighlight, subscribeHighlight, type ColouredLines } from "../code-highlight";
-import { CopyButton } from "./CopyButton";
+import { CopyTextTool, FigureStrip, FigureTools } from "./figure-tools";
 import type { FenceState } from "./Markdown";
 
 /** One finished line, its tokens as text in spans: drawn once, then kept while the lines below it arrive. */
@@ -53,10 +53,9 @@ export function CodeBlock({ code, language: fenceLanguage, fence, streaming, pre
 	const open = writing ? code.slice(lineEnd + 1) : "";
 	return (
 		<div className="code-block">
-			<div className="code-block-tools">
-				{labelled && <span className="code-block-lang">{codeLanguageLabel(fenceLanguage)}</span>}
-				<CopyButton text={code} className="code-block-copy" what="code" />
-			</div>
+			<FigureStrip label={labelled ? codeLanguageLabel(fenceLanguage) : undefined} className="code-block-tools">
+				<FigureTools copy={<CopyTextTool text={code} what="code" />} />
+			</FigureStrip>
 			{coloured ? (
 				<pre {...preProps}>
 					<code className={`language-${fenceLanguage}`}>

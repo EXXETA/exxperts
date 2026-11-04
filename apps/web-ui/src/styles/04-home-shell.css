@@ -25,7 +25,7 @@
 	padding: 14px 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 4px;
 }
 .product-nav-section {
 	display: flex;
@@ -285,30 +285,41 @@
 	margin: 0 0 10px;
 }
 .landing p { color: var(--fg-soft); margin: 0; max-width: 700px; }
-/* Home with nothing to answer yet: connecting comes before the first room. */
+/* No New room there: no empty region for a screen reader, no gap. */
+.landing-grid:empty { display: none; }
+/* Home with nothing to answer yet: connecting comes before the first room.
+   The soft panel of Settings: a light fill, no outline, as wide as the column. */
 .home-connect-card {
 	margin-top: 18px;
-	max-width: 560px;
-	padding: 18px 20px;
-	border: 1px solid var(--border);
+	padding: 28px 32px;
 	border-radius: var(--exx-radius-card);
-	background: var(--panel);
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
+	background: color-mix(in srgb, var(--fg) 6%, var(--bg));
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: 32px;
+	row-gap: 6px;
+}
+/* A shared server's member has no button: the words keep their column without it. */
+.home-connect-card h2,
+.home-connect-card p {
+	grid-column: 1;
 }
 .landing .home-connect-card h2 {
-	font-size: 17px;
+	font-size: 20px;
 	line-height: 1.25;
 	margin: 0;
 }
 .home-page .home-connect-card p {
 	color: var(--fg-soft);
-	font-size: 13px;
-	line-height: 1.45;
+	font-size: 14px;
+	line-height: 1.5;
+	text-wrap: pretty;
 }
 .home-connect-card .landing-action {
-	margin-top: 6px;
+	grid-column: 2;
+	grid-row: 1 / span 2;
+	align-self: center;
 }
 .home-ai-profile-status {
 	background: transparent;

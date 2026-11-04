@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useSyncExternalStore } from "react";
+import { CopyTextTool, FigureStrip, FigureTools } from "./figure-tools";
 
 type Katex = typeof import("katex").default;
 
@@ -71,8 +72,10 @@ function typesetNow(tex: string, display: boolean): string | null | undefined {
  * parse (`\frac{a}{`), and before the first one it is a quiet box one line
  * high, never raw TeX. A finished formula that does not parse shows as it was
  * written, in the answer's own text, never KaTeX's red error.
+ *
+ * `copy`: a display formula carries a Copy of its LaTeX in a strip above it.
  */
-export const Maths = memo(function Maths({ tex, display, written, writing = false }: { tex: string; display: boolean; written: string; writing?: boolean }) {
+export const Maths = memo(function Maths({ tex, display, written, writing = false, copy = false }: { tex: string; display: boolean; written: string; writing?: boolean; copy?: boolean }) {
 	useSyncExternalStore(subscribe, loadedVersion, loadedVersion);
 	useEffect(() => {
 		void loadMaths();
@@ -82,6 +85,14 @@ export const Maths = memo(function Maths({ tex, display, written, writing = fals
 	if (html) lastGood.current = html;
 	const shown = html ?? (writing ? lastGood.current : undefined);
 	const className = display ? "maths maths-display" : "maths";
+	if (shown && display && copy) {
+		return (
+			<span className="figure-maths">
+				<FigureStrip className="figure-strip-plain"><FigureTools copy={<CopyTextTool text={tex.trim()} what="formula" />} /></FigureStrip>
+				<span className={className} dangerouslySetInnerHTML={{ __html: shown }} />
+			</span>
+		);
+	}
 	if (shown) return <span className={className} dangerouslySetInnerHTML={{ __html: shown }} />;
 	if (load.state === "failed") return <span className="maths-as-written">{written}</span>;
 	if (writing || (html === undefined && display)) return <span className={`${className} maths-pending`} aria-label="Formula" />;

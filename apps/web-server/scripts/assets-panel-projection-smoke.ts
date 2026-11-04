@@ -1,4 +1,4 @@
-import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, windowAssetRows, type AssetLedgerRowInput } from "../../web-ui/src/assets-panel.js";
+import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, type AssetLedgerRowInput } from "../../web-ui/src/assets-panel.js";
 import { resolveIterateSourceFromLedger, type TaskLedgerRecord } from "../src/persistent-room-task-ledger.js";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -128,17 +128,6 @@ try {
 	assert(grammarById.get("tsk-acted")?.unread === false && grammarById.get("tsk-acted")?.subline === `created · ${expectedShortTime("2026-07-18T13:41:00.000Z")}`, "export implies seen; the row rests on created + its moment (no workspace subline)");
 	assert(grammarById.get("tsk-broken")?.failed === true && grammarById.get("tsk-broken")?.subline === "didn't finish", "error rows carry the failed flag beside the shipped subline");
 	assert(grammarById.get("tsk-fresh")?.failed === false, "ok rows never carry the failed flag");
-
-	// Windowing: 3 resting + show-all.
-	const many = projectAssetRows(
-		["a", "b", "c", "d", "e"].map((id, i) => row({ taskId: `tsk-${id}`, outcome: "ok", startedAt: `2026-07-18T0${i}:00:00.000Z`, artifacts: [artifact("tasks/t/x.html")] })),
-		{ liveTask: null, threadTaskIds: new Set(), now: NOW },
-	);
-	const resting = windowAssetRows(many, false);
-	assert(resting.visible.length === 3 && resting.hiddenCount === 2, "resting window is 3 + hidden count");
-	assert(resting.visible[0].taskId === "tsk-e", "resting window keeps the newest");
-	const expanded = windowAssetRows(many, true);
-	assert(expanded.visible.length === 5 && expanded.hiddenCount === 0, "show-all reveals everything");
 
 	// Iterate-source ledger fallback (server side): ok+artifacts only.
 	const ledger = (partial: Partial<TaskLedgerRecord> & { taskId: string; outcome: TaskLedgerRecord["outcome"] }): TaskLedgerRecord =>
@@ -278,20 +267,6 @@ try {
 		assert(rowShelfFileName(byTask.get("tsk-many")!) === null, "a multi-file run is not a file row");
 		assert(rowShelfFileName(byTask.get("tsk-store")!) === null, "a legacy store row is not a file row");
 		assert(rowShelfFileName(byTask.get("file:mine.pdf")!) === "mine.pdf", "user rows are always file rows");
-	}
-
-	// Height-derived window: the component passes a count; the default stays 3.
-	{
-		const rows = projectAssetRows(
-			["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].map((id, i) => row({ taskId: `tsk-${id}`, outcome: "ok", startedAt: `2026-07-18T0${Math.min(i, 9)}:0${i}:00.000Z`, artifacts: [artifact("tasks/t/x.html")], viewedAt: "x" })),
-			{ liveTask: null, threadTaskIds: new Set(), now: NOW },
-		);
-		const nine = windowAssetRows(rows, false, 9);
-		assert(nine.visible.length === 9 && nine.hiddenCount === 1, "an explicit count windows to it");
-		const all = windowAssetRows(rows, false, 12);
-		assert(all.visible.length === 10 && all.hiddenCount === 0, "a count above the row total shows everything");
-		const garbage = windowAssetRows(rows, false, Number.NaN);
-		assert(garbage.visible.length === 3, "a garbage count falls back to the conservative default");
 	}
 
 	// A revise run has no row of its own (taste pass): the TARGET file's row

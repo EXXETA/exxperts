@@ -68,7 +68,7 @@ export interface ShelfFileSniff {
 }
 
 const REFUSAL_LEGACY_OFFICE = "Legacy Office formats (.doc/.xls/.ppt) cannot be read safely. Save the file as .docx or .xlsx, or export it to PDF, and add it again.";
-const REFUSAL_ARCHIVE = "Archives cannot be read. Extract the file you need and add it to this room's Files directly.";
+const REFUSAL_ARCHIVE = "Archives cannot be read. Extract the file you need and add it to this room's Attachments directly.";
 const REFUSAL_PRESENTATION = "This presentation format is not readable yet. Export it to PDF and add that instead.";
 const REFUSAL_BINARY = "This is a binary file the room cannot read as text. Converting it to PDF or plain text almost always works.";
 const REFUSAL_MEDIA = "Audio and video cannot be read. Add a transcript or notes as text instead.";
@@ -131,7 +131,7 @@ export function sniffShelfFile(absolutePath: string, name: string): ShelfFileSni
 		const read = fs.readSync(fd, head, 0, SNIFF_BYTES, 0);
 		head = head.subarray(0, read);
 	} catch {
-		throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Files.");
+		throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Attachments.");
 	} finally {
 		if (fd !== null) fs.closeSync(fd);
 	}
@@ -287,7 +287,7 @@ export async function readShelfFileText(roomIdRaw: string, rawName: string, opti
 		try {
 			text = fs.readFileSync(resolved.absolutePath, "utf-8");
 		} catch {
-			throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Files.");
+			throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Attachments.");
 		}
 		return { name: resolved.name, kind: "text", text, pages: null, truncated: false };
 	}
@@ -302,7 +302,7 @@ export async function readShelfFileText(roomIdRaw: string, rawName: string, opti
 		try {
 			buffer = fs.readFileSync(resolved.absolutePath);
 		} catch {
-			throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Files.");
+			throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Attachments.");
 		}
 		try {
 			return { name: resolved.name, kind: "xlsx", text: renderSpreadsheetPreview(buffer, resolved.name, {}).text, pages: null, truncated: false };

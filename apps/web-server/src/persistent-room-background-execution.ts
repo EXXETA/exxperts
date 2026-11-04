@@ -445,7 +445,7 @@ export function persistentRoomBackgroundSessionToolNames(allowedToolNames: reado
 /**
  * The room-state message a live turn sends (room-state-message.ts), with what
  * a background run can use: who the room is, the instructions in force and
- * its workspace, which never has bash here. It has no skills or Files tools,
+ * its workspace, which never has bash here. It has no skills or Attachments tools,
  * so their parts are left out; the next live turn's copy differs and is sent
  * whole. The run's copy is saved to the thread, so a live turn after it reads
  * the latest state from the session as it does after its own turns.
@@ -456,7 +456,7 @@ function createRoomStateExtension(roomId: string, thread: PersistentAgentThreadR
 		pi.on("before_agent_start", async (event: { systemPrompt: string }, ctx: { sessionManager: SessionManager }) => {
 			let workspace: string | null = null;
 			try {
-				workspace = buildPersistentRoomCurrentWorkspaceSection(workspacePolicy);
+				workspace = buildPersistentRoomCurrentWorkspaceSection(workspacePolicy, { scheduled: true });
 			} catch (error) {
 				console.warn(`scheduled run: current workspace section build failed: ${(error as Error)?.message ?? error}`);
 			}

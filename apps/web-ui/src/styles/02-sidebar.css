@@ -69,14 +69,14 @@
 :root[data-theme="light"] .landing-brand img {
 	filter: invert(1);
 }
-/* The sidebar's lists (this one and .product-nav): rows 34px apart (32px
-   boxes, 2px between) in regular weight, a tight list in the manner of a
-   sidebar beside a chat; the mac app steps 28px (html.desktop-app-mac). */
+/* The sidebar's lists (this one and .product-nav): rows 36px apart (32px
+   boxes, 4px between) in regular weight, a tight list in the manner of a
+   sidebar beside a chat; the mac app steps 32px (html.desktop-app-mac). */
 .sidebar-primary-nav {
 	padding: 14px 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 4px;
 }
 /* An item's text starts at --sidebar-text-left: the list's 12px padding and
    the item's 1px border come off it. */

@@ -40,7 +40,7 @@ const storage = { persistentAgentsRoot: agentsRoot } as const;
 	assert(sentence.includes("“deck (2).html”"), "the sentence says where the revision landed");
 	// A conflict with nowhere to point still tells the truth it has.
 	const bare = notice.reviseConflictSentence({ name: "deck.html" });
-	assert(!bare.includes("Files as"), "a conflict without a saved-as claims only what it knows");
+	assert(!bare.includes("Attachments as"), "a conflict without a saved-as claims only what it knows");
 	// A junk record must not render as a sentence about a file called "".
 	assert(notice.reviseConflictSentence({ name: "  " }).startsWith("“The file”"), "a nameless conflict degrades to a generic subject");
 	// Multi-conflict: one sentence per line, no run-on.

@@ -35,19 +35,23 @@ export function CopyIcon() {
 	);
 }
 
+const writeText = (text: string) => navigator.clipboard?.writeText(text);
+
 // Copy a piece of text to the clipboard. The button flips to a checkmark for
 // a moment so the click is acknowledged without a toast. One control for the
-// message action rows (Message.tsx) and the code-block corner (Markdown.tsx):
+// message action rows (Message.tsx) and the expanded diagram's code:
 // the `.message-copy` class carries the shared ghost look, `className` the
 // placement, `what` the noun the screen reader hears ("message", "code").
-export function CopyButton({ text, className, what = "message" }: { text: string; className?: string; what?: string }) {
+// `copy` is how the text reaches the clipboard, for a caller that puts more
+// than plain text there: the answer's passes copyAnswer (answer-copy.ts).
+export function CopyButton({ text, className, what = "message", copy = writeText }: { text: string; className?: string; what?: string; copy?: (text: string) => Promise<void> | undefined }) {
 	const [copied, markCopied] = useCopiedFlag();
 	const onCopy = useCallback(() => {
 		// Optional chaining + catch: navigator.clipboard is undefined over plain
 		// http on a LAN IP (not localhost), and a write can be denied; degrade
 		// quietly (the button just does not flip) rather than throw.
-		void navigator.clipboard?.writeText(text).then(markCopied).catch(() => {});
-	}, [text, markCopied]);
+		void copy(text)?.then(markCopied).catch(() => {});
+	}, [text, copy, markCopied]);
 	return (
 		<button
 			type="button"

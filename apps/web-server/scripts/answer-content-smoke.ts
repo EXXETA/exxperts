@@ -65,10 +65,28 @@ const MANY_ANSWER = "Many flows:\n\n" + Array.from({ length: MANY }, (_, i) => `
 // SVG decoded on its own cannot load, so it cannot be copied as a picture either.
 const PICTURE_PROMPT = "Draw the app with its icon.";
 const PICTURE_ANSWER = "With a picture:\n\n```mermaid\nflowchart LR\n  A@{ img: \"/brand/icon-192.png\", label: \"App\", w: 60, h: 60 } --> B[Done]\n```";
+// Another, answered at once: what Copy image must keep whole, at any width.
+const COPY_PROMPT = "Chart the regions and draw the routes.";
+const COPY_TITLE = "Quarterly revenue of every northern European enterprise customer compared with the same quarter of the previous financial year";
+const COPY_NOTE = "Figures are in thousands of euros, before the one-off adjustment for the spring acquisition, and they leave out every partner who joined after the close of the financial year, so these totals differ from the annual report.";
+const COPY_SERIES = ["Northern Europe enterprise customers", "Southern Europe enterprise customers"];
+const COPY_SLICES = ["Salaries and social security contributions of every office in the group", "Cloud infrastructure and software licences for all of the teams"];
+const COPY_DIAGRAM = ["flowchart LR", ...Array.from({ length: 9 }, (_, i) => `  N${i}[Route stage ${i}] --> N${i + 1}[Route stage ${i + 1}]`)];
+// Past what a canvas holds at twice their size, one by its area and one by its side.
+const HUGE_DIAGRAMS = [[12000, 3000], [24000, 300]].map(([width, height]) => `---\nconfig:\n  xyChart:\n    width: ${width}\n    height: ${height}\n---\nxychart-beta\n  bar [1, 2, 3]`);
+const COPY_ANSWER = [
+	"Copies:",
+	...(["bar", "line"].map((kind) => `\`\`\`chart\ntype: ${kind}\ntitle: ${COPY_TITLE}\nnote: ${COPY_NOTE}\nQuarter, ${COPY_SERIES.join(", ")}\nQ1, 120, 80\nQ2, 140, 95\nQ3, 90, 130\n\`\`\``)),
+	`\`\`\`chart\ntype: pie\ntitle: ${COPY_TITLE}\nnote: ${COPY_NOTE}\nClient, ${COPY_SERIES[0]}\n${COPY_SLICES[0]}, 84\n${COPY_SLICES[1]}, 41\n\`\`\``,
+	"```chart\ntype: bar\ntitle: Short title\nnote: A short note\nQuarter, Sales\nQ1, 3\nQ2, 4\n```",
+	`\`\`\`mermaid\n${COPY_DIAGRAM.join("\n")}\n\`\`\``,
+	...HUGE_DIAGRAMS.map((source) => `\`\`\`mermaid\n${source}\n\`\`\``),
+].join("\n\n");
 // A fourth, written piece by piece like the first: code blocks.
 const CODE_PROMPT = "Show me the commands.";
 // Another, written piece by piece: formulas and charts.
 const CONTENT_PROMPT = "Show the maths and the charts.";
+const TEAM_TABLE = "| Team | Share | Note |\n| --- | --- | --- |\n| Sales | $x^2$ | up  by a third |\n| Product | 5 |  |\n| Finance | $\\frac{a}{b}$ | first<br>second |\n| Big | $$y^2$$ |  |";
 const CHART = ["type: bar", "title: Requests refused per hour", "Hour, Refused", "09:00, 12", "10:00, 30", "11:00, 84", "12:00, 41"];
 // A fifth, answered at once: one block in each language the page colours,
 // under the last name its table gives it, each with a comment, a string or a
@@ -145,7 +163,7 @@ const provider = http.createServer((req, res) => {
 		const base = { id: "cmpl_answer_content", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: body.model };
 		// What the person asked last decides the answer: the history repeats the earlier questions.
 		const asked = JSON.stringify([...(body.messages ?? [])].reverse().find((message: { role?: string; content?: unknown }) => message.role === "user" && !JSON.stringify(message.content ?? "").includes(ROOM_STATE_HEADING)) ?? "");
-		const said = asked.includes(PICTURE_PROMPT) ? PICTURE_ANSWER : asked.includes(LANGUAGES_PROMPT) ? languagesAnswer() : asked.includes(MANY_PROMPT) ? MANY_ANSWER : asked.includes(MATHS_PROMPT) ? MATHS_ANSWER : "Approval flow";
+		const said = asked.includes(COPY_PROMPT) ? COPY_ANSWER : asked.includes(PICTURE_PROMPT) ? PICTURE_ANSWER : asked.includes(LANGUAGES_PROMPT) ? languagesAnswer() : asked.includes(MANY_PROMPT) ? MANY_ANSWER : asked.includes(MATHS_PROMPT) ? MATHS_ANSWER : "Approval flow";
 		const held = HELD.find((prompt) => asked.includes(prompt) && !heldDone.has(prompt));
 		if (!turn && held) {
 			turn = { res, base, prompt: held };
@@ -202,6 +220,31 @@ async function setTheme(page: Page, theme: "light" | "dark"): Promise<void> {
 	await waitUntil(() => page.evaluate((want) => document.documentElement.dataset.theme === want, theme), `the page turns ${theme}`);
 }
 
+/** Presses a figure's Copy image and reads what it made: the PNG's size, and the SVG it was drawn from laid out as the copy's own canvas sees it. */
+async function copyFigure(page: Page, figure: Locator) {
+	await page.evaluate(() => { (window as unknown as { copied: Promise<string>[] }).copied = []; });
+	await figure.hover();
+	await figure.getByRole("button", { name: "Copy image" }).click();
+	await figure.getByRole("button", { name: "Copied", exact: true }).waitFor({ timeout: 30000 });
+	return page.evaluate(async () => {
+		const bitmap = await createImageBitmap(await (await navigator.clipboard.read())[0].getType("image/png"));
+		const source = await (window as unknown as { copied: Promise<string>[] }).copied[0];
+		const host = document.createElement("div");
+		host.style.cssText = "position: fixed; left: 0; top: 0; visibility: hidden;";
+		host.innerHTML = source;
+		document.body.append(host);
+		const svg = host.querySelector("svg")!;
+		const box = svg.viewBox.baseVal;
+		const head = [...svg.children].filter((child) => !child.hasAttribute("transform"));
+		const words = head.flatMap((child) => [...(child.tagName === "text" ? [child] : child.querySelectorAll("text"))]) as SVGTextElement[];
+		const lines = words.map((text) => ({ text: text.textContent ?? "", className: text.getAttribute("class"), fill: text.style.fill, right: text.getBBox().x + text.getBBox().width, y: Number(text.getAttribute("y")) }));
+		const legend = [...svg.querySelectorAll(".answer-chart-legend")].map((row) => [...row.querySelectorAll("text")].map((text) => ({ text: text.textContent ?? "", right: text.getBBox().x + text.getBBox().width, bottom: text.getBBox().y + text.getBBox().height })));
+		const drawingTop = Number(/translate\(0 ([\d.]+)\)/.exec(svg.querySelector("g[transform]")?.getAttribute("transform") ?? "")?.[1] ?? 0);
+		host.remove();
+		return { png: { width: bitmap.width, height: bitmap.height }, box: { width: box.width, height: box.height }, lines, legend, drawingTop };
+	});
+}
+
 /** The drawn diagram's colours: a node's box and border, its words, an edge line. */
 function diagramColours(page: Page) {
 	return page.evaluate(() => {
@@ -223,7 +266,7 @@ function codeBlocks(answer: Locator) {
 		let cut = nodes.length;
 		while (cut > 0 && nodes[cut - 1].nodeType === Node.TEXT_NODE) cut--;
 		return {
-			label: block.querySelector(".code-block-lang")?.textContent ?? null,
+			label: block.querySelector(".figure-strip-label")?.textContent ?? null,
 			text: code.textContent ?? "",
 			styles: [...new Set(spans.map((span) => span.style.color))],
 			colours: [...new Set(spans.map((span) => getComputedStyle(span).color))],
@@ -438,11 +481,11 @@ try {
 		});
 
 		await check("Copy image puts the diagram on the clipboard as a PNG on the card's colour", async () => {
-			await figure.hover();
+			await page.mouse.move(0, 0);
 			const copy = figure.getByRole("button", { name: "Copy image" });
-			assert(await copy.isVisible(), "Copy image shows on hover");
+			assert(await copy.isVisible(), "Copy image is in view with nothing pointed at");
 			await copy.click();
-			await figure.getByRole("button", { name: "Copied image" }).waitFor({ timeout: 15000 });
+			await figure.getByRole("button", { name: "Copied", exact: true }).waitFor({ timeout: 15000 });
 			const card = await figure.evaluate((element) => getComputedStyle(element).backgroundColor);
 			const png = await page.evaluate(async () => {
 				const items = await navigator.clipboard.read();
@@ -455,9 +498,9 @@ try {
 				const [r, g, b] = context.getImageData(1, 1, 1, 1).data;
 				return { types: ["image/png"], width: bitmap.width, height: bitmap.height, corner: `rgb(${r}, ${g}, ${b})` };
 			});
-			const svgWidth = await figure.locator(".mermaid-diagram-svg svg").evaluate((svg) => svg.getBoundingClientRect().width);
+			const ownWidth = await figure.locator(".mermaid-diagram-svg svg").evaluate((svg: SVGSVGElement) => parseFloat(svg.style.maxWidth));
 			assert(png.types.includes("image/png") && png.width > 0 && png.height > 0, `the clipboard holds a PNG, got ${JSON.stringify(png)}`);
-			assert(Math.abs(png.width - Math.round(svgWidth * 2)) <= 2, `the PNG is twice the diagram's size on screen, got ${png.width} for ${svgWidth}`);
+			assert(Math.abs(png.width - Math.round(ownWidth * 2)) <= 2, `the PNG is twice the diagram's own size, got ${png.width} for ${ownWidth}`);
 			assert(png.corner === card, `the PNG is on the card's colour ${card}, got ${png.corner}`);
 		});
 
@@ -468,14 +511,17 @@ try {
 			await code.waitFor();
 			assert((await code.textContent())?.trim() === DIAGRAM.join("\n"), `the code reads as written, got ${await code.textContent()}`);
 			assert(!(await figure.locator(".mermaid-diagram-svg").count()) && !(await figure.getByRole("button", { name: "Copy image" }).count()), "the drawing and Copy image give way to the code");
-			assert(await figure.locator(".figure-code").getByRole("button", { name: /copy/i }).count(), "the code has its own Copy");
+			assert((await figure.locator(".figure-tools button").evaluateAll((tools) => tools.map((tool) => tool.getAttribute("aria-label") ?? tool.textContent))).join() === "Picture,Code,Open expanded diagram,Copy code", "Copy code takes Copy image's place, last in the strip");
+			await figure.getByRole("button", { name: "Copy code" }).click();
+			await figure.getByRole("button", { name: "Copied", exact: true }).waitFor({ timeout: 15000 });
+			assert((await page.evaluate(() => navigator.clipboard.readText())).trim() === DIAGRAM.join("\n"), "Copy code puts the diagram's source on the clipboard");
 			const clear = await figure.evaluate((element) => {
 				const tools = element.querySelector(".figure-tools")!.getBoundingClientRect();
 				const firstLine = element.querySelector(".figure-code code > span")!.getBoundingClientRect();
 				return { toolsBottom: tools.bottom, lineTop: firstLine.top };
 			});
 			assert(clear.lineTop >= clear.toolsBottom, `the code's first line starts below the tools, got ${JSON.stringify(clear)}`);
-			await figure.getByRole("button", { name: "Code", exact: true }).click();
+			await figure.getByRole("button", { name: "Picture", exact: true }).click();
 			await figure.locator(".mermaid-diagram-svg svg").waitFor();
 		});
 
@@ -714,7 +760,7 @@ try {
 			await chart.getByRole("button", { name: "Chart" }).click();
 			await chart.locator(".answer-chart-svg").waitFor();
 			await chart.getByRole("button", { name: "Copy image" }).click();
-			await chart.getByRole("button", { name: "Copied image" }).waitFor({ timeout: 15000 });
+			await chart.getByRole("button", { name: "Copied", exact: true }).waitFor({ timeout: 15000 });
 			const png = await page.evaluate(async () => {
 				const items = await navigator.clipboard.read();
 				const item = items.find((entry) => entry.types.includes("image/png"));
@@ -728,7 +774,7 @@ try {
 
 		await check("a block that is no chart stays its code, and the chart is not drawn again as the answer ends", async () => {
 			const drawn = await contentAnswer.locator(".answer-chart-svg").elementHandle();
-			say(" arriving.\n\n```chart\ntype: radar\nClient, Refused\nMobile app, forty-one\n```\n\nDone.");
+			say(` arriving.\n\n\`\`\`chart\ntype: radar\nClient, Refused\nMobile app, forty-one\n\`\`\`\n\n${TEAM_TABLE}\n\nDone.`);
 			finish();
 			await waitUntil(async () => (await page.locator(".stop-btn").count()) === 0, "the answer has ended", 30000);
 			await contentAnswer.getByText("Done.").waitFor({ timeout: 15000 });
@@ -751,6 +797,60 @@ try {
 			await setTheme(page, "dark");
 		});
 
+		await check("a chart, a diagram and code show one row of tools, always in view, Copy at the same spot, reached by Tab", async () => {
+			await page.mouse.move(0, 0);
+			const chart = contentAnswer.locator("figure.answer-chart-card").first();
+			const diagram = page.locator("figure.mermaid-diagram:not(.mermaid-diagram-loading)").first();
+			const code = contentAnswer.locator(".code-block", { hasText: "forty-one" });
+			const copySpot = (holder: Locator, name: string) => holder.getByRole("button", { name }).evaluate((tool, name) => {
+				const box = tool.getBoundingClientRect();
+				const edge = tool.closest(".figure-card, .code-block")!.getBoundingClientRect();
+				const last = [...tool.closest(".figure-tools")!.querySelectorAll("button")].at(-1);
+				return { name, right: Math.round(edge.right - box.right), top: Math.round(box.top - edge.top), width: Math.round(box.width), last: last === tool, tip: tool.getAttribute("data-tip"), words: tool.textContent };
+			}, name);
+			const spots = [await copySpot(chart, "Copy image"), await copySpot(diagram, "Copy image"), await copySpot(code, "Copy code")];
+			assert(spots.every((spot) => spot.right === 9 && spot.width === 26 && spot.last && spot.tip === spot.name && !spot.words) && spots.every((spot) => Math.abs(spot.top - 5) <= 1), `Copy is the last icon at one spot, with its tooltip, got ${JSON.stringify(spots)}`);
+			await chart.getByRole("button", { name: "Chart" }).focus();
+			const order: string[] = [];
+			for (let i = 0; i < 3; i++) {
+				await page.keyboard.press("Tab");
+				order.push(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? document.activeElement?.textContent ?? ""));
+			}
+			assert(order[0] === "Table" && order[1] === "Copy image" && order[2].startsWith("Bar chart"), `Tab goes through the tools, then the drawing, got ${order}`);
+			await page.keyboard.press("Shift+Tab");
+			const tip = await page.evaluate(() => getComputedStyle(document.activeElement!, "::before").content);
+			assert(tip === '"Copy image"', `the tooltip shows on keyboard focus, got ${tip}`);
+			await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+		});
+
+		await check("a table copies as a table and a formula as its LaTeX, each from Copy alone at the same spot", async () => {
+			const table = contentAnswer.locator(".figure-table");
+			await table.getByRole("button", { name: "Copy table" }).click();
+			await table.getByRole("button", { name: "Copied", exact: true }).waitFor({ timeout: 15000 });
+			const clipboard = await page.evaluate(async () => {
+				const [item] = await navigator.clipboard.read();
+				const [html, text] = await Promise.all(["text/html", "text/plain"].map(async (type) => (await item.getType(type)).text()));
+				return { html, text };
+			});
+			assert(clipboard.text === "Team\tShare\tNote\nSales\tx^2\tup by a third\nProduct\t5\t\nFinance\t\\frac{a}{b}\tfirst second\nBig\ty^2\t", `tab-separated text, one line a row, a formula as its LaTeX, a line break a space, got ${JSON.stringify(clipboard.text)}`);
+			const pasted = await page.evaluate((html) => {
+				const host = document.createElement("div");
+				host.innerHTML = html;
+				return { rows: host.querySelectorAll("table tr").length, head: host.querySelector("th")?.textContent, drawn: host.querySelectorAll(".katex").length, tools: host.querySelectorAll("button").length, breaks: host.querySelectorAll("br").length, fraction: host.textContent?.includes("\\frac{a}{b}") };
+			}, clipboard.html);
+			assert(pasted.rows === 5 && pasted.head === "Team" && pasted.drawn === 0 && pasted.tools === 0 && pasted.breaks === 1 && pasted.fraction, `the HTML holds the table, its rows and line breaks, its formulas as LaTeX, and no tools, got ${JSON.stringify(pasted)}`);
+			const formula = contentAnswer.locator(".figure-maths").first();
+			const tex = await formula.getByRole("button", { name: "Copy formula" }).evaluate((tool) => tool.closest(".figure-maths")!.querySelector("annotation")!.textContent!);
+			await formula.getByRole("button", { name: "Copy formula" }).click();
+			await formula.getByRole("button", { name: "Copied", exact: true }).waitFor({ timeout: 15000 });
+			const copied = await page.evaluate(() => navigator.clipboard.readText());
+			assert(copied === tex.trim() && copied.length > 0, `the formula's LaTeX is on the clipboard, got ${JSON.stringify(copied)} for ${JSON.stringify(tex)}`);
+			assert((await contentAnswer.locator(".maths:not(.maths-display)").count()) > 0 && (await contentAnswer.locator(".maths:not(.maths-display) button").count()) === 0, "a formula inside a sentence or a cell carries no tools");
+			assert((await table.locator(".figure-tools button").count()) === 1 && (await formula.locator(".figure-tools button").count()) === 1, "each has Copy alone");
+			const fromRight = await contentAnswer.evaluate((answer) => [".figure-table .figure-icon", ".figure-maths .figure-icon", ".code-block .figure-icon"].map((selector) => Math.round(answer.getBoundingClientRect().right - answer.querySelector(selector)!.getBoundingClientRect().right)));
+			assert(new Set(fromRight).size === 1, `Copy stands the same distance from the right on a table, a formula and code, got ${fromRight}`);
+		});
+
 		await check("every language the page's table names is coloured, under its readable name", async () => {
 			const { CODE_LANGUAGES } = await import(new URL("../../web-ui/src/code-highlight.ts", import.meta.url).href) as { CODE_LANGUAGES: Record<string, readonly string[]> };
 			const missing = Object.keys(CODE_LANGUAGES).filter((id) => !SAMPLES[id]);
@@ -768,6 +868,12 @@ try {
 			assert(blocks.length === languageFences.length && plain.length === 0, `each block shows two colours or more; plain: ${plain}`);
 			const labels = blocks.map((block) => block.label);
 			assert(JSON.stringify(labels) === JSON.stringify(languageFences.map(({ label }) => label)), `each block is labelled with its language's name, got ${labels}`);
+		});
+
+		await check("the copies' answer is drawn", async () => {
+			await composer.fill(COPY_PROMPT);
+			await page.locator("button.send-btn").click();
+			await page.locator(".assistant-markdown").filter({ hasText: "Copies:" }).locator("figure.mermaid-diagram:not(.mermaid-diagram-loading) .mermaid-diagram-svg svg").nth(2).waitFor({ state: "attached", timeout: 60000 });
 		});
 
 		assert(pageErrors.length === 0, `the page logged errors:\n  ${pageErrors.join("\n  ")}`);
@@ -788,7 +894,6 @@ try {
 				await touch.locator(".persistent-agent-card").filter({ hasText: "Diagram Room" }).getByRole("button", { name: "Resume" }).click();
 				const drawn = touch.locator("figure.mermaid-diagram:not(.mermaid-diagram-loading)").first();
 				await drawn.locator(".mermaid-diagram-svg svg").waitFor({ timeout: 30000 });
-				await waitUntil(() => drawn.locator(".figure-tools").evaluate((tools) => getComputedStyle(tools).opacity === "1"), "the tools show with no hover");
 				// Where any drawing can start, however tall: a short one is centred lower down.
 				const where = await drawn.evaluate((figure) => {
 					const canvas = figure.querySelector(".mermaid-diagram-canvas")!;
@@ -797,12 +902,24 @@ try {
 				assert(where.drawingTop >= where.toolsBottom, `a drawing starts below the tools, got ${JSON.stringify(where)}`);
 				// A finger needs 44px: a tap a little above or below a tool, or on its edge, still reaches it.
 				await drawn.evaluate((figure) => figure.scrollIntoView({ block: "center" }));
-				const taps = await drawn.evaluate((figure) => [...figure.querySelectorAll(".figure-tool")].map((tool) => {
+				const tapsOn = (figure: Locator) => figure.evaluate((element) => [...element.querySelectorAll(".figure-tools button")].map((tool) => {
 					const box = tool.getBoundingClientRect();
 					const x = box.left + box.width / 2;
-					return { label: tool.getAttribute("aria-label") ?? tool.textContent, width: box.width, above: tool.contains(document.elementFromPoint(x, box.top - 8)), below: tool.contains(document.elementFromPoint(x, box.bottom + 8)) };
+					const middle = box.top + box.height / 2;
+					return { label: tool.getAttribute("aria-label") ?? tool.textContent, width: box.width, tall: [middle - 21.5, middle + 21.5].every((y) => tool === document.elementFromPoint(x, y)) };
 				}));
-				assert(taps.length === 3 && taps.every((tap) => tap.width >= 44 && tap.above && tap.below), `each tool takes a 44px tap, got ${JSON.stringify(taps)}`);
+				const taps = await tapsOn(drawn);
+				assert(taps.length === 4 && taps.every((tap) => tap.width >= 44 && tap.tall), `each of a diagram's tools takes a 44px tap, got ${JSON.stringify(taps)}`);
+				const barChart = touch.locator("figure.answer-chart-card").first();
+				await barChart.evaluate((figure) => figure.scrollIntoView({ block: "center" }));
+				const chartTaps = await tapsOn(barChart);
+				assert(chartTaps.length === 3 && chartTaps.every((tap) => tap.width >= 44 && tap.tall), `each of a chart's tools takes a 44px tap, the drawing under them or not, got ${JSON.stringify(chartTaps)}`);
+				const code = touch.locator(".code-block").first();
+				await code.evaluate((block) => block.scrollIntoView({ block: "center" }));
+				const codeTaps = await tapsOn(code);
+				assert(codeTaps.length === 1 && codeTaps[0].width >= 44 && codeTaps[0].tall, `code's Copy takes a 44px tap, got ${JSON.stringify(codeTaps)}`);
+				const copySpots = await Promise.all([drawn, barChart, code].map((figure) => figure.locator(".figure-tools button").last().evaluate((tool) => Math.round(tool.closest(".figure-card, .code-block")!.getBoundingClientRect().right - tool.getBoundingClientRect().right))));
+				assert(new Set(copySpots).size === 1, `on touch too Copy stands the same distance from the card's right edge, got ${copySpots}`);
 			} finally {
 				await phone.close();
 			}
@@ -831,6 +948,76 @@ try {
 				await phone.close();
 			}
 		});
+
+		// What each width's own diagram copied at, to compare the two widths.
+		const diagramCopies: { png: { width: number; height: number } }[] = [];
+		for (const [name, device] of [["desktop", { viewport: { width: 1440, height: 900 } }], ["phone", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }]] as const) {
+			await check(`at ${name} width a copy keeps every word of a chart and a diagram's own size, dark and light`, async () => {
+				const context = await browser.newContext({ ...device, colorScheme: "dark" });
+				try {
+					await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseUrl });
+					await context.addInitScript(() => {
+						try { localStorage.setItem("exxperts.appearance", "system"); } catch {}
+						// The source of each picture the page draws, as the page hands it to the canvas.
+						const make = URL.createObjectURL.bind(URL);
+						URL.createObjectURL = (blob: Blob | MediaSource) => {
+							if (blob instanceof Blob && blob.type === "image/svg+xml") (window as unknown as { copied: Promise<string>[] }).copied.push(blob.text());
+							return make(blob);
+						};
+					});
+					const copier = await context.newPage();
+					await copier.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+					await copier.waitForLoadState("networkidle");
+					const close = copier.locator(".whats-new-close");
+					if (await close.count()) await close.click();
+					await copier.locator(".persistent-agent-card").filter({ hasText: "Diagram Room" }).getByRole("button", { name: "Resume" }).click();
+					const answer = copier.locator(".assistant-markdown").filter({ hasText: "Copies:" });
+					const charts = answer.locator("figure.answer-chart-card:not(.answer-chart-writing)");
+					const diagrams = answer.locator("figure.mermaid-diagram:not(.mermaid-diagram-loading)");
+					await charts.nth(3).locator(".answer-chart-svg").waitFor({ timeout: 30000 });
+					await diagrams.nth(2).locator(".mermaid-diagram-svg svg").waitFor({ state: "attached", timeout: 60000 });
+					for (const theme of ["dark", "light"] as const) {
+						await setTheme(copier, theme);
+						const wordColour = await tokenColour(copier, "--fg");
+						for (const [i, kind] of (["bar", "line", "pie"] as const).entries()) {
+							const copy = await copyFigure(copier, charts.nth(i));
+							const shown = await charts.nth(i).locator(".answer-chart-svg").evaluate((svg) => ({ width: svg.getBoundingClientRect().width, height: svg.getBoundingClientRect().height }));
+							if (kind === "pie") {
+								for (const [s, slice] of COPY_SLICES.entries()) assert(copy.legend[s]?.slice(0, -1).map((line) => line.text).join(" ") === slice, `${theme} pie: the legend holds "${slice}" in full, got ${JSON.stringify(copy.legend)}`);
+								const rows = copy.legend.flat();
+								assert(rows.every((row) => row.right <= copy.box.width && row.bottom + copy.drawingTop <= copy.box.height), `${theme} pie: the legend ends inside the picture, got ${JSON.stringify(rows)} in ${JSON.stringify(copy.box)}`);
+							}
+							const said = copy.lines.map((line) => line.text).join(" ");
+							for (const whole of [COPY_TITLE, COPY_NOTE, ...(kind === "pie" ? COPY_SERIES.slice(0, 1) : COPY_SERIES)]) assert(said.includes(whole), `${theme} ${kind}: the copy holds "${whole}" in full, got "${said}"`);
+							assert(copy.lines.every((line) => line.right <= copy.box.width - 11), `${theme} ${kind}: every line ends inside the picture, ${copy.box.width} wide, got ${JSON.stringify(copy.lines)}`);
+							assert(copy.lines.length >= 5, `${theme} ${kind}: the long words wrap over their lines, got ${JSON.stringify(copy.lines)}`);
+							assert(copy.drawingTop >= Math.max(...copy.lines.map((line) => line.y)) && copy.box.height - copy.drawingTop >= (kind === "pie" ? shown.height : shown.height - 1), `${theme} ${kind}: the drawing sits whole below the words, got ${copy.drawingTop} under ${JSON.stringify(copy.lines)}, ${copy.box.height} high for a drawing of ${shown.height}`);
+							assert(Math.abs(copy.png.width - 2 * copy.box.width) <= 2 && Math.abs(copy.png.height - 2 * copy.box.height) <= 2, `${theme} ${kind}: the PNG is the whole picture at twice its size, got ${JSON.stringify(copy.png)} for ${JSON.stringify(copy.box)}`);
+							const title = copy.lines.find((line) => line.className === "answer-chart-copy-title");
+							assert(title?.fill === wordColour, `${theme} ${kind}: the title takes this theme's colour ${wordColour}, got ${title?.fill}`);
+						}
+						const short = await copyFigure(copier, charts.nth(3));
+						assert(JSON.stringify(short.lines.map((line) => [line.text, line.y])) === JSON.stringify([["Short title", 22], ["A short note", 40], ["Sales", 60]]) && short.drawingTop === 70, `${theme}: a short title copies on one line, in its place, got ${JSON.stringify(short)}`);
+						// Its own size: what mermaid measured for it, whatever the column shrank it to.
+						const own = await diagrams.first().locator(".mermaid-diagram-svg svg").evaluate((svg: SVGSVGElement) => ({ maxWidth: parseFloat(svg.style.maxWidth), shown: svg.getBoundingClientRect().width, aspect: svg.viewBox.baseVal.height / svg.viewBox.baseVal.width }));
+						const diagram = await copyFigure(copier, diagrams.first());
+						assert(own.shown < own.maxWidth, `${name}: the column shrinks this diagram, ${own.maxWidth} wide, to ${own.shown}`);
+						assert(Math.abs(diagram.png.width - 2 * own.maxWidth) <= 2 && Math.abs(diagram.png.height - 2 * own.maxWidth * own.aspect) <= 2, `${theme}: the diagram copies at twice its own size, ${own.maxWidth} wide, got ${JSON.stringify(diagram.png)}`);
+						diagramCopies.push(diagram);
+					}
+					for (const [i] of HUGE_DIAGRAMS.entries()) {
+						const huge = await copyFigure(copier, diagrams.nth(1 + i));
+						assert(4 * huge.box.width * huge.box.height > 16_000_000 || 2 * huge.box.width > 16384, `this diagram is past the cap at twice its size, got ${JSON.stringify(huge.box)}`);
+						assert(huge.png.width > 0 && Math.max(huge.png.width, huge.png.height) <= 16384 && huge.png.width * huge.png.height <= 16_000_000, `a very large diagram copies within the cap, got ${JSON.stringify(huge.png)}`);
+						assert(Math.abs(huge.png.height / huge.png.width - huge.box.height / huge.box.width) < 0.01, `a capped copy keeps its shape, got ${JSON.stringify(huge.png)} for ${JSON.stringify(huge.box)}`);
+					}
+				} finally {
+					await context.close();
+				}
+			});
+		}
+		assert(new Set(diagramCopies.map((copy) => JSON.stringify(copy.png))).size === 1, `a diagram copies the same at every width, got ${JSON.stringify(diagramCopies)}`);
+		console.log("  ok  a diagram copies the same at every width");
 	} finally {
 		await browser.close();
 	}

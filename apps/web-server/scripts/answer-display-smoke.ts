@@ -51,7 +51,7 @@ await check("an answer keeps its single line breaks; other Markdown joins them a
 	assert(/<li>first item<br\/?>\s*continues here<\/li>/.test(item), `a list item keeps its own line break, got ${item}`);
 });
 
-await check("lists, tables, code blocks and quotes look the same in an answer", () => {
+await check("lists, tables, code blocks and quotes look the same in an answer, a table with its Copy above it", () => {
 	const doc = [
 		"# Heading",
 		"",
@@ -61,10 +61,6 @@ await check("lists, tables, code blocks and quotes look the same in an answer", 
 		"",
 		"1. first",
 		"2. second",
-		"",
-		"| Name | Size |",
-		"| --- | --- |",
-		"| a.txt | 1 KB |",
 		"",
 		"```js",
 		"const a = 1;",
@@ -76,6 +72,8 @@ await check("lists, tables, code blocks and quotes look the same in an answer", 
 		"A paragraph with `code` and **bold**.",
 	].join("\n");
 	assert(render(doc, true) === render(doc), `an answer with no single line breaks renders exactly as before, got ${render(doc, true)}`);
+	const table = "| Name | Size |\n| --- | --- |\n| a.txt | 1 KB |";
+	assert(render(table, true).includes(render(table).trim()) && render(table, true).includes('aria-label="Copy table"'), `a table looks the same in an answer and gains its Copy, got ${render(table, true)}`);
 	const quote = render("> first line\n> second line", true);
 	assert(/<blockquote>\s*<p>first line<br\/?>\s*second line<\/p>\s*<\/blockquote>/.test(quote), `a quote keeps its lines, got ${quote}`);
 	const fenced = render("```\nline one\nline two\n```", true);
@@ -495,7 +493,6 @@ await check("the tools flag their refusals as errors", async () => {
 	assert(/function refusalResult\([^)]*\)[^{]*\{\s*return \{ content: \[\{ type: "text", text \}\], details, isError: true \};/.test(source("../../../pi-package/extensions/mcp/room-scope.ts")) && scope, "a connector refusal carries the error flag");
 	assert(/function refusal\([^)]*\)[^{]*\{\s*return \{ content: \[\{ type: "text", text \}\], details, isError: true \};/.test(source("../src/persistent-room-skill-tool.ts")), "a skill refusal carries the error flag");
 	assert(source("../src/persistent-room-shelf-tools.ts").includes('if (targetNames.length === 0) return { ...toolResult("This room has no files, so there is nothing to search."), isError: true };'), "a search with no files carries the error flag");
-	assert(/outcome === "declined" \? \{\} : \{ isError: true \}/.test(source("../src/persistent-room-delegate-tool.ts")), "a refused hand-off carries the error flag, except a decline the person made on its card");
 });
 
 await check("a declined or stopped command says what happened", () => {

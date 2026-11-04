@@ -81,12 +81,12 @@ export interface TaskLedgerRecord {
 	/**
 	 * Stamped the first time the user opens this task's result (viewer, from
 	 * any entry path) or acts on it (attach). Unset on a done row = the green
-	 * unread dot in the Files rail — green
+	 * unread dot on the Attachments card: green
 	 * means "you haven't seen this yet", so it must decay exactly once.
 	 */
 	viewedAt?: string;
 	/**
-	 * Stamped when the user took this row off the Files panel ("Remove from
+	 * Stamped when the user took this row off the Attachments panel ("Remove from
 	 * list"). A LIST operation only — files stay on disk and deletedAt keeps its
 	 * meaning ("files are gone"). Only the panel listing hides removed rows;
 	 * every other reader (reseed, GC measurement, iterate mapping) still sees
@@ -269,7 +269,7 @@ export function markTaskLedgerRecordDeleted(roomIdRaw: string, taskIdRaw: string
 }
 
 /**
- * Stamp removedAt: the user took this row off the Files panel. Also stamps
+ * Stamp removedAt: the user took this row off the Attachments panel. Also stamps
  * awayNoticedAt when unset — removing a row is acting on it, so a later connect
  * must not announce a task the user already dismissed. Idempotent; returns the
  * updated row, or null when the row is missing.

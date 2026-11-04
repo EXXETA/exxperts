@@ -13,6 +13,7 @@ import { type AgentJson, createPersistentAgentInstance, ensureDir, getPersistent
 import { getPersistentAgentThread, normalizeL1bSourceFingerprint, normalizePersistentAgentRuntimeString, normalizeSha256Hex, piSessionHasNoMessages, threadHasUserVisibleTurns } from "./persistent-agent-threads.js";
 import { budgetState } from "./persistent-agent-memory-files.js";
 import { localFilesWorkspaceWriteLine, persistentAgentPlatformKernel, persistentAgentRuntimeEnvelope, safeWorkspaceCapabilityLabel } from "./persistent-agent-constitution.js";
+import { serverHooks } from "./server-hooks.js";
 
 function buildPromptBudget(l0: string, l1a: string, l1b: string, l2: string): PersistentAgentPromptBudget {
 	const l0EstimatedTokens = estimateTokens(l0);
@@ -320,7 +321,7 @@ Your name is now **${displayName}**. This line is live runtime state and wins ov
  * policy every turn so the model always states the workspace the tools
  * actually enforce, including "none" after the user cleared it.
  */
-export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy): string {
+export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy, run: { scheduled?: boolean } = {}): string {
 	const heading = `
 
 ## Current workspace
@@ -328,24 +329,35 @@ export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: Pers
 This is live runtime state and wins over any "Active workspace capability" section above: the user can change the room workspace at any time, and this stanza reflects the setting in force from this message on, until a later room-state message says otherwise.`;
 	const capability = effectivePolicy.workspaceToolsEnabled ? effectivePolicy.capability : undefined;
 	if (!capability) {
+		// A shared server reads every stored folder as none (the same switch the
+		// workspace policy reads), so there is no setting to point the person to.
+		const noFolder = serverHooks().ignoresStoredWorkspaceSettings?.()
+			? "This server offers no folder and no commands yet; results stay in the chat."
+			: "No folder is set for this room: you cannot open the user's files beyond Attachments, save a file, or run commands. When the user asks for one of these, or a result is worth keeping as a file, say so once and how to switch it on: Room settings → Folder → Choose folder. With a folder you can create and edit text files in it (notes, tables, web pages, SVG). Running commands (Bash: scripts, converting files, making Word, Excel, PowerPoint or PDF files with the computer's own programs) also needs Access set to Full access and the Bash switch on; each command then waits for the user's approval unless the chip under the message box says Auto.";
 		return `${heading}
 
-No workspace is configured for this room right now. Workspace file tools and Bash are unavailable; if earlier context claims a workspace, the user has removed or changed it since. The room can still use its other tools.`;
+${noFolder} If earlier context claims a workspace, the user has removed or changed it since.`;
 	}
 	const modeLabel = capability.workspaceAccessMode === "localFiles" ? "Full access" : "Bounded workspace";
 	const toolNames = capability.availableToolNames.join(", ") || "none";
 	const writeLine = capability.workspaceAccessMode === "localFiles"
 		? localFilesWorkspaceWriteLine(capability)
 		: (capability.writeEnabled ? "- Write scope: files inside the selected workspace only, via the write and edit tools" : "- Write access: disabled. If asked to change files, say the room is read-only up front; do not attempt workarounds.");
+	// Bash writes files too, and a scheduled run, which has none, has no one to ask.
+	const noSilentReplace = !capability.writeEnabled && !capability.bashEnabled
+		? ""
+		: run.scheduled
+			? "Never replace an existing file unless the task names that file: look first, and if it exists, write under a new name and say so.\n\n"
+			: "Before you write a file, look: if a file with that name exists, the user did not ask to change it and you did not make it for them, ask, or write under a new name and say so. Changing or recreating a file the user asked to change, or one you made for them, needs no question.\n\n";
 	return `${heading}
 
 - Workspace label: ${safeWorkspaceCapabilityLabel(capability.workspaceLabel)}
 - Workspace mode: ${modeLabel}
 - Workspace tools: ${toolNames}
 ${writeLine}
-- Bash/shell access: ${capability.bashEnabled ? "enabled" : "disabled"}
+- Bash/shell access: ${capability.bashEnabled ? "enabled" : "disabled. Commands need Access set to Full access and the Bash switch on, in Room settings → Folder; say so if a task needs one."}
 
-Where files land, so you describe it truthfully: a file you create in the workspace stays in the workspace folder on the user's computer and does NOT appear in this room's Files panel (that panel shows only the room's own shelf files and task artifacts). When you tell the user where a file is, name the actual workspace folder path; never claim a workspace file is in the Files panel.
+${noSilentReplace}Where files land, so you describe it truthfully: a file you create in the workspace stays in the workspace folder on the user's computer and does NOT appear in this room's Attachments panel (that panel shows only the room's own files). When you tell the user where a file is, name the actual workspace folder path; never claim a workspace file is in the Attachments panel.
 
 If these facts differ from a workspace described earlier in this conversation, the user changed the workspace mid-conversation; follow these facts and the usage rules of this mode from the boot context.`;
 }

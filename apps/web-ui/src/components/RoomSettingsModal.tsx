@@ -18,10 +18,10 @@ import { shownRoomName, trimHumanText } from "../../../web-server/src/room-name"
 export type SettingsPane = "workspace" | "model" | "memory" | "instructions" | "skills" | "connectors" | "schedules" | "session" | "danger";
 
 const PANES: { id: SettingsPane; label: string }[] = [
-	{ id: "workspace", label: "Folder" },
 	{ id: "model", label: "Model" },
 	{ id: "memory", label: "Memory" },
 	{ id: "instructions", label: "Instructions" },
+	{ id: "workspace", label: "Folder" },
 	{ id: "skills", label: "Skills" },
 	{ id: "connectors", label: "Connectors" },
 	{ id: "schedules", label: "Scheduled tasks" },
@@ -125,7 +125,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	}
 	// Callers that open the modal at a particular pane (the Memory tab's link
 	// into this room's memory) say so once; the nav owns it from then on.
-	const [pane, setPane] = useState<SettingsPane>(initialPane ?? "workspace");
+	const [pane, setPane] = useState<SettingsPane>(initialPane ?? PANES[0].id);
 	// Skills the room paused because they changed: counted on the Skills entry
 	// until reviewed, so the way to the review is visible from any pane. The
 	// Skills pane is always mounted (only hidden), so it reports the count on
@@ -336,7 +336,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 				<RoomScheduledTasksSection status={status} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "session"}>
-				<RoomSessionSection status={status} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} />
+				<RoomSessionSection status={status} answering={roomAnswering} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "danger"}>
 				<RoomDangerZone status={status} visible={pane === "danger"} onArchive={archiveAndClose} onPurge={purgeAndClose} />

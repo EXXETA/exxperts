@@ -52,14 +52,12 @@ export type ModelPickControlProps = {
 	current: RoomModelLock & { label?: string };
 	/** The server's name for the model the conversation runs, used until the providers list names it. */
 	currentName?: string;
-	/** A pick not yet confirmed by the room: shown as the conversation's model until the switch lands or is refused. */
-	held: RoomModelLock | null;
+	/** A pick not yet confirmed by the room: shown as the conversation's model until the switch lands or is refused, with the level set on its dial meanwhile. */
+	held: (RoomModelLock & { level?: string }) | null;
 	/** The conversation's effort on the model it runs, as the room's socket reports it. */
 	effort: EffortState | null;
 	/** The effort travels on the room's socket; the model pick does not. */
 	effortDisabled: boolean;
-	/** A model change is pending: the slider shows the effort on the held model and waits until that model is in use. */
-	effortWaits?: boolean;
 	onPick: (lock: RoomModelLock) => void;
 	onEffort: (level: string) => void;
 	/** A model this conversation is too long for: the window that remembers and switches. */
@@ -93,7 +91,7 @@ function withRungs(effort: EffortState | null | undefined): EffortState | null {
  * on the one in use, each one's context window and the mark the server's read
  * gives it. A model with one rung has no effort view.
  */
-export function ModelPickControl({ placement, agentId, conversationId, open, onOpenChange, current, currentName, held, effort, effortDisabled, effortWaits = false, onPick, onEffort, onTooLong }: ModelPickControlProps) {
+export function ModelPickControl({ placement, agentId, conversationId, open, onOpenChange, current, currentName, held, effort, effortDisabled, onPick, onEffort, onTooLong }: ModelPickControlProps) {
 	const [read, setRead] = useState<PanelRead>({ state: "loading" });
 	const [readAsk, setReadAsk] = useState(0);
 	// The effort the slider's thumb is being dragged over, so the title follows it.
@@ -134,20 +132,20 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 		return () => { cancelled = true; };
 	}, [agentId, conversationId, open, readAsk]);
 
-	// A drag left mid-way when the panel closes never outlives it.
-	useEffect(() => { if (!open) setPreviewLevel(null); }, [open]);
 
 	const groups = read.state === "ready" ? offeredModelGroups(read.providers, "conversation") : [];
 	const options = read.state === "ready" ? read.options : [];
 	const optionOf = (lock: RoomModelLock) => options.find((option) => lockKey(option) === lockKey(lock));
 	const rowOf = (lock: RoomModelLock) => groups.find((group) => group.provider.id === lock.provider)?.rows.find((row) => row.option.model === lock.model);
 	const chosen = held ?? current;
+	const chosenKey = lockKey(chosen);
 	const chosenOffered = Boolean(rowOf(chosen));
 	const chosenName = rowOf(chosen)?.name ?? (!held && currentName ? currentName : undefined) ?? modelDisplayName({ model: chosen.model, modelLabel: held ? undefined : current.label, provider: chosen.provider });
-	// A held pick shows the conversation's effort as the picked model would
-	// run it, from the server's read; the model in use shows what its socket
-	// reports, and the read until the socket has.
-	const shownEffort = withRungs(held ? optionOf(held)?.effort : effort ?? optionOf(current)?.effort);
+	// A held pick shows the level set on its dial, else the conversation's
+	// effort as the picked model would run it, from the server's read; the
+	// model in use shows what its socket reports, and the read until the socket has.
+	const heldEffort = held && optionOf(held)?.effort;
+	const shownEffort = withRungs(held ? heldEffort && { ...heldEffort, level: held.level ?? heldEffort.level } : effort ?? optionOf(current)?.effort);
 	const rungIndex = shownEffort ? Math.max(0, shownEffort.ladder.findIndex((rung) => rung.level === shownEffort.level)) : 0;
 	const effortWordOf = (level: string) => effortDisplayName(shownEffort?.ladder.find((rung) => rung.level === level)?.label ?? level);
 	const effortWord = shownEffort ? effortWordOf(shownEffort.level) : null;
@@ -188,6 +186,11 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 	// Escape steps back from the models to the effort view, then closes; as the top layer only.
 	useEscapeKey(() => (backToEffortView ? showEffort() : close(true)), open);
 
+	// The slider, or the model's name while the slider is off.
+	function focusDial(): void {
+		((effortDisabled ? null : sliderRef.current) ?? modelNameRef.current ?? panelRef.current)?.focus();
+	}
+
 	// The model in use, else the first model; while the list still loads, the
 	// back arrow, or the panel itself, so the keys never stay behind the phone's sheet.
 	function focusList(): void {
@@ -196,13 +199,13 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 	}
 
 	// Every open starts on the effort view, focus on the slider (on the model's
-	// name while the slider waits), or on the models alone for a one-rung
+	// name while the slider is off), or on the models alone for a one-rung
 	// model. A model in use that is no longer offered opens on the models: the
 	// person came to choose another.
 	useEffect(() => {
 		if (!open) { setView("effort"); focusAfterView.current = null; return; }
 		if (shownView === "effort" && read.state === "ready" && !chosenOffered) { showModels(); return; }
-		if (shownView === "effort") ((effortDisabled || effortWaits ? null : sliderRef.current) ?? modelNameRef.current ?? panelRef.current)?.focus();
+		if (shownView === "effort") focusDial();
 		else focusList();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open]);
@@ -223,6 +226,15 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 		else if (target === "name") (modelNameRef.current ?? panelRef.current)?.focus();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [shownView]);
+
+	// The dial is the chosen model's: another model gets a new slider, so a drag
+	// begun on the last one (a pick refused under the pointer) ends there and
+	// reaches no model. Nor does a drag left mid-way outlive the panel.
+	useEffect(() => { setPreviewLevel(null); }, [open, chosenKey]);
+	useEffect(() => {
+		if (open && shownView === "effort" && !panelRef.current?.contains(document.activeElement)) focusDial();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [chosenKey]);
 
 	// Up and Down move through the models, Home and End to the ends, as Room settings' picker.
 	function onListKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
@@ -268,7 +280,7 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 				<p className="room-model-menu-kicker">{provider.label}</p>
 				{rows.map(({ option, name }, index) => {
 					const key = lockKey(option);
-					const selected = lockKey(chosen) === key;
+					const selected = chosenKey === key;
 					// The list keeps one tab stop: the model in use, or the first row when it is not offered.
 					const tabStop = selected || (index === 0 && groups[0]?.provider.id === provider.id && !chosenOffered);
 					// The model the conversation runs on needs no fit check: picking it
@@ -322,9 +334,8 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 				    It takes a press itself, so a press on the word never reaches the dial, and
 				    keeps the focus where it was (on the slider). */}
 				<p className="model-pick-effort-title" onMouseDown={(event) => event.preventDefault()}>{titleWord}</p>
-				<EffortSlider level={shownEffort.level} ladder={shownEffort.ladder} disabled={effortDisabled || effortWaits} onSelect={onEffort} onPreview={setPreviewLevel} sliderRef={sliderRef} />
+				<EffortSlider key={chosenKey} level={shownEffort.level} ladder={shownEffort.ladder} disabled={effortDisabled} onSelect={onEffort} onPreview={setPreviewLevel} sliderRef={sliderRef} />
 			</div>
-			{effortWaits && <p className="model-pick-effort-hint">Effort can be changed once {chosenName} is in use.</p>}
 			<button ref={modelNameRef} type="button" className="model-pick-effort-model" aria-label={`Models: ${chosenName}`} onClick={showModels}>
 				<span className="model-pick-effort-model-name">{chosenName}</span>
 				{chosenContext && <span className="model-pick-row-context" aria-hidden="true">{chosenContext}</span>}

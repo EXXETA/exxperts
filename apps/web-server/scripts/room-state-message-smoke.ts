@@ -8,16 +8,16 @@
 //      the live sections, only the room-tools stanza after the boot prompt;
 //   2. the first turn sends a whole copy after the person's message, a turn
 //      with nothing changed sends none, and each change sends one new copy
-//      that carries it; the model's Files list shows sizes only, while the
-//      Files panel still shows a parsed PDF's pages;
+//      that carries it; the model's Attachments list shows sizes only, while the
+//      Attachments panel still shows a parsed PDF's pages;
 //   3. instructions A, then B, then A: the last copy names the original ones
 //      and no longer carries B;
 //   4. Remember's transcript of a conversation that holds copies quotes none;
-//   5. a part that cannot be read (the Files folder, the instructions) keeps
+//   5. a part that cannot be read (the Attachments folder, the instructions) keeps
 //      the latest copy's part, also one a compaction removed, and sends no
 //      copy on its own;
 //   6. one file that cannot be looked up leaves its readable neighbours in
-//      the Files panel and search_file, and only the model's Files list
+//      the Attachments panel and search_file, and only the model's Attachments list
 //      counts that read as unreadable.
 // The page's chat and history are checked in a browser by room-state-page-smoke.ts.
 import fs from "node:fs";
@@ -26,7 +26,7 @@ import { ROOM_STATE_CUSTOM_TYPE } from "@exxeta/exxperts-runtime";
 import { nextRoomStateMessage, roomStateMessageFor, type RoomStateParts } from "../src/room-state-message.js";
 import { assert, copiesIn, openRoom, personsNewest, rename, requestJson, ROOM_STATE_HEADING, RoomSocket, setInstructions, startRoomStateServer, stopRoomStateServer, tempHome, type SentRequest } from "./room-state-setup.js";
 
-const LIVE_HEADINGS = ["## Current identity", "## Current instructions", "## Current workspace", "## Enabled skills", "## Files in this room"];
+const LIVE_HEADINGS = ["## Current identity", "## Current instructions", "## Current workspace", "## Enabled skills", "## Attachments in this room"];
 let passes = 0;
 const pass = (label: string) => { passes++; console.log(`  ok ${label}`); };
 const failures: string[] = [];
@@ -118,14 +118,14 @@ try {
 			{
 				label: "a new file",
 				change: async () => {
-					// A PDF, which the upload parses at once: the Files panel then knows its pages.
+					// A PDF, which the upload parses at once: the Attachments panel then knows its pages.
 					const added = await requestJson(`/api/persistent-agents/${roomId}/files`, { method: "POST", body: JSON.stringify({ filename: "terms.pdf", contentBase64: onePagePdf().toString("base64") }) });
 					assert(added.status === 200 || added.status === 201, `the file should be added, got ${added.status}: ${JSON.stringify(added.body)}`);
 					const panel = await requestJson(`/api/persistent-agents/${roomId}/files`);
 					const listed = (panel.body?.files ?? []).find((file: any) => file.name === "terms.pdf");
-					assert(listed?.pages === 1, `the Files panel still shows the PDF's pages, got ${JSON.stringify(panel.body)}`);
+					assert(listed?.pages === 1, `the Attachments panel still shows the PDF's pages, got ${JSON.stringify(panel.body)}`);
 				},
-				carries: (copy) => /- terms\.pdf · [\d.]+ (B|KB) · added by you/.test(copy) && !/\d+ pages?\b/.test(copy) && copy.includes("it is what the user sees in the Files panel") && !copy.includes("exactly what the user sees"),
+				carries: (copy) => /- terms\.pdf · [\d.]+ (B|KB) · added by you/.test(copy) && !/\d+ pages?\b/.test(copy) && copy.includes("it is what the user sees in the Attachments panel") && !copy.includes("exactly what the user sees"),
 			},
 		];
 		let copies = 1;
@@ -153,7 +153,7 @@ try {
 		// Windows keeps a folder readable whatever its mode, and root reads it anyway, so the unreadable case runs elsewhere only.
 		const canForceFsRefusal = process.platform !== "win32" && process.getuid?.() !== 0;
 		if (!canForceFsRefusal) {
-			console.log("  skip a Files folder that cannot be read (Windows or root ignores the folder's mode)");
+			console.log("  skip a Attachments folder that cannot be read (Windows or root ignores the folder's mode)");
 			return;
 		}
 		const { persistentRoomShelfDirPath } = await import("../src/persistent-room-shelf.js");
@@ -163,14 +163,14 @@ try {
 		for (const refused of [0o000, 0o400]) {
 			fs.chmodSync(shelf, refused);
 			try {
-				const text = `Files unreadable at ${refused.toString(8)}.`;
+				const text = `Attachments unreadable at ${refused.toString(8)}.`;
 				const unreadable = only(await room.prompt(text), text);
-				assert(copiesIn(unreadable).length === copies && unreadable.messages.at(-1)?.text === text, `a Files folder that cannot be read (mode ${refused.toString(8)}) is not an empty one: no new copy, got ${JSON.stringify(unreadable.messages.map((message) => `${message.role}: ${message.text.slice(0, 40)}`))}`);
+				assert(copiesIn(unreadable).length === copies && unreadable.messages.at(-1)?.text === text, `a Attachments folder that cannot be read (mode ${refused.toString(8)}) is not an empty one: no new copy, got ${JSON.stringify(unreadable.messages.map((message) => `${message.role}: ${message.text.slice(0, 40)}`))}`);
 			} finally {
 				fs.chmodSync(shelf, mode);
 			}
 		}
-		pass("a Files folder that cannot be listed, or whose files cannot be looked up, keeps the latest copy's list and sends no copy");
+		pass("a Attachments folder that cannot be listed, or whose files cannot be looked up, keeps the latest copy's list and sends no copy");
 	});
 
 	// --- 4. Remember skips the copies -----------------------------------------
@@ -246,16 +246,16 @@ try {
 		};
 		try {
 			const rows = listShelfFilesWithOrigin("lookup-room", storage).map((entry) => entry.name);
-			assert(rows.length === 1 && rows[0] === "kept.md", `the Files panel keeps the readable file beside one it cannot look up, got ${JSON.stringify(rows)}`);
+			assert(rows.length === 1 && rows[0] === "kept.md", `the Attachments panel keeps the readable file beside one it cannot look up, got ${JSON.stringify(rows)}`);
 			const search = createPersistentRoomShelfTools({ roomId: "lookup-room", storage }).find((tool) => tool.name === "search_file")!;
 			const found = await search.execute("search", { query: "readable line" }, undefined, undefined, undefined as any);
 			const foundText = (found.content as Array<{ text?: string }>).map((part) => part.text ?? "").join("");
 			assert(!(found as any).isError && foundText.includes("kept.md:1: a readable line"), `search_file still searches the readable file, got: ${foundText}`);
-			assert(buildShelfManifestSection("lookup-room", storage) === null, "the model's Files list counts a read with one file missing as unreadable, so the room-state copy keeps its latest list");
+			assert(buildShelfManifestSection("lookup-room", storage) === null, "the model's Attachments list counts a read with one file missing as unreadable, so the room-state copy keeps its latest list");
 		} finally {
 			(fs as any).lstatSync = lstatSync;
 		}
-		pass("one file that cannot be looked up leaves its readable neighbours in the Files panel and search, and only the model's Files list counts the read as unreadable");
+		pass("one file that cannot be looked up leaves its readable neighbours in the Attachments panel and search, and only the model's Attachments list counts the read as unreadable");
 	});
 
 	if (failures.length > 0) throw new Error(`${failures.length} case${failures.length === 1 ? "" : "s"} failed`);

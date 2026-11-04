@@ -1,8 +1,9 @@
 // Home from the first visit, and the sidebar around it, as a person sees them.
-// With no model, Home leads with connecting one ("Connect AI" opens Settings
-// at AI setup) and New room waits with "Connect an AI first"; a shared
-// server's member is asked to go to the admin instead. Once a gateway is
-// saved and no room exists yet, Home says so and New room leads. A room whose
+// With no rooms and no model, Home is one soft welcome block ("Connect AI"
+// opens Settings at AI setup) with no New room; a shared server's member is
+// asked to go to the admin instead. With rooms and no model, New room stays
+// and says what it waits for. Once a gateway is saved and no room exists yet,
+// Home says so and New room leads. A room whose
 // open conversation keeps the model it started on shows that model's saved
 // label ("Quill 70B"), not a tidied id, while a gateway model saved without a
 // label still reads tidied; its greyed Maintain says why on hover, and on the
@@ -83,6 +84,8 @@ const PROVIDER_CREDENTIAL = /_API_KEY$|_OAUTH_TOKEN$|^(COPILOT_GITHUB_TOKEN|GH_T
 const json = (route: string, method: string, body: unknown) => authedFetch(`${baseUrl}${route}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 async function openHome(context: BrowserContext): Promise<Page> {
+	// first-run-guide-ui-smoke.ts holds the guide; here it has had its turn.
+	await context.addInitScript(() => localStorage.setItem("exxperts.first-run-guide-seen", "1"));
 	const page = await context.newPage();
 	await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 	await page.waitForLoadState("networkidle");
@@ -113,6 +116,16 @@ async function primaryColors(page: Page): Promise<{ tile: string; primary: strin
 		const primary = getComputedStyle(probe).backgroundColor;
 		probe.remove();
 		return { tile: getComputedStyle(document.querySelector(".add-room-card")!).backgroundColor, primary };
+	});
+}
+
+/** How the welcome block is drawn against the page and its heading. */
+async function welcomeLook(page: Page): Promise<{ border: number; fill: string; page: string; left: number; headingLeft: number; width: number }> {
+	return page.evaluate(() => {
+		const card = document.querySelector(".home-connect-card")!;
+		const style = getComputedStyle(card);
+		const box = card.getBoundingClientRect();
+		return { border: parseFloat(style.borderTopWidth), fill: style.backgroundColor, page: getComputedStyle(document.querySelector(".landing")!).backgroundColor, left: box.left, headingLeft: document.querySelector(".landing h1")!.getBoundingClientRect().left, width: box.width };
 	});
 }
 
@@ -157,10 +170,13 @@ try {
 			await card.getByRole("heading", { name: "Connect an AI to get started" }).waitFor({ timeout: 15000 });
 			const line = (await card.locator("p").textContent())?.trim();
 			assert(line === "Use a subscription you already pay for, an API key, your company's gateway, or a model running on this computer.", `the card names the ways in, got ${JSON.stringify(line)}`);
-			const newRoom = page.getByRole("button", { name: "Create a new room" });
-			assert((await newRoom.textContent())?.includes("Connect an AI first"), "New room says to connect an AI first");
-			assert(!(await newRoom.getAttribute("class"))?.includes("is-primary"), "New room is not the primary action while nothing can answer");
+			check(!(await page.getByRole("button", { name: "Create a new room" }).count()), "no New room while nothing can answer");
+			check(!(await page.locator(".landing-grid").isVisible()), "no empty Rooms region under the block");
 			assert(!(await page.getByText("You're set up").count()), "no set-up line before a model exists");
+			const look = await welcomeLook(page);
+			check(look.border === 0 && look.fill !== look.page, `the block is a light fill with no outline, got ${JSON.stringify(look)}`);
+			check(look.left === look.headingLeft && look.width > 800, `the block sits in the heading's column, as wide as the column, got ${JSON.stringify(look)}`);
+			check((await page.getByRole("button").filter({ hasText: /^Connect AI$/ }).count()) === 1, "one Connect AI");
 			await card.getByRole("button", { name: "Connect AI" }).click();
 			const settings = page.getByRole("dialog", { name: "Settings" });
 			await settings.waitFor({ timeout: 10000 });
@@ -177,8 +193,21 @@ try {
 			await card.waitFor({ timeout: 15000 });
 			const line = (await card.locator("p").textContent())?.trim();
 			assert(line === "Ask your admin to add a model in Settings, AI setup.", `a member is sent to the admin, got ${JSON.stringify(line)}`);
-			assert(!(await card.getByRole("button", { name: "Connect AI" }).count()) && (await card.getByRole("button", { name: "See AI setup" }).count()) === 1, "a member is offered a look at AI setup, not Connect AI");
-			assert((await page.getByRole("button", { name: "Create a new room" }).textContent())?.includes("Ask your admin for a model first"), "New room tells a member to ask for a model");
+			check(!(await card.getByRole("button").count()), "a member has nothing to press: the admin connects the AI");
+			const member = await card.evaluate((block) => ({ heading: block.querySelector("h2")!.getBoundingClientRect().toJSON(), sentence: block.querySelector("p")!.getBoundingClientRect().toJSON() }));
+			check(member.sentence.top >= member.heading.bottom && member.sentence.left === member.heading.left, `a member's sentence sits under the heading, got ${JSON.stringify(member)}`);
+			check(!(await page.getByRole("button", { name: "Create a new room" }).count()), "no New room for a member while nothing can answer");
+			await ctx.close();
+		}
+
+		// 1b2. A shared server's admin connects the AI: the block offers it.
+		{
+			const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+			await ctx.route("**/api/remote/client-context", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ remote: false, capability: "full", sharedServer: true, person: { id: "admin-1", name: "Alex", admin: true } }) }));
+			const page = await openHome(ctx);
+			const card = page.locator(".home-connect-card");
+			await card.getByRole("button", { name: "Connect AI" }).waitFor({ timeout: 15000 });
+			check((await card.locator("p").textContent())?.trim() === "Add an API key or a gateway in Settings, AI setup.", `an admin is told how, got ${JSON.stringify((await card.locator("p").textContent())?.trim())}`);
 			await ctx.close();
 		}
 
@@ -191,9 +220,6 @@ try {
 			await card.waitFor({ timeout: 15000 });
 			check((await card.getByRole("button", { name: "See AI setup" }).count()) === 1 && !(await card.getByRole("button", { name: "Connect AI" }).count()), "a paired device is offered a look at AI setup, not Connect AI");
 			check((await card.locator("p").textContent())?.trim() === "Connect one on the computer this app runs on, in Settings, AI setup.", `a paired device is told where an AI is connected, got ${JSON.stringify((await card.locator("p").textContent())?.trim())}`);
-			// The hint is the tile's description for a screen reader; its name stays "Create a new room".
-			const describedBy = await page.getByRole("button", { name: "Create a new room" }).getAttribute("aria-describedby");
-			check(describedBy && (await page.locator(`#${describedBy}`).textContent())?.trim() === "Connect an AI first", `New room's hint is its accessible description, got ${JSON.stringify(describedBy)}`);
 			await ctx.close();
 		}
 
@@ -312,6 +338,22 @@ try {
 			check(await card.locator(".persistent-agent-maintain-why").count() === 0, "the fresh card beside it still shows no reason line");
 			releasePurge();
 			await team.waitFor({ state: "detached", timeout: 15000 });
+			await ctx.close();
+		}
+
+		// 3b. Rooms but no model: only the empty Home hides New room. It can still make a room that waits, and says what for.
+		for (const [role, hint] of [[null, "Connect an AI first"], ["member", "Ask your admin for a model first"]] as const) {
+			const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+			await ctx.route("**/api/persistent-agent-room/model-status", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ ready: false, providers: [] }) }));
+			if (role) await ctx.route("**/api/remote/client-context", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ remote: false, capability: "full", sharedServer: true, person: { id: "member-1", name: "Sam", admin: false } }) }));
+			const page = await openHome(ctx);
+			const newRoom = page.getByRole("button", { name: "Create a new room" });
+			await newRoom.waitFor({ timeout: 15000 });
+			await page.locator("#add-room-hint").waitFor({ timeout: 15000 });
+			// The hint is the tile's description for a screen reader; its name stays "Create a new room".
+			const describedBy = await newRoom.getAttribute("aria-describedby");
+			check(describedBy && (await page.locator(`#${describedBy}`).textContent())?.trim() === hint, `New room's hint is its accessible description, got ${JSON.stringify(describedBy)}`);
+			check(!(await page.locator(".home-connect-card").count()), "no welcome block once rooms exist");
 			await ctx.close();
 		}
 
