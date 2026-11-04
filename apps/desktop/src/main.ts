@@ -994,6 +994,13 @@ async function smokeReport(): Promise<void> {
     })()`)
     .catch(() => "error");
   const dragOk = dragRegion === "ok" || dragRegion === "n/a";
+  // A fresh profile opens the first-run guide by itself, and a right-click on
+  // its overlay finds no selection: close it as a click outside does.
+  const guideClosed = `(() => { const overlay = document.querySelector(".help-overlay"); overlay?.click(); return !overlay; })()`;
+  for (let tries = 0; tries < 10; tries += 1) {
+    if (await win.webContents.executeJavaScript(guideClosed).catch(() => true)) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
   // Context menu: select the heading, then deliver a real right-click at the
   // centre of its own box; the handler must have produced at least a copy
   // item. A fixed point drifts off the heading when the page's look moves
