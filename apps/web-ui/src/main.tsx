@@ -31,8 +31,10 @@ createRoot(document.getElementById("root")!).render(
 		<div className="desktop-drag-strip" aria-hidden="true" />
 		{/* A render error shows one sentence and Reload, not a blank page. */}
 		<AppErrorBoundary>
-			<SidebarCollapsedAffordance />
 			<App />
+			{/* After the app: the mac app takes a no-drag box out of the drag area in the
+			    page's order, so a bar that drags and comes later would cover this button. */}
+			<SidebarCollapsedAffordance />
 			<ConfirmDialogHost />
 			<KeysList />
 		</AppErrorBoundary>

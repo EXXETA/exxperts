@@ -228,6 +228,26 @@ try {
 		if (problems.length > 0) failures.push(`${label}: the drag area: ${problems.join("; ")}`);
 		else passes += 1;
 	};
+	// The mac app takes a no-drag box out of the drag area in the page's order, not by what paints on top: a bar that
+	// drags and comes after the floating button covers it again, and a click there moves the window.
+	const checkFloatingClicks = async (on: Page, label: string) => {
+		const problems = await on.evaluate(() => {
+			const button = document.querySelector(".sidebar-toggle-floating");
+			if (!button) return ["no floating button"];
+			const own = getComputedStyle(button).getPropertyValue("-webkit-app-region");
+			if (own !== "no-drag") return [`the floating button is ${own || "unset"}, not no-drag`];
+			const box = button.getBoundingClientRect();
+			return [...document.querySelectorAll("*")]
+				.filter((el) => getComputedStyle(el).getPropertyValue("-webkit-app-region") === "drag" && (button.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
+				.filter((el) => {
+					const bar = el.getBoundingClientRect();
+					return bar.left < box.right && box.left < bar.right && bar.top < box.bottom && box.top < bar.bottom;
+				})
+				.map((el) => `.${String(el.className).trim().split(/\s+/).join(".")} drags over the floating button and comes after it in the page`);
+		});
+		if (problems.length > 0) failures.push(`${label}: the floating button's click: ${problems.join("; ")}`);
+		else passes += 1;
+	};
 	// The floating button at rest, on hover and on keyboard focus, in the look that is on.
 	const checkFloatingButton = async (look: string) => {
 		const background = () => floating.evaluate((el) => getComputedStyle(el).backgroundColor);
@@ -372,6 +392,7 @@ try {
 		await mac.locator("aside.artifact-viewer").waitFor({ state: "detached", timeout: 5_000 });
 		await checkMacRow(mac, `${at}, sidebar hidden`, zoom, TOPBAR_PARTS);
 		await checkPlace(`${at}, sidebar hidden`, COLLAPSED_CLEARANCE.mac(zoom), mac);
+		await checkFloatingClicks(mac, `${at}, sidebar hidden`);
 		await mac.getByRole("button", { name: "Show sidebar" }).first().click();
 		await mac.locator(".sidebar-toggle-floating").waitFor({ state: "detached", timeout: 5_000 });
 		assert(roomSocket, "the page's room socket is open");
