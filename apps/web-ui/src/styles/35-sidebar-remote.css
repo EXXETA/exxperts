@@ -28,6 +28,11 @@
 	left: 10px;
 	z-index: 40;
 }
+/* The floating one comes after the app in the page, so at the level of the
+   dialogs' backdrops (40) it would show and click above them. */
+.sidebar-toggle-floating {
+	z-index: 39;
+}
 /* The mac app: on the window-button row, right of the traffic lights (x 18
    to 78, centre y 25, in window points), above the drag strip and out of it.
    The lights keep their size and place under page zoom, so the spot is set in

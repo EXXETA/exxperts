@@ -2,6 +2,11 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.15.2 (2026-11-07)
+
+- Fixed: In the Mac app, a hidden sidebar can be opened again from inside a room. Clicking its button
+  used to do nothing (fixed in pull request #83).
+
 ## 0.15.1 (2026-11-04)
 
 - Attachments: A room's files now open as a panel of cards beside the chat. Pictures, text files and a

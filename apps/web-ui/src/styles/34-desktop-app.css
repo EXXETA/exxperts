@@ -53,8 +53,8 @@ html.desktop-app-mac .product-sidebar-header img {
    pages clear it with padding (below, their heroes breathe anyway), but the
    chat column, the right pane and the overlays sit flush at the top — those
    surfaces layer ABOVE the strip instead, and their interactive pieces punch
-   precise no-drag holes (drag regions follow paint order: whatever paints
-   last at a point decides). z 20 slots into the deliberate gap in the app's
+   precise no-drag holes (drag regions follow page order, not paint order:
+   whatever comes last in the page at a point decides). z 20 slots into the deliberate gap in the app's
    scale: in-flow content tops out at 6, composer-anchored popovers start at
    30, overlays run 40-85 — so the strip covers plain page background yet
    stays under everything that must stay clickable. */

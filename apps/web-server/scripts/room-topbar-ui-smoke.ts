@@ -14,7 +14,7 @@
 // the strip, at 69.4% zoom too. The sidebar's wordmark stays where it was. On a sharp screen the sidebar button's glyph centres on
 // the wordmark's small letters. The floating sidebar button shown while the
 // sidebar is collapsed is just its glyph at rest; hover and keyboard focus
-// show its square, and focus a ring. At phone width the bar has no "Talking
+// show its square, and focus a ring. A dialog's backdrop covers it. At phone width the bar has no "Talking
 // to" either, and the button keeps its resting square. Offline: a synthetic model answers
 // "Noted.". Throwaway HOME.
 import fs from "node:fs";
@@ -228,6 +228,44 @@ try {
 		if (problems.length > 0) failures.push(`${label}: the drag area: ${problems.join("; ")}`);
 		else passes += 1;
 	};
+	// The mac app takes a no-drag box out of the drag area in the page's order, not by what paints on top: a bar that
+	// drags and comes after the floating button covers it again, and a click there moves the window.
+	const checkFloatingClicks = async (on: Page, label: string) => {
+		const problems = await on.evaluate(() => {
+			const button = document.querySelector(".sidebar-toggle-floating");
+			if (!button) return ["no floating button"];
+			const own = getComputedStyle(button).getPropertyValue("-webkit-app-region");
+			if (own !== "no-drag") return [`the floating button is ${own || "unset"}, not no-drag`];
+			const box = button.getBoundingClientRect();
+			return [...document.querySelectorAll("*")]
+				.filter((el) => getComputedStyle(el).getPropertyValue("-webkit-app-region") === "drag" && (button.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
+				.filter((el) => {
+					const bar = el.getBoundingClientRect();
+					return bar.left < box.right && box.left < bar.right && bar.top < box.bottom && box.top < bar.bottom;
+				})
+				.map((el) => `.${String(el.className).trim().split(/\s+/).join(".")} drags over the floating button and comes after it in the page`);
+		});
+		if (problems.length > 0) failures.push(`${label}: the floating button's click: ${problems.join("; ")}`);
+		else passes += 1;
+	};
+	// A dialog's backdrop takes the place of the floating button: the button comes later in the page, so only its lower
+	// level keeps it under the backdrop, and a tap there must not open the sidebar over the dialog.
+	const checkDialogCovers = async (label: string) => {
+		const buttonOnTop = () => floating.evaluate((el) => {
+			const box = el.getBoundingClientRect();
+			return el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+		});
+		const dialog = page.getByRole("dialog", { name: "Remember this conversation" });
+		const shownAlone = await buttonOnTop();
+		await page.getByRole("button", { name: "Choose what to keep…", exact: true }).click();
+		await dialog.waitFor({ timeout: 10_000 });
+		const shownOverDialog = await buttonOnTop();
+		await dialog.getByRole("button", { name: "Close", exact: true }).click();
+		await dialog.waitFor({ state: "detached", timeout: 5_000 });
+		if (!shownAlone) failures.push(`${label}: something covers the floating button with no dialog open`);
+		else if (shownOverDialog) failures.push(`${label}: the floating button shows above a dialog's backdrop`);
+		else passes += 1;
+	};
 	// The floating button at rest, on hover and on keyboard focus, in the look that is on.
 	const checkFloatingButton = async (look: string) => {
 		const background = () => floating.evaluate((el) => getComputedStyle(el).backgroundColor);
@@ -282,6 +320,9 @@ try {
 		}
 	}
 
+	await setSidebar(true);
+	await checkDialogCovers("in the browser");
+
 	// The phone keeps its bar as it was, the resting square on the sidebar button included, without "Talking to".
 	await page.setViewportSize({ width: 390, height: 844 });
 	await setSidebar(true);
@@ -298,6 +339,11 @@ try {
 	if (!name || !first || !last) failures.push(`at phone width not all of the bar is on screen: ${JSON.stringify({ name, first, last })}`);
 	else if (name.right > first.left || last.right > phoneWidth) failures.push(`at phone width the bar overlaps: the room name ends at ${name.right}, the first action starts at ${first.left}, the last ends at ${last.right} on a ${phoneWidth} wide screen`);
 	else passes += 1;
+
+	// The open file covers the composer on a phone, and Remember's arrow with it.
+	await page.locator(".artifact-viewer-close").click();
+	await page.locator("aside.artifact-viewer").waitFor({ state: "detached", timeout: 5_000 });
+	await checkDialogCovers("at phone width");
 
 	// A sharp screen (2x): the sidebar button's glyph centred on the wordmark's small letters in the browser, the room name on the wordmark in the mac app's look. One place at a time: the 1x page leaves the room first.
 	await closeContext(page.context());
@@ -372,6 +418,7 @@ try {
 		await mac.locator("aside.artifact-viewer").waitFor({ state: "detached", timeout: 5_000 });
 		await checkMacRow(mac, `${at}, sidebar hidden`, zoom, TOPBAR_PARTS);
 		await checkPlace(`${at}, sidebar hidden`, COLLAPSED_CLEARANCE.mac(zoom), mac);
+		await checkFloatingClicks(mac, `${at}, sidebar hidden`);
 		await mac.getByRole("button", { name: "Show sidebar" }).first().click();
 		await mac.locator(".sidebar-toggle-floating").waitFor({ state: "detached", timeout: 5_000 });
 		assert(roomSocket, "the page's room socket is open");
