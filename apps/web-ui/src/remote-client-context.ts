@@ -38,6 +38,7 @@ let cached: Promise<RemoteClientContext> | null = null;
 let known: RemoteClientContext | null = null;
 // Whether any read has been answered, as opposed to the local default standing in for a failed first one.
 let answered = false;
+let confirmedLocal = false;
 // The read that is out now, and the one that will go next: everyone who asks while one is out shares the next.
 let inFlight: Promise<RefreshResult> | null = null;
 let queued: Promise<RefreshResult> | null = null;
@@ -77,13 +78,33 @@ const READ_DEADLINE_MS = 10_000;
 
 // null when no usable answer came; a 401 has already sent the page to sign-in, and the server's refusal of the person
 // this page names has already ended it (apiFetch).
-async function readAnswer(): Promise<RemoteClientContext | null> {
+async function readAnswer(): Promise<{ context: RemoteClientContext; local: boolean } | null> {
+	setConfirmedLocal(false);
 	try {
 		const res = await apiFetch("/api/remote/client-context", { signal: AbortSignal.timeout(READ_DEADLINE_MS) });
-		return res.ok ? readContext(await res.json()) : null;
+		if (!res.ok) return null;
+		const body: unknown = await res.json();
+		const value = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : null;
+		return { context: readContext(body), local: value?.remote === false && value.sharedServer === false };
 	} catch {
 		return null;
 	}
+}
+
+function setConfirmedLocal(value: boolean): void {
+	if (confirmedLocal === value) return;
+	confirmedLocal = value;
+	for (const listener of listeners) listener();
+}
+
+/** A local-only action needs an explicit, current answer, not the fallback. */
+export function useConfirmedLocalClientContext(): boolean {
+	useEffect(() => { void fetchRemoteClientContext(); }, []);
+	return useSyncExternalStore(
+		(listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+		() => confirmedLocal && !personChange,
+		() => false,
+	);
 }
 
 /** Whether this page can no longer be taken for the person it was opened for. */
@@ -121,9 +142,10 @@ export type RefreshResult = "answered" | "no answer" | "person changed";
 
 export function fetchRemoteClientContext(): Promise<RemoteClientContext> {
 	if (!cached) {
-		cached = readAnswer().then((context) => {
-			answered = context !== null;
-			setKnown(context ?? LOCAL_CONTEXT);
+		cached = readAnswer().then((answer) => {
+			answered = answer !== null;
+			setKnown(answer?.context ?? LOCAL_CONTEXT);
+			setConfirmedLocal(answer?.local === true && !personChange);
 			return known as RemoteClientContext;
 		});
 	}
@@ -163,14 +185,16 @@ async function readOnce(): Promise<RefreshResult> {
 	// The first read is this one's answer.
 	if (!cached) { await fetchRemoteClientContext(); return answered ? "answered" : "no answer"; }
 	await cached;
-	const next = await readAnswer();
-	if (!next) return personChange ? "person changed" : "no answer";
+	const answer = await readAnswer();
+	if (!answer) return personChange ? "person changed" : "no answer";
+	const next = answer.context;
 	answered = true;
 	const first = known?.person ?? null;
 	if (first && next.person && first.id !== next.person.id) return endPage("other");
 	// The page never learned who it was opened for (the first read failed): the first identity to arrive is not adopted.
 	if (!first && next.sharedServer && next.person) return endPage("unknown");
 	setKnown(next);
+	setConfirmedLocal(answer.local && !personChange);
 	return "answered";
 }
 

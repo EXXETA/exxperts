@@ -20,7 +20,8 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^9.1.0",
     "remark-gfm": "^4.0.1",
-    "shiki": "^4.5.0"
+    "shiki": "^4.5.0",
+    "@aiden0z/pptx-renderer": "1.4.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

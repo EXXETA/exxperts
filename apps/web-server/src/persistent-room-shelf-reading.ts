@@ -190,12 +190,16 @@ interface ShelfWorkerMessage {
 	image?: { imageBase64: string; mimeType: string; width: number; height: number; downscaled: boolean };
 	raster?: { pages: Array<{ page: number; imageBase64: string; mimeType: string }>; totalPages: number };
 	error?: string;
+	schemaVersion?: number;
+	code?: string;
+	notices?: unknown;
+	result?: unknown;
 }
 
 const SHELF_PARSE_WORKER_MAX_HEAP_MB = 512;
 const TOO_COMPLEX_MESSAGE = "This document is too complex to process — it was given up on rather than allowed to exhaust memory. If it is a scanned document, exporting a smaller page range usually works.";
 
-function runShelfWorker(request: Record<string, unknown>, timeoutMs: number): Promise<ShelfWorkerMessage> {
+function runShelfWorker(request: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<ShelfWorkerMessage> {
 	return new Promise((resolve, reject) => {
 		const child = fork(fileURLToPath(new URL("./shelf-parse-worker.mjs", import.meta.url)), [JSON.stringify(request)], {
 			// Bare node, no inherited loaders: the worker is plain .mjs and must
@@ -206,27 +210,56 @@ function runShelfWorker(request: Record<string, unknown>, timeoutMs: number): Pr
 		// V8's OOM abort reports on stderr; keep a bounded tail so a heap-capped
 		// death maps to the honest too_complex refusal below.
 		let stderrTail = "";
+		let diagnosticLine = "";
+		let diagnosticOverflow = false;
+		let diagnostic: string | undefined;
+		let duplicateDiagnostic = false;
 		child.stderr?.on("data", (chunk: Buffer) => {
-			stderrTail = (stderrTail + chunk.toString()).slice(-8192);
+			const data = chunk.toString("latin1");
+			stderrTail = (stderrTail + data).slice(-8192);
+			if (request.mode !== "workspace-preview-v1" || request.kind !== "word") return;
+			for (const char of data) {
+				if (char === "\n") {
+					if (!diagnosticOverflow && /^WORD_PREVIEW_DIAGNOSTIC (Error|TypeError|ReferenceError|RangeError|SyntaxError|UnknownError)\|(requestAnimationFrame is not defined|Unexpected renderer error)$/.test(diagnosticLine)) {
+						if (diagnostic) duplicateDiagnostic = true;
+						else diagnostic = diagnosticLine;
+					}
+					diagnosticLine = "";
+					diagnosticOverflow = false;
+				} else if (!diagnosticOverflow) {
+					if (diagnosticLine.length >= 128) { diagnosticLine = ""; diagnosticOverflow = true; }
+					else diagnosticLine += char;
+				}
+			}
 		});
 		let settled = false;
+		let closed = false;
+		child.once("close", () => {
+			closed = true;
+			if (diagnostic && !duplicateDiagnostic) console.error(diagnostic);
+		});
 		const settle = (fn: () => void) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", abort);
 			try {
 				child.kill("SIGKILL");
 			} catch {
 				// Already gone.
 			}
-			fn();
+			if (request.mode === "workspace-preview-v1" && !closed) child.once("close", fn);
+			else fn();
 		};
+		const abort = () => settle(() => reject(new PersistentRoomShelfError("preview_aborted", "Preview cancelled.")));
 		const timer = setTimeout(() => {
 			settle(() => reject(new PersistentRoomShelfError("parse_timeout", `The document could not be processed within ${timeoutMs / 1000}s and was given up on.`)));
 		}, timeoutMs);
+		signal?.addEventListener("abort", abort, { once: true });
+		if (signal?.aborted) abort();
 		child.once("message", (message: ShelfWorkerMessage) => {
 			settle(() => {
-				if (message?.ok) resolve(message);
+				if (request.mode === "workspace-preview-v1" || message?.ok) resolve(message);
 				else reject(new PersistentRoomShelfError("parse_failed", `The document could not be processed: ${String(message?.error ?? "unknown parser error")}`));
 			});
 		});
@@ -254,6 +287,146 @@ function runShelfWorker(request: Record<string, unknown>, timeoutMs: number): Pr
 			}, 250);
 		});
 	});
+}
+
+const WORD_PREVIEW_PREFIX = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">`;
+
+type WorkspacePreviewJob = {
+	mode: "workspace-preview-v1";
+	kind: "pdf" | "word" | "spreadsheet";
+	absolutePath: string;
+	expected: { dev: string; ino: string; size: number; mtimeMs: number; ctimeMs: number };
+	limits: Record<string, number>;
+};
+
+function hasExactKeys(value: object, keys: string[]): boolean {
+	const actual = Object.keys(value).sort();
+	return actual.length === keys.length && keys.slice().sort().every((key, index) => actual[index] === key);
+}
+
+const color = (value: unknown): value is string => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+const dimension = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 10_000;
+const integer = (value: unknown, min: number, max: number): value is number => Number.isInteger(value) && (value as number) >= min && (value as number) <= max;
+const keys = (value: unknown, names: string[]): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join(",") === names.slice().sort().join(",");
+const borderStyles = ["hair", "thin", "medium", "thick", "double", "dotted", "dashed", "dashDot", "dashDotDot", "mediumDashed", "mediumDashDot", "mediumDashDotDot", "slantDashDot"];
+
+function validPreviewWorkbook(value: unknown): boolean {
+	if (!keys(value, ["dateSystem", "styles", "sheets"]) || !["1900", "1904"].includes(value.dateSystem) || !Array.isArray(value.styles) || value.styles.length < 1 || !Array.isArray(value.sheets) || value.sheets.length < 1) return false;
+	for (const style of value.styles) {
+		if (!keys(style, ["fill", "font", "borders", "align"]) || !(style.fill === null || color(style.fill)) || !keys(style.font, ["family", "sizePt", "color", "bold", "italic", "underline", "strike"]) || typeof style.font.family !== "string" || style.font.family.length < 1 || style.font.family.length > 128 || /[\x00-\x1f]/.test(style.font.family) || typeof style.font.sizePt !== "number" || !Number.isFinite(style.font.sizePt) || style.font.sizePt < 1 || style.font.sizePt > 409 || !color(style.font.color) || typeof style.font.bold !== "boolean" || typeof style.font.italic !== "boolean" || typeof style.font.strike !== "boolean" || !["none", "single", "double"].includes(style.font.underline) || !keys(style.borders, ["top", "right", "bottom", "left"]) || !keys(style.align, ["horizontal", "vertical", "wrap"]) || !["left", "center", "right"].includes(style.align.horizontal) || !["top", "middle", "bottom"].includes(style.align.vertical) || typeof style.align.wrap !== "boolean") return false;
+		for (const border of Object.values(style.borders)) if (border !== null && (!keys(border, ["style", "color"]) || !borderStyles.includes(border.style) || !color(border.color))) return false;
+	}
+	let slots = 0, cells = 0;
+	for (const [index, sheet] of value.sheets.entries()) {
+		if (!keys(sheet, ["id", "name", "visibility", "showGridLines", "rowCount", "columnCount", "defaultRowHeightPx", "defaultColumnWidthPx", "rows", "columns", "cells", "merges"]) || typeof sheet.showGridLines !== "boolean" || sheet.id !== String(index + 1) || typeof sheet.name !== "string" || !sheet.name || !["visible", "hidden", "veryHidden"].includes(sheet.visibility) || !integer(sheet.rowCount, 0, 100_000) || !integer(sheet.columnCount, 0, 16_384) || ((sheet.rowCount === 0) !== (sheet.columnCount === 0)) || !dimension(sheet.defaultRowHeightPx) || !dimension(sheet.defaultColumnWidthPx) || !Array.isArray(sheet.rows) || !Array.isArray(sheet.columns) || !Array.isArray(sheet.cells) || !Array.isArray(sheet.merges)) return false;
+		slots += sheet.rowCount * sheet.columnCount; cells += sheet.cells.length;
+		if (slots > 200_000 || cells > 100_000) return false;
+		for (const [entries, max, field] of [[sheet.rows, sheet.rowCount, "heightPx"], [sheet.columns, sheet.columnCount, "widthPx"]] as const) {
+			let previous = 0;
+			for (const entry of entries) { if (!keys(entry, ["index", field]) || !integer(entry.index, 1, max) || entry.index <= previous || !dimension(entry[field])) return false; previous = entry.index; }
+		}
+		let previous = 0;
+		for (const cell of sheet.cells) {
+			if (!keys(cell, ["row", "column", "text", "style", "runs", "valueKind"]) || !integer(cell.row, 1, sheet.rowCount) || !integer(cell.column, 1, sheet.columnCount) || typeof cell.text !== "string" || cell.text.length > 32_767 || !integer(cell.style, 0, value.styles.length - 1) || !["empty", "text", "number", "date", "boolean", "error", "formula-result", "formula-result-unavailable"].includes(cell.valueKind)) return false;
+			const position = (cell.row - 1) * sheet.columnCount + cell.column;
+			if (position <= previous) return false; previous = position;
+			if (cell.runs !== null && (!Array.isArray(cell.runs) || !cell.runs.every((run: unknown) => keys(run, ["text", "style"]) && typeof run.text === "string" && integer(run.style, 0, value.styles.length - 1)) || cell.runs.map((run: { text: string }) => run.text).join("") !== cell.text)) return false;
+		}
+		const covered = new Set<number>();
+		const anchors = new Set<number>();
+		for (const merge of sheet.merges) {
+			if (!keys(merge, ["top", "left", "bottom", "right"]) || !integer(merge.top, 1, sheet.rowCount) || !integer(merge.bottom, merge.top, sheet.rowCount) || !integer(merge.left, 1, sheet.columnCount) || !integer(merge.right, merge.left, sheet.columnCount)) return false;
+			anchors.add((merge.top - 1) * sheet.columnCount + merge.left);
+			for (let row = merge.top; row <= merge.bottom; row++) for (let column = merge.left; column <= merge.right; column++) { const pos = (row - 1) * sheet.columnCount + column; if (covered.has(pos)) return false; covered.add(pos); }
+		}
+		for (const cell of sheet.cells) { const pos = (cell.row - 1) * sheet.columnCount + cell.column; if (covered.has(pos) && !anchors.has(pos)) return false; }
+	}
+	return true;
+}
+
+
+function previewJpegDimensions(bytes: Buffer): { width: number; height: number } | null {
+	if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) return null;
+	let offset = 2;
+	while (offset + 4 <= bytes.length) {
+		if (bytes[offset] !== 0xff) return null;
+		while (offset < bytes.length && bytes[offset] === 0xff) offset++;
+		if (offset >= bytes.length) return null;
+		const marker = bytes[offset++];
+		if (marker === 0xda || marker === 0xd9) return null;
+		if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+		if (offset + 2 > bytes.length) return null;
+		const length = bytes.readUInt16BE(offset);
+		if (length < 2 || length > bytes.length - offset) return null;
+		if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+			if (length < 8) return null;
+			return { height: bytes.readUInt16BE(offset + 3), width: bytes.readUInt16BE(offset + 5) };
+		}
+		offset += length;
+	}
+	return null;
+}
+
+let activeWorkspacePreviews = 0;
+
+export async function runWorkspacePreviewWorker(job: WorkspacePreviewJob, signal: AbortSignal): Promise<ShelfWorkerMessage> {
+	if (activeWorkspacePreviews >= 2) return { ok: false, schemaVersion: 1, code: "preview_busy" };
+	activeWorkspacePreviews += 1;
+	try {
+		const result = await runShelfWorker(job, job.kind === "pdf" ? 60_000 : 30_000, signal);
+		if (!result || result.schemaVersion !== 1 || typeof result.ok !== "boolean") {
+			return { ok: false, schemaVersion: 1, code: "preview_failed" };
+		}
+		if (!result.ok) {
+			if (!hasExactKeys(result, ["ok", "schemaVersion", "code"])) return { ok: false, schemaVersion: 1, code: "preview_failed" };
+			const codes = ["file_changed", "file_too_large", "expanded_content_too_large", "preview_too_complex", "decoded_image_too_large", "damaged_file", "encrypted_file", "unsupported_document_feature", "renderer_unavailable", "preview_failed"];
+			return codes.includes(result.code ?? "") ? { ok: false, schemaVersion: 1, code: result.code } : { ok: false, schemaVersion: 1, code: "preview_failed" };
+		}
+		if (!hasExactKeys(result, ["ok", "schemaVersion", "notices", "result"]) || !Array.isArray(result.notices) || !result.result || typeof result.result !== "object") {
+			return { ok: false, schemaVersion: 1, code: "preview_failed" };
+		}
+		if (job.kind === "word") {
+			const word = result.result as { kind?: unknown; html?: unknown };
+			const validNotice = (notice: any) => notice && hasExactKeys(notice, ["code", "text"]) && notice.code === "external_resources_blocked" && notice.text === "External document resources are blocked.";
+			if (!hasExactKeys(word, ["kind", "html"]) || word.kind !== "word" || typeof word.html !== "string" || Buffer.byteLength(word.html) > 16_777_216 || !word.html.startsWith(WORD_PREVIEW_PREFIX) || result.notices.length > 1 || !result.notices.every(validNotice)) return { ok: false, schemaVersion: 1, code: "preview_failed" };
+			return result;
+		}
+		if (job.kind === "spreadsheet") {
+			const spreadsheet = result.result as { kind?: unknown; workbook?: unknown };
+			const validNotice = (notice: any) => notice && hasExactKeys(notice, ["code", "text"]) && ((notice.code === "excel_charts_omitted" && notice.text === "Charts are not shown in this preview.") || (notice.code === "excel_unusual_formatting" && notice.text === "Some unusual spreadsheet formatting is not shown."));
+			if (!hasExactKeys(spreadsheet, ["kind", "workbook"]) || spreadsheet.kind !== "spreadsheet" || !result.notices.every(validNotice) || !validPreviewWorkbook(spreadsheet.workbook) || Buffer.byteLength(JSON.stringify(result)) > 50_331_648) return { ok: false, schemaVersion: 1, code: "preview_failed" };
+			return result;
+		}
+		if (job.kind !== "pdf" || result.notices.length !== 0) {
+			return { ok: false, schemaVersion: 1, code: "preview_failed" };
+		}
+		const pdf = result.result as { kind?: unknown; totalPages?: unknown; pages?: unknown };
+		if (!hasExactKeys(pdf, ["kind", "totalPages", "pages"]) || pdf.kind !== "pdf" || !Number.isInteger(pdf.totalPages) || (pdf.totalPages as number) < 1 || (pdf.totalPages as number) > 200 || !Array.isArray(pdf.pages) || pdf.pages.length !== pdf.totalPages) {
+			return { ok: false, schemaVersion: 1, code: "preview_failed" };
+		}
+		let totalPixels = 0;
+		let totalBytes = 0;
+		for (const [index, page] of pdf.pages.entries()) {
+			if (!page || typeof page !== "object" || !hasExactKeys(page, ["page", "mimeType", "imageBase64", "widthPx", "heightPx"]) || page.page !== index + 1 || page.mimeType !== "image/jpeg" || !Number.isInteger(page.widthPx) || page.widthPx < 1 || !Number.isInteger(page.heightPx) || page.heightPx < 1 || page.widthPx * page.heightPx > 4_000_000 || typeof page.imageBase64 !== "string" || page.imageBase64.length === 0 || page.imageBase64.length > 44_739_244 || page.imageBase64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(page.imageBase64)) {
+				return { ok: false, schemaVersion: 1, code: "preview_failed" };
+			}
+			totalPixels += page.widthPx * page.heightPx;
+			const byteLength = page.imageBase64.length / 4 * 3 - (page.imageBase64.endsWith("==") ? 2 : page.imageBase64.endsWith("=") ? 1 : 0);
+			totalBytes += byteLength;
+			if (totalPixels > 80_000_000 || totalBytes > 33_554_432) return { ok: false, schemaVersion: 1, code: "preview_failed" };
+			const bytes = Buffer.from(page.imageBase64, "base64");
+			const dimensions = previewJpegDimensions(bytes);
+			if (bytes.length !== byteLength || !dimensions || dimensions.width !== page.widthPx || dimensions.height !== page.heightPx) {
+				return { ok: false, schemaVersion: 1, code: "preview_failed" };
+			}
+		}
+		if (Buffer.byteLength(JSON.stringify(result)) > 50_331_648) return { ok: false, schemaVersion: 1, code: "preview_failed" };
+		return result;
+	} catch (error) {
+		return { ok: false, schemaVersion: 1, code: (error as { code?: string }).code === "parse_timeout" ? "preview_timeout" : "preview_failed" };
+	} finally {
+		activeWorkspacePreviews -= 1;
+	}
 }
 
 export async function runShelfParseWorker(absolutePath: string, kind: "pdf" | "docx"): Promise<{ text: string; pages: number | null; truncated: boolean }> {

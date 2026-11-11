@@ -39,6 +39,9 @@ const tempHome = path.join(tempRoot, "home");
 const agentsRoot = path.join(tempHome, ".exxperts", "app", "personalized-agents");
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const productAppRoot = path.join(tempHome, ".exxperts", "app");
+const workspace = path.join(tempHome, "invented-workspace");
+fs.mkdirSync(workspace, { recursive: true });
+fs.writeFileSync(path.join(workspace, "sample.html"), "<p>Invented HTML</p>");
 fs.mkdirSync(agentsRoot, { recursive: true, mode: 0o700 });
 fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 
@@ -130,9 +133,26 @@ try {
 	const idA = String(roomA.body.agent.agentId);
 	const idB = String(roomB.body.agent.agentId);
 
+    for (const id of [idA, idB]) {
+        const saved = await adminJson(`/api/persistent-agents/${encodeURIComponent(id)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspace, workspaceAccessMode: "localFiles" }) });
+        const thread = await adminJson(`/api/persistent-agents/${encodeURIComponent(id)}/threads/demo-thread`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: { provider: "openai-compatible", model: "room-model" }, items: [] }) });
+        assert(saved.status === 200 && thread.status === 200, "invented HTML workspace and conversation are set up");
+    }
 	const device = await pairDevice(port, "Capability phone");
 	const asDevice = { Cookie: device.cookie };
 
+    const htmlAccess = async (id: string, status: number) => {
+        for (const suffix of ["", "&frame=1"]) {
+            const result = await remoteRequest(port, `/api/persistent-agents/${encodeURIComponent(id)}/workspace-preview?conversationId=demo-thread&path=sample.html${suffix}`, { headers: asDevice });
+            assert(result.status === status, `remote HTML ${suffix || "JSON"} expected ${status}, got ${result.status}`);
+        }
+    };
+    const htmlOpen = async () => {
+        const result = await remoteRequest(port, `/api/persistent-agents/${encodeURIComponent(idA)}/workspace-open`, { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ conversationId: "demo-thread", path: "sample.html" }) });
+        assert(result.status === 403 && JSON.parse(result.body).code === "remote_local_only", "remote HTML open is local only");
+    };
+    await htmlAccess(idA, 200);
+    await htmlOpen();
 	// 2. Full-capability device: reads and writes pass, "local" refuses.
 	const listing = await remoteRequest(port, "/api/persistent-agents", { headers: asDevice });
 	assert(listing.status === 200, `tunnel listing: expected 200, got ${listing.status}`);
@@ -161,6 +181,7 @@ try {
 	const hide = await adminJson("/api/remote/rooms/exposure", { method: "POST", body: JSON.stringify({ id: idB, exposed: false }) });
 	assert(hide.status === 200, `hide: expected 200, got ${hide.status}`);
 
+    await htmlAccess(idB, 404);
 	const afterHide = await remoteRequest(port, "/api/persistent-agents", { headers: asDevice });
 	const visibleRooms = JSON.parse(afterHide.body) as any[];
 	assert(visibleRooms.length === 1 && visibleRooms[0].id === idA, "hidden room must vanish from the tunnel listing");
@@ -201,6 +222,12 @@ try {
 	//    refuses every inbound frame.
 	const flip = await adminJson("/api/remote/devices/capability", { method: "POST", body: JSON.stringify({ id: device.deviceId, capability: "read-only" }) });
 	assert(flip.status === 200, `capability flip: expected 200, got ${flip.status}`);
+    await htmlAccess(idA, 200);
+    await htmlAccess(idB, 404);
+    await htmlOpen();
+    const revoked = await adminJson(`/api/persistent-agents/${encodeURIComponent(idA)}/workspace-default`, { method: "PUT", body: JSON.stringify({ toolSelection: { kind: "custom", allowedToolNames: [] }, bashEnabled: false }) });
+    assert(revoked.status === 200, "workspace read grant revoked");
+    await htmlAccess(idA, 403);
 	const readAfterFlip = await remoteRequest(port, "/api/persistent-agents", { headers: asDevice });
 	assert(readAfterFlip.status === 200, "read-only device must keep reading");
 	const writeAfterFlip = await remoteRequest(port, `/api/persistent-agents/${encodeURIComponent(idA)}/rename`, { method: "POST", headers: { ...asDevice, "content-type": "application/json" }, body: JSON.stringify({ displayName: "Nope", dryRun: true }) });

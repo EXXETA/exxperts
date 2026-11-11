@@ -696,6 +696,8 @@ try {
 	const lost24 = ((await getThread(room24, conv24)).items ?? []).find((item: any) => item.id === part24);
 	assert(lost24.text === expectedText && lost24.stoppedAt === undefined, `room24 a lost connection's copy gives way to the whole answer, got ${JSON.stringify(String(lost24.text).slice(0, 80))}`);
 	await waitUntil(async () => !(await getStatus(room24)).activeLock, "room24 lock released", 20_000);
+	// The detached landing parks the thread before the next connection opens.
+	await waitUntil(async () => (await getThread(room24, conv24)).state === "standby", "room24 detached landing parks the thread", 20_000);
 	// After a Stop the page's copy is stopped, and the file keeps that cut.
 	const ws24b = await WsHarness.connect(room24, conv24);
 	await ws24b.waitFor((frame) => frame.type === "ready", "room24 second ready");
@@ -707,11 +709,14 @@ try {
 	await ws24b.waitFor((frame) => deltaText(frame).includes("slow part 3. "), "room24 more of the answer shows", mark24b);
 	const shown24 = "slow part 1. slow part 2.".length;
 	ws24b.send({ type: "abort", shown: shown24 });
-	await ws24b.waitFor((frame) => frame.type === "event" && frame.event?.type === "agent_end", "room24 the stopped answer ends", mark24b, 20_000);
 	const stopped24 = namedIn(ws24b.frames, mark24b).find((id) => /^kr24b-a\d+$/.test(id))!;
 	const pageStopped = `${"slow part 1. slow part 2.".slice(0, shown24)}\n\n_Stopped._`;
 	const before24 = (await getThread(room24, conv24)).items ?? [];
-	await putThread(room24, conv24, [...before24.filter((item: any) => item.id !== stopped24), { kind: "assistant", id: stopped24, text: pageStopped, stoppedAt: shown24, streaming: false }]);
+	const stopSave24 = await putThread(room24, conv24, [...before24.filter((item: any) => item.id !== stopped24), { kind: "assistant", id: stopped24, text: pageStopped, stoppedAt: shown24, streaming: false }]);
+	assert(stopSave24.status === 200, `room24 the stopped answer save succeeds, got ${stopSave24.status}: ${JSON.stringify(stopSave24.body)}`);
+	await ws24b.waitFor((frame) => frame.type === "event" && frame.event?.type === "agent_end", "room24 the stopped answer ends", mark24b, 20_000);
+	const settledSave24 = await putThread(room24, conv24, [...before24.filter((item: any) => item.id !== stopped24), { kind: "assistant", id: stopped24, text: pageStopped, stoppedAt: shown24, streaming: false }]);
+	assert(settledSave24.status === 200, `room24 the settled Stop save succeeds, got ${settledSave24.status}: ${JSON.stringify(settledSave24.body)}`);
 	await waitUntil(async () => ((await getThread(room24, conv24)).items ?? []).some((item: any) => item.id === stopped24 && item.landed === true), "room24 the stopped answer landed", 20_000);
 	const kept24 = ((await getThread(room24, conv24)).items ?? []).find((item: any) => item.id === stopped24);
 	assert(kept24.stoppedAt === shown24 && kept24.text === pageStopped, `room24 a Stop's copy keeps its cut and its note, got ${JSON.stringify(kept24)}`);

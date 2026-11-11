@@ -72,6 +72,12 @@ After code changes, rebuild/repack/reinstall only when you need to test installe
 
 The app (`exxperts`, `./scripts/exxperts-web`, or the desktop app) is the one product surface: persistent rooms and the memory lifecycle. Everything a person sets up, from provider sign-in to connectors, web search and remote access, is in the app's Settings.
 
+## Workspace file previews
+
+A room can browse files in its granted workspace and open read-only tabs beside the chat. Markdown, text and JSON are shown as text; images, PDF, Word, spreadsheets, HTML and presentations have previews. Existing tabs retain their loaded content when selected again: close and reopen a tab to read the current file, including changes made by the agent. Dragging a file into the composer inserts its workspace-relative path.
+
+A local user can explicitly open supported files in the operating system's associated application. The server checks the current workspace grant before dispatching the file; this action is unavailable to paired devices. HTML and presentation previews run in isolated frames. Their external resource requests are blocked, but a frame can navigate itself to a URL that carries the opened file's contents. Legacy `.doc` files show save-as-`.docx` guidance, and `.xls` files are unsupported.
+
 ## How prompts are assembled
 
 **Persistent rooms (web)** boot from four code-assembled layers (L0
