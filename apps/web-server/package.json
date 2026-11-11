@@ -16,10 +16,14 @@
     "fastify": "^5.12.1",
     "jszip": "^3.10.1",
     "pdfjs-dist": "5.4.394",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "docx-preview": "0.4.1",
+    "exceljs": "4.4.0",
+    "jsdom": "26.1.0"
   },
   "optionalDependencies": {
-    "@napi-rs/canvas": "^0.1.81"
+    "@napi-rs/canvas": "^0.1.81",
+    "koffi": "2.16.2"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

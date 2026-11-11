@@ -2940,6 +2940,11 @@ ${lines.join("\n")}`;
 			try {
 				const askedKey = readTurnKey(msg.id);
 				const turnKey = askedKey && keyFreeInConversation(persistentAgentIdForSession, persistentConversationId, askedKey, continuing) ? askedKey : undefined;
+				const thread = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
+				if (thread?.state === "standby") {
+					assertPersistentAgentTurnCanBegin(persistentAgentIdForSession, persistentConversationId);
+					writePersistentAgentThread(persistentAgentIdForSession, persistentConversationId, { state: "active", origin: thread.origin, model: thread.model, items: thread.items });
+				}
 				const startedTurn = beginPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { connectionId, key: turnKey });
 				if (!startedTurn.turnId) throw new Error("persistent-agent turn id was not created");
 				persistentTurnId = startedTurn.turnId;

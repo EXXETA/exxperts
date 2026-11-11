@@ -1,0 +1,237 @@
+/* The room's workspace tree, tabs and read-only previews. */
+.app.sidebar-resizable {
+	grid-template-columns: var(--sidebar-width, 260px) 1px minmax(0, 1fr);
+}
+.sidebar-scroll-area {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+.sidebar-footer { flex: 0 0 auto; }
+/* A one-pixel line with a wider area to grab. Above the drag strip and the topbar (z 21), under the overlays. */
+.sidebar-resizer {
+	position: relative;
+	cursor: col-resize;
+	background: var(--border);
+	z-index: 22;
+}
+.sidebar-resizer::before { content: ""; position: absolute; inset: 0 -4px; }
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible,
+.sidebar-resizer.is-dragging {
+	background: color-mix(in srgb, var(--fg) 40%, transparent);
+}
+.sidebar-resizer:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: -2px; }
+.app.sidebar-resizable > .sidebar { border-right: 0; }
+html.sidebar-collapsed .sidebar-resizer { display: none; }
+.sidebar-workspace-files {
+	flex: 1 1 auto;
+	margin: 2px 12px 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.workspace-file-browser-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 4px 6px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+.workspace-file-browser-head-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.workspace-file-browser-count {
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--fg-soft);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-pill);
+	padding: 0 6px;
+	line-height: 16px;
+}
+.workspace-file-browser-tree {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding-bottom: 4px;
+	scrollbar-width: thin;
+}
+.workspace-file-browser-entry {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	min-width: 0;
+	border: 1px solid transparent;
+	border-radius: var(--exx-radius-control);
+	background: transparent;
+	color: var(--fg-soft);
+	font: inherit;
+	font-size: 12px;
+	line-height: 1.25;
+	padding-top: 5px;
+	padding-right: 6px;
+	padding-bottom: 5px;
+	text-align: left;
+	cursor: pointer;
+}
+.workspace-file-browser-entry:hover,
+.workspace-file-browser-entry:focus-visible,
+.workspace-file-browser-entry.selected {
+	background: var(--exx-surface-raised);
+	border-color: var(--border);
+	color: var(--fg);
+	outline: none;
+}
+.workspace-file-browser-caret {
+	flex: 0 0 10px;
+	font-size: 10px;
+	color: var(--muted);
+	text-align: center;
+}
+.workspace-file-browser-icon {
+	position: relative;
+	flex: 0 0 13px;
+	width: 13px;
+	height: 13px;
+	color: var(--muted);
+}
+.workspace-file-browser-folder {
+	border: 1px solid currentColor;
+	border-radius: 2px;
+	height: 9px;
+	margin-top: 3px;
+}
+.workspace-file-browser-folder::before {
+	content: "";
+	position: absolute;
+	left: -1px;
+	top: -4px;
+	width: 6px;
+	height: 4px;
+	border: 1px solid currentColor;
+	border-bottom: 0;
+	border-radius: 2px 2px 0 0;
+}
+.workspace-file-browser-document {
+	border: 1px solid currentColor;
+	border-radius: 2px;
+	height: 12px;
+}
+.workspace-file-browser-document::before {
+	content: "";
+	position: absolute;
+	right: -1px;
+	top: -1px;
+	width: 4px;
+	height: 4px;
+	background: var(--exx-surface-inset);
+	border-left: 1px solid currentColor;
+	border-bottom: 1px solid currentColor;
+}
+.workspace-file-browser-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.workspace-file-browser-loading {
+	margin-left: auto;
+	color: var(--muted);
+}
+.workspace-file-browser-children { min-width: 0; }
+.workspace-file-browser-status {
+	margin: 2px 4px 8px;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.35;
+}
+.workspace-file-browser-error { color: var(--exx-danger); }
+/* The file tabs share the window's top row: above the drag strip, the bar drags
+   and the tabs click, as in the headers above. */
+html.desktop-app-mac .workbench > .workspace-pane {
+	position: relative;
+	z-index: 21;
+}
+html.desktop-app-mac .workspace-tabs {
+	-webkit-app-region: drag;
+	min-height: var(--mac-row-height);
+	box-sizing: border-box;
+}
+html.desktop-app-mac .workspace-tab {
+	-webkit-app-region: no-drag;
+}
+
+@media (max-width: 760px) {
+	.app.sidebar-resizable { grid-template-columns: minmax(0, 1fr); }
+	.sidebar-resizer { display: none; }
+}
+
+.workspace-pane { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; }
+.workspace-pane[hidden], .workspace-pane [hidden] { display: none; }
+.workspace-open-action { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.5rem; padding: 0.5rem 1rem; border-bottom: 1px solid var(--exx-border); background: var(--exx-surface); }
+.workspace-open-action button { flex: none; padding: 5px 12px; border: 1px solid var(--exx-border); border-radius: 6px; background: transparent; color: inherit; font-size: 13px; cursor: pointer; }
+.workspace-open-action button:hover:not(:disabled) { background: var(--exx-surface-hover); }
+.workspace-open-action p { flex-basis: 100%; margin: 0; text-align: right; }
+.workspace-spreadsheet { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.workspace-spreadsheet-scroll { flex: 1; min-height: 0; overflow: auto; background: #fff; }
+.workspace-spreadsheet table { table-layout: fixed; border-collapse: collapse; width: max-content; background: #fff; }
+.workspace-spreadsheet td { overflow: hidden; padding: 0 4px; border: 1px solid #e1e1e1; color: #000; }
+.workspace-spreadsheet table[data-gridlines="false"] td { border-color: transparent; }
+.workspace-spreadsheet th { position: sticky; z-index: 1; padding: 0 4px; border: 0; background: var(--exx-surface-raised); box-shadow: inset -1px -1px 0 var(--exx-border); color: var(--exx-text-muted, inherit); font-size: 11px; font-weight: 400; text-align: center; white-space: nowrap; }
+.workspace-spreadsheet thead th { top: 0; height: 24px; }
+.workspace-spreadsheet tbody th { left: 0; }
+.workspace-spreadsheet thead th.workspace-spreadsheet-corner { left: 0; z-index: 2; }
+.workspace-spreadsheet-sheets { display: flex; flex: none; overflow-x: auto; gap: 2px; padding: 0 8px; border-top: 1px solid var(--exx-border); background: var(--exx-surface-raised); }
+.workspace-spreadsheet-sheets button { flex: none; padding: 6px 14px; border: 0; border-radius: 0 0 4px 4px; background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.workspace-spreadsheet-sheets button:hover { background: var(--exx-surface-hover); }
+.workspace-spreadsheet-sheets button[aria-pressed="true"] { background: var(--exx-surface); font-weight: 600; }
+.workspace-tabs { display: flex; flex: none; align-items: flex-end; gap: 2px; overflow-x: auto; padding: 6px 8px 0; border-bottom: 1px solid var(--exx-border); background: var(--exx-surface-raised); }
+.workspace-tab { display: flex; flex: none; align-items: center; margin-bottom: -1px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; font-size: 13px; }
+.workspace-tab { position: relative; cursor: grab; }
+.workspace-tab[data-dragging] { opacity: 0.5; }
+.workspace-tab[data-drop]::before { content: ""; position: absolute; top: 2px; bottom: 2px; width: 2px; border-radius: 1px; background: var(--exx-focus); pointer-events: none; }
+.workspace-tab[data-drop="before"]::before { left: -2px; }
+.workspace-tab[data-drop="after"]::before { right: -2px; }
+.workspace-tab:hover { background: var(--exx-surface-hover); }
+.workspace-tab[data-active="true"] { border-color: var(--exx-border); background: var(--exx-surface); font-weight: 600; }
+.workspace-tab:not([data-active="true"]) + .workspace-tab:not([data-active="true"]) { box-shadow: -3px 0 0 -2px var(--exx-border); }
+.workspace-tab button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+.workspace-tab-select { max-width: 180px; overflow: hidden; padding: 7px 4px 7px 12px; font-weight: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-tab-tooltip { position: fixed; z-index: 90; max-width: min(480px, 90vw); padding: 4px 8px; border: 1px solid var(--exx-border); border-radius: 5px; background: var(--exx-surface-raised); color: var(--exx-text); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; pointer-events: none; }
+.workspace-tab-close { padding: 7px 10px 7px 4px; opacity: 0.6; }
+.workspace-tab-close:hover { opacity: 1; }
+.workspace-preview-image-frame { height: 100%; display: flex; flex-direction: column; }
+.workspace-preview-image-tools { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 4px 1rem; border-bottom: 1px solid var(--exx-border); background: var(--exx-surface); font-size: 12px; }
+.workspace-preview-image-tools span { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
+.workspace-preview-image-tools button { min-width: 26px; padding: 2px 8px; border: 1px solid var(--exx-border); border-radius: 5px; background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.workspace-preview-image-tools button:hover { background: var(--exx-surface-hover); }
+.workspace-preview-image { position: relative; flex: 1; min-height: 0; overflow: hidden; cursor: grab; touch-action: none; user-select: none; }
+.workspace-preview-image[data-dragging] { cursor: grabbing; }
+.workspace-preview-image p { padding: 16px; }
+.workspace-preview-image img { position: absolute; top: 0; left: 0; max-width: none; max-height: none; transform-origin: 0 0; will-change: transform; }
+.workspace-preview-pdf { height: 100%; overflow: auto; padding: 16px; background: var(--exx-surface); }
+.workspace-preview-pdf img { display: block; width: 100%; height: auto; margin: 0 auto 16px; background: white; }
+.workspace-preview-content { flex: 1; min-height: 0; }
+.workspace-preview-image { box-sizing: border-box; }
+.workspace-preview-word { height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+.workspace-preview-word iframe { width: 100%; flex: 1; min-height: 0; border: 0; }
+.workspace-preview-text { height: 100%; overflow: auto; background: var(--exx-surface); }
+.workspace-preview-text pre { margin: 0; padding: 16px; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-preview-text p { padding: 16px; margin: 0; }
+.workspace-preview-html { height: 100%; position: relative; }
+.workspace-preview-pptx-loading { position: absolute; top: 16px; left: 16px; margin: 0; }
+.workspace-preview-html iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
