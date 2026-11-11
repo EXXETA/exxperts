@@ -55,7 +55,7 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, answering, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, onOpenConnectors, onOpenAiSetup, initialPane }: { status: PersistentAgentStatus; /** Whether the room is answering, from the open room's own turn; without it, the room's last read status says. */ answering?: boolean; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; onOpenConnectors?: () => void; /** Opens Settings, AI setup at a provider's row (a refused key's Replace key); without it the Model pane offers none. */ onOpenAiSetup?: (providerId: string) => void; initialPane?: SettingsPane }) {
+export function RoomSettingsModal({ status, answering, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onBeforeMemento, onOpenSkillsLibrary, onOpenConnectors, onOpenAiSetup, initialPane }: { status: PersistentAgentStatus; /** Whether the room is answering, from the open room's own turn; without it, the room's last read status says. */ answering?: boolean; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse | null>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse | null>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onBeforeMemento?: (continueAction: () => void) => boolean; onOpenSkillsLibrary?: () => void; onOpenConnectors?: () => void; /** Opens Settings, AI setup at a provider's row (a refused key's Replace key); without it the Model pane offers none. */ onOpenAiSetup?: (providerId: string) => void; initialPane?: SettingsPane }) {
 	const roomAnswering = answering ?? status.activeThread?.inFlight === true;
 	// Save and close waits like Save while the room answers: the unsaved question
 	// greys it, and lifts that the moment the answer has finished.
@@ -226,14 +226,16 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 			navigate?.();
 		});
 	}
-	async function archiveAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse> {
+	async function archiveAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse | null> {
 		const response = await onArchive(agentId, confirmation);
+		if (!response) return null;
 		onRefresh();
 		onClose();
 		return response;
 	}
-	async function purgeAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse> {
+	async function purgeAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse | null> {
 		const response = await onPurge(agentId, confirmation);
+		if (!response) return null;
 		onRefresh();
 		onClose();
 		return response;
@@ -336,7 +338,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 				<RoomScheduledTasksSection status={status} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "session"}>
-				<RoomSessionSection status={status} answering={roomAnswering} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} />
+				<RoomSessionSection status={status} answering={roomAnswering} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} onBeforeMemento={onBeforeMemento} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "danger"}>
 				<RoomDangerZone status={status} visible={pane === "danger"} onArchive={archiveAndClose} onPurge={purgeAndClose} />

@@ -41,6 +41,8 @@ function listFiles(dir, rel = "") {
 }
 
 const pkg = (name, extra = {}) => JSON.stringify({ name, version: "1.0.0", license: "MIT", ...extra });
+const notices = ["NOTICE", "runtime/LICENSE", "runtime/NOTICE.md"];
+const sourceNotice = (file) => fs.readFileSync(new URL(`../../../${file}`, import.meta.url));
 
 // A staged app/ tree as the release archive carries it: the bundled server
 // and what the desktop keeps, next to the CLI, the sources and packages only
@@ -58,6 +60,7 @@ function stagedApp(overrides = {}) {
 		"package.json": pkg("@exxeta/exxperts-app"),
 		"CHANGELOG.md": "# Changelog\n",
 		"LICENSE": "Apache-2.0\n",
+		...Object.fromEntries(notices.map((file) => [file, sourceNotice(file)])),
 		"README.md": "readme\n",
 		"docs/quickstart.md": "docs\n",
 		"docs/assets/logo.png": "png",
@@ -92,6 +95,15 @@ function stagedApp(overrides = {}) {
 	});
 }
 
+test("retains the exact notice bytes and rejects missing notice inputs", () => {
+	const dir = stagedApp();
+	pruneDesktopPayload(dir, { log: () => {} });
+	for (const file of notices) {
+		assert.deepEqual(fs.readFileSync(path.join(dir, file)), sourceNotice(file));
+		assert.throws(() => pruneDesktopPayload(stagedApp({ [file]: null }), { log: () => {} }), (error) => error.message.includes(`${file} is missing`));
+	}
+});
+
 test("keeps only the listed paths outside node_modules", () => {
 	const dir = stagedApp();
 	pruneDesktopPayload(dir, { log: () => {} });
@@ -99,6 +111,7 @@ test("keeps only the listed paths outside node_modules", () => {
 	assert.deepEqual(outside, [
 		"CHANGELOG.md",
 		"LICENSE",
+		"NOTICE",
 		"apps/web-server/dist/app-bridge.bundle.js",
 		"apps/web-server/dist/photon_rs_bg.wasm",
 		"apps/web-server/dist/server.mjs",
@@ -110,6 +123,8 @@ test("keeps only the listed paths outside node_modules", () => {
 		"bin/lib/server-entry.cjs",
 		"bin/lib/state-profiles.cjs",
 		"package.json",
+		"runtime/LICENSE",
+		"runtime/NOTICE.md",
 		"runtime/packages/coding-agent/dist/core/export-html/template.html",
 		"runtime/packages/coding-agent/dist/modes/interactive/assets/logo.txt",
 		"runtime/packages/coding-agent/dist/modes/interactive/theme/dark.json",

@@ -10,11 +10,13 @@ interface Props {
 	onSetAppearance: (pref: AppearancePreference) => void;
 	/** Opens the Settings overlay over the room; the optional section targets it. */
 	onSettings: (section?: "remote") => void;
+	/** The room workspace tree, shown below Home while a room is open. */
+	workspaceSlot?: ReactNode;
 	/** The room's Attachments entry: a row of the list, under Home. */
 	assetsSlot?: ReactNode;
 }
 
-export function Sidebar({ theme, appearance, onSetAppearance, onSettings, onHome, assetsSlot }: Props) {
+export function Sidebar({ theme, appearance, onSetAppearance, onSettings, onHome, workspaceSlot, assetsSlot }: Props) {
 	return (
 		<aside className="sidebar">
 			<div className="sidebar-header">
@@ -27,6 +29,9 @@ export function Sidebar({ theme, appearance, onSetAppearance, onSettings, onHome
 				<button className="list-btn sidebar-home-btn" onClick={onHome}>Home</button>
 				{assetsSlot}
 			</nav>
+			<div className="sidebar-scroll-area">
+				{workspaceSlot}
+			</div>
 
 			{/* No connection status here on purpose: the room's own reconnect
 			    affordance sits on the composer, where it can actually act. */}
