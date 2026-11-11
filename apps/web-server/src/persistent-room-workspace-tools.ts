@@ -347,7 +347,7 @@ function createRuntime(policy: PersistentRoomCapabilityPolicy): WorkspaceToolPol
 	if (!isPersistentRoomWorkspaceToolBundleEnabled(policy) || policy.modes.read !== true || policy.roots.length < 1) return null;
 	const root = policy.roots[0];
 	if (!root) return null;
-	const rootRealpath = safeRealpath(root.realpath) ?? safeRealpath(root.path);
+	const rootRealpath = safeRealpath(root.path);
 	if (!rootRealpath) return null;
 	try {
 		if (!fs.statSync(rootRealpath).isDirectory()) return null;
@@ -387,7 +387,8 @@ export function resolvePersistentRoomWorkspacePath(
 	let lstat: fs.Stats;
 	try {
 		lstat = fs.lstatSync(absolutePath);
-	} catch {
+	} catch (error) {
+		if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw new PersistentRoomWorkspaceToolError("workspace_unavailable", "No selected workspace is available for this room.");
 		throw new PersistentRoomWorkspaceToolError(purpose === "read" ? "file_not_found" : "path_not_found", purpose === "read" ? "File not found in selected workspace." : "Path not found in selected workspace.");
 	}
 
@@ -423,6 +424,31 @@ export function resolvePersistentRoomWorkspacePath(
 		stat,
 		lstat,
 	};
+}
+
+/**
+ * Resolve an existing regular file without creating directories or following
+ * symlinks. Workspace editors use this narrower guard than the general write
+ * tool, whose resolver intentionally supports creating new files.
+ */
+export function resolvePersistentRoomWorkspaceExistingFile(
+	policy: PersistentRoomCapabilityPolicy,
+	rawPath: string,
+): PersistentRoomWorkspaceToolGuardResult {
+	const guarded = resolvePersistentRoomWorkspacePath(policy, rawPath, "read");
+	const runtime = createRuntime(policy);
+	if (!runtime) throw new PersistentRoomWorkspaceToolError("workspace_unavailable", "No selected workspace is available for this room.");
+	if (guarded.lstat.isSymbolicLink() || !guarded.lstat.isFile() || !guarded.stat.isFile()) {
+		throw new PersistentRoomWorkspaceToolError("not_file", "Path is not a regular file in selected workspace.");
+	}
+	const parentAbsolutePath = path.dirname(guarded.absolutePath);
+	const parentRelativePath = normalizeSlashes(path.relative(runtime.rootRealpath, parentAbsolutePath) || ".");
+	assertNoSymlinkAncestors(runtime, parentRelativePath);
+	const parentRealpath = safeRealpath(parentAbsolutePath);
+	if (!parentRealpath || !sameOrDescendant(parentRealpath, runtime.rootRealpath)) {
+		throw new PersistentRoomWorkspaceToolError("outside_workspace", "Path is outside the selected workspace.");
+	}
+	return guarded;
 }
 
 function nearestExistingAncestor(startPath: string, rootRealpath: string): { absolutePath: string; lstat: fs.Stats } {

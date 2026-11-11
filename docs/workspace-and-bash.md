@@ -23,6 +23,12 @@ Search finds text across the folder. Write and Edit create and change files
 of any type; in a bounded room that includes editing existing files, not
 only adding new ones.
 
+## Browse and edit workspace files
+
+The room sidebar shows the granted folder as a tree when **List** is enabled. Open a Markdown file from the tree to edit it on the right, or drag a file into the composer to insert its relative path. Opening Markdown and its local images requires **Read**; saving also requires a selected writing tool. Paired devices need permission to write as well.
+
+The editor saves after a short pause and offers Edit, Preview and RAW views. If a file changes elsewhere while you have a draft, choose Reload to discard the draft or Keep mine to save it over the latest version. Leaving the editor offers save, discard and cancel choices; a failed save keeps the draft open. External images are not fetched; their alt text and original Markdown source remain in the document.
+
 ## Tool toggles, and read-only as a consequence
 
 Each tool is a toggle. Whether a room can change files follows from the

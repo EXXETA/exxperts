@@ -44,6 +44,8 @@
     "apps/web-ui/src/reveal-cut.ts",
     "apps/web-ui/src/sign-in-failure.ts",
     "apps/web-ui/src/turn-failure-line.ts",
+    "runtime/LICENSE",
+    "runtime/NOTICE.md",
     "runtime/packages/ai/dist",
     "runtime/packages/ai/package.json",
     "runtime/packages/agent/dist",
@@ -54,6 +56,7 @@
     "runtime/packages/tui/package.json",
     "docs/*.md",
     "README.md",
+    "NOTICE",
     "CHANGELOG.md"
   ],
   "scripts": {

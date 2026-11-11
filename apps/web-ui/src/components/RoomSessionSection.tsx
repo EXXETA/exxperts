@@ -40,7 +40,7 @@ function sessionModelLabel(status: PersistentAgentStatus): { name: string; title
 	return { name: modelDisplayName(input) || model.model, title: modelTooltipName(input) || model.model };
 }
 
-export function RoomSessionSection({ status, answering, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; answering: boolean; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
+export function RoomSessionSection({ status, answering, onRefresh, onMementoApplied, onMementoForget, onBeforeMemento }: { status: PersistentAgentStatus; answering: boolean; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onBeforeMemento?: (continueAction: () => void) => boolean }) {
 	const [submitting, setSubmitting] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -50,6 +50,7 @@ export function RoomSessionSection({ status, answering, onRefresh, onMementoAppl
 
 	async function forgetConversation(): Promise<void> {
 		if (!activeThread) return;
+		if (onBeforeMemento && !onBeforeMemento(() => { void forgetConversation(); })) return;
 		setError(null);
 		setMessage(null);
 		if (!(await confirmForgetConversation(answering))) return;
