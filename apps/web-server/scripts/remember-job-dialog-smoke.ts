@@ -16,7 +16,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 import { closeBrowser, closeContext } from "./smoke-close-context.js";
 
 const waitUntil = waitEvery(150);
@@ -163,12 +163,12 @@ try {
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await readyAfter(0);
 		// Before any message, Remember's arrow is off like Remember itself and says why.
-		const arrow = page.getByRole("button", { name: "Choose what to keep…", exact: true });
+		const arrow = page.getByRole("button", { name: "Choose what to keep", exact: true });
 		await arrow.waitFor({ timeout: 10000 });
 		const arrowBefore = { off: await arrow.isDisabled(), title: await arrow.getAttribute("title") };
 		assert(arrowBefore.off && arrowBefore.title === "Send a message before remembering", `before any message the arrow is off with "Send a message before remembering", got ${JSON.stringify(arrowBefore)}`);
 		await composer.fill("We moved the launch to May.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer");
 		// What Remember reads: an answer more than the page showed before the message, no turn in flight, and the saved conversation holds every answer the page shows.
 		const answerSaved = (shownBefore = 0) => waitUntil(async () => {
@@ -198,7 +198,7 @@ try {
 		for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 740 }]) {
 			await page.setViewportSize(viewport);
 			const title = await arrow.getAttribute("title");
-			assert(await arrow.isEnabled() && title === "Choose what to keep…", `after a message the arrow is on with "Choose what to keep…" at ${viewport.width}, got ${JSON.stringify(title)}`);
+			assert(await arrow.isEnabled() && title === "Choose what to keep", `after a message the arrow is on with "Choose what to keep" at ${viewport.width}, got ${JSON.stringify(title)}`);
 			await arrow.click();
 			await dialog.waitFor({ timeout: 10000 });
 			assert(await dialog.getByRole("button", { name: "Generate memory proposal" }).isVisible(), `the arrow opens the options form at ${viewport.width}`);
@@ -208,6 +208,102 @@ try {
 		}
 		await page.setViewportSize({ width: 1280, height: 900 });
 		console.log("  ok  Remember's arrow is off before any message, then opens the options form in one click, desktop and phone");
+
+		// The options form on a short phone: its buttons stay on screen with no
+		// scrolling, and what is above them scrolls behind them.
+		const stepCard = dialog.locator(".checkpoint-input-card");
+		const stepRow = stepCard.locator("> .checkpoint-preview-actions");
+		const onScreen = (name: string) => dialog.getByRole("button", { name, exact: true }).evaluate((button) => {
+			const rect = button.getBoundingClientRect();
+			const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+			return rect.top >= 0 && rect.bottom <= window.innerHeight && hit === button;
+		});
+		await page.setViewportSize({ width: 375, height: 667 });
+		await arrow.click();
+		await dialog.waitFor({ timeout: 10000 });
+		assert(await stepCard.evaluate((card) => card.scrollTop === 0 && card.scrollHeight > card.clientHeight), "the form is taller than a short phone");
+		assert(await onScreen("Close") && await onScreen("Generate memory proposal"), "Close and Generate are on screen at 375x667 with no scrolling");
+		// A field reached by keyboard lands clear of the pinned buttons.
+		await dialog.locator(".checkpoint-density-option").last().focus();
+		await page.keyboard.press("Tab");
+		const noteField = await stepRow.evaluate((row) => ({ focused: document.activeElement?.tagName, clear: row.getBoundingClientRect().top - document.activeElement!.getBoundingClientRect().bottom }));
+		assert(noteField.focused === "TEXTAREA" && noteField.clear >= 0, `the note field reached by Tab clears the buttons, got ${JSON.stringify(noteField)}`);
+		await stepCard.evaluate((card) => { card.scrollTop = 0; });
+		const buttonsAt = () => dialog.getByRole("button", { name: "Close", exact: true }).evaluate((button) => button.getBoundingClientRect().top);
+		const pinnedAt = await buttonsAt();
+		for (const place of ["middle", "end"] as const) {
+			await stepCard.evaluate((card, to) => { card.scrollTop = to === "end" ? card.scrollHeight : (card.scrollHeight - card.clientHeight) / 2; }, place);
+			assert(await buttonsAt() === pinnedAt, `the buttons stay where they are with the form scrolled to its ${place}`);
+			// The row's own fill, from the card's left edge to its right and down to its end: nothing shows through.
+			const fill = await stepRow.evaluate((row) => {
+				const card = row.parentElement!;
+				const box = row.getBoundingClientRect();
+				const edges = card.getBoundingClientRect();
+				const points = [[edges.left + 4, box.top + 1], [edges.right - 12, box.top + 1], [edges.left + 24, edges.bottom - 3], [edges.right - 24, edges.bottom - 3]];
+				return { covered: points.every(([x, y]) => document.elementFromPoint(x!, y!) === row), same: getComputedStyle(row).backgroundColor === getComputedStyle(card).backgroundColor };
+			});
+			assert(fill.covered && fill.same, `the buttons' row covers what scrolls behind it, with the form scrolled to its ${place}: ${JSON.stringify(fill)}`);
+		}
+		assert(await stepRow.evaluate((row) => row.previousElementSibling!.getBoundingClientRect().bottom <= row.getBoundingClientRect().top), "at its end the form's last part clears the buttons");
+		// Generate pressed from the top of the form fails: its sentence comes into view clear of the buttons, with no scrolling by the person.
+		const STOPPED = "Remember stopped unexpectedly. Nothing was saved. Generate again.";
+		const SAVED_ELSEWHERE = "This conversation was saved from another window.";
+		const DAMAGED = "This room's memory file is damaged, so Remember cannot save. Nothing was lost.";
+		const failGenerate = async (body: string, sentence: string) => {
+			await stepCard.evaluate((card) => { card.scrollTop = 0; });
+			await page.route("**/checkpoint/propose", (route) => route.fulfill({ status: 500, contentType: "application/json", body }));
+			await dialog.getByRole("button", { name: /^Generate / }).click();
+			const line = dialog.getByText(sentence, { exact: true });
+			await line.waitFor({ timeout: 10000 });
+			await page.unroute("**/checkpoint/propose");
+			const seen = () => line.evaluate((shown) => {
+				const box = shown.getBoundingClientRect();
+				const card = shown.closest(".checkpoint-input-card")!;
+				return { top: box.top - card.getBoundingClientRect().top, clear: card.querySelector(":scope > .checkpoint-preview-actions")!.getBoundingClientRect().top - box.bottom };
+			});
+			await waitUntil(async () => { const place = await seen(); return place.top >= 0 && place.clear >= 0; }, "the sentence is in view", 3000).catch(async () => {
+				throw new Error(`${JSON.stringify(sentence)} comes into view clear of the buttons at ${JSON.stringify(page.viewportSize())}, got ${JSON.stringify(await seen())}`);
+			});
+		};
+		await failGenerate("", STOPPED);
+		// A Remember that did not finish: the button that lets it go sits with the others.
+		assert(await onScreen("Close") && await onScreen("Discard") && await onScreen("Generate again"), "Close, Discard and Generate again are on screen at 375x667 with no scrolling");
+		await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+		await dialog.waitFor({ state: "detached", timeout: 5000 });
+		await arrow.click();
+		await dialog.waitFor({ timeout: 10000 });
+		await failGenerate(JSON.stringify({ error: SAVED_ELSEWHERE }), SAVED_ELSEWHERE);
+		await failGenerate(JSON.stringify({ error: "L1b missing mandatory section: Recent Context" }), DAMAGED);
+		assert(await onScreen("Close") && await dialog.getByRole("button", { name: /^Generate / }).count() === 0, "a damaged memory file leaves Close alone, on screen");
+		// Only a new page lets a damaged file's line go.
+		await page.reload();
+		await enterRoom();
+		// A short desktop window hides the sentence too; where the form fits, a failure moves nothing.
+		for (const [viewport, moves] of [[{ width: 1280, height: 480 }, true], [{ width: 1280, height: 900 }, false]] as const) {
+			await page.setViewportSize(viewport);
+			await arrow.click();
+			await dialog.waitFor({ timeout: 10000 });
+			await failGenerate("", STOPPED);
+			assert(await stepCard.evaluate((card) => card.scrollTop > 0) === moves, `at ${viewport.width}x${viewport.height} the form ${moves ? "scrolls to the sentence" : "stays where it was"}`);
+			await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+			await dialog.waitFor({ state: "detached", timeout: 5000 });
+		}
+		// Where the form fits, nothing changes: the buttons keep their distance from what is above them and from the card's end.
+		for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+			await page.setViewportSize(viewport);
+			await arrow.click();
+			await dialog.waitFor({ timeout: 10000 });
+			const place = await dialog.getByRole("button", { name: "Close", exact: true }).evaluate((close) => {
+				const row = close.parentElement!;
+				const card = row.parentElement!;
+				return { fits: card.scrollHeight === card.clientHeight, above: close.getBoundingClientRect().top - row.previousElementSibling!.getBoundingClientRect().bottom, below: card.getBoundingClientRect().bottom - row.lastElementChild!.getBoundingClientRect().bottom };
+			});
+			assert(place.fits && Math.abs(place.above - 22) <= 1 && Math.abs(place.below - 31) <= 1, `the form looks as it did at ${viewport.width}x${viewport.height}, got ${JSON.stringify(place)}`);
+			await dialog.getByRole("button", { name: "Close", exact: true }).click();
+			await dialog.waitFor({ state: "detached", timeout: 5000 });
+		}
+		await page.setViewportSize({ width: 1280, height: 900 });
+		console.log("  ok  the options form's buttons stay on screen on a short phone, its failures come into view above them, and where it fits it looks as it did");
 		const progress = () => authedFetch(`${baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(conversationId)}`).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
 
 		// 0. A note typed in Remember stays through a restart of the server while the page stays open: the room reconnects, and the dialog and the note are as they were.
@@ -323,7 +419,7 @@ try {
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await readyAfter(beforeOther);
 		await composer.fill("The venue holds two hundred.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the other room");
 		holdRemember = false;
 		for (const release of held.splice(0)) release();
@@ -389,7 +485,7 @@ try {
 		conversationId = await activeConversation();
 		await enterFirstRoom();
 		await composer.fill("We moved the launch to May.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the first room's new conversation");
 		await answerSaved();
 
@@ -410,7 +506,7 @@ try {
 		assert(await composer.inputValue() === "typed", `typing after Keep chatting lands in the message box, got ${JSON.stringify(await composer.inputValue())}`);
 		conversationId = await activeConversation();
 		await composer.fill("We moved the launch to May.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the fresh conversation");
 		await answerSaved();
 
@@ -451,7 +547,7 @@ try {
 		assert(await dialog.count() === 0, "an ordinary quick save shows no dialog");
 		(await import("../src/persistent-room-maintenance-settings.js")).writePersistentRoomMaintenanceSettings(agentId, { quickCheckpointAutoApply: false });
 		await composer.fill("We moved the launch to May.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer after the quick save");
 		await answerSaved();
 
@@ -485,7 +581,7 @@ try {
 		await reenter();
 		const shownBeforeVenue = await page.getByText("Answer from claude-fake.").count();
 		await composer.fill("The venue is booked.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) >= 1, "the answer before the 19th save");
 		await answerSaved(shownBeforeVenue);
 		await openDialog();
@@ -502,7 +598,7 @@ try {
 		// The 19th save left a new, empty conversation: say something to remember.
 		const shownBeforeCaterer = await page.getByText("Answer from claude-fake.").count();
 		await composer.fill("The caterer is confirmed.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) >= 1, "the answer before the quick save");
 		await answerSaved(shownBeforeCaterer);
 		const closedId = await page.evaluate(async (id) => {
@@ -536,7 +632,7 @@ try {
 		holdNineteen();
 		await reenter();
 		await composer.fill("And the budget holds.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer in the new conversation");
 		await answerSaved();
 		await openDialog();

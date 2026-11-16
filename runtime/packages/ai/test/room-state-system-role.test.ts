@@ -140,6 +140,7 @@ beforeEach(() => {
 const LISTED_MODELS = [
 	"claude-fable-5",
 	"claude-fable-5-1",
+	"claude-fable-5-2",
 	"claude-mythos-5",
 	"claude-mythos-5-1",
 	"claude-mythos-preview",
@@ -200,8 +201,8 @@ function expectUserText(messages: WireMessage[]) {
 }
 
 describe("everywhere else it stays plain user text", () => {
-	it("the Claude sign-in (subscription token) on a listed model", async () => {
-		const { messages } = await wireParams(anthropicModel("claude-opus-5-5"), [user("Hello"), roomState()], OAUTH_KEY);
+	it.each(["claude-opus-5-5", "claude-fable-5-2"])("the Claude sign-in (subscription token) on a listed model, %s", async (id) => {
+		const { messages } = await wireParams(anthropicModel(id), [user("Hello"), roomState()], OAUTH_KEY);
 		expectUserText(messages);
 	});
 
@@ -218,6 +219,17 @@ describe("everywhere else it stays plain user text", () => {
 			user("Hello"),
 			roomState(),
 		]);
+		expectUserText(messages);
+	});
+
+	it.each([
+		["cloudflare-ai-gateway", "claude-fable-5.2"],
+		["opencode", "claude-fable-5-2"],
+	])("Fable 5.2 through a gateway (%s)", async (provider, id) => {
+		// A concrete address in place of the account placeholders in Cloudflare's.
+		const model = { ...anthropicModel(id, provider), baseUrl: "https://gateway.invalid/anthropic" };
+		expect(model.provider).toBe(provider);
+		const { messages } = await wireParams(model, [user("Hello"), roomState()]);
 		expectUserText(messages);
 	});
 

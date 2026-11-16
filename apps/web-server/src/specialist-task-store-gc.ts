@@ -3,6 +3,8 @@ import path from "node:path";
 import { artifactRoot } from "../../../pi-package/extensions/artifacts/index.js";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT } from "./persistent-room-workspace-policy.js";
 import { listTaskLedgerRecords, markTaskLedgerRecordDeleted, type TaskLedgerRecord } from "./persistent-room-task-ledger.js";
+import { listPersistentAgentIds } from "./persistent-agent-status.js";
+import { settleRoom } from "./room-settle.js";
 
 /**
  * Task-store safety-valve GC (assets contract §4 — G3).
@@ -133,6 +135,8 @@ function ledgerRowsByTaskId(options: TaskStoreGcOptions): Map<string, { roomId: 
 }
 
 export function assessTaskStoreGc(options: TaskStoreGcOptions = {}): TaskStoreGcAssessment {
+	// Task titles are a conversation's words: a half-done Forget goes first, its task folders with it.
+	for (const roomId of listPersistentAgentIds()) settleRoom(roomId);
 	const thresholdBytes = options.thresholdBytes ?? TASK_STORE_GC_THRESHOLD_BYTES;
 	const tasksRoot = tasksRootPath(options);
 	let taskDirs: fs.Dirent[] = [];

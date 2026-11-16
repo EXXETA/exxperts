@@ -152,3 +152,63 @@ export function SaveIcon({ size = 14 }: { size?: number } = {}) {
 		</Icon>
 	);
 }
+
+export function FolderIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M2 4.5c0-.83.67-1.5 1.5-1.5h2.6l1.5 1.6h4.9c.83 0 1.5.67 1.5 1.5v5.4c0 .83-.67 1.5-1.5 1.5h-9c-.83 0-1.5-.67-1.5-1.5z" />
+		</Icon>
+	);
+}
+
+export function GlobeIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<circle cx="8" cy="8" r="6" />
+			<path d="M2 8h12" />
+			<path d="M8 2c1.7 1.7 2.5 3.7 2.5 6S9.7 12.3 8 14C6.3 12.3 5.5 10.3 5.5 8S6.3 3.7 8 2z" />
+		</Icon>
+	);
+}
+
+export function PlusIcon({ size = 14 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M8 3v10M3 8h10" />
+		</Icon>
+	);
+}
+
+export function CheckIcon({ size = 14 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M3.5 8.5l3 3 6-7" />
+		</Icon>
+	);
+}
+
+export function ScreenIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<rect x="1.8" y="2.5" width="12.4" height="8.5" rx="1.2" />
+			<path d="M8 11v2.5M5.5 13.5h5" />
+		</Icon>
+	);
+}
+
+export function SunIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<circle cx="8" cy="8" r="2.8" />
+			<path d="M8 1.6v1.3M8 13.1v1.3M1.6 8h1.3M13.1 8h1.3M3.5 3.5l.9.9M11.6 11.6l.9.9M3.5 12.5l.9-.9M11.6 4.4l.9-.9" />
+		</Icon>
+	);
+}
+
+export function MoonIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<path d="M13.6 9.6A5.9 5.9 0 1 1 6.4 2.4a4.6 4.6 0 0 0 7.2 7.2z" />
+		</Icon>
+	);
+}

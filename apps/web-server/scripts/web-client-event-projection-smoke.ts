@@ -100,6 +100,12 @@ try {
 		const otherMessage = { role: "assistant", content: [otherCall] };
 		const grep = others({ type: "message_update", assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: otherMessage }, message: otherMessage }).assistantMessageEvent;
 		assert(JSON.stringify(grep.preview) === JSON.stringify({ path: "src", pattern: "limit" }), `a search sends its pattern and folder only, got ${JSON.stringify(grep)}`);
+		// The folder ask's suggestion and reason are the room's words: the page gets them only as the app judged and showed them, never as written.
+		const asked = createWebClientEventProjector();
+		const askCall = { type: "toolCall", id: "call-10", name: "ask_for_folder", arguments: { access: "read", reason: "The invoices are in Finance.", folder: "~/documents/finance/" } };
+		const askMessage = { role: "assistant", content: [askCall] };
+		const ask = asked({ type: "message_update", assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: askCall, partial: askMessage }, message: askMessage }).assistantMessageEvent;
+		assert(JSON.stringify(ask.preview) === "{}" && !JSON.stringify(ask).includes("finance"), `the folder ask's preview carries no folder, got ${JSON.stringify(ask)}`);
 	});
 
 	// A file write names its file and how far it has got, and never carries the file's text.

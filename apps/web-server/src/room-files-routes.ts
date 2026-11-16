@@ -1,6 +1,9 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
+import { writeFileAtomic } from "@exxeta/exxperts-runtime";
+import { isValidPersistentAgentId, PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
+import { settleRoom } from "./room-settle.js";
 import { sweepExpiredShelfTrash, replayShelfRenameJournals, listShelfFilesWithOrigin, persistentRoomShelfDirPath, allocateShelfFilename, PersistentRoomShelfError, resolveShelfFilePath, stageShelfFileDelete, undoShelfFileDelete, commitShelfFileDelete, renameShelfFile, validateShelfFilename, sanitizeShelfFilename } from "./persistent-room-shelf.js";
 import { cachedShelfPageCount, SHELF_READ_MAX_FILE_BYTES, sniffShelfFileBuffer, readShelfFileText } from "./persistent-room-shelf-reading.js";
 import { stateHome } from "../../../pi-package/product-state-paths.js";
@@ -51,11 +54,11 @@ const ROOM_FILES_PDF_SECURITY_HEADERS: Record<string, string> = {
 	"cache-control": "no-store",
 };
 
-const SAFE_ROOM_ID = /^[a-zA-Z0-9_-]{1,160}$/;
-
 function roomFilesRoomId(req: any): string | null {
 	const roomId = String((req.params as any).id ?? "").trim();
-	return SAFE_ROOM_ID.test(roomId) && fs.existsSync(path.join(PERSISTENT_AGENTS_ROOT, roomId)) ? roomId : null;
+	if (!isValidPersistentAgentId(roomId) || !fs.existsSync(path.join(PERSISTENT_AGENTS_ROOT, roomId))) return null;
+	settleRoom(roomId);
+	return roomId;
 }
 
 function isLocalSaveFileRequest(req: any): boolean {
@@ -87,6 +90,45 @@ app.get("/api/persistent-agents/:id/files", async (req, reply) => {
 	return { files };
 });
 
+const UPLOAD_LANDING_TRIES = 5;
+
+/** The name an earlier upload of these same bytes landed under, when its answer never went out. */
+function landedUpload(shelfDir: string, unanswered: string, bytes: Buffer): string | null {
+	let mark: { name?: unknown };
+	try {
+		mark = JSON.parse(fs.readFileSync(unanswered, "utf-8"));
+	} catch {
+		return null;
+	}
+	if (typeof mark.name !== "string") return null;
+	try {
+		return fs.readFileSync(path.join(shelfDir, validateShelfFilename(mark.name))).equals(bytes) ? mark.name : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Lands the bytes under a free name. Another server on this folder can take the name first, so the landing refuses rather than replaces, and the next free name is tried. */
+function landUpload(shelfDir: string, unanswered: string, desiredName: string, bytes: Buffer): string {
+	for (let tries = 1; ; tries += 1) {
+		const name = allocateShelfFilename(desiredName, (candidate) => fs.existsSync(path.join(shelfDir, candidate)));
+		writeFileAtomic(unanswered, JSON.stringify({ name }) + "\n");
+		try {
+			writeFileAtomic(path.join(shelfDir, name), bytes, { hiddenTemp: true, exclusive: true });
+			return name;
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code !== "EEXIST" || tries >= UPLOAD_LANDING_TRIES) throw e;
+		}
+	}
+}
+
+/** What a kill left of an upload's temporary files. Landing is synchronous, so none of this server's is in flight; another server's upload caught here fails and says so. */
+function removeUploadLeftovers(shelfDir: string): void {
+	for (const name of fs.readdirSync(shelfDir)) {
+		if (name.startsWith(".") && name.includes(".tmp-")) fs.rmSync(path.join(shelfDir, name), { force: true });
+	}
+}
+
 // Upload: base64 JSON like /api/skills/upload (no multipart anywhere in the
 // app). 40 MB body limit covers the 25 MB shelf cap plus base64 inflation.
 // The file is sniffed BEFORE landing: tier-3 formats refuse honestly with the
@@ -116,14 +158,33 @@ app.post("/api/persistent-agents/:id/files", { bodyLimit: 40 * 1024 * 1024 }, as
 	}
 	const shelfDir = persistentRoomShelfDirPath(roomId);
 	fs.mkdirSync(shelfDir, { recursive: true, mode: 0o700 });
+	// The mark stands from before the file lands until the answer went out, so
+	// the same file sent again after a kill gets its first landing back, never a
+	// second copy. It is named for the file's name and bytes, so the same bytes
+	// under two names keep a mark each. It holds a name only, and a dotfile never
+	// shows on the shelf.
+	const unanswered = path.join(shelfDir, `.upload-${crypto.createHash("sha256").update(desiredName).update("\0").update(bytes).digest("hex")}.json`);
 	let name: string;
 	try {
-		name = allocateShelfFilename(desiredName, (candidate) => fs.existsSync(path.join(shelfDir, candidate)));
-		fs.writeFileSync(path.join(shelfDir, name), bytes, { flag: "wx", mode: 0o600 });
+		const landed = landedUpload(shelfDir, unanswered, bytes);
+		if (landed) {
+			name = landed;
+		} else {
+			removeUploadLeftovers(shelfDir);
+			name = landUpload(shelfDir, unanswered, desiredName, bytes);
+		}
 	} catch (e) {
 		app.log.warn({ err: (e as Error).message, roomId }, "shelf upload write failed");
 		return reply.code(500).send({ error: "The file could not be saved to this room's Attachments." });
 	}
+	reply.raw.once("finish", () => {
+		try {
+			fs.rmSync(unanswered, { force: true });
+		} catch (e) {
+			// Thrown here it would end the server for everyone; left behind it costs a stale mark.
+			app.log.warn({ err: (e as Error).message, roomId }, "shelf upload mark could not be removed");
+		}
+	});
 	// Parse once, honestly. A parse failure is reported, not hidden — the file
 	// stays on the shelf (read_file will state the same failure) and the chip
 	// carries the truth before the user commits the message.

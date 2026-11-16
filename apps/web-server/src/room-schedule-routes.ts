@@ -1,6 +1,7 @@
 import { validatePersistentAgentId, getPersistentAgentStatus, isPersistentAgentArchived } from "./persistent-agents.js";
+import { settledRoomStatus } from "./room-status.js";
 import { browserSafeDiagnosticText } from "./status-diagnostics.js";
-import { type BackgroundRunStatus, listBackgroundRuns } from "./background-runs.js";
+import { type BackgroundRunStatus, listBackgroundRunsWithNewestPerSchedule } from "./background-runs.js";
 import { buildPersistentRoomBackgroundRunsResponse } from "./persistent-room-background-run-history.js";
 import { type AddPersistentRoomScheduleJobInput, type UpdatePersistentRoomScheduleJobInput, type PersistentRoomScheduleJob, type PersistentRoomScheduleSummary, type PersistentRoomScheduleType, SCHEDULE_PATTERN_CANNOT_RUN_CODE, listPersistentRoomScheduleJobs, summarizePersistentRoomScheduleJobs, addPersistentRoomScheduleJob, updatePersistentRoomScheduleJob, removePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { app } from "./server-app.js";
@@ -139,7 +140,7 @@ function getPersistentRoomScheduleManagementRoomId(idRaw: string): string {
 	} catch (error) {
 		throw persistentRoomScheduleManagementHttpError((error as Error).message, 400);
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) throw persistentRoomScheduleManagementHttpError(`persistent agent not found: ${id}`, 404);
 	if (isPersistentAgentArchived(status)) {
 		throw persistentRoomScheduleManagementHttpError(`persistent agent is archived: ${id}`, 410, { status: "archived", agentId: id, archivedAt: status.archivedAt });
@@ -241,13 +242,13 @@ app.get("/api/persistent-agents/:id/background-runs", async (req, reply) => {
 	try {
 		const id = getPersistentRoomScheduleManagementRoomId(String((req.params as any).id ?? "").trim());
 		const filters = parsePersistentRoomBackgroundRunHistoryQuery(req.query);
-		const records = listBackgroundRuns({
+		const history = listBackgroundRunsWithNewestPerSchedule({
 			scope: { kind: "persistent-room", roomId: id },
 			...(filters.status ? { status: filters.status } : {}),
 			...(filters.scheduleId ? { schedulerJobId: filters.scheduleId } : {}),
 			limit: filters.limit,
 		});
-		return buildPersistentRoomBackgroundRunsResponse(id, records, filters);
+		return buildPersistentRoomBackgroundRunsResponse(id, history.runs, filters, history.newestPerSchedule);
 	} catch (e) {
 		const explicitBody = (e as any)?.body;
 		const explicitStatus = (e as any)?.statusCode;
@@ -264,7 +265,7 @@ app.get("/api/persistent-agents/:id/schedules", async (req, reply) => {
 	} catch (e) {
 		return reply.code(400).send({ error: (e as Error).message });
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: `persistent agent not found: ${id}` });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: `persistent agent is archived: ${id}`, status: "archived", agentId: id, archivedAt: status.archivedAt });
 	try {

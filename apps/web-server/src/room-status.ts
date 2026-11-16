@@ -1,9 +1,17 @@
-import { validatePersistentAgentId, getPersistentAgentStatus, isPersistentAgentArchived, assertPersistentAgentAcceptsCheckpoint, type writeApprovedCheckpoint, type writePersistentAgentMementoBoundary } from "./persistent-agents.js";
+import { validatePersistentAgentId, isPersistentAgentArchived, assertPersistentAgentAcceptsCheckpoint, type writeApprovedCheckpoint, type writePersistentAgentMementoBoundary } from "./persistent-agents.js";
 import type { AbsorbRunApprovalResponse } from "./absorb-run.js";
+import { describePersistentAgent } from "./persistent-agent-status.js";
+import { settleRoom } from "./room-settle.js";
+
+/** What a route that reads a room starts from: the room settled, then described. */
+function settledRoomStatus(id: string) {
+	settleRoom(id);
+	return describePersistentAgent(id);
+}
 
 function getUsablePersistentAgentStatusForNormalUse(idRaw: string) {
 	const id = validatePersistentAgentId(idRaw);
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) {
 		const error = new Error(`persistent agent not found: ${id}`);
 		(error as any).statusCode = 404;
@@ -31,7 +39,7 @@ function getPersistentAgentStatusForCheckpoint(idRaw: string) {
 
 function getPersistentAgentStatusForMaintenance(idRaw: string) {
 	const id = validatePersistentAgentId(idRaw);
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) {
 		const error = new Error(`persistent agent not found: ${id}`);
 		(error as any).statusCode = 404;
@@ -132,4 +140,4 @@ function browserSafeAbsorbApprovalResponse(result: AbsorbRunApprovalResponse & {
 	};
 }
 
-export { browserSafeAbsorbApprovalResponse, browserSafeCheckpointApprovalResponse, browserSafeMementoBoundaryResponse, getPersistentAgentStatusForCheckpoint, getPersistentAgentStatusForMaintenance, getUsablePersistentAgentStatusForNormalUse, persistentAgentNormalUseErrorReply };
+export { settledRoomStatus, browserSafeAbsorbApprovalResponse, browserSafeCheckpointApprovalResponse, browserSafeMementoBoundaryResponse, getPersistentAgentStatusForCheckpoint, getPersistentAgentStatusForMaintenance, getUsablePersistentAgentStatusForNormalUse, persistentAgentNormalUseErrorReply };

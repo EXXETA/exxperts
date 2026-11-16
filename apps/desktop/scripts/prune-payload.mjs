@@ -20,6 +20,9 @@ export const DESKTOP_KEEP = [
 	{ path: "package.json", reason: "the server and the Health Check read the product version from it" },
 	{ path: "CHANGELOG.md", reason: "What's new reads the release notes from it" },
 	{ path: "LICENSE", reason: "the app's own licence travels with every copy" },
+	{ path: "NOTICE", reason: "the notice that goes with LICENSE travels with every copy" },
+	{ path: "runtime/LICENSE", reason: "the runtime is derived from Pi under the MIT licence, whose notice travels with every copy" },
+	{ path: "runtime/NOTICE.md", reason: "the runtime's notice, which NOTICE points to, travels with every copy" },
 	{ path: "apps/web-server/dist", reason: "the bundled server, its licences file and the files it reads beside itself" },
 	{ path: "apps/web-ui/dist", reason: "the web interface the server serves" },
 	{ path: "runtime/packages/coding-agent/package.json", reason: "the runtime reads its name, version and config folder from it" },
@@ -42,12 +45,57 @@ export const DESKTOP_DROP = [
 	{ name: "recheck-jar", reason: "recheck's Java fallback (23 MB), used only when the native checker is missing and Java is installed; the native checker ships for both desktop targets, and without the jar recheck falls back to its JavaScript checker" },
 ];
 
+// The targets the desktop app is built for.
+export const DESKTOP_TARGETS = ["darwin-arm64", "win-x64"];
+
+// Packages the bundled server ships that one target's payload leaves out,
+// each with the reason; what only they need goes with them, and a package a
+// kept package needs stays. Any other package the trim would leave out fails
+// it, so each one is named here. An entry with `from` leaves out a dependency
+// of that kept package which the code the desktop runs never loads.
+export const DESKTOP_TARGET_DROP = [
+	{ target: "win-x64", name: "@anthropic-ai/sandbox-runtime", reason: "the room box's library: only box-worker.mjs loads it, and the server builds the Mac's box on a Mac alone (roomBoxComputer in apps/web-server/src/room-box/box-available.ts), and Windows' box forks box-worker-windows.mjs instead; its own commander, inside its folder, goes with it" },
+	{ target: "win-x64", name: "@pondwader/socks5-server", reason: "only the room box's library needs it" },
+	{ target: "win-x64", name: "node-forge", reason: "only the room box's library needs it" },
+	{ target: "win-x64", name: "zod", reason: "only the room box's library loads it as files; the bundled server carries its own copy" },
+	{ target: "win-x64", name: "node-pty", from: "@microsoft/mxc-sdk", reason: "the sandbox kit loads it only for a terminal in the box (dist/bindings/process-container-pty.js), by an import the Windows box never reaches" },
+	{ target: "win-x64", name: "node-addon-api", reason: "only node-pty needs it, to build from source" },
+	{ target: "darwin-arm64", name: "@microsoft/mxc-sdk", reason: "Microsoft's sandbox kit for the Windows box: only box-worker-windows.mjs loads it, and its library is Windows only; its own koffi, inside its folder, goes with it" },
+	{ target: "darwin-arm64", name: "@koromix/koffi-darwin-arm64", reason: "only the sandbox kit's koffi needs it" },
+	{ target: "darwin-arm64", name: "node-pty", reason: "only the sandbox kit needs it" },
+	{ target: "darwin-arm64", name: "node-addon-api", reason: "only node-pty needs it, to build from source" },
+	{ target: "darwin-arm64", name: "semver", reason: "only the sandbox kit needs it" },
+];
+
+// Files left out of a kept package, each with the reason: every file but the
+// `keep` paths, relative to the folder.
+// Nothing loads them, and each one would count against the ceiling below. A
+// kept path that is missing fails the trim. The release archive has already
+// left out every package's maps, declarations and Markdown but its licence
+// (scripts/bundle-release-prune.mjs), the sandbox kit's included.
+export const DESKTOP_DROP_FILES = [
+	{ folder: "node_modules/zod", keep: ["package.json", "LICENSE", "v3"], reason: "the room box's library, the only package that loads zod as files, imports zod/v3 alone, which loads nothing outside its folder" },
+	{
+		folder: "node_modules/@microsoft/mxc-sdk/bin",
+		keep: ["x64/mxc_ffi.dll"],
+		reason: "the Windows box runs, streams and probes through this one library, by koffi (dist/native-library.js); the app is x64, so arm64 goes, and so do the Linux and Mac binaries, the programs the box never starts (wxc-exec.exe serves only a terminal in the box; the others are daemons, a diagnostics console and test proxies), the signed manifests and the .NET bindings",
+	},
+	{
+		folder: "node_modules/@microsoft/mxc-sdk/node_modules/koffi",
+		keep: ["package.json", "LICENSE.txt", "index.js", "src/koffi/index.js", "src/koffi/src/static.js"],
+		reason: "the files the kit's import of koffi loads, which take its native module from its platform package; its CommonJS twins and its indirect entry are never loaded, and its C sources, headers and build script only build it from source",
+	},
+];
+
 // The most files the trimmed app/ folder may hold, the one Windows users
 // install. Each file costs install and update time there, as the virus
 // scanner checks every new file, so growth has to be a reviewed decision.
-// Measured: 2,145 files on darwin-arm64, and about 2,148 on win-x64
-// estimated from an earlier release's zip index; the ceiling sits about 16
-// percent above.
+// Measured: 2,397 files on darwin-arm64, and 2,344 on win-x64, which leaves
+// out the room box's library and keeps Microsoft's sandbox kit with semver
+// (DESKTOP_TARGET_DROP), measured on the same tree with koffi's win32-x64
+// package in place of the Mac's; a real Windows tree differs only by its
+// native binaries, 3 files more in an earlier release's zip index. The
+// ceiling sits about 4 percent above darwin-arm64 and 7 percent above win-x64.
 export const DESKTOP_MAX_FILES = 2_500;
 
 export function countFiles(dir) {
@@ -87,27 +135,65 @@ function pruneNodeModules(nodeModulesDir, keep) {
 	}
 }
 
-// Trims appDir in place and checks the result; throws, naming what is
-// missing, when the trimmed payload lacks anything the desktop runs.
-export function pruneDesktopPayload(appDir, { log = console.log, maxFiles = DESKTOP_MAX_FILES } = {}) {
+// The kept paths of an entry whose folder the payload keeps that are missing,
+// checked before the entry trims the folder.
+function missingKeptFiles(appDir) {
+	return DESKTOP_DROP_FILES.filter(({ folder }) => fs.existsSync(path.join(appDir, ...folder.split("/")))).flatMap(({ folder, keep, reason }) =>
+		keep.filter((rel) => !fs.existsSync(path.join(appDir, ...folder.split("/"), ...rel.split("/")))).map((rel) => `${folder}/${rel} is missing (${reason})`),
+	);
+}
+
+// The package folders the target's list leaves out of the full closure, each
+// with its entry; throws when one is not listed. A package inside a left-out
+// package's folder goes with it.
+function targetDrops(appDir, target, exclude, kept) {
+	const listed = DESKTOP_TARGET_DROP.filter((entry) => entry.target === target);
+	const left = [...shippedPackageDirs(appDir, { exclude }).dirs].filter((dir) => !kept.has(dir));
+	const drops = left
+		.filter((dir) => !left.some((outer) => dir.startsWith(`${outer}${path.sep}`)))
+		.map((dir) => {
+			const { name } = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+			return { name, entry: listed.find((entry) => entry.name === name) };
+		});
+	const unlisted = drops.filter((drop) => !drop.entry).map((drop) => drop.name);
+	if (unlisted.length > 0) {
+		throw new Error(`the ${target} desktop payload would leave out ${unlisted.join(", ")}, which DESKTOP_TARGET_DROP does not list for it; list each with the reason, or keep what it serves`);
+	}
+	return drops.map((drop) => drop.entry);
+}
+
+// Trims appDir in place for the target and checks the result; throws, naming
+// what is missing, when the trimmed payload lacks anything the desktop runs.
+export function pruneDesktopPayload(appDir, { target, log = console.log, maxFiles = DESKTOP_MAX_FILES }) {
+	if (!DESKTOP_TARGETS.includes(target)) throw new Error(`unknown desktop target "${target}" (${DESKTOP_TARGETS.join(" or ")})`);
 	const filesBefore = countFiles(appDir);
 	const nodeModulesDir = path.join(appDir, "node_modules");
 	const nodeModulesBefore = fs.existsSync(nodeModulesDir) ? countFiles(nodeModulesDir) : 0;
 	// The closure is resolved before anything is removed, so a package the
 	// release tree lacks shows up in the check below rather than as a crash.
-	const { dirs } = shippedPackageDirs(appDir, { exclude: DESKTOP_DROP.map((entry) => entry.name) });
+	const exclude = DESKTOP_DROP.map((entry) => entry.name);
+	const drops = DESKTOP_TARGET_DROP.filter((entry) => entry.target === target);
+	const leaveOut = drops.filter((entry) => !entry.from).map((entry) => entry.name);
+	const cut = drops.filter((entry) => entry.from);
+	const { dirs } = shippedPackageDirs(appDir, { exclude, leaveOut, cut });
+	for (const entry of targetDrops(appDir, target, exclude, dirs)) log(`[package] left out of the ${target} payload: ${entry.name} (${entry.reason})`);
 	pruneOutsideKeepList(appDir, "", DESKTOP_KEEP.map((entry) => entry.path));
 	if (fs.existsSync(nodeModulesDir)) pruneNodeModules(nodeModulesDir, dirs);
+	const missingKept = missingKeptFiles(appDir);
+	for (const { folder, keep } of DESKTOP_DROP_FILES) {
+		const full = path.join(appDir, ...folder.split("/"));
+		if (fs.existsSync(full)) pruneOutsideKeepList(full, "", keep);
+	}
 
 	const problems = DESKTOP_KEEP.filter((entry) => !fs.existsSync(path.join(appDir, ...entry.path.split("/")))).map(
 		(entry) => `${entry.path} is missing (${entry.reason})`,
 	);
-	problems.push(...checkServerFiles(appDir));
+	problems.push(...missingKept, ...checkServerFiles(appDir, undefined, { leaveOut, cut }));
 	if (problems.length > 0) throw new Error(`the trimmed desktop payload is incomplete:\n  - ${[...new Set(problems)].join("\n  - ")}`);
 
 	const nodeModulesAfter = countFiles(nodeModulesDir);
 	const filesAfter = countFiles(appDir);
-	log(`[package] desktop payload trimmed: app/ ${filesBefore} -> ${filesAfter} files (node_modules ${nodeModulesBefore} -> ${nodeModulesAfter}, ${dirs.size} packages kept; ceiling ${maxFiles})`);
+	log(`[package] desktop payload trimmed for ${target}: app/ ${filesBefore} -> ${filesAfter} files (node_modules ${nodeModulesBefore} -> ${nodeModulesAfter}, ${dirs.size} packages kept; ceiling ${maxFiles})`);
 	if (filesAfter > maxFiles) {
 		throw new Error(`the trimmed desktop payload's app/ would carry ${filesAfter} files, over the ceiling of ${maxFiles}. Leave out what the desktop never reads (DESKTOP_KEEP, DESKTOP_DROP), or raise DESKTOP_MAX_FILES in a reviewed commit that states the measured count.`);
 	}

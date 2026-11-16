@@ -82,6 +82,8 @@ export interface PersistentRoomBackgroundRunsResponse {
 	};
 	ordering: "createdAt_desc";
 	runs: PersistentRoomBackgroundRunView[];
+	/** Each task's newest run, however many newer runs push it out of runs. */
+	latestRuns: PersistentRoomBackgroundRunView[];
 	summary: PersistentRoomBackgroundRunHistorySummary;
 }
 
@@ -89,15 +91,18 @@ export function buildPersistentRoomBackgroundRunsResponse(
 	roomId: string,
 	records: BackgroundRunRecord[],
 	filters: { scheduleId?: string; status?: PersistentRoomBackgroundRunStatus; limit: number },
+	newestPerSchedule: BackgroundRunRecord[] = [],
 ): PersistentRoomBackgroundRunsResponse {
-	const runs = records
+	const project = (list: BackgroundRunRecord[]) => list
 		.filter((record) => record.scope.kind === "persistent-room" && record.scope.roomId === roomId)
 		.map((record) => projectPersistentRoomBackgroundRun(roomId, record));
+	const runs = project(records);
 	return {
 		roomId,
 		filters,
 		ordering: "createdAt_desc",
 		runs,
+		latestRuns: project(newestPerSchedule),
 		summary: summarizePersistentRoomBackgroundRuns(runs),
 	};
 }

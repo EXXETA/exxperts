@@ -13,7 +13,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -191,7 +191,7 @@ try {
 
 		for (let round = 1; round <= 2; round += 1) {
 			await composer.fill(`Question ${round}.`);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, `answer ${round}`);
 			await answerSaved(`Question ${round}.`);
 			const socketsBefore = await socketCount();
@@ -211,7 +211,7 @@ try {
 		// A Forget that fails after the room's socket closed: the room is not
 		// left without its reconnect, it dials again and says so.
 		await composer.fill("Question 3.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "answer 3");
 		await answerSaved("Question 3.");
 		await page.route("**/memento", async (route) => {

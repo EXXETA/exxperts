@@ -14,8 +14,9 @@
  */
 
 import * as path from "node:path";
+import { installConnectorStartCheck } from "../../../apps/web-server/src/connector-start-check.js";
 import { stateHome } from "../../product-state-paths.js";
-import { ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomConnectorConfigCwd, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
+import { type ConnectorPlaces, connectorPlacesReader, ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomConnectorConfigCwd, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
 
 // Kept non-literal so tsc never resolves the specifiers into raw .ts sources,
 // and so no tsconfig `paths` remap is needed — a remap would also be applied
@@ -29,12 +30,20 @@ type EventHandlerLike = (event: unknown, ctx: unknown) => unknown;
  * except `cwd`, which is the room connector folder. The adapter reads `cwd`
  * only to find config files, so a room's connectors come from the person's
  * settings while each connector still starts where it always did. The guarded
- * getters are carried over as getters, never read eagerly.
+ * getters are carried over as getters, never read eagerly. `onCwdRead` runs
+ * each time `cwd` is read, right before the adapter's read that uses it.
  */
-function withRoomConnectorConfigCwd(ctx: unknown): unknown {
+function withRoomConnectorConfigCwd(ctx: unknown, onCwdRead?: () => void): unknown {
 	if (!ctx || typeof ctx !== "object") return ctx;
 	const descriptors = Object.getOwnPropertyDescriptors(ctx);
-	descriptors.cwd = { get: () => roomConnectorConfigCwd(), enumerable: true, configurable: true };
+	descriptors.cwd = {
+		get: () => {
+			onCwdRead?.();
+			return roomConnectorConfigCwd();
+		},
+		enumerable: true,
+		configurable: true,
+	};
 	return Object.create(Object.getPrototypeOf(ctx), descriptors);
 }
 
@@ -50,6 +59,8 @@ export function createRoomScopedMcpExtension(roomId: string, options: RoomScopeR
 }
 
 async function registerMcpExtension(pi: unknown, roomScopeId: string, scopeOptions: RoomScopeRegistrationOptions) {
+	// Before the warm-up below and every later start of this room's connectors.
+	installConnectorStartCheck();
 	// The adapter resolves its agent-global config dir from PI_CODING_AGENT_DIR
 	// (defaulting to ~/.pi/agent); point it at the exxperts agent dir instead.
 	if (!process.env.PI_CODING_AGENT_DIR) {
@@ -94,10 +105,30 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string, scopeOptio
 	}
 	// The adapter's session handlers (its session start loads the config) see
 	// the room connector folder as their cwd.
+	//
+	// The adapter connects, and reconnects, every connector from the one read
+	// of the settings its session start makes (pi-mcp-adapter's init.ts:
+	// `loadMcpConfig(configPath, ctx.cwd)`; lazyConnect and the call path use
+	// that state's config), and it keeps only the newest session start's state.
+	// Reading `cwd` is the first step of that read, so the places are read
+	// there, in the same step, with the same arguments, and kept only for the
+	// newest session start: the gate offers a lasting yes only while a
+	// connector is still where this session connected it.
+	const readConnectorPlaces = await connectorPlacesReader();
+	const flags = pi as { getFlag?: (name: string) => unknown };
+	let sessionStarts = 0;
+	let placesAtSessionStart: ConnectorPlaces | undefined;
 	const originalOn = api.on?.bind(pi);
 	if (originalOn) {
 		api.on = (event: string, handler: EventHandlerLike) => {
-			originalOn(event, (eventValue: unknown, ctx: unknown) => handler(eventValue, withRoomConnectorConfigCwd(ctx)));
+			originalOn(event, (eventValue: unknown, ctx: unknown) => {
+				if (event !== "session_start") return handler(eventValue, withRoomConnectorConfigCwd(ctx));
+				const started = ++sessionStarts;
+				placesAtSessionStart = undefined;
+				return handler(eventValue, withRoomConnectorConfigCwd(ctx, () => {
+					if (started === sessionStarts) placesAtSessionStart = readConnectorPlaces(flags.getFlag?.("mcp-config") as string | undefined);
+				}));
+			});
 		};
 	}
 	// ...and its startup config read (direct tools, settings) uses the same
@@ -117,6 +148,7 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string, scopeOptio
 		const registrationOptions: RoomScopeRegistrationOptions = {
 			...scopeOptions,
 			...(getAllTools ? { getAllTools } : {}),
+			connectedPlaces: () => placesAtSessionStart,
 		};
 		for (const tool of deferredRoomScopedTools) {
 			const scoped = await roomScopedMcpToolRegistration(roomScopeId, tool, registrationOptions);

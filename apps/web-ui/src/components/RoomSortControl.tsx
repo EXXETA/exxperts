@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { ROOM_ORDER_MODES, type RoomOrderMode } from "../../../web-server/src/room-order";
 import { useRemoteClientContext } from "../remote-client-context";
 import type { HomeRoomOrder } from "../home-room-order";
+import type { HomeRoomOrderFailedSave } from "../use-home-room-order";
+import { ROOM_ARRANGE_DONE_FAILED, ROOM_ARRANGE_FAILED_AWAY, ROOM_ARRANGE_HINT_POINTER, ROOM_ARRANGE_HINT_TOUCH } from "../home-room-arrange";
+import { isTouchScreen } from "../platform";
 
 /** What each order is called, in the control and in its menu. Total over the modes: a new mode does not compile without its name. */
 export const ROOM_ORDER_LABELS: Record<RoomOrderMode, string> = {
@@ -50,26 +53,33 @@ export const ROOM_SORT_MIN_ROOMS = 2;
  * link is never needed before there is something to change.
  *
  * While the rooms are being arranged (`arranging`), the control is the
- * arrange line instead: what to do (ONE sentence for every device: a drag
- * is the mouse's or a long press's, the arrow keys are the keyboard's), then
- * the app's standard pair as at the end of a form (Cancel outlined, Save
- * filled), and a failed save's sentence under them. Save is one write; Save and Cancel are disabled only
- * while that write is in flight (a write already sent cannot be cancelled,
- * and closing the line under it would say the previous order is back when
- * it may not be). Whether there is anything to save, and what happens on
- * Save and Cancel, is the home screen's (landing.tsx, Landing); the line only
- * draws it. The line is drawn whatever the room count: a room gone elsewhere
- * mid-arrange must not take Save and Cancel with it.
+ * arrange line instead: what to do (where a pointer hovers, a drag or the
+ * keyboard; on a touch screen, a held drag or the cards' arrows), then Done
+ * in Arrange's place, and a failed Done's line under them. Done reads
+ * "Saving…" and is off while its write is in flight. What Done keeps, and
+ * what Escape and the ways out of Home do, is the home screen's (landing.tsx,
+ * Landing); the line only draws it. The line is drawn whatever the room
+ * count: a room gone elsewhere mid-arrange must not take Done with it.
+ *
+ * A failed arrangement is said in arranging's own words, never the server's
+ * (home-room-arrange.ts): while arranging, only once this arranging's own
+ * Done has failed ("try again" is about that Done); at rest, whichever save
+ * it was, the next visit included. A menu choice's failure keeps the words
+ * the controller kept, and is shown at rest only. At rest, where a folder
+ * sits in the saved order's place, the line that says to remove it wins:
+ * no try again can succeed before that. Not while arranging, where its "shown
+ * A to Z" is untrue of the cards being moved.
  */
 export interface RoomSortArranging {
-	onSave: () => void;
-	onCancel: () => void;
+	onDone: () => void;
+	/** This arranging's Done failed, and no Done or Arrange has started since. */
+	doneFailed: boolean;
 }
 
-export function RoomSortControl({ order, saving, saveError, onChoose, onArrange, arranging }: {
+export function RoomSortControl({ order, saving, failedSave, onChoose, onArrange, arranging }: {
 	order: HomeRoomOrder;
 	saving: boolean;
-	saveError: string | null;
+	failedSave: HomeRoomOrderFailedSave | null;
 	/** Resolves true when what was chosen is what is saved (or, for Custom with nothing arranged yet, when arrange mode opened). */
 	onChoose: (mode: RoomOrderMode) => Promise<boolean>;
 	/** The "Arrange" link beside the control (Custom only): arrange mode opens on the order on screen. */
@@ -92,8 +102,9 @@ export function RoomSortControl({ order, saving, saveError, onChoose, onArrange,
 		: loadFailed
 			? "The saved order could not be loaded, so your rooms are shown A to Z."
 			: null;
-	const failedSave = saveError && !readOnly ? saveError : null;
-	const line = failedSave ?? problem;
+	const folderInTheWay = saveBlocked && problem !== null;
+	const failedLine = !failedSave || readOnly || folderInTheWay ? null : failedSave.kind === "arrangement" ? ROOM_ARRANGE_FAILED_AWAY : failedSave.sentence;
+	const line = failedLine ?? problem;
 
 	useEffect(() => {
 		if (!open) return;
@@ -126,13 +137,10 @@ export function RoomSortControl({ order, saving, saveError, onChoose, onArrange,
 		return (
 			<div className="room-sort room-arrange-line" ref={rootRef}>
 				<div className="room-arrange-line-row">
-					<span className="room-arrange-hint" id={ROOM_ARRANGE_HINT_ID}>Drag rooms into order, or use tab + arrow keys.</span>
-					<span className="room-arrange-buttons">
-						<button type="button" className="rs-btn room-arrange-cancel" disabled={saving} onClick={arranging.onCancel}>Cancel</button>
-						<button type="button" className="rs-btn rs-btn-primary room-arrange-save" disabled={saving} onClick={arranging.onSave}>{saving ? "Saving…" : "Save"}</button>
-					</span>
+					<span className="room-arrange-hint" id={ROOM_ARRANGE_HINT_ID}>{isTouchScreen() ? ROOM_ARRANGE_HINT_TOUCH : ROOM_ARRANGE_HINT_POINTER}</span>
+					<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm room-sort-btn room-arrange-done" disabled={saving} onClick={arranging.onDone}>{saving ? "Saving…" : "Done"}</button>
 				</div>
-				{saveError && <p className="room-sort-problem room-sort-save-error" role="alert">{saveError}</p>}
+				{arranging.doneFailed && <p className="room-sort-problem room-sort-save-error" role="alert">{ROOM_ARRANGE_DONE_FAILED}</p>}
 			</div>
 		);
 	}
@@ -146,7 +154,7 @@ export function RoomSortControl({ order, saving, saveError, onChoose, onArrange,
 					<button
 						type="button"
 						ref={buttonRef}
-						className="room-sort-btn"
+						className="rs-btn rs-btn-quiet rs-btn-sm room-sort-btn"
 						aria-haspopup="menu"
 						aria-expanded={open}
 						title="Choose the order of your rooms"
@@ -156,7 +164,7 @@ export function RoomSortControl({ order, saving, saveError, onChoose, onArrange,
 					</button>
 				)}
 				{mode === "custom" && !readOnly && (
-					<button type="button" className="room-sort-btn room-sort-arrange" disabled={saving} title="Move your rooms into the order you want" onClick={onArrange}>Arrange</button>
+					<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm room-sort-btn room-sort-arrange" disabled={saving} title="Move your rooms into the order you want" onClick={onArrange}>Arrange</button>
 				)}
 			</div>
 			{open && !readOnly && (
@@ -172,10 +180,10 @@ export function RoomSortControl({ order, saving, saveError, onChoose, onArrange,
 							onClick={() => void select(option)}
 						>{ROOM_ORDER_LABELS[option]}</button>
 					))}
-					{line && <p className={`room-sort-menu-error${failedSave ? "" : " is-note"}`} role={failedSave ? "alert" : "status"}>{line}</p>}
+					{line && <p className={`room-sort-menu-error${failedLine ? "" : " is-note"}`} role={failedLine ? "alert" : "status"}>{line}</p>}
 				</div>
 			)}
-			{line && !(open && !readOnly) && <p className={`room-sort-problem${failedSave ? " room-sort-save-error" : ""}`} role={failedSave ? "alert" : "status"}>{line}</p>}
+			{line && !(open && !readOnly) && <p className={`room-sort-problem${failedLine ? " room-sort-save-error" : ""}`} role={failedLine ? "alert" : "status"}>{line}</p>}
 		</div>
 	);
 }

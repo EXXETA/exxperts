@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { clampThinkingLevel, getModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
-import type { Api, Context, Model, SimpleStreamOptions } from "../src/types.js";
+import type { Api, Context, Model, ModelThinkingLevel, SimpleStreamOptions } from "../src/types.js";
 
 type SimpleOptionsWithExtras = SimpleStreamOptions & Record<string, unknown>;
 
@@ -104,6 +104,71 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E"
 	});
 });
 
+const CAPTURED = new Error("payload captured");
+
+/**
+ * The thinkingConfig a room's level sends, captured before any request leaves.
+ * No level is a call that asks for no thinking, as a summary of a long
+ * conversation does.
+ */
+async function thinkingConfigFor(model: Model<Api>, level?: ModelThinkingLevel): Promise<Record<string, unknown> | undefined> {
+	const effective = level === undefined ? "off" : clampThinkingLevel(model, level);
+	let config: Record<string, unknown> | undefined;
+	let captured = false;
+	const s = streamSimple({ ...model, baseUrl: "http://127.0.0.1:9" }, makeContext(), {
+		apiKey: "fake-key",
+		reasoning: effective === "off" ? undefined : effective,
+		onPayload: (payload) => {
+			captured = true;
+			config = (payload as { config?: { thinkingConfig?: Record<string, unknown> } }).config?.thinkingConfig;
+			throw CAPTURED;
+		},
+	});
+	await s.result();
+	if (!captured) throw new Error(`no payload captured for ${model.provider}/${model.id} at ${level}`);
+	return config;
+}
+
+describe("Gemini 4 thinking on the wire", () => {
+	const argon = getModel("google", "gemini-4-argon") as Model<Api>;
+	const hydrogen = getModel("google", "gemini-4-hydrogen") as Model<Api>;
+	// Vertex has no Gemini 4 rows yet; a person's own Vertex row goes the same way.
+	const vertexArgon = { ...argon, api: "google-vertex", provider: "google-vertex" } as Model<Api>;
+
+	it.each([
+		["Gemini 4 Argon on a Google key", argon, ["LOW", "LOW", "LOW", "MEDIUM", "HIGH", "HIGH", "HIGH"]],
+		["Gemini 4 Hydrogen on a Google key", hydrogen, ["LOW", "LOW", "LOW", "MEDIUM", "HIGH", "XHIGH", "XHIGH"]],
+		["Gemini 4 Argon on Vertex", vertexArgon, ["LOW", "LOW", "LOW", "MEDIUM", "HIGH", "HIGH", "HIGH"]],
+	] as const)("sends %s a thinking level at every level a room can store, and never a budget", async (_name, model, expected) => {
+		const levels: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+		const sent = [];
+		for (const level of levels) {
+			const config = await thinkingConfigFor(model, level);
+			expect(config, `${model.id} at ${level}`).toBeDefined();
+			expect(config, `${model.id} at ${level}`).not.toHaveProperty("thinkingBudget");
+			sent.push(config!.thinkingLevel);
+		}
+		expect(sent).toEqual(expected);
+	});
+
+	it.each([
+		["Gemini 4 Argon on a Google key", argon],
+		["Gemini 4 Argon on Vertex", vertexArgon],
+	] as const)("sends %s its lowest level, and no budget, when a call asks for no thinking", async (_name, model) => {
+		// Gemini 4 cannot stop thinking; a budget of 0 is how Gemini 2 stops.
+		expect(await thinkingConfigFor(model)).toEqual({ thinkingLevel: "LOW" });
+	});
+
+	it("still stops Gemini 2.5 with a budget of 0 when a call asks for no thinking", async () => {
+		expect(await thinkingConfigFor(getModel("google", "gemini-2.5-flash") as Model<Api>)).toEqual({ thinkingBudget: 0 });
+	});
+
+	it("keeps sending Gemini 2.5 a budget, the way it takes thinking", async () => {
+		const config = await thinkingConfigFor(getModel("google", "gemini-2.5-flash") as Model<Api>, "medium");
+		expect(config).toEqual({ includeThoughts: true, thinkingBudget: 8192 });
+	});
+});
+
 describe.skipIf(!process.env.GEMINI_API_KEY)("Google thinking disable E2E", () => {
 	it("disables thinking for Gemini 2.5", { retry: 2, timeout: 30000 }, async () => {
 		await expectThinkingDisabledE2E(getModel("google", "gemini-2.5-flash"));
@@ -115,6 +180,13 @@ describe.skipIf(!process.env.GEMINI_API_KEY)("Google thinking disable E2E", () =
 
 	it("does not error when thinking is off for Gemini 3.1 Pro", { retry: 2, timeout: 30000 }, async () => {
 		await expectThinkingDisabledE2E(getModel("google", "gemini-3.1-pro-preview"), {
+			requestOptions: { maxTokens: 512 },
+			minPongs: 20,
+		});
+	});
+
+	it("does not error when thinking is off for Gemini 4 Argon, which cannot stop thinking", { retry: 2, timeout: 30000 }, async () => {
+		await expectThinkingDisabledE2E(getModel("google", "gemini-4-argon"), {
 			requestOptions: { maxTokens: 512 },
 			minPongs: 20,
 		});

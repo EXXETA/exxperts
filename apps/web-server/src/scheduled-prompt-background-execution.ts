@@ -7,7 +7,7 @@ import {
 	claimBackgroundRunLease,
 	extendBackgroundRunLease,
 	generateBackgroundRunLeaseToken,
-	listClaimableScheduledPromptBackgroundRuns,
+	claimableNewestScheduledPromptRuns,
 	recoverExpiredBackgroundRunLeases,
 	reviveTransientlyBlockedBackgroundRuns,
 	readBackgroundRun,
@@ -17,11 +17,12 @@ import {
 	type BackgroundRunStatus,
 	type BackgroundRunTarget,
 } from "./background-runs.js";
-import { executePersistentRoomBackgroundPrompt } from "./persistent-room-background-execution.js";
+import { executePersistentRoomBackgroundPrompt, type PersistentRoomBackgroundSpend } from "./persistent-room-background-execution.js";
 import { recordPersistentAgentUnseenLandedAnswer } from "./persistent-agents.js";
-import { appendUsageOnce, resolveUsageAuthType } from "./usage-log.js";
+import { appendUsageOnce, resolveUsageAuthType, usageMovedNothing } from "./usage-log.js";
 import { INTERRUPTED_SCHEDULED_RUN_SENTENCE, SERVER_STOPPED_REASON, serverStopping } from "./server-stop.js";
 import { serverHooks } from "./server-hooks.js";
+import { activeRoomLock } from "./server-install-root.js";
 import {
 	inspectScheduledPromptBackgroundRunIdempotency,
 	mergeScheduledPromptBackgroundRunArtifacts,
@@ -100,6 +101,7 @@ export function scheduledRunTimeLimitSentence(limitMs: number): string {
 }
 
 const DEFAULT_EXECUTION_LIMIT = 1;
+const HELD_ROOM_RETRY_MS = 60 * 1000;
 const DEFAULT_EXECUTION_LEASE_MS = 5 * 60 * 1000;
 const DEFAULT_EXECUTION_HEARTBEAT_MS = 30 * 1000;
 const PROCESS_RANDOM = crypto.randomBytes(8).toString("hex");
@@ -236,6 +238,32 @@ function completedArtifactsForEvidence(run: BackgroundRunRecord): BackgroundRunA
 	});
 }
 
+/**
+ * Scheduled turns spend tokens like chat turns; account them to the room in the
+ * shared ledger. Provider auth just succeeded, so the authType lookup can assume
+ * configured. Keyed on the run id so a re-executed run can never bill the same
+ * occurrence twice.
+ */
+function billRun(runId: string, roomId: string, { model, usage }: PersistentRoomBackgroundSpend): void {
+	if (!usage) return;
+	appendUsageOnce({
+		ts: Date.now(),
+		agent: roomId,
+		persona: "business",
+		model: model.model,
+		provider: model.provider,
+		authType: resolveUsageAuthType(model.provider, true),
+		kind: "scheduled",
+		input: usage.input ?? 0,
+		output: usage.output ?? 0,
+		cacheRead: usage.cacheRead ?? 0,
+		cacheWrite: usage.cacheWrite ?? 0,
+		cost: usage.cost ?? 0,
+		runId,
+		...(usage.calls ? { calls: usage.calls } : {}),
+	}, (message) => console.warn(message));
+}
+
 async function executeClaimedRun(input: {
 	claimed: BackgroundRunRecord;
 	token: string;
@@ -347,32 +375,16 @@ async function executeClaimedRun(input: {
 			turnId,
 			connectionId: `scheduler:${run.runId}`,
 			signal: limit.signal,
+			// A cut run paid for what it did so far. A cut that moved nothing is no turn, as a failed call is none.
+			onCut: (spent) => {
+				if (spent.usage && !usageMovedNothing(spent.usage)) billRun(run.runId, roomId, spent);
+			},
 		});
 		// The output artifact is the idempotency evidence: it must land before the usage row so a
 		// crash in between makes lease recovery short-circuit to already_completed instead of
 		// generating (and billing) the same run a second time.
 		const outputArtifacts = writeScheduledPromptBackgroundRunOutputArtifact({ run, assistantText: result.assistantText, completedAt: new Date() });
-		if (result.usage) {
-			// Scheduled turns spend tokens like chat turns; account them to the
-			// room in the shared ledger. Provider auth just succeeded, so the
-			// authType lookup can assume configured. Keyed on the run id so a
-			// re-executed run can never bill the same occurrence twice.
-			appendUsageOnce({
-				ts: Date.now(),
-				agent: roomId,
-				persona: "business",
-				model: result.model.model,
-				provider: result.model.provider,
-				authType: resolveUsageAuthType(result.model.provider, true),
-				kind: "scheduled",
-				input: result.usage.input ?? 0,
-				output: result.usage.output ?? 0,
-				cacheRead: result.usage.cacheRead ?? 0,
-				cacheWrite: result.usage.cacheWrite ?? 0,
-				cost: result.usage.cost ?? 0,
-				runId: run.runId,
-			}, (message) => console.warn(message));
-		}
+		billRun(run.runId, roomId, result);
 		// Nobody was in the room while this ran, so the answer would otherwise
 		// only be found by opening the room. Record the same unseen-landed-answer
 		// marker the detached-turn landing writes, so the room card badges it and
@@ -449,10 +461,25 @@ async function executeClaimedRun(input: {
 	}
 }
 
+// A waiting run in a room that is in use is tried again a minute after its last try. Once the room is free, or
+// its task is deleted or switched off, it is tried on the next tick: the pane stops saying the room is in use,
+// and an ended task's runs clear at once.
+function waitsForHeldRoom(run: BackgroundRunRecord, now: Date): boolean {
+	if (run.status !== "deferred" || run.scope.kind !== "persistent-room") return false;
+	if (now.getTime() - new Date(run.updatedAt).getTime() >= HELD_ROOM_RETRY_MS) return false;
+	if (!activeRoomLock(run.scope.roomId)) return false;
+	return "job" in readEnabledSchedulePrompt(run);
+}
+
+// A run whose answer reached the room ends already_completed when it is claimed: never superseded, never ended unrun.
+function answerLanded(run: BackgroundRunRecord): boolean {
+	return inspectScheduledPromptBackgroundRunIdempotency({ run }).alreadyCompleted;
+}
+
 // A run cut by an abnormal end is not run again, unless its answer had already landed: that one
 // still ends already_completed when it is claimed.
 function endInterruptedRun(run: BackgroundRunRecord): { reason: string; message: string } | null {
-	if (inspectScheduledPromptBackgroundRunIdempotency({ run }).alreadyCompleted) return null;
+	if (answerLanded(run)) return null;
 	return { reason: INTERRUPTED_BY_RESTART_REASON, message: INTERRUPTED_SCHEDULED_RUN_SENTENCE };
 }
 
@@ -481,11 +508,15 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 	const skipped: Array<{ runId: string; reason: string }> = [];
 	const processedRooms = new Set<string>();
 	let claimedCount = 0;
+	// Only runs that took their turn count toward the limit: a run that waits or ends without running costs a check, not a turn.
+	let turnsTaken = 0;
 	const counts = { recovered: recovered.length, claimed: 0, processed: 0, skipped: 0, succeeded: 0, failed: 0, deferred: 0, blocked: 0, cancelled: 0 };
-	const claimable = listClaimableScheduledPromptBackgroundRuns({ now, limit: Math.max(limit * 5, limit) });
+	// All of them, so one room's waiting runs never hide the next room's.
+	let claimable = claimableNewestScheduledPromptRuns({ now, keep: answerLanded });
 
-	for (const candidate of claimable) {
-		if (processed.length >= limit) break;
+	for (let index = 0; index < claimable.length; index += 1) {
+		const candidate = claimable[index];
+		if (turnsTaken >= limit) break;
 		// A stopping server claims no further run; the ones left stay queued.
 		if (serverStopping()) break;
 		const roomId = candidate.scope.kind === "persistent-room" ? candidate.scope.roomId : null;
@@ -493,6 +524,7 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 			skipped.push({ runId: candidate.runId, reason: "room_already_processed_this_tick" });
 			continue;
 		}
+		if (waitsForHeldRoom(candidate, now)) continue;
 
 		const token = generateBackgroundRunLeaseToken();
 		let claimed: BackgroundRunRecord | null = null;
@@ -509,13 +541,25 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 
 		claimedCount += 1;
 		counts.claimed = claimedCount;
-		if (roomId) processedRooms.add(roomId);
 		try {
 			const transition = await executeClaimedRun({ claimed, token, workerId, now, leaseMs, heartbeatMs, executePrompt, runLimitMs });
 			processed.push(transition);
 			const countKey = statusCountKey(transition.finalStatus);
 			if (countKey) counts[countKey] += 1;
+			// A room that made its run wait is done for this tick; a run that ended without running leaves its room to the next one.
+			const tookTurn = transition.finalStatus === "succeeded" || transition.finalStatus === "failed";
+			if (roomId && (tookTurn || transition.finalStatus === "deferred")) processedRooms.add(roomId);
+			if (tookTurn) {
+				turnsTaken += 1;
+				// While the turn ran, a task may have come due again: the next turn starts from a fresh read.
+				if (turnsTaken < limit) {
+					claimable = claimableNewestScheduledPromptRuns({ now, keep: answerLanded });
+					index = -1;
+				}
+			}
 		} catch (error) {
+			if (roomId) processedRooms.add(roomId);
+			turnsTaken += 1;
 			try {
 				const latest = readBackgroundRun(claimed.runId);
 				processed.push({ runId: latest.runId, previousStatus: candidate.status, finalStatus: latest.status, reason: latest.reason ?? "execution_failed", ...(latest.target?.threadId ? { threadId: latest.target.threadId } : {}) });

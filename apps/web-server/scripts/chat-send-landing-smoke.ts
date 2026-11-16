@@ -7,7 +7,8 @@
 // whatever was above it:
 // - a failure line, after a send that failed;
 // - an answer's copy row, after a plain answer;
-// - a steps card, after an answer that was only a step.
+// - a steps card, after an answer that was only a step, sent once its fold
+//   has ended.
 // A "Queued" bubble never sits above a sent message: it is always last in the
 // newest turn (groupIntoTurns), and a queued message the room takes joins the
 // running answer's turn, with no glide.
@@ -255,6 +256,10 @@ try {
 				await ask(page, room, `Look up the launch checklist. ${STEP}`);
 				const card = page.locator(".messages .transcript-turn").last().locator(".wk-card");
 				if ((await card.count()) === 0) throw new Error("the answer shows no steps card");
+				// A card drawn while its turn runs folds when the turn ends, and the
+				// stop is worked out once, at Send: sent during the fold, it comes from
+				// a card that then shrinks, which moves both the stop and the gap.
+				await waitUntil(() => card.evaluate((el) => el.getAttribute("data-open") === "0" && el.querySelector(".wk-body")!.getAnimations().length === 0), "the steps card's fold has ended");
 				await ask(page, room, "What did you find?");
 				await landed(page);
 				const at = await landing(page);

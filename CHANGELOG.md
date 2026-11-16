@@ -2,6 +2,77 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.16.0 (2026-11-17)
+
+- Protection: On a Mac, and on Windows 11 (version 24H2 or later) where Windows offers it, a room's
+  commands now run inside the computer's own protection. It keeps them in the room's folders. A new room
+  with a folder starts with its commands on. You can turn protection off for one room with the Protection
+  switch in Room settings, Folder: its commands can then reach all your files, as in 0.15.2.
+- Commands: In a protected room, commands now have three modes, on the chip under the message box: Ask,
+  Semi and Auto. Ask asks before each command and each new website. Semi runs commands without asking but
+  asks before a new website. Auto reaches public websites without asking too. A new protected room starts
+  on Semi.
+- Commands: A room that ran commands without asking before the update is on Auto afterwards, so where
+  protection works it also reaches public websites without asking. Choose Semi on the chip if you want it
+  to ask before a new website.
+- Questions: A room can now ask, in a panel just above the message box, to run a command, to use another
+  folder, to reach a new website or to turn on its commands. On Ask, "Run this command?" shows the whole
+  command and the folder it runs in. In a protected room, for a job that needs your full rights, such as a
+  git push over SSH, it can also ask to run one command outside the room.
+- GitHub Copilot: You can now sign in to Copilot at your company's own GitHub address, such as
+  yourcompany.ghe.com. A company sign-in lists the models its account can use; leave the address empty for
+  github.com.
+- Connectors: A connector action that may change something now asks you first, and shows what the room
+  would send. Reading runs without asking, going by what each connector says about its own tools, and Auto
+  doesn't skip the question. In a scheduled task, or after you leave the room, such an action doesn't run,
+  unless you allowed it for the room.
+- Connectors: At the computer, the question for a web connector's action has a third answer, Allow for
+  this room. The room then uses that one action without asking, also in scheduled tasks and after you
+  leave. It isn't offered for an action the connector marks as destructive, or for a connector that is a
+  program on this computer. Room settings, Connectors lists what you allowed, with Remove.
+- Models: A model you pick in the chat now becomes the room's Conversation model too. Room settings shows
+  it, and new conversations and scheduled tasks start on it. The Memory model stays as it was.
+- Models: Claude Fable 5.2 joins the list for a Claude sign-in, and Claude Fable 5 leaves it. With a
+  Claude API key, you can add Fable 5.2 in Settings, AI setup. A conversation already on Fable 5 keeps
+  answering. A room on a Claude sign-in that is still set to Fable 5 asks you to choose another model
+  before a new conversation or a scheduled task starts.
+- Home: Arranging rooms now ends with Done, and leaving Home keeps the new order. While you arrange, each
+  room card has arrows to move it earlier or later.
+- Look: Buttons now share one look across the app, from Home and Settings to the model picker, memory and
+  connectors. The gear menu shows the theme as three icons: System, Light and Dark.
+- Desktop app: Back and forward arrows now take you through the screens you opened, in the Mac and Windows
+  apps. On a Mac use ⌘[ and ⌘], and on Windows Alt+Left and Alt+Right.
+- Consult: A room you pick after @ now sits on the message box as a label. Typing @, a room's name and a
+  space picks it too.
+- Connectors: The Connectors page now shows each connector as one row, with its status, one button and a
+  menu. A connector you add keeps the name you type, and a web connector you added here can move to a new
+  address from its menu.
+- Folders: Full access and Bounded are now one: a room's file tools stay in its folder and the other
+  folders you allow. Room settings, Folder saves each change at once, and lists those folders and the
+  sites you allowed under Also allowed. A room that was set to Bounded has its commands off until you turn
+  them on there.
+- Windows: On a protected Windows 11 PC, commands run in Windows PowerShell, which comes with Windows. A
+  skill whose files you allowed to run can run its PowerShell scripts there, and its Python or Node
+  scripts where those are installed. A commit made there uses the name and e-mail from your git settings.
+  Commands without protection, and a command run outside the room, run in Git Bash and need Git for
+  Windows.
+- Web reader: A room that isn't on Auto now asks before it opens a page, unless it's your link, a search
+  result or on a site you named or allowed. On Auto, public pages open without asking too.
+- Commands: A room without protection offers Ask and Auto. On Auto it runs commands and opens public
+  websites without asking, and keeps going after you leave it, until its answer ends or for up to an hour.
+- Protection: Where protection isn't available, such as on Linux or Windows 10, Room settings, Folder says
+  so, and a new room starts with its commands off. If you turn them on there, they run without protection.
+  On a computer without it, they run only while the room can change files.
+- Commands: In a protected room, commands can no longer get at the keys exxperts uses for your AI models.
+  Without protection, they no longer receive most of these keys, but they can still open any file you can.
+- Connectors: A connector program on this computer no longer starts while a room can change the files it
+  runs from. Its row says which room, and how to fix that. Such a program now gets only a few of your
+  computer's environment variables, plus those its own entry sets.
+- Connectors: Adding Atlassian now uses its current address, and Asana's card says how to connect it with
+  an app of your own.
+- Fixed: A scheduled task that came due while its room was open now runs once, when the room is free, and
+  an open room no longer holds up other rooms' tasks.
+
 ## 0.15.2 (2026-11-07)
 
 - Fixed: In the Mac app, a hidden sidebar can be opened again from inside a room. Clicking its button

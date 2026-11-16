@@ -69,7 +69,7 @@ export function Help({ onClose }: Props) {
 			<div className="help-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="help-head">
 					<h2>How exxperts works</h2>
-					<button className="icon-btn" onClick={close} aria-label="Close">✕</button>
+					<button className="rs-btn rs-btn-icon" onClick={close} aria-label="Close">✕</button>
 				</div>
 				<div className="help-body" ref={bodyRef} tabIndex={-1}>
 					<p className="help-lede">Your rooms remember your work, and you decide what they keep.</p>

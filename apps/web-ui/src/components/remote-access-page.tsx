@@ -576,13 +576,13 @@ export function RemoteAccessPage() {
 							<CapabilityControl value={device.capability} disabled={deviceBusy === device.id} onChange={(next) => void changeCapability(device, next)} />
 							{revokeArmed === device.id ? (
 								<>
-									<button className="rs-quiet" type="button" disabled={deviceBusy === device.id} onClick={() => setRevokeArmed(null)}>Keep it</button>
-									<button className="rs-quiet rs-quiet-danger" type="button" disabled={deviceBusy === device.id} onClick={() => void revoke(device)}>
+									<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={deviceBusy === device.id} onClick={() => setRevokeArmed(null)}>Keep it</button>
+									<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" disabled={deviceBusy === device.id} onClick={() => void revoke(device)}>
 										{deviceBusy === device.id ? "Revoking…" : "Revoke"}
 									</button>
 								</>
 							) : (
-								<button className="rs-quiet rs-quiet-danger" type="button" disabled={deviceBusy === device.id} onClick={() => setRevokeArmed(device.id)}>Revoke</button>
+								<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" disabled={deviceBusy === device.id} onClick={() => setRevokeArmed(device.id)}>Revoke</button>
 							)}
 						</div>
 					</div>

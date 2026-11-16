@@ -106,6 +106,8 @@ export interface AgentOptions {
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	sessionId?: string;
+	/** Forwarded on every model call, as sessionId is; providers read the fields they know, such as `user_id`. */
+	metadata?: Record<string, unknown>;
 	thinkingBudgets?: ThinkingBudgets;
 	transport?: Transport;
 	maxRetryDelayMs?: number;
@@ -199,6 +201,8 @@ export class Agent {
 	private activeRun?: ActiveRun;
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
+	/** Request metadata forwarded on every model call. */
+	public metadata?: Record<string, unknown>;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
 	public thinkingBudgets?: ThinkingBudgets;
 	/** Preferred transport forwarded to the stream function. */
@@ -231,6 +235,7 @@ export class Agent {
 		this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
 		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
+		this.metadata = options.metadata;
 		this.thinkingBudgets = options.thinkingBudgets;
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
@@ -450,6 +455,7 @@ export class Agent {
 			maxRetries: this.maxRetries,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
 			sessionId: this.sessionId,
+			metadata: this.metadata,
 			onPayload: this.onPayload,
 			onResponse: this.onResponse,
 			transport: this.transport,

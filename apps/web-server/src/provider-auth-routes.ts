@@ -7,6 +7,8 @@ import { browserSafeLocalPath } from "./status-diagnostics.js";
 import { forgetKeyRefusal } from "./model-call-causes.js";
 import { app } from "./server-app.js";
 import { logProviderCallFailed } from "./usage-recording.js";
+import { isSharedServer } from "./server-hooks.js";
+import { startGatewayProviderId, START_GATEWAY_REFUSAL } from "./openai-compatible-gateways.js";
 
 const AUTH_PROVIDER_ORDER = [
 	{ id: "anthropic", name: "Anthropic / Claude" },
@@ -39,7 +41,8 @@ function getLoginProviderCatalog(shared?: { authStorage: AuthStorage; registry: 
 	const entries = [...providerIds]
 		.map((id) => {
 			const authTypes: Array<"oauth" | "api_key"> = [];
-			if (oauthProviderIds.has(id)) authTypes.push("oauth");
+			// A shared server runs no subscription, so it offers API keys alone.
+			if (oauthProviderIds.has(id) && !isSharedServer()) authTypes.push("oauth");
 			if (isApiKeyLoginProvider(id, oauthProviderIds)) authTypes.push("api_key");
 			return {
 				id,
@@ -90,10 +93,12 @@ function getAuthOverview() {
 app.get("/api/auth/status", async () => getAuthOverview());
 
 app.post("/api/auth/login", async (req, reply) => {
-	const provider = String((req.body as { provider?: unknown } | null)?.provider ?? "").trim();
+	const body = (req.body ?? {}) as { provider?: unknown; companyAddress?: unknown };
+	const provider = String(body.provider ?? "").trim();
 	if (!provider) return reply.code(400).send({ error: "provider is required" });
+	const companyAddress = typeof body.companyAddress === "string" ? body.companyAddress : undefined;
 	try {
-		return await startProviderLogin(provider, () => forgetKeyRefusal(provider));
+		return await startProviderLogin(provider, companyAddress, () => forgetKeyRefusal(provider));
 	} catch (e) {
 		const statusCode = e instanceof ProviderAuthError ? e.statusCode : 500;
 		return reply.code(statusCode).send({ error: (e as Error).message });
@@ -124,6 +129,8 @@ app.post("/api/auth/api-key", async (req, reply) => {
 	const provider = String(body.provider ?? "").trim();
 	const key = typeof body.key === "string" ? body.key : "";
 	if (!provider) return reply.code(400).send({ error: "provider is required" });
+	// The start's gateway takes its key from the start alone: a saved key would sit in auth.json, unused.
+	if (provider === startGatewayProviderId()) return reply.code(403).send({ error: START_GATEWAY_REFUSAL });
 	try {
 		const notice = await checkProviderApiKey(provider, key, (failure) => logProviderCallFailed({ callKind: "key-check", provider }, failure));
 		saveProviderApiKey(provider, key);

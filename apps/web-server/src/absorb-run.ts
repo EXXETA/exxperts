@@ -55,6 +55,7 @@ import {
 	type MemorySection,
 } from "./memory-entries.js";
 import {
+	assertMemoryWriteAllowed,
 	loadMemoryDocument,
 	readArchive,
 	newestRecordFiles,
@@ -631,6 +632,8 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 	const existing = RUNS.get(agentId) ?? reviveRun(agentId);
 	if (existing && blocksNewRun(existing.run.state)) throw absorbRunActiveError(existing.run.runId);
 	if (hasActiveReviewRun(agentId)) throw productError(ABSORB_REVIEW_ACTIVE_SENTENCE, "absorb_review_active", 409);
+	// A conversation mid-turn is still changing, and its memory is what that turn is reading.
+	assertMemoryWriteAllowed(agentId);
 	if (input.sourceFingerprint) assertAbsorbSourceFingerprintCurrent(input.sourceFingerprint, createPersistentAgentInstance(agentId).readL1b(), "assessment source");
 
 	settleMemoryBudget(agentId);
@@ -1817,6 +1820,7 @@ export function resumeAbsorbRun(agentIdRaw: string, runId: string, model: Absorb
 	const slot = slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId);
 	requireReady(slot);
 	if (!slot.run.stop || !slot.postFoldDoc) throw productError("This memory update has nothing left to read.", "absorb_run_nothing_waiting", 409);
+	assertMemoryWriteAllowed(slot.run.agentId);
 	// Save's staleness check, before any call: a memory changed some other way
 	// since the card (a Review save, an edit) would make Save refuse these folds.
 	const diskL1b = createPersistentAgentInstance(slot.run.agentId).readL1b();

@@ -25,8 +25,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContextOptions, type Page } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer, putRunWithoutAsking } from "./smoke-server-process.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
+import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../src/room-approval-titles.js";
 
 const waitUntil = waitEvery(100, 15_000);
 
@@ -89,6 +90,8 @@ function expectedSections(mac: boolean): ListedSection[] {
 				["Stop the answer", "Esc"],
 				["Allow a waiting step", enter],
 				["Deny a waiting step", "Esc"],
+				["The room's question: Allow this time or Run once, with the box empty", sendNow],
+				["The room's question: Not now", "Esc"],
 				["Open or close a card or a row you reached with Tab", `${enter} or Space`],
 				["This room's settings", mac ? "⇧⌘," : "Ctrl+Shift+,"],
 				["Diagram viewer: zoom in, zoom out, actual size, fit, close", "+ − 0 F Esc"],
@@ -174,7 +177,7 @@ try {
 	// One room per platform, so each opens a fresh conversation; a third gives the @ list a room to offer.
 	const platformRooms = ["Mac Room", "Windows Room"].map(create);
 	create("Other Room");
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(tempHome, "workspace");
 	fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
@@ -194,6 +197,9 @@ try {
 			body: JSON.stringify({ root: workspaceRoot, displayLabel: "Keys Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }),
 		});
 		if (!workspace.ok) throw new Error(`the room's folder is set, got ${workspace.status}`);
+		// A new room's commands start in Run without asking where the room's protection runs: this smoke chooses Ask before each command, as the chip does.
+		const askFirst = await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(roomId)}/bash-settings`, false);
+		if (!askFirst.ok) throw new Error(`the room asks before each command, got ${askFirst.status}`);
 	}
 
 	const browser = await chromium.launch();
@@ -419,15 +425,14 @@ async function checkDesktop(browser: Browser, platform: "Mac" | "Windows", userA
 		expect((await composer.inputValue()) === "first line\nsecond line" && (await userMessages.count()) === sentBefore, `${platform}: Shift+Enter makes a new line and sends nothing`);
 
 		// Send: Enter sends it, and the room answers.
-		await waitUntil(() => page.locator("button.send-btn:not(.stop-btn)").isEnabled(), `${platform}: the room can take a message`, 20_000);
-		await page.keyboard.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await userMessages.count()) === sentBefore + 1, `${platform}: Enter sends`).catch(() => {});
 		expect((await userMessages.count()) === sentBefore + 1 && (await composer.inputValue()) === "", `${platform}: Enter sends the message`);
 		await waitUntil(async () => (await page.locator("button.send-btn:not(.stop-btn)").count()) === 1 && (await page.getByText("Done.").count()) > 0, `${platform}: the room answers`, 20_000);
 
 		// Open or close a row: a long message folds; Tab to its toggle, Enter opens it, Space closes it.
 		await composer.fill(LONG_MESSAGE);
-		await page.keyboard.press("Enter");
+		await sendFromBox(page);
 		const toggle = page.locator("button.user-message-toggle").last();
 		await toggle.waitFor({ timeout: 10_000 });
 		await waitUntil(async () => (await page.locator("button.send-btn:not(.stop-btn)").count()) === 1, `${platform}: the room is idle again`, 20_000);
@@ -467,10 +472,11 @@ async function checkDesktop(browser: Browser, platform: "Mac" | "Windows", userA
 		// Once the turn ends a card folds into one sentence: a denied step's says "not run".
 		const allowedRows = () => page.locator(".wk-card").filter({ hasNotText: NOT_RUN }).count();
 		const deniedRows = () => page.locator(".wk-card").filter({ hasText: NOT_RUN }).count();
-		const asks = page.locator(".wk-ask .wk-btn.primary");
+		// The room's command question, in the panel above the box.
+		const asks = page.locator(".ask-panel").filter({ hasText: PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE });
 		askGate.hold = true;
 		await composer.fill(ASK_FOR_COMMAND);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.keyboard.press(`${mod}+Slash`);
 		await waitUntil(() => shortcutsSeen(page), `${platform}: the window opens while the room works`);
 		await releaseAsk();
@@ -492,19 +498,21 @@ async function checkDesktop(browser: Browser, platform: "Mac" | "Windows", userA
 		}
 		await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
-		// Deny it: Esc, the box empty.
+		// Not now: Esc, the box empty, once the panel's pause is over (the panel shows the question anew when the Attachments close).
+		await asks.locator('.ask-actions .rs-btn:not(.rs-btn-primary)[aria-disabled="false"]').waitFor();
 		await page.keyboard.press("Escape");
-		await waitUntil(async () => (await deniedRows()) === 1, `${platform}: Esc denies the waiting step`).catch(() => {});
-		expect((await deniedRows()) === 1 && (await allowedRows()) === 0, `${platform}: Esc, the box empty, denies the step that waits`);
+		await waitUntil(async () => (await deniedRows()) === 1, `${platform}: Esc is the question's Not now`).catch(() => {});
+		expect((await deniedRows()) === 1 && (await allowedRows()) === 0, `${platform}: Esc, the box empty, is the question's Not now, and the step does not run`);
 		await waitUntil(async () => (await page.locator("button.send-btn:not(.stop-btn)").count()) === 1, `${platform}: the room is idle after the denial`, 20_000);
 
-		// Allow it: Enter, the box empty.
+		// Its yes: the chord, the box empty, once the question's pause is over.
 		await composer.fill(ASK_FOR_COMMAND);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await asks.count()) === 1, `${platform}: the room asks again`, 20_000);
-		await page.keyboard.press("Enter");
-		await waitUntil(async () => (await allowedRows()) === 1, `${platform}: Enter allows the waiting step`).catch(() => {});
-		expect((await allowedRows()) === 1, `${platform}: Enter, the box empty, allows the step that waits`);
+		await asks.locator('.rs-btn-primary[data-awake="1"]').waitFor();
+		await page.keyboard.press(`${mod}+Enter`);
+		await waitUntil(async () => (await allowedRows()) === 1, `${platform}: the chord is the question's yes`).catch(() => {});
+		expect((await allowedRows()) === 1, `${platform}: ${mac ? "⌘↵" : "Ctrl+Enter"}, the box empty, is the question's yes, and the step runs`);
 		await waitUntil(async () => (await page.locator("button.send-btn:not(.stop-btn)").count()) === 1, `${platform}: the room is idle after the step`, 20_000);
 
 		// This room's settings: ⇧⌘, (Ctrl+Shift+,) opens them; Esc closes them.
@@ -518,7 +526,7 @@ async function checkDesktop(browser: Browser, platform: "Mac" | "Windows", userA
 
 		// The diagram viewer: + − 0 F Esc; the chord does nothing while it is open.
 		await composer.fill(ASK_FOR_DIAGRAM);
-		await page.keyboard.press("Enter");
+		await sendFromBox(page);
 		const expand = page.getByRole("button", { name: "Open expanded diagram" }).last();
 		await expand.waitFor({ timeout: 20_000 });
 		await expand.click({ force: true });

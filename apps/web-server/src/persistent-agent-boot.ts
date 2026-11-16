@@ -12,7 +12,8 @@ import type { CheckpointModelWindow, L1bSourceFingerprint } from "./persistent-a
 import { type AgentJson, createPersistentAgentInstance, ensureDir, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, PERSISTENT_AGENTS_ROOT, type PersistentAgentInstance, safeRuntimeThreadId } from "./persistent-agent-store.js";
 import { getPersistentAgentThread, normalizeL1bSourceFingerprint, normalizePersistentAgentRuntimeString, normalizeSha256Hex, piSessionHasNoMessages, threadHasUserVisibleTurns } from "./persistent-agent-threads.js";
 import { budgetState } from "./persistent-agent-memory-files.js";
-import { localFilesWorkspaceWriteLine, persistentAgentPlatformKernel, persistentAgentRuntimeEnvelope, safeWorkspaceCapabilityLabel } from "./persistent-agent-constitution.js";
+import type { CommandsAskState } from "./room-box/folder-question.js";
+import { commandsLine, localFilesWorkspaceWriteLine, persistentAgentPlatformKernel, persistentAgentRuntimeEnvelope, safeWorkspaceCapabilityLabel } from "./persistent-agent-constitution.js";
 import { serverHooks } from "./server-hooks.js";
 
 function buildPromptBudget(l0: string, l1a: string, l1b: string, l2: string): PersistentAgentPromptBudget {
@@ -308,7 +309,7 @@ export function buildPersistentAgentCurrentIdentitySection(agentIdRaw: string): 
 
 ## Current identity
 
-Your name is now **${displayName}**. This line is live runtime state and wins over the layers above: if the constitution or memory still call you by another name, the user has renamed you since they were written — introduce yourself and refer to yourself as **${displayName}**.`;
+Your name is now **${displayName}**. If the constitution or memory call you by another name, they were written before a rename, and this name wins.`;
 	} catch {
 		return "";
 	}
@@ -321,28 +322,28 @@ Your name is now **${displayName}**. This line is live runtime state and wins ov
  * policy every turn so the model always states the workspace the tools
  * actually enforce, including "none" after the user cleared it.
  */
-export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy, run: { scheduled?: boolean } = {}): string {
+// Read live, so it wins over the frozen line that allowed absolute paths.
+const ASKS_LIVE_LINE = "File tools reach only this room's folder and the folders the person allows, whatever an earlier line says about absolute paths. A folder the person names that isn't here is somewhere else on their computer: don't make one of that name here, call ask_for_folder with the folder's full path in folder if you know it, and the person allows it or picks another. To change a file in a folder this room can only read, call ask_for_folder with access change and the person picks that folder again.";
+
+export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy, run: { scheduled?: boolean; asks?: { commands: CommandsAskState } } = {}): string {
 	const heading = `
 
 ## Current workspace
 
-This is live runtime state and wins over any "Active workspace capability" section above: the user can change the room workspace at any time, and this stanza reflects the setting in force from this message on, until a later room-state message says otherwise.`;
+This is live runtime state and wins over any "Active workspace capability" section above: the user can change the room's folder at any time, and this stanza reflects the setting in force from this message on, until a later room-state message says otherwise.`;
 	const capability = effectivePolicy.workspaceToolsEnabled ? effectivePolicy.capability : undefined;
 	if (!capability) {
 		// A shared server reads every stored folder as none (the same switch the
 		// workspace policy reads), so there is no setting to point the person to.
 		const noFolder = serverHooks().ignoresStoredWorkspaceSettings?.()
 			? "This server offers no folder and no commands yet; results stay in the chat."
-			: "No folder is set for this room: you cannot open the user's files beyond Attachments, save a file, or run commands. When the user asks for one of these, or a result is worth keeping as a file, say so once and how to switch it on: Room settings → Folder → Choose folder. With a folder you can create and edit text files in it (notes, tables, web pages, SVG). Running commands (Bash: scripts, converting files, making Word, Excel, PowerPoint or PDF files with the computer's own programs) also needs Access set to Full access and the Bash switch on; each command then waits for the user's approval unless the chip under the message box says Auto.";
+			: "No folder is set for this room: you cannot open the user's files beyond Attachments, save a file, or run commands. When the user asks for one of these, say what you couldn't do; they can choose a folder for this room at their computer.";
 		return `${heading}
 
-${noFolder} If earlier context claims a workspace, the user has removed or changed it since.`;
+${noFolder} If earlier context claims a folder, the user has removed or changed it since.`;
 	}
-	const modeLabel = capability.workspaceAccessMode === "localFiles" ? "Full access" : "Bounded workspace";
 	const toolNames = capability.availableToolNames.join(", ") || "none";
-	const writeLine = capability.workspaceAccessMode === "localFiles"
-		? localFilesWorkspaceWriteLine(capability)
-		: (capability.writeEnabled ? "- Write scope: files inside the selected workspace only, via the write and edit tools" : "- Write access: disabled. If asked to change files, say the room is read-only up front; do not attempt workarounds.");
+	const writeLine = localFilesWorkspaceWriteLine(capability);
 	// Bash writes files too, and a scheduled run, which has none, has no one to ask.
 	const noSilentReplace = !capability.writeEnabled && !capability.bashEnabled
 		? ""
@@ -351,15 +352,14 @@ ${noFolder} If earlier context claims a workspace, the user has removed or chang
 			: "Before you write a file, look: if a file with that name exists, the user did not ask to change it and you did not make it for them, ask, or write under a new name and say so. Changing or recreating a file the user asked to change, or one you made for them, needs no question.\n\n";
 	return `${heading}
 
-- Workspace label: ${safeWorkspaceCapabilityLabel(capability.workspaceLabel)}
-- Workspace mode: ${modeLabel}
-- Workspace tools: ${toolNames}
+- Folder name: ${safeWorkspaceCapabilityLabel(capability.workspaceLabel)}
+- File tools: ${toolNames}
 ${writeLine}
-- Bash/shell access: ${capability.bashEnabled ? "enabled" : "disabled. Commands need Access set to Full access and the Bash switch on, in Room settings → Folder; say so if a task needs one."}
+${commandsLine(run.asks ? run.asks.commands : capability.bashEnabled)}
 
-${noSilentReplace}Where files land, so you describe it truthfully: a file you create in the workspace stays in the workspace folder on the user's computer and does NOT appear in this room's Attachments panel (that panel shows only the room's own files). When you tell the user where a file is, name the actual workspace folder path; never claim a workspace file is in the Attachments panel.
+${run.asks ? `${ASKS_LIVE_LINE}\n\n` : ""}${noSilentReplace}Where files land, so you describe it truthfully: a file you create in the room's folder stays in that folder on the user's computer and does NOT appear in this room's Attachments panel (that panel shows only the room's own files). When you tell the user where a file is, name the folder's actual path; never claim a file in the folder is in the Attachments panel.
 
-If these facts differ from a workspace described earlier in this conversation, the user changed the workspace mid-conversation; follow these facts and the usage rules of this mode from the boot context.`;
+If these facts differ from a folder described earlier in this conversation, the user changed it mid-conversation; follow these facts and the usage rules from the boot context.`;
 }
 
 export interface PersistentAgentPiSessionJsonlPaths {
@@ -414,7 +414,8 @@ export function fingerprintPersistentAgentBootContextL1b(bootContext: ReturnType
 export function writePersistentAgentBootPromptSnapshot(agentIdRaw: string, threadIdRaw: string, systemPrompt: string): PersistentAgentBootPromptSnapshotWriteResult {
 	const { bootPromptSnapshotPath, bootPromptSnapshotRelPath } = persistentAgentPiSessionJsonlPaths(agentIdRaw, threadIdRaw);
 	ensureDir(path.dirname(bootPromptSnapshotPath));
-	fs.writeFileSync(bootPromptSnapshotPath, systemPrompt, { mode: 0o600, flag: "wx" });
+	// Only a conversation with no record yet gets here, so a file already there is a creation a kill cut short: nothing reads it, and its retry replaces it.
+	fs.writeFileSync(bootPromptSnapshotPath, systemPrompt, { mode: 0o600 });
 	return {
 		path: bootPromptSnapshotPath,
 		relPath: bootPromptSnapshotRelPath,

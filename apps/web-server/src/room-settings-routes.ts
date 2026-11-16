@@ -2,17 +2,19 @@ import type { FastifyRequest } from "fastify";
 import { MAINTENANCE_DIAGNOSTICS_KEEP, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, listMaintenanceDiagnostics, exportMaintenanceDiagnostics } from "./maintenance-diagnostics.js";
 import { createPersistentAgentInstance, saveWithOpenConversationCheck, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, savePersistentRoomInstructions } from "./persistent-agents.js";
 import { normalizePersistentRoomWorkspaceToolSelectionInput } from "./persistent-room-tool-policy.js";
-import { PersistentRoomWorkspacePolicyError, assertPersistentRoomWorkspaceDefaultMutable, releasePersistentRoomThreadWorkspaceMirror, type PersistentRoomCapabilityPolicy, persistentRoomCapabilityPolicyView, readPersistentRoomCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, deletePersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, createPersistentRoomDefaultCapabilityPolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomDefaultCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, createPersistentRoomCapabilityPolicy, writePersistentRoomCapabilityPolicy } from "./persistent-room-workspace-policy.js";
+import { PersistentRoomWorkspacePolicyError, assertPersistentRoomWorkspaceDefaultMutable, type PersistentRoomCapabilityPolicy, persistentRoomCapabilityPolicyView, readPersistentRoomCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, deletePersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, createPersistentRoomDefaultCapabilityPolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomDefaultCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, createPersistentRoomCapabilityPolicy, writePersistentRoomCapabilityPolicy, persistentRoomCommandsStartOn } from "./persistent-room-workspace-policy.js";
 import { readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { settleMemoryBudget } from "./memory-entries-store.js";
 import { readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
+import { type PersistentRoomProtection, type PersistentRoomProtectionCause, persistentRoomProtection, persistentRoomWindowsBoxed, writePersistentRoomProtection } from "./persistent-room-protection.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice } from "./persistent-room-effort-settings.js";
 import { persistentRoomShellFound, PERSISTENT_ROOM_SHELL_MISSING_SENTENCE } from "./persistent-room-shell-missing.js";
 import { createRoomModelCatalog, resolveAiDefault, memoryModelTooSmallSentence, writeRoomModels } from "./room-models.js";
 import { ROOM_INSTRUCTIONS_MAX_CHARS } from "./persistent-room-instructions.js";
 import { readPersistentRoomSkillSettings, computeSkillStatuses, enablePersistentRoomSkill, disablePersistentRoomSkill, approvePersistentRoomSkillExecution, revokePersistentRoomSkillExecution } from "./persistent-room-skill-settings.js";
-import { listConfiguredMcpConnectorNames } from "./mcp-status.js";
-import { readPersistentRoomMcpSettings, computeGrantedConnectorStatuses, grantPersistentRoomMcpConnector, revokePersistentRoomMcpConnector } from "./persistent-room-mcp-settings.js";
+import { listConfiguredMcpConnectorDisplayNames, listConfiguredMcpConnectorNames } from "./mcp-status.js";
+import { allowedToolsOf, readPersistentRoomMcpSettings, computeGrantedConnectorStatuses, forgetPersistentRoomMcpTool, grantPersistentRoomMcpConnector, type PersistentRoomMcpSettings, revokePersistentRoomMcpConnector } from "./persistent-room-mcp-settings.js";
+import { connectorToolWords } from "../../../pi-package/extensions/mcp/room-scope.js";
 import { buildRoomMemoryHistory } from "./memory-api.js";
 import { registerMemoryEntryRoutes } from "./memory-entries-api.js";
 import { undoMemorySave } from "./memory-undo.js";
@@ -24,6 +26,15 @@ import { getUsablePersistentAgentStatusForNormalUse, persistentAgentNormalUseErr
 import { parseRoomModelPatch, roomModelsPayload } from "./ai-models.js";
 import { memoryBudgetRaiseRefusal, refuseMemoryBudgetRaise, refuseMemoryModelTooSmall } from "./ai-profile-models.js";
 import { resolveExecutableSkillFiles, resolveLibrarySkillManifest, skillLibraryFingerprint, withSkillDisplayNames } from "./skills-library.js";
+import { addAlsoAllowedFolder, type AlsoAllowedEntry, readAlsoAllowed, removeAlsoAllowedEntry, removedAlsoAllowedEntry, restoreAlsoAllowedEntry } from "./room-box/also-allowed.js";
+import { CHANGE_SAVE_FAILED, FOLDER_ALREADY_USED, FOLDER_PICK_REFUSED, NO_FOLDER_WINDOW, PROTECTION_UNAVAILABLE, PROTECTION_UNAVAILABLE_COMPUTER, PROTECTION_UNAVAILABLE_FOLDER } from "./room-box/card-text.js";
+import { folderGrantable, roomFolderGrantable, soundFolders, writeEntries } from "./room-box/folder-offer.js";
+import { chooseFolderForRoom, undoAllowChanges } from "./room-box/folder-question.js";
+import { isInside } from "./room-box/box-closed.js";
+import { chooseLocalFolder, folderPickerPrompt, type LocalFolderPickerResult } from "./local-folder-picker.js";
+import { roomFence } from "./room-files.js";
+import { isLocalSystemChooseFolderRequest } from "./request-checks.js";
+import path from "node:path";
 
 function parsePersistentRoomWorkspaceMode(value: unknown): "read" | "write" {
 	if (value == null || value === "") return "read";
@@ -53,20 +64,6 @@ function persistentRoomWorkspaceErrorPayload(error: unknown): { statusCode: numb
 	}
 	const statusCode = (error as any)?.statusCode ?? 400;
 	return { statusCode, body: { error: error instanceof Error ? error.message : String(error), ...((error as any)?.code ? { code: (error as any).code } : {}) } };
-}
-
-// Workspace defaults apply live: the only boundary a mutation must respect is
-// a turn actually in flight (a turn finishes under the rules it started with).
-// Before the mutation, the active thread sheds a sidecar that merely mirrors
-// the current default (the old snapshot regime pinned every thread this way),
-// so the running conversation follows the live default from its next message;
-// a sidecar that differs from the default is a deliberate per-conversation
-// override and stays authoritative.
-function guardActiveThreadBeforeWorkspaceDefaultMutation(status: ReturnType<typeof getUsablePersistentAgentStatusForNormalUse>, action: "Save" | "Clear"): void {
-	const activeThread = status.activeThread;
-	if (!activeThread) return;
-	assertPersistentRoomWorkspaceDefaultMutable(activeThread, action);
-	releasePersistentRoomThreadWorkspaceMirror(status.id, activeThread.threadId);
 }
 
 // Whether this request may carry a full path from this computer: only a page
@@ -219,7 +216,7 @@ app.get("/api/persistent-agents/:id/bash-settings", async (req, reply) => {
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const settings = readPersistentRoomBashSettings(status.id);
-		return { agentId: status.id, settings };
+		return { agentId: status.id, settings, ...protectionView(status.id) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -230,8 +227,9 @@ app.put("/api/persistent-agents/:id/bash-settings", async (req, reply) => {
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const body = (req.body ?? {}) as any;
-		const settings = writePersistentRoomBashSettings(status.id, { autoApprove: body.autoApprove });
-		return { agentId: status.id, settings };
+		// The protection the chip last read: a yes is kept for the state the person saw, or refused. `free`: the chip's Auto in a protected room, beside its yes.
+		const settings = writePersistentRoomBashSettings(status.id, { autoApprove: body.autoApprove, free: body.free, protection: body.protection });
+		return { agentId: status.id, settings, ...protectionView(status.id) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -380,15 +378,23 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 	}
 });
 
+/**
+ * A room's connectors as the settings pane reads them. `granted` is the
+ * per-grant configured/missing view the pane renders next to the full
+ * configured list; `allowedTools`, the tools each enabled connector may use
+ * without asking, by their own name and as people read it, never on a shared
+ * server, where no yes is kept. What a yes is pinned to stays on the server.
+ */
+async function roomConnectorsAnswer(agentId: string, { allowedTools, ...settings }: PersistentRoomMcpSettings, configuredNames: string[]) {
+	const allowed = isSharedServer() ? {} : { allowedTools: Object.fromEntries(settings.grantedConnectors.filter((name) => allowedToolsOf(allowedTools, name).length > 0).map((name) => [name, allowedToolsOf(allowedTools, name).map(({ tool }) => ({ tool, shown: connectorToolWords(tool) }))])) };
+	return { agentId, settings, configuredConnectors: configuredNames, displayNames: await listConfiguredMcpConnectorDisplayNames(), granted: computeGrantedConnectorStatuses(settings.grantedConnectors, configuredNames), ...allowed };
+}
+
 app.get("/api/persistent-agents/:id/mcp-connectors", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
-		const settings = readPersistentRoomMcpSettings(status.id);
-		const configuredNames = await listConfiguredMcpConnectorNames();
-		// `granted` is the per-grant configured/missing view the room settings
-		// panel renders next to the full configured list.
-		return { agentId: status.id, settings, configuredConnectors: configuredNames, granted: computeGrantedConnectorStatuses(settings.grantedConnectors, configuredNames) };
+		return await roomConnectorsAnswer(status.id, readPersistentRoomMcpSettings(status.id), await listConfiguredMcpConnectorNames());
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -401,22 +407,200 @@ app.put("/api/persistent-agents/:id/mcp-connectors", async (req, reply) => {
 		const body = (req.body ?? {}) as any;
 		const action = String(body.action ?? "");
 		const name = String(body.name ?? "");
-		if (action !== "grant" && action !== "revoke") return reply.code(400).send({ error: "action must be 'grant' or 'revoke'" });
+		// forget-tool takes back a tool's yes; a shared server keeps none, so there it is no action at all.
+		const forget = action === "forget-tool" && !isSharedServer();
+		if (action !== "grant" && action !== "revoke" && !forget) return reply.code(400).send({ error: "action must be 'grant' or 'revoke'" });
 		const configuredNames = await listConfiguredMcpConnectorNames();
 		// Grant validates against the CURRENT configured list server-side, so a
-		// grant can never name a connector that does not exist; revoke stays
-		// permissive so dangling grants can always be cleaned up.
-		const result = action === "grant"
-			? grantPersistentRoomMcpConnector(status.id, name, configuredNames)
-			: revokePersistentRoomMcpConnector(status.id, name);
+		// grant can never name a connector that does not exist; revoke and
+		// forget-tool stay permissive so dangling entries can always be cleaned up.
+		const result = forget
+			? forgetPersistentRoomMcpTool(status.id, name, String(body.tool ?? ""))
+			: action === "grant"
+				? grantPersistentRoomMcpConnector(status.id, name, configuredNames)
+				: revokePersistentRoomMcpConnector(status.id, name);
 		if (!result.ok) {
 			return reply.code(400).send({ error: result.reason === "unknown-connector" ? `unknown connector: ${name}` : "invalid connector name" });
 		}
-		return { agentId: status.id, settings: result.settings, configuredConnectors: configuredNames, granted: computeGrantedConnectorStatuses(result.settings.grantedConnectors, configuredNames) };
+		return await roomConnectorsAnswer(status.id, result.settings, configuredNames);
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+
+/** The room's own folder by its real path, and whether it can change files: what the list is judged against. */
+function roomReachOf(roomId: string): { folder: string; canChangeFiles: boolean } | null {
+	const policy = readPersistentRoomDefaultCapabilityPolicy(roomId);
+	const room = policy ? roomFence(policy, () => []).room : null;
+	return room ? { folder: room.path, canChangeFiles: room.access === "write" } : null;
+}
+
+const folderName = (folder: string): string => path.basename(folder) || folder;
+
+/**
+ * The list as the pane draws it. A phone gets names, never a path. A Can read
+ * folder says whether Allow changes can widen it, by the same check a pick has.
+ * A folder the room's own folder makes unusable isn't drawn: the room's list
+ * keeps it for a conversation, or a Location, that can use it.
+ */
+function alsoAllowedView(req: FastifyRequest, roomId: string) {
+	const withPaths = requestGetsLocalPaths(req);
+	const room = roomReachOf(roomId);
+	const listed = readAlsoAllowed(roomId);
+	const folders = room ? soundFolders(listed.folders, room.folder) : listed.folders;
+	const sites = listed.sites;
+	const writable = room ? [room.folder, ...writeEntries(folders)] : [];
+	return {
+		folders: folders.map((entry) => ({
+			name: folderName(entry.path),
+			access: entry.access,
+			...(withPaths ? { path: entry.path } : {}),
+			canAllowChanges: entry.access === "read" && room !== null && room.canChangeFiles && folderGrantable(entry.path, "write", writable, room.folder),
+		})),
+		sites: sites.map((site) => ({ host: site.host, port: site.port })),
+	};
+}
+
+/** A list change that widens what the room can do waits while it answers, as a Save does. */
+function refuseWhileAnswering(roomId: string): void {
+	assertPersistentRoomWorkspaceDefaultMutable(getUsablePersistentAgentStatusForNormalUse(roomId).activeThread, "Save");
+}
+
+function listError(statusCode: number, code: string, error: string): Error {
+	return Object.assign(new Error(error), { statusCode, code });
+}
+
+/** Names one entry of the list from a request body: a folder by its path, or a site by host and port. */
+function namedEntry(body: unknown): { path: string } | { host: string; port: number } {
+	const { path: folder, host, port } = (body ?? {}) as { path?: unknown; host?: unknown; port?: unknown };
+	if (typeof folder === "string" && folder !== "") return { path: folder };
+	if (typeof host === "string" && host !== "" && Number.isInteger(port)) return { host, port: port as number };
+	throw listError(400, "entry_required", "Name a folder by its path, or a site by its host and port.");
+}
+
+app.get("/api/persistent-agents/:id/also-allowed", async (req, reply) => {
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(String((req.params as { id: string }).id ?? ""));
+		return alsoAllowedView(req, status.id);
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+
+// Add a folder…: the computer's own window, and the one way a pick goes on the
+// list. A path in the body is never read. A new folder starts at Can read.
+app.post("/api/persistent-agents/:id/also-allowed/folders", async (req, reply) => {
+	// The window opens only for the app's own page, as the room's folder's does.
+	if (!isLocalSystemChooseFolderRequest(req)) return reply.code(403).send({ error: "Folder chooser is only available from the local Exxperts app.", code: "local_request_required" });
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(String((req.params as { id: string }).id ?? ""));
+		const roomId = status.id;
+		refuseWhileAnswering(roomId);
+		const room = roomReachOf(roomId);
+		if (!room) throw listError(400, "missing_root", "Choose a folder for this room.");
+		// The window closes when the page goes before it answers.
+		const window = new AbortController();
+		reply.raw.on("close", () => {
+			if (!reply.raw.writableFinished) window.abort();
+		});
+		let windowFailed: LocalFolderPickerResult | null = null;
+		const outcome = await chooseFolderForRoom({
+			roomId,
+			room: { folder: room.folder, canChangeFiles: room.canChangeFiles, commands: "unavailable", boxed: false },
+			access: "read",
+			pickFolder: async (signal) => {
+				const picked = await chooseLocalFolder({ prompt: folderPickerPrompt("room-asks"), timeoutMs: null, signal });
+				if (!picked.ok) windowFailed = picked;
+				// The room may have started answering while the window was open.
+				else if (!picked.cancelled) refuseWhileAnswering(roomId);
+				return picked;
+			},
+			signal: window.signal,
+			// Again in the same run as the write: the room may have started answering during the look.
+			beforeGive: () => refuseWhileAnswering(roomId),
+		});
+		const failed = windowFailed as LocalFolderPickerResult | null;
+		if (failed && !failed.ok && failed.code !== "folder_chooser_stopped") return { state: "refused", line: failed.supported ? CHANGE_SAVE_FAILED : NO_FOLDER_WINDOW, list: alsoAllowedView(req, roomId) };
+		if ("line" in outcome) return { state: "refused", line: outcome.line, list: alsoAllowedView(req, roomId) };
+		if ("done" in outcome && outcome.done.state === "already") return { state: "already", line: FOLDER_ALREADY_USED, list: alsoAllowedView(req, roomId) };
+		if ("done" in outcome && outcome.done.state === "picked") return { state: "added", name: outcome.done.name, list: alsoAllowedView(req, roomId) };
+		return { state: "unchanged", list: alsoAllowedView(req, roomId) };
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+
+// Allow changes, and the button back to Can read. Only a listed folder moves.
+// Back to Can read only narrows, so it works while the room answers, from the next command and the next file call.
+app.post("/api/persistent-agents/:id/also-allowed/access", async (req, reply) => {
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(String((req.params as { id: string }).id ?? ""));
+		const roomId = status.id;
+		const { path: folder, access } = (req.body ?? {}) as { path?: unknown; access?: unknown };
+		if (typeof folder !== "string" || (access !== "read" && access !== "write")) throw listError(400, "entry_required", "Name a listed folder and read or write.");
+		const listed = readAlsoAllowed(roomId).folders;
+		const entry = listed.find((each) => each.path === folder);
+		if (!entry) throw listError(404, "not_listed", "That folder isn't on this room's list.");
+		if (access === "read") {
+			undoAllowChanges(roomId, folder);
+			return { list: alsoAllowedView(req, roomId) };
+		}
+		refuseWhileAnswering(roomId);
+		const room = roomReachOf(roomId);
+		if (!room?.canChangeFiles || !folderGrantable(folder, "write", [room.folder, ...writeEntries(listed)], room.folder)) throw listError(400, "folder_refused", "This room can't change files in that folder.");
+		addAlsoAllowedFolder(roomId, folder, "write");
+		return { list: alsoAllowedView(req, roomId) };
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+
+// The cross: a folder or a site leaves the list and is kept for Undo. It only
+// narrows, so it works while the room answers, from the next command and the next file call.
+app.post("/api/persistent-agents/:id/also-allowed/remove", async (req, reply) => {
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(String((req.params as { id: string }).id ?? ""));
+		const roomId = status.id;
+		const removed = removeAlsoAllowedEntry(roomId, namedEntry(req.body));
+		if (!removed) throw listError(404, "not_listed", "That isn't on this room's list.");
+		// A folder another row still lets the room read: the pane says which.
+		const room = roomReachOf(roomId);
+		const through = removed.kind === "folder" && room ? soundFolders(readAlsoAllowed(roomId).folders, room.folder).find((entry) => isInside(removed.path, entry.path)) : undefined;
+		return { removed: entryView(removed), ...(through ? { stillReadThrough: folderName(through.path) } : {}), list: alsoAllowedView(req, roomId) };
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+
+// Undo after the cross: puts back only what Remove kept, with the access it had.
+app.post("/api/persistent-agents/:id/also-allowed/restore", async (req, reply) => {
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(String((req.params as { id: string }).id ?? ""));
+		const roomId = status.id;
+		refuseWhileAnswering(roomId);
+		const kept = removedAlsoAllowedEntry(roomId, namedEntry(req.body));
+		if (!kept) throw listError(404, "not_removed", "There's nothing to put back.");
+		restoreAlsoAllowedEntry(roomId, kept);
+		return { list: alsoAllowedView(req, roomId) };
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+
+/** A room's own folder is judged as a folder on its list is: one no room may use is refused before it is saved. */
+function refuseUnusableRoomFolder(policy: PersistentRoomCapabilityPolicy): void {
+	const root = policy.roots[0];
+	if (root && !roomFolderGrantable(root.realpath)) throw Object.assign(new Error(FOLDER_PICK_REFUSED), { statusCode: 400, code: "folder_refused" });
+}
+
+function entryView(entry: AlsoAllowedEntry) {
+	return entry.kind === "folder" ? { kind: "folder", name: folderName(entry.path), path: entry.path, access: entry.access } : { kind: "site", host: entry.host, port: entry.port };
+}
 
 app.get("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
@@ -430,7 +614,12 @@ app.get("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 			policy: policy ? workspacePolicyViewFor(req, policy) : null,
 			warnings: missingPersistentRoomWorkspaceRootWarnings(policy),
 			// Looked up afresh on every read: the pane asks again when it opens.
-			shellMissingNote: persistentRoomShellFound(policy?.roots[0]?.path ?? REPO_ROOT) ? null : PERSISTENT_ROOM_SHELL_MISSING_SENTENCE,
+			// The note is the Windows line, so a shared server never looks; nor does a room whose commands run in Windows' box, where Git isn't used.
+			shellMissingNote: isSharedServer() || persistentRoomWindowsBoxed(id) || persistentRoomShellFound() ? null : PERSISTENT_ROOM_SHELL_MISSING_SENTENCE,
+			commandsStartOn: persistentRoomCommandsStartOn(id),
+			// Judged afresh too: a folder saved before the rule, or one that became a closed place since.
+			folderRefused: policy ? roomFence(policy, () => []).refused : false,
+			...protectionView(id),
 		};
 	} catch (e) {
 		const payload = persistentRoomWorkspaceErrorPayload(e);
@@ -449,10 +638,12 @@ app.put("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 		// capability is derived from the tool selection.
 		parsePersistentRoomWorkspaceMode(body.mode);
 		const root = String(body.root ?? "").trim();
+		// Left out, the room keeps whether it can change files: its folder's, or for its next folder what Clear kept.
+		const toolSelectionSent = Object.prototype.hasOwnProperty.call(body, "toolSelection");
 		let policy;
 		if (root) {
 			const workspaceAccessMode = normalizePersistentRoomWorkspaceAccessModeInput(body.workspaceAccessMode);
-			const toolSelection = normalizePersistentRoomWorkspaceToolSelectionInput(body.toolSelection, { defaultToStandard: true, workspaceAccessMode });
+			const toolSelection = toolSelectionSent ? normalizePersistentRoomWorkspaceToolSelectionInput(body.toolSelection, { defaultToStandard: true, workspaceAccessMode }) : undefined;
 			policy = createPersistentRoomDefaultCapabilityPolicy({
 				agentId: id,
 				repoRoot: REPO_ROOT,
@@ -461,23 +652,27 @@ app.put("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 				source: "manual",
 				displayLabel: typeof body.displayLabel === "string" ? body.displayLabel : undefined,
 				toolSelection,
-				bashEnabled: body.bashEnabled === true,
+				// Left out, the switch was never touched: a new room's first folder takes the start-on default.
+				bashEnabled: typeof body.bashEnabled === "boolean" ? body.bashEnabled : undefined,
 			});
+			refuseUnusableRoomFolder(policy);
 		} else {
 			const existingDefault = readPersistentRoomDefaultCapabilityPolicy(id);
 			if (!existingDefault) throw new Error("Choose a folder for this room.");
 			const workspaceAccessMode = normalizePersistentRoomWorkspaceAccessModeInput(body.workspaceAccessMode, { defaultMode: existingDefault.workspaceAccessMode });
-			const toolSelection = Object.prototype.hasOwnProperty.call(body, "toolSelection")
+			const toolSelection = toolSelectionSent
 				? normalizePersistentRoomWorkspaceToolSelectionInput(body.toolSelection, { defaultToStandard: true, workspaceAccessMode })
 				: undefined;
 			policy = updatePersistentRoomCapabilityPolicyWorkspaceSettings(existingDefault, { workspaceAccessMode, ...(toolSelection ? { toolSelection } : {}), ...(Object.prototype.hasOwnProperty.call(body, "bashEnabled") ? { bashEnabled: body.bashEnabled === true } : {}) });
 		}
-		guardActiveThreadBeforeWorkspaceDefaultMutation(status, "Save");
+		assertPersistentRoomWorkspaceDefaultMutable(status.activeThread, "Save");
 		writePersistentRoomDefaultCapabilityPolicy(policy);
+		// The answer is the room as the next read gives it: folded, and with its commands as they now stand.
+		const saved = readPersistentRoomDefaultCapabilityPolicy(id);
 		return {
 			agentId: id,
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE },
-			policy: workspacePolicyViewFor(req, policy),
+			policy: saved ? workspacePolicyViewFor(req, saved) : null,
 			warnings: [],
 		};
 	} catch (e) {
@@ -491,7 +686,7 @@ app.delete("/api/persistent-agents/:id/workspace-default", async (req, reply) =>
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const id = status.id;
-		guardActiveThreadBeforeWorkspaceDefaultMutation(status, "Clear");
+		assertPersistentRoomWorkspaceDefaultMutable(status.activeThread, "Clear");
 		const result = deletePersistentRoomDefaultCapabilityPolicy(id);
 		return {
 			agentId: id,
@@ -503,6 +698,45 @@ app.delete("/api/persistent-agents/:id/workspace-default", async (req, reply) =>
 	} catch (e) {
 		const payload = persistentRoomWorkspaceErrorPayload(e);
 		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+
+/** A room's protection as the reads carry it. None on a shared server, where no room's commands are boxed. */
+function protectionView(roomId: string): { protection?: PersistentRoomProtection } {
+	return isSharedServer() ? {} : { protection: persistentRoomProtection(roomId) };
+}
+
+const PROTECTION_UNAVAILABLE_LINES: Record<PersistentRoomProtectionCause, string> = {
+	computer: PROTECTION_UNAVAILABLE_COMPUTER,
+	folder: PROTECTION_UNAVAILABLE_FOLDER,
+	unknown: PROTECTION_UNAVAILABLE,
+};
+
+/** The protection route's request: the room from the path, the state from the body, checked below. */
+type ProtectionRequest = { idRaw: string; state: unknown };
+
+// A room's protection, turned off or on by the person at the computer: the
+// app's own control is the one way. Refused while the room answers, and where
+// a cause stands, since then nothing she chooses would change what runs.
+app.put("/api/persistent-agents/:id/protection", async (req, reply) => {
+	const { idRaw, state }: ProtectionRequest = {
+		idRaw: String((req.params as { id?: string }).id ?? "").trim(),
+		state: ((req.body ?? {}) as { state?: unknown }).state,
+	};
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const id = status.id;
+		if (isSharedServer()) throw listError(403, "protection_unavailable", PROTECTION_UNAVAILABLE);
+		if (state !== "on" && state !== "off") throw listError(400, "invalid_protection", "state must be \"on\" or \"off\"");
+		refuseWhileAnswering(id);
+		const now = persistentRoomProtection(id);
+		if (now.state === "off" && now.cause !== undefined) throw listError(409, "protection_unavailable", PROTECTION_UNAVAILABLE_LINES[now.cause]);
+		writePersistentRoomProtection(id, state);
+		// Seen in its new state at once: a yes of the other state is no longer honoured, and one given without protection is dropped.
+		readPersistentRoomBashSettings(id);
+		return { agentId: id, ...protectionView(id) };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
 
@@ -531,6 +765,7 @@ app.post("/api/persistent-agents/:id/workspace/validate", async (req, reply) => 
 			toolSelection,
 			bashEnabled: body.bashEnabled === true,
 		});
+		refuseUnusableRoomFolder(policy);
 		writePersistentRoomCapabilityPolicy(policy);
 		return {
 			agentId: id,

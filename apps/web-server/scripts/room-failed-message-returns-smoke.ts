@@ -293,7 +293,8 @@ try {
 	await isReturned("Cut off in a step, while I step out.", "cut off in a step while nobody was in the room");
 	const stepsAfter = await landedSteps();
 	assert(stepsAfter.length === stepsBefore, `a message handed back lands no step, got ${JSON.stringify(stepsAfter.slice(stepsBefore).map((item) => ({ name: item.name, status: item.status })))}`);
-	assert(!(await savedItems()).some((item) => item?.kind === "user" && String(item?.text ?? "").includes("Cut off in a step, while I step out.")), "a message handed back lands no question in the transcript");
+	// The page's save after the hand-back takes the question out of the saved conversation, and it can land after the box shows the message.
+	await waitUntil(async () => !(await savedItems()).some((item) => item?.kind === "user" && String(item?.text ?? "").includes("Cut off in a step, while I step out.")), "a message handed back lands no question in the transcript", 15000);
 	assert((await errorTexts()).length === linesBeforeStep + 1 && !/back in the box/.test((await errorTexts()).at(-1) ?? ""), `cut off in a step: one line, and it does not say the message is back in the box, got ${JSON.stringify((await errorTexts()).slice(linesBeforeStep))}`);
 	await composer.fill("");
 	console.log("  ok  an attempt cut off in a step while nobody was in the room: no stopped step, no question, the message in the box, one line");

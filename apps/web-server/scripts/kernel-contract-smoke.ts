@@ -142,11 +142,17 @@ try {
 		nativePiFilesystemToolsEnabled: true,
 	};
 	const localFilesBashL2 = l2At({ ...localFilesBase, bashEnabled: true });
-	assert(localFilesBashL2.includes("read works on files only; for directories use ls to list contents or find to search by name (read on a directory fails — wrong tool, not retry)."), "local-files L2 should carry the relocated read/ls/find advice");
+	assert(localFilesBashL2.includes("read works on files only; for directories use ls to list contents or find to search by name (read on a directory fails: wrong tool, not retry)."), "local-files L2 should carry the relocated read/ls/find advice");
 	assert(localFilesBashL2.includes("For searching file content, prefer grep over piping shell output."), "local-files L2 with bash should prefer grep over piping");
 	const localFilesNoBashL2 = l2At({ ...localFilesBase, bashEnabled: false });
 	assert(localFilesNoBashL2.includes("Use grep for searching file content."), "local-files L2 without bash should still point at grep");
 	assert(!localFilesNoBashL2.includes("piping"), "local-files L2 without bash should not mention piping (there is no shell to pipe in)");
+	// Can change files off: the room only reads, unless its commands run with nothing holding them to that.
+	const readOnlyBase = { ...localFilesBase, availableToolNames: ["read", "ls", "find", "grep"], writeEnabled: false, bashEnabled: true };
+	const heldL2 = l2At({ ...readOnlyBase, commandsChangeFiles: false });
+	assert(heldL2.includes("- Can change files: off. If asked to change files, say up front that this room can only read them"), "with its commands held to reading, the room says it can only read files");
+	const unheldL2 = l2At({ ...readOnlyBase, commandsChangeFiles: true });
+	assert(unheldL2.includes("- Can change files: off for the file tools. Commands can still change files") && !unheldL2.includes("this room can only read them"), "with commands that can change files, the room never says it can only read them");
 	const boundedL2 = l2At({
 		workspaceAccessMode: "bounded",
 		workspaceLabel: "workspace",
@@ -157,8 +163,9 @@ try {
 		bashEnabled: false,
 		nativePiFilesystemToolsEnabled: false,
 	});
-	assert(boundedL2.includes("read works on files only; for directories use ls to list contents or find to search by name."), "bounded L2 should carry the relocated read/ls/find advice");
-	assert(boundedL2.includes("Workspace tools: ls, find, grep, read, write, edit"), "bounded L2 should list the curated bundle including grep");
+	// A room has one access now, so a capability still marked Bounded reads as every room does.
+	assert(boundedL2.includes("read works on files only; for directories use ls to list contents or find to search by name (read on a directory fails: wrong tool, not retry)."), "an L2 marked Bounded should carry the one access's read/ls/find advice");
+	assert(boundedL2.includes("- File tools: ls, find, grep, read, write, edit") && !boundedL2.includes("Access:"), "an L2 marked Bounded should list the file tools and name no access");
 
 	// 11. The assembled boot prompt carries the kernel exactly once, ahead of the constitution.
 	const agentId = "kernel-contract-smoke-room";

@@ -4,14 +4,15 @@ import { clearRememberWork } from "./remember-parts-cache.js";
 import { writeCommitIntent, clearCommitIntent, registerCommitSettler } from "./memory-commit.js";
 import { eraseConversationWords } from "./forget-erase.js";
 import { abortConversationSpecialistTasks } from "./persistent-room-specialist-registry.js";
-import { fingerprintL1bSource, type PersistentAgentModelLock } from "./persistent-agent-types.js";
+import { fingerprintL1bSource, type PersistentAgentModelLock, type PersistentAgentThreadRecord } from "./persistent-agent-types.js";
 import type { MementoEventRecord, PersistentAgentMementoBoundaryResponse, PersistentAgentMementoRuntimeBoundary } from "./persistent-agent-memory-types.js";
-import { agentRootRelativePath, assertPersistentAgentThreadNotInFlight, createPersistentAgentInstance, getPersistentAgentRuntimeState, mementoEventRecordPath, normalizeRuntimeModel, type PersistentAgentInstance, safeRuntimeThreadId, shortRandomId, slugTimestamp, writeMementoEventRecord } from "./persistent-agent-store.js";
-import { closePersistentAgentThreadForMemento, getPersistentAgentThread, writePersistentAgentThread } from "./persistent-agent-threads.js";
-import { clearPersistentAgentUnseenLandedAnswerForClosedThread, rememberGenerationKey, rememberGenerations } from "./persistent-agent-turns.js";
-import { createPersistentAgentPiSessionJsonlThreadRuntime } from "./persistent-agent-conversation-model.js";
+import { agentRootRelativePath, assertPersistentAgentThreadNotInFlight, createPersistentAgentInstance, getPersistentAgentRuntimeState, mementoEventRecordPath, normalizeRuntimeModel, type PersistentAgentInstance, readJson, safeRuntimeThreadId, shortRandomId, slugTimestamp, writeMementoEventRecord } from "./persistent-agent-store.js";
+import { closePersistentAgentThreadForMemento, getPersistentAgentThread, piSessionHasNoMessages, threadHasUserVisibleTurns, writePersistentAgentThread } from "./persistent-agent-threads.js";
+import { clearPersistentAgentUnseenLandedAnswerForClosedThread, getPersistentAgentUnseenLandedAnswer, rememberGenerationKey, rememberGenerations } from "./persistent-agent-turns.js";
+import { createPersistentAgentPiSessionJsonlThreadRuntime, persistentRoomConversationCwd } from "./persistent-agent-conversation-model.js";
 import { getPersistentAgentStatus } from "./persistent-agent-status.js";
 import type { PersistentAgentMementoBoundaryWriteOptions } from "./persistent-agent-remember-save.js";
+import { serverHooks } from "./server-hooks.js";
 
 export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversationIdRaw: string, now = new Date(), options: PersistentAgentMementoBoundaryWriteOptions = {}): PersistentAgentMementoBoundaryResponse {
 	const instance = createPersistentAgentInstance(agentIdRaw);
@@ -26,6 +27,8 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 	if (runtime.activeThreadId !== conversationId) throw new Error("the request is stale; the room has a different conversation open now");
 	const oldThread = getPersistentAgentThread(instance.agentId, conversationId);
 	if (!oldThread) throw new Error("the room's open conversation is missing; the request is stale");
+	const alreadyForgotten = forgetThatMade(instance, oldThread);
+	if (alreadyForgotten) return alreadyForgotten;
 	// A crashed or previously-failed Memento can leave the boundary half
 	// applied: the old thread already closed with closedReason "memento" but
 	// the fresh thread never created, so the runtime pointer targets a closed
@@ -47,7 +50,6 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 		mementoId: `mm_${stamp}_${suffix}`,
 		freshThreadId: `postmem_${stamp}_${suffix}`,
 		freshModel: normalizeRuntimeModel(options.freshModel) ?? oldThread.model,
-		runtimeCwd,
 		at: now.toISOString(),
 	};
 
@@ -61,7 +63,7 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 	// settle.
 	writeCommitIntent(instance.rootDir, "forget", intent);
 	if (!completingHalfAppliedBoundary) closePersistentAgentThreadForMemento(instance.agentId, conversationId, intent.mementoId, now.getTime());
-	const finished = finishForgetCommit(instance, intent);
+	const finished = finishForgetCommit(instance, intent, runtimeCwd);
 	clearCommitIntent(instance.rootDir, "forget");
 	return {
 		agentId: instance.agentId,
@@ -77,13 +79,73 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 	};
 }
 
-/** A Forget in flight: ids and times only. */
+/**
+ * A Forget that landed after the copy this room was restored from, run again
+ * on the restored room, whole: the conversation the room has open is forgotten
+ * as the person's Forget does it (a fresh conversation opens); any other is
+ * closed as forgotten. Either way its words go. A conversation the copy does
+ * not hold is "absent". The restored server's start runs it before anyone can
+ * sign in, so nothing is in flight.
+ */
+export function forgetConversationAgain(agentId: string, conversationId: string, now = new Date()): "forgotten" | "absent" {
+	const instance = createPersistentAgentInstance(agentId);
+	const thread = getPersistentAgentThread(instance.agentId, conversationId);
+	if (!thread) return "absent";
+	const runtime = getPersistentAgentRuntimeState(instance.agentId);
+	if (thread.state !== "closed" && runtime.activeThreadId === thread.threadId) {
+		writePersistentAgentMementoBoundary(instance.agentId, thread.threadId, now, { runtimeCwd: persistentRoomConversationCwd(instance.agentId, thread.threadId) });
+		return "forgotten";
+	}
+	if (thread.state !== "closed") closePersistentAgentThreadForMemento(instance.agentId, thread.threadId, `mm_${slugTimestamp(now)}_${shortRandomId()}`, now.getTime());
+	eraseConversationWords(instance.agentId, instance.rootDir, thread.threadId);
+	removeSessionRewriteLeftovers(instance.rootDir, thread.threadId);
+	return "forgotten";
+}
+
+/**
+ * The same Forget sent again after a kill took its answer. The room already
+ * moved to the empty conversation that Forget made, so the route aims the retry
+ * there; forgetting that one would write a second record for one Forget. Its
+ * own record answers instead. A conversation anyone has spoken in, or with an
+ * answer waiting, is never this.
+ */
+function forgetThatMade(instance: PersistentAgentInstance, fresh: PersistentAgentThreadRecord): PersistentAgentMementoBoundaryResponse | null {
+	if (fresh.origin !== "memento" || fresh.runtime.kind !== "pi-session-jsonl") return null;
+	if (threadHasUserVisibleTurns(fresh.items) || !piSessionHasNoMessages(instance.agentId, fresh.runtime)) return null;
+	if (getPersistentAgentUnseenLandedAnswer(instance.agentId)?.threadId === fresh.threadId) return null;
+	const eventRecordPath = mementoEventRecordPath(instance, fresh.threadId.replace(/^postmem_/, "mm_"));
+	const record = readJson(eventRecordPath) as MementoEventRecord | null;
+	if (record?.runtimeBoundary.newThreadId !== fresh.threadId) return null;
+	const closed = getPersistentAgentThread(instance.agentId, record.conversationId);
+	if (!closed) return null;
+	return {
+		agentId: instance.agentId,
+		conversationId: closed.threadId,
+		mementoId: record.mementoId,
+		writesMemory: false,
+		eventRecordPath,
+		eventRelPath: record.paths.eventRelPath,
+		runtimeBoundary: {
+			closedThreadId: closed.threadId,
+			closedReason: "memento",
+			closedAt: record.runtimeBoundary.closedAt,
+			closedByMementoId: record.mementoId,
+			oldRuntime: closed.runtime,
+			newThreadId: fresh.threadId,
+			newRuntime: fresh.runtime,
+		},
+		postMemento: { canContinue: true, canRest: true, activeThreadId: fresh.threadId, runtime: fresh.runtime },
+		memory: record.memory,
+		warnings: [],
+	};
+}
+
+/** A Forget in flight: ids and times only. One an older version left also holds `runtimeCwd`, which nothing reads. */
 interface ForgetCommitIntent {
 	oldThreadId: string;
 	mementoId: string;
 	freshThreadId: string;
 	freshModel: PersistentAgentModelLock;
-	runtimeCwd: string;
 	at: string;
 }
 
@@ -93,11 +155,12 @@ interface ForgetCommitIntent {
  * marker cleared, the memento record. The Forget itself and the crash
  * recovery both run it.
  */
-function finishForgetCommit(instance: PersistentAgentInstance, intent: ForgetCommitIntent): { runtimeBoundary: PersistentAgentMementoRuntimeBoundary; eventRecord: MementoEventRecord; eventRecordPath: string } {
+function finishForgetCommit(instance: PersistentAgentInstance, intent: ForgetCommitIntent, runtimeCwd: string): { runtimeBoundary: PersistentAgentMementoRuntimeBoundary; eventRecord: MementoEventRecord; eventRecordPath: string } {
 	const agentId = instance.agentId;
 	const now = new Date(intent.at);
 	const closedThread = getPersistentAgentThread(agentId, intent.oldThreadId);
 	if (!closedThread || closedThread.state !== "closed") throw new Error("the forgotten conversation is not closed");
+	serverHooks().deletionLanded?.({ kind: "forget", roomId: agentId, conversationId: intent.oldThreadId, at: intent.at });
 	rememberGenerations.get(rememberGenerationKey(agentId, intent.oldThreadId))?.stop?.("forgotten");
 	clearRememberWork(instance.rootDir, intent.oldThreadId);
 	const existingFresh = getPersistentAgentThread(agentId, intent.freshThreadId);
@@ -108,7 +171,7 @@ function finishForgetCommit(instance: PersistentAgentInstance, intent: ForgetCom
 			model: existingFresh?.model ?? intent.freshModel,
 			...(existingFresh ? {} : { items: [] }),
 		}, {
-			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: intent.freshThreadId, model, cwd: intent.runtimeCwd }),
+			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: intent.freshThreadId, model, cwd: runtimeCwd }),
 			// Forget never invokes a model (runtime_boundary_only). When no
 			// currently-available model was resolved, the fresh thread inherits the
 			// old thread's lock, which may belong to a profile that is no longer
@@ -140,9 +203,12 @@ function finishForgetCommit(instance: PersistentAgentInstance, intent: ForgetCom
 	abortConversationSpecialistTasks(agentId, closedThread.threadId);
 	const eventRecordPath = mementoEventRecordPath(instance, intent.mementoId);
 	const eventRelPath = agentRootRelativePath(instance, eventRecordPath);
-	if (fs.existsSync(eventRecordPath)) {
+	// A record a kill cut short before this write was atomic reads as none, and is written whole.
+	const stored = readJson(eventRecordPath) as MementoEventRecord | null;
+	if (stored) {
 		eraseConversationWords(agentId, instance.rootDir, closedThread.threadId);
-		return { runtimeBoundary, eventRecord: JSON.parse(fs.readFileSync(eventRecordPath, "utf-8")), eventRecordPath };
+		removeSessionRewriteLeftovers(instance.rootDir, closedThread.threadId);
+		return { runtimeBoundary, eventRecord: stored, eventRecordPath };
 	}
 	const meta = instance.readAgentJson();
 	const l1bPath = meta ? instance.l1bCurrentPath(meta) : path.join(instance.rootDir, "L1b", "current.md");
@@ -186,7 +252,17 @@ function finishForgetCommit(instance: PersistentAgentInstance, intent: ForgetCom
 	writeMementoEventRecord(instance, eventRecord);
 	// Forget means gone: every stored copy of the conversation's words is erased.
 	eraseConversationWords(agentId, instance.rootDir, closedThread.threadId);
+	removeSessionRewriteLeftovers(instance.rootDir, closedThread.threadId);
 	return { runtimeBoundary, eventRecord, eventRecordPath };
+}
+
+/** A session rewrite a kill cut short leaves a temporary file holding the whole conversation. One that cannot go now keeps the intent, so the next request tries again. */
+function removeSessionRewriteLeftovers(roomDir: string, threadId: string): void {
+	const sessions = path.join(roomDir, "runtime", "pi-sessions");
+	if (!fs.existsSync(sessions)) return;
+	for (const name of fs.readdirSync(sessions)) {
+		if (name.startsWith(`${threadId}.jsonl.tmp-`)) fs.rmSync(path.join(sessions, name), { force: true });
+	}
 }
 
 /**
@@ -196,7 +272,7 @@ function finishForgetCommit(instance: PersistentAgentInstance, intent: ForgetCom
 function settleForgetCommit(agentId: string, roomDir: string, intent: ForgetCommitIntent): void {
 	const instance = createPersistentAgentInstance(agentId);
 	const thread = getPersistentAgentThread(instance.agentId, intent.oldThreadId);
-	if (thread?.state === "closed" && thread.closedReason === "memento") finishForgetCommit(instance, intent);
+	if (thread?.state === "closed" && thread.closedReason === "memento") finishForgetCommit(instance, intent, persistentRoomConversationCwd(instance.agentId, intent.freshThreadId));
 	clearCommitIntent(roomDir, "forget");
 }
 

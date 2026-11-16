@@ -476,7 +476,7 @@ try {
 	// A tombstone a crash left behind is invisible to listings and swept at boot.
 	const strandedTombstone = path.join(tempAgentsRoot, `${guardId}.purging-123`);
 	writeText(path.join(strandedTombstone, "agent.json"), "{}\n");
-	assert(!agents.listPersistentAgents().some((row) => row.id.includes("purging")), "a tombstone must never appear in the room listing");
+	assert(!agents.listPersistentAgents("every room").some((row) => row.id.includes("purging")), "a tombstone must never appear in the room listing");
 	const swept = agents.sweepPersistentAgentPurgeTombstones();
 	assert(swept >= 1, `the boot sweep should reclaim the stranded tombstone, got ${swept}`);
 	assert(!fs.existsSync(strandedTombstone), "the swept tombstone must be gone");

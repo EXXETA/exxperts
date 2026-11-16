@@ -593,6 +593,7 @@ export async function generateSummary(
 	customInstructions?: string,
 	previousSummary?: string,
 	thinkingLevel?: ThinkingLevel,
+	metadata?: Record<string, unknown>,
 ): Promise<string> {
 	const maxTokens = Math.floor(0.8 * reserveTokens);
 
@@ -624,8 +625,8 @@ export async function generateSummary(
 
 	const completionOptions =
 		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
-			: { maxTokens, signal, apiKey, headers };
+			? { maxTokens, signal, apiKey, headers, metadata, reasoning: thinkingLevel }
+			: { maxTokens, signal, apiKey, headers, metadata };
 
 	const response = await completeSimple(
 		model,
@@ -782,6 +783,7 @@ export async function compact(
 	customInstructions?: string,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	metadata?: Record<string, unknown>,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -811,6 +813,7 @@ export async function compact(
 						customInstructions,
 						previousSummary,
 						thinkingLevel,
+						metadata,
 					)
 				: Promise.resolve("No prior history."),
 			generateTurnPrefixSummary(
@@ -821,6 +824,7 @@ export async function compact(
 				headers,
 				signal,
 				thinkingLevel,
+				metadata,
 			),
 		]);
 		// Merge into single summary
@@ -837,6 +841,7 @@ export async function compact(
 			customInstructions,
 			previousSummary,
 			thinkingLevel,
+			metadata,
 		);
 	}
 
@@ -867,6 +872,7 @@ async function generateTurnPrefixSummary(
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	metadata?: Record<string, unknown>,
 ): Promise<string> {
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 	const llmMessages = convertToLlm(messages);
@@ -884,8 +890,8 @@ async function generateTurnPrefixSummary(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
 		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
-			: { maxTokens, signal, apiKey, headers },
+			? { maxTokens, signal, apiKey, headers, metadata, reasoning: thinkingLevel }
+			: { maxTokens, signal, apiKey, headers, metadata },
 	);
 
 	const failure = getSummarizationFailure(response, "Turn prefix summarization");

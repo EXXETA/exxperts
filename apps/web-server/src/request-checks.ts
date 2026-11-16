@@ -256,11 +256,11 @@ app.addHook("onRequest", async (req, reply) => {
 });
 
 // A shared-server entry's request guard (server-hooks.ts; none on the desktop):
-// after the checks above, before any handler, the /ws upgrade included.
-// Nothing with side effects may run before it (a preParsing or preValidation hook, a writing body parser).
+// after the checks above, before the body is read and before any handler, the /ws upgrade included.
+// Registered after the hook above, since hooks run in the order added and stop at the first reply.
 const guardRequest = serverHooks().guardRequest;
 
-if (guardRequest) app.addHook("preHandler", async (req, reply) => guardRequest(req, reply));
+if (guardRequest) app.addHook("onRequest", async (req, reply) => guardRequest(req, reply));
 
 // A stopping server (server-stop.ts): /healthz answers 503, and requests that start work are refused with the code.
 // Callback style, so a server that is not stopping adds no await to any request
@@ -271,6 +271,9 @@ app.addHook("preHandler", (req, reply, done) => {
 	if (stopRefuses(req.method, req.routeOptions.url)) return void refuseWhileStopping(reply);
 	done();
 });
+
+// A shared-server entry's own routes (server-hooks.ts; none on the desktop).
+serverHooks().routes?.(app);
 
 app.get("/healthz", async () => ({ ok: true, persona: process.env.EXXETA_PERSONA ?? "business" }));
 

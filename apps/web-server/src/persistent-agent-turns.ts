@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { settleCommits } from "./memory-commit.js";
+import { settleRoom } from "./room-settle.js";
 import { eraseAgainIfForgotten } from "./forget-erase.js";
 import { recordPersistentRoomLastUsed, type PersistentRoomLastUsed, recordPersistentRoomLastUsedIfAbsent } from "./persistent-room-last-used.js";
 import type { PatienceWait } from "./model-call-causes.js";
@@ -9,6 +9,7 @@ import type { PersistentAgentActiveTurnState, PersistentAgentActiveTurnTerminalR
 import { createPersistentAgentInstance, ensureDir, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, idlePersistentAgentTurnState, normalizePersistentAgentActiveTurnToken, persistentAgentActiveTurnKey, persistentAgentActiveTurns, type PersistentAgentInstance, persistentAgentTurnConflictError, readJson, safeRuntimeThreadId, shortRandomId, writeFileAtomic } from "./persistent-agent-store.js";
 import { getPersistentAgentThread, normalizePersistentAgentThreadRecord, threadHasUserVisibleTurns } from "./persistent-agent-threads.js";
 import { declinedQuestionNoteText, notesOfKeptCards } from "./thread-items-by-id.js";
+import { dropRunningTurn, readTurnItemsMemory, type RunningTurn, type TurnItemsMemory, writeRunningTurn, writeTurnItemsMemory } from "./turn-pieces-store.js";
 
 // Remember reading a conversation. While a proposal is being generated the
 // conversation must not move: a message sent meanwhile (from another device,
@@ -91,30 +92,38 @@ export function assertNoRememberGeneration(agentIdRaw: string, threadIdRaw: stri
 }
 
 /**
- * What a conversation's keyed turns leave in memory (thread-items-by-id.ts):
- * the latest-turn marker, the keys of recent turns in start order and the
- * ids removed on purpose lately (accepted cuts: persistent-agent-threads.ts).
- * In memory on purpose: a restart forgets them, a stated gap
- * of the design (a late Stop then cuts nothing).
+ * What a conversation's keyed turns leave for later requests, in the room's
+ * folder (turn-pieces-store.ts `items`), so a restart keeps them: the
+ * latest-turn marker, the keys of recent turns in start order and the ids
+ * removed on purpose lately (accepted cuts: persistent-agent-threads.ts).
  */
-type ConversationItemMemory = { marker?: string; keys: string[]; removed: string[] };
-const conversationItemMemories = new Map<string, ConversationItemMemory>();
 const RECENT_KEYS_KEPT = 50;
 const REMOVED_IDS_KEPT = 50;
 /** Starts the marker of a turn without a key: no key can hold it. */
 const UNKEYED_MARKER = "\u0000";
 
-function conversationItemMemory(agentIdRaw: string, threadIdRaw: string): ConversationItemMemory {
-	const key = rememberGenerationKey(agentIdRaw, threadIdRaw);
-	let memory = conversationItemMemories.get(key);
-	if (!memory) {
-		memory = { keys: [], removed: [] };
-		conversationItemMemories.set(key, memory);
-	}
-	return memory;
+function conversationOf(agentIdRaw: string, threadIdRaw: string): { agentId: string; threadId: string } {
+	const { agentId } = createPersistentAgentInstance(agentIdRaw);
+	const threadId = safeRuntimeThreadId(threadIdRaw);
+	if (!threadId) throw new Error("invalid persistent-agent thread id");
+	return { agentId, threadId };
 }
 
-/** The key of the conversation's newest turn; undefined after a turn without one or a restart. A late Stop cuts only this turn's parts. */
+function conversationItemMemory(agentIdRaw: string, threadIdRaw: string): TurnItemsMemory {
+	const { agentId, threadId } = conversationOf(agentIdRaw, threadIdRaw);
+	return readTurnItemsMemory(agentId, threadId);
+}
+
+/** A turn's pieces never cost the turn: a write that fails loses only what that piece would keep across a restart. */
+function keepTurnPiece(what: string, write: () => void): void {
+	try {
+		write();
+	} catch (error) {
+		console.error(`[persistent-agent-turns] the conversation's ${what} could not be saved: ${(error as Error)?.name ?? "Error"}`);
+	}
+}
+
+/** The key of the conversation's newest turn; undefined after a turn without one. A late Stop cuts only this turn's parts. */
 export function latestTurnKey(agentIdRaw: string, threadIdRaw: string): string | undefined {
 	const marker = conversationItemMemory(agentIdRaw, threadIdRaw).marker;
 	return marker && !marker.startsWith(UNKEYED_MARKER) ? marker : undefined;
@@ -125,11 +134,12 @@ export function recentTurnKeys(agentIdRaw: string, threadIdRaw: string): string[
 	return [...conversationItemMemory(agentIdRaw, threadIdRaw).keys];
 }
 
-/** Ids the page or the server took out on purpose: no later save brings them back while the server runs. */
+/** Ids the page or the server took out on purpose: no later save brings them back. */
 export function rememberRemovedIds(agentIdRaw: string, threadIdRaw: string, ids: readonly string[]): void {
 	if (ids.length === 0) return;
-	const memory = conversationItemMemory(agentIdRaw, threadIdRaw);
-	memory.removed = [...memory.removed.filter((id) => !ids.includes(id)), ...ids].slice(-REMOVED_IDS_KEPT);
+	const { agentId, threadId } = conversationOf(agentIdRaw, threadIdRaw);
+	const memory = readTurnItemsMemory(agentId, threadId);
+	keepTurnPiece("removed ids", () => writeTurnItemsMemory(agentId, threadId, { ...memory, removed: [...memory.removed.filter((id) => !ids.includes(id)), ...ids].slice(-REMOVED_IDS_KEPT) }));
 }
 
 export function removedIdsOf(agentIdRaw: string, threadIdRaw: string): Set<string> {
@@ -156,7 +166,11 @@ export function assertPersistentAgentTurnCanBegin(agentIdRaw: string, threadIdRa
 	if (existing.state === "running" || existing.state === "cancelling") throw persistentAgentTurnConflictError(instance.agentId, threadId, existing);
 }
 
-/** `key`: the turn's key when the page named it (thread-items-by-id.ts). Every turn moves the conversation's latest-turn marker, keyed or not, and the marker outlives the turn. */
+/**
+ * `key`: the turn's key when the page named it (thread-items-by-id.ts). Every
+ * turn moves the conversation's latest-turn marker, keyed or not, and the
+ * marker outlives the turn.
+ */
 export function beginPersistentAgentTurn(agentIdRaw: string, threadIdRaw: string, metadata: { turnId?: string; connectionId?: string; key?: string } = {}): PersistentAgentActiveTurnState {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const threadId = safeRuntimeThreadId(threadIdRaw);
@@ -164,7 +178,7 @@ export function beginPersistentAgentTurn(agentIdRaw: string, threadIdRaw: string
 	// Every turn passes here, the socket's and the scheduler's: a save a crash
 	// left half done is finished first, so no turn lands on a conversation
 	// whose page is already saved.
-	settleCommits(instance.agentId, instance.rootDir);
+	settleRoom(instance.agentId);
 	assertPersistentAgentTurnCanBegin(instance.agentId, threadId);
 	const now = Date.now();
 	const turnId = normalizePersistentAgentActiveTurnToken(metadata.turnId, "turn id") ?? `turn_${now.toString(36)}_${shortRandomId()}`;
@@ -177,13 +191,27 @@ export function beginPersistentAgentTurn(agentIdRaw: string, threadIdRaw: string
 		updatedAt: now,
 	};
 	persistentAgentActiveTurns.set(persistentAgentActiveTurnKey(instance.agentId, threadId), state);
-	const memory = conversationItemMemory(instance.agentId, threadId);
-	memory.marker = metadata.key ?? `${UNKEYED_MARKER}${turnId}`;
-	if (metadata.key) memory.keys = [...memory.keys.filter((key) => key !== metadata.key), metadata.key].slice(-RECENT_KEYS_KEPT);
+	const memory = readTurnItemsMemory(instance.agentId, threadId);
+	const keys = metadata.key ? [...memory.keys.filter((key) => key !== metadata.key), metadata.key].slice(-RECENT_KEYS_KEPT) : memory.keys;
+	keepTurnPiece("latest-turn marker", () => writeTurnItemsMemory(instance.agentId, threadId, { ...memory, marker: metadata.key ?? `${UNKEYED_MARKER}${turnId}`, keys }));
 	// The turn has started: the room counts as used from here, however the turn
 	// ends. Best-effort by construction (the function cannot throw).
 	recordPersistentRoomLastUsed(instance.agentId, "server");
 	return state;
+}
+
+/**
+ * A keyed turn says it runs, with its question, in the room's folder until it
+ * finishes: the page saves the question some time after it is sent, and a
+ * kill leaves the file behind, so the room's next settle lands the question
+ * and the clean stop's line (killed-turn-line.ts). Only the turn running now
+ * writes it.
+ */
+export function keepRunningTurn(agentIdRaw: string, threadIdRaw: string, turn: RunningTurn): void {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	const threadId = safeRuntimeThreadId(threadIdRaw);
+	if (!threadId || getPersistentAgentActiveTurnState(instance.agentId, threadId).turnId !== turn.turnId) return;
+	keepTurnPiece("running turn", () => writeRunningTurn(instance.agentId, threadId, turn));
 }
 
 export function markPersistentAgentTurnCancelling(agentIdRaw: string, threadIdRaw: string, reason: PersistentAgentActiveTurnTerminalReason | "abort_requested" = "cancelled"): PersistentAgentActiveTurnState {
@@ -218,6 +246,8 @@ export function finishPersistentAgentTurn(agentIdRaw: string, threadIdRaw: strin
 	if (existing.state !== "idle" && turnId && existing.turnId && existing.turnId !== turnId) return existing;
 	const state = idlePersistentAgentTurnState(Date.now(), outcome.terminalReason);
 	persistentAgentActiveTurns.set(persistentAgentActiveTurnKey(instance.agentId, threadId), state);
+	// It ended here, however it ended: no later settle takes it for a killed one.
+	keepTurnPiece("running turn", () => dropRunningTurn(instance.agentId, threadId));
 	return state;
 }
 
@@ -237,19 +267,23 @@ export function recordPersistentAgentUnseenLandedAnswer(agentIdRaw: string, mark
 	// it. The badge the user keeps is the one that is harder to reach; the live
 	// answer is waiting in the conversation they open anyway. Same conversation,
 	// or a scheduled landing arriving on top: newest wins.
-	if (origin === "detached-turn") {
-		const existing = getPersistentAgentUnseenLandedAnswer(instance.agentId);
-		if (existing && existing.origin === "scheduled-run" && existing.threadId !== threadId) return;
-	}
+	const existing = getPersistentAgentUnseenLandedAnswer(instance.agentId);
+	if (origin === "detached-turn" && existing && existing.origin === "scheduled-run" && existing.threadId !== threadId) return;
 	const file = instance.runtimeUnseenLandedAnswerPath();
 	ensureDir(path.dirname(file));
-	const record: PersistentAgentUnseenLandedAnswer = { threadId, turnId, terminalReason: marker.terminalReason, landedAt: Date.now(), origin };
+	const landedAt = Date.now();
+	// The run of unopened answers goes on until the mark is cleared: its first
+	// landing's time and how many have landed since (a shared server pauses a
+	// room's scheduled tasks on them).
+	const firstUnopenedAt = existing?.firstUnopenedAt || landedAt;
+	const unopenedCount = (existing?.unopenedCount ?? 0) + 1;
+	const record: PersistentAgentUnseenLandedAnswer = { threadId, turnId, terminalReason: marker.terminalReason, landedAt, origin, firstUnopenedAt, unopenedCount };
 	writeFileAtomic(file, JSON.stringify(record, null, 2) + "\n");
 }
 
-// A session is binding to a conversation in this room. A detached turn landed
-// into the room's live conversation, so any bind puts the user in front of it
-// and clears the badge, exactly as before. A scheduled answer lives in its own
+// A page in view is binding to a conversation in this room. A detached turn
+// landed into the room's live conversation, which the bind takes over, so any
+// such bind clears the badge. A scheduled answer lives in its own
 // conversation: only a bind that opens THAT conversation actually shows it, so
 // a bind that starts a new one has to leave the badge lit.
 export function clearPersistentAgentUnseenLandedAnswerForBind(agentIdRaw: string, boundThreadIdRaw: string): void {
@@ -264,6 +298,17 @@ export function clearPersistentAgentUnseenLandedAnswerForBind(agentIdRaw: string
 export function clearPersistentAgentUnseenLandedAnswerForClosedThread(agentIdRaw: string, closedThreadIdRaw: string): void {
 	const marker = getPersistentAgentUnseenLandedAnswer(agentIdRaw);
 	if (!marker || marker.threadId !== String(closedThreadIdRaw ?? "").trim()) return;
+	clearPersistentAgentUnseenLandedAnswer(agentIdRaw);
+}
+
+// A page already bound to this conversation comes into view: it shows the
+// landing it loaded as it bound, so only that marker goes, and only while it
+// still points at this conversation. A later landing, which another window
+// asked for after this page bound, keeps the badge.
+export function clearPersistentAgentUnseenLandedAnswerLoaded(agentIdRaw: string, threadIdRaw: string, loaded: PersistentAgentUnseenLandedAnswer): void {
+	const marker = getPersistentAgentUnseenLandedAnswer(agentIdRaw);
+	if (!marker || marker.threadId !== String(threadIdRaw ?? "").trim()) return;
+	if (marker.turnId !== loaded.turnId || marker.landedAt !== loaded.landedAt) return;
 	clearPersistentAgentUnseenLandedAnswer(agentIdRaw);
 }
 
@@ -283,7 +328,10 @@ export function getPersistentAgentUnseenLandedAnswer(agentIdRaw: string): Persis
 	if (!threadId || !turnId || !terminalReason) return null;
 	const landedAt = Number.isFinite(raw?.landedAt) && Number(raw?.landedAt) > 0 ? Math.floor(Number(raw?.landedAt)) : 0;
 	const origin: PersistentAgentUnseenLandedAnswerOrigin = raw?.origin === "scheduled-run" ? "scheduled-run" : "detached-turn";
-	return { threadId, turnId, terminalReason, landedAt, origin };
+	// A mark written before these two facts counts as one answer, landed when it says.
+	const firstUnopenedAt = Number.isFinite(raw?.firstUnopenedAt) && Number(raw?.firstUnopenedAt) > 0 ? Math.floor(Number(raw?.firstUnopenedAt)) : landedAt;
+	const unopenedCount = Number.isSafeInteger(raw?.unopenedCount) && Number(raw?.unopenedCount) > 0 ? Number(raw?.unopenedCount) : 1;
+	return { threadId, turnId, terminalReason, landedAt, origin, firstUnopenedAt, unopenedCount };
 }
 
 // Is the answer this marker points at still something the user can walk into?
@@ -309,7 +357,8 @@ function unseenLandedAnswerStillReachable(agentId: string, marker: PersistentAge
 // up; the id prefix belongs to the turn, so a re-landed write updates its own
 // notes instead of stacking new ones.
 export interface PersistentRoomAutoDeclinedQuestionLog {
-	note(question: { title: string }): void;
+	/** `lasting`: a connector question that offered Allow for this room. */
+	note(question: { title: string; lasting?: boolean }): void;
 	titles(): string[];
 	appendItems(items: unknown[], idPrefix: string): unknown[];
 	/** The notes as items of their own, `<idPrefix>-<n>`, for a keyed landing to place by id (it applies the card rule itself). */
@@ -326,7 +375,7 @@ export function createPersistentRoomAutoDeclinedQuestionLog(): PersistentRoomAut
 		// of notes that look like a bug.
 		note(question) {
 			const title = String(question?.title ?? "").trim();
-			const text = declinedQuestionNoteText(title);
+			const text = declinedQuestionNoteText(title, question?.lasting === true);
 			if (notes.some((existing) => existing.text === text)) return;
 			notes.push({ title, text });
 		},

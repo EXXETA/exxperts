@@ -7,12 +7,38 @@
 //
 // This file holds only the slots and the flag. Shared code never imports an
 // entry file: a release packs the server by following imports.
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+
+import type { UsageKind } from "./usage-log.js";
 
 export type EdgeTools = {
 	// True when the candidate is the server's token. The token itself is never handed out.
 	readonly tokenMatches: (candidate: string) => boolean;
 };
+
+type RoomRefusal = { readonly code: string; readonly message: string };
+
+// A live connection as the connectionOpened slot gets it: its socket.
+export type LiveConnection = {
+	// Sends a close frame with this code and reason; the connection ends once
+	// the other side answers it.
+	close(code: number, reason: string): void;
+	// Ends the connection at once, without a close frame.
+	terminate(): void;
+	// Hands an event to the connection's listeners: "message" for each frame
+	// it receives, until it has closed.
+	emit(event: string | symbol, ...args: unknown[]): boolean;
+	// Sends a ping frame; the other side's answer arrives as "pong".
+	ping(): void;
+	on(event: "pong", listener: () => void): unknown;
+};
+
+// A Forget that landed, or a room deleted for good: ids and a time, never words.
+// A room's deletion also carries the room's createdAt, read from its agent.json
+// before the folder went; absent when that file holds none or cannot be read.
+export type DeletionLanded =
+	| { readonly kind: "forget"; readonly roomId: string; readonly conversationId: string; readonly at: string }
+	| { readonly kind: "room"; readonly roomId: string; readonly createdAt?: number; readonly at: string };
 
 export type ServerHooks = {
 	// The folder the web page is served from, given the app root; without it,
@@ -35,8 +61,8 @@ export type ServerHooks = {
 	// listener, given the server's own; asked once while index.ts loads.
 	pageSecurityHeaders?: (base: Readonly<Record<string, string>>) => Record<string, string>;
 	// Runs after the loopback and token checks, or after the edge when one is
-	// registered, and before any handler, the /ws upgrade included. It may
-	// only refuse: send a reply and return it.
+	// registered, before the body is read and before any handler, the /ws
+	// upgrade included. It may only refuse: send a reply and return it.
 	// Returning without a reply lets the request through. A route is known by
 	// req.routeOptions.url, except for requests no route matches (answered
 	// 404) and OPTIONS requests, where it is undefined; a HEAD request carries
@@ -66,11 +92,91 @@ export type ServerHooks = {
 	// ran) is run again, asked when a scheduler tick starts; without it, yes.
 	// No ends the run instead, unless its answer had already landed.
 	retriesInterruptedScheduledRuns?: () => boolean;
+	// Asked each time a room is checked for a scheduled run
+	// (persistent-agent-room-settings.ts), after the room's own checks and
+	// before its lock, with the room's "Response ready" mark, nothing when it
+	// has none. A sentence ends the run as blocked owner_paused, never retried,
+	// with that sentence as its message. It answers at once. Without it, or
+	// when it gives nothing, the run goes on as before.
+	scheduledRunPause?: (roomId: string, unopened: { readonly firstUnopenedAt: number; readonly unopenedCount: number } | undefined) => string | undefined;
 	// Asked once per connector add (mcp-admin.ts), after the add's own checks,
 	// with the entry it would write; a sentence refuses the add with that
 	// sentence and nothing is written. Without it, or when it gives nothing,
 	// the add goes on as before.
 	connectorEntryRefusal?: (entry: Readonly<{ url?: string; command?: string; auth?: string | false }>) => string | undefined;
+	// Asked by AI setup's gateway discover and save (gateways.ts) with the address
+	// it would use or keep; a sentence refuses with a 400 and nothing is fetched
+	// or written. Without it, or when it gives nothing, as before.
+	gatewayAddressRefusal?: (baseUrl: string) => string | undefined;
+	// Asked once per room the create route makes, after the room exists and
+	// before the reply, with the createdAt in its agent.json; the reply waits for
+	// it. A throw or a rejection takes the route's own failure path, its statusCode
+	// and sentence, and the room stays. Without it, nothing happens.
+	roomCreated?: (req: FastifyRequest, room: { readonly roomId: string; readonly createdAt: number }) => void | Promise<void>;
+	// Asked whether this request's person may be refused this room: the refusal,
+	// or nothing to let them in, at once or as a promise. Without it, nobody is
+	// refused. The live connection's consult frame asks for the room it names
+	// (room-socket.ts), with the upgrade's request, before it reads that room.
+	roomRefusal?: (req: FastifyRequest, roomId: string) => RoomRefusal | undefined | Promise<RoomRefusal | undefined>;
+	// Asked for the room ids this request's person may see: the set, or nothing
+	// for every room, at once or as a promise. Without it, every room. The saved
+	// room order's two routes ask (settings-routes.ts), and every other route
+	// through viewerOf (persistent-agent-status.ts): each list that reads across
+	// rooms and the room name check. Each asks once per request and waits for the
+	// answer before it reads a room.
+	roomViewer?: (req: FastifyRequest) => ReadonlySet<string> | undefined | Promise<ReadonlySet<string> | undefined>;
+	// Asked once per request of the artifact routes (artifact-routes.ts) for the
+	// room whose shelf serves this task's files: its id, or null for none (the
+	// route answers 404), at once or as a promise. When it is registered, the
+	// file route serves only that room's shelf, never the server-wide task store.
+	// Without it, the room task-room-lookup.ts finds, after the store.
+	taskRoomOf?: (req: FastifyRequest, taskId: string) => string | null | Promise<string | null>;
+	// Asked once per request of the saved room order's two routes, for the
+	// folder this request's order lives in. A throw takes the route's own failure
+	// path and nothing is written. Without it, the app's state folder, one order
+	// for every door.
+	roomOrderFolder?: (req: FastifyRequest) => string;
+	// Asked once per attempt at a new room's id, for what goes after the slug; a
+	// taken id asks again. It answers at once. Without it, ids are the slug, then a
+	// count when that is taken.
+	roomIdTail?: () => string;
+	// Who this request's person and space are, as opaque ids, at once or as a
+	// promise; nothing when no one is known. The memory ask asks
+	// (memory-routes.ts), once per request, for its usage row.
+	whoIsAsking?: (req: FastifyRequest) => { person: string; space: string } | undefined | Promise<{ person: string; space: string } | undefined>;
+	// A gateway the server's start provides: its provider id and key. index.ts
+	// asks once while it loads and hands the key to the runtime in memory
+	// (AuthStorage.setProcessKey), never to a file; AI setup asks at each save,
+	// delete and key save, and refuses any change to that gateway but its
+	// models (openai-compatible-gateways.ts, startGatewayProviderId). Without
+	// it, or when it gives nothing, no gateway is provided.
+	startGateway?: () => { readonly providerId: string; readonly key: string } | undefined;
+	// Called once, while the server registers its routes (request-checks.ts),
+	// with the server, so an entry can add routes of its own. Without it, none.
+	routes?: (app: FastifyInstance) => void;
+	// Called once as each live connection's handler starts, a room's or Home's,
+	// with that connection. Without it, nothing.
+	connectionOpened?: (req: FastifyRequest, connection: LiveConnection) => void;
+	// Asked for every message a room's live connection takes (room-socket.ts),
+	// held ones included, before it is handled, with the room and the parsed
+	// message. True means it refused, and the message is not handled. Without
+	// it, every message is handled.
+	frameRefusal?: (req: FastifyRequest, roomId: string, message: unknown, connection: LiveConnection & { send(data: string): void }) => boolean;
+	// Asked once per usage row as it is written (usage-log.ts), when the row names
+	// no person, with the room it names and its kind: the person and space it is
+	// written with, or nothing to write it without them. Asked the same way once
+	// per model session (modelCallMetadata), so its calls name that person. It
+	// answers at once. Without it, rows and calls carry neither.
+	usageOwner?: (roomId: string, kind: UsageKind | undefined) => { person: string; space: string } | undefined;
+	// Called once a Forget has landed (persistent-agent-forget.ts, after the
+	// conversation is closed as forgotten, and again when a Forget a cut left is
+	// finished, with the same time) and once a room is deleted for good
+	// (persistent-agent-archive.ts, right after its folder is detached, so a
+	// detach that fails notes nothing). It answers at once, never throws, and
+	// says whether it noted the deletion: one it did not keeps the room's
+	// detached folder, which the server's next start reads. A Forget answers
+	// the same either way. Without it, nothing, and the folder goes.
+	deletionLanded?: (deletion: DeletionLanded) => boolean;
 };
 
 let registered: Readonly<ServerHooks> | null = null;

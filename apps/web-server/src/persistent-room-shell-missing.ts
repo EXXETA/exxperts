@@ -1,4 +1,5 @@
-import { findShellConfig, getAgentDir, isNoShellFoundMessage, SettingsManager, setShellLookupPlatformForTests } from "@exxeta/exxperts-runtime";
+import { findShellConfig, isNoShellFoundMessage, setShellLookupPlatformForTests } from "@exxeta/exxperts-runtime";
+import { personalShellSettings } from "./room-command-tool.js";
 
 /**
  * Shell commands on a computer with no shell to run them in: only Windows
@@ -16,15 +17,15 @@ import { findShellConfig, getAgentDir, isNoShellFoundMessage, SettingsManager, s
 export const PERSISTENT_ROOM_SHELL_MISSING_SENTENCE = "On Windows, shell commands need Git for Windows. Install it from gitforwindows.org; the room can run commands as soon as it is installed. If it still says this, restart exxperts.";
 
 /**
- * The lookup the room's bash tool makes, with the shell path a settings file
- * may name. Only the runtime's no-shell failure counts as missing: any other
- * (a settings file's shell path that does not exist) is a developer's error,
- * which the bash tool shows as it is.
+ * The lookup the room's bash tool makes, with the shell path the person's
+ * settings may name. Only the runtime's no-shell failure counts as missing:
+ * any other (a settings file's shell path that does not exist) is a
+ * developer's error, which the bash tool shows as it is.
  */
-export function persistentRoomShellFound(runtimeCwd: string): boolean {
+export function persistentRoomShellFound(): boolean {
 	let shellPath: string | undefined;
 	try {
-		shellPath = SettingsManager.create(runtimeCwd, getAgentDir()).getShellPath();
+		shellPath = personalShellSettings().shellPath;
 	} catch {}
 	try {
 		return findShellConfig(shellPath) !== null;

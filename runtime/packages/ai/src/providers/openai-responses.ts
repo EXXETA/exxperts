@@ -240,6 +240,10 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		store: false,
 	};
 
+	// Whose call it is, for a gateway that counts spend per person: the caller's own id, never a name.
+	const user = options?.metadata?.user_id;
+	if (typeof user === "string" && user) params.user = user;
+
 	if (options?.maxTokens) {
 		params.max_output_tokens = options?.maxTokens;
 	}

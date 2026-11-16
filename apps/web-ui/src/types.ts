@@ -1,5 +1,6 @@
 import type { RememberRead } from "./remember-read";
 import type { CredentialKey } from "../../web-server/src/model-not-offered";
+import type { FolderPanelPress, SuggestedFolder } from "../../web-server/src/room-box/card-text";
 import type { FailureCause, FailureLineParts, GatewayFind, QuotaWay, Unreached } from "./turn-failure-line";
 
 /**
@@ -174,7 +175,16 @@ export interface PersistentRoomWorkspaceDefaultResponse {
 	deleted?: boolean;
 	/** The line to show when this computer has no shell for commands (Windows without Git); null when one is found. */
 	shellMissingNote?: string | null;
+	/** A room with no folder yet whose first folder comes with commands on. */
+	commandsStartOn?: boolean;
+	/** The saved folder is there, but it is one no room may use: the room's files and commands stop until another is chosen. */
+	folderRefused?: boolean;
+	/** The room's protection. Absent on a shared server and on an older server. */
+	protection?: PersistentRoomProtection;
 }
+
+/** A room's protection as the server reads it. Off with no cause: the person turned it off. */
+export type PersistentRoomProtection = { state: "on" } | { state: "off"; cause?: "computer" | "folder" | "unknown" };
 
 export type SystemChooseFolderResponse =
 	| { supported: true; cancelled: false; path: string }
@@ -1325,6 +1335,8 @@ export interface PersistentRoomBackgroundRunsResponse {
 	};
 	ordering: "createdAt_desc";
 	runs: PersistentRoomBackgroundRunView[];
+	/** Each task's newest run, however many newer runs push it out of runs. */
+	latestRuns: PersistentRoomBackgroundRunView[];
 	summary: PersistentRoomBackgroundRunHistorySummary;
 }
 
@@ -1355,7 +1367,8 @@ export interface PersistentAgentStatus {
 	id: PersistentAgentId;
 	exists: boolean;
 	status: "missing" | "ready" | "needs_absorb" | "error";
-	root: string;
+	/** The room list leaves it out; the one-room status carries it. */
+	root?: string;
 	runtime: PersistentAgentRuntimeState;
 	activeThread: PersistentAgentActiveThreadSummary | null;
 	/** A detached turn landed its answer while no session was connected; the server clears it when a session next binds to the room. */
@@ -1366,17 +1379,22 @@ export interface PersistentAgentStatus {
 	answeringDetached?: boolean;
 	/** When a turn last started in this room, through any door, or the estimate below; null when the room has neither (never used, or archived before it was given an estimate). Read by the "Recently used" order only. */
 	lastUsedAt: string | null;
-	/** True while `lastUsedAt` is an estimate rather than a turn's stamp: the newest change of any conversation somebody spoke in, given once to a room that was in use before stamps existed. The room's first turn replaces it. */
-	lastUsedIsEstimate: boolean;
+	/** True while `lastUsedAt` is an estimate rather than a turn's stamp: the newest change of any conversation somebody spoke in, given once to a room that was in use before stamps existed. The room's first turn replaces it. The room list leaves it out; the one-room status carries it. */
+	lastUsedIsEstimate?: boolean;
 	displayName?: string;
 	description?: string;
+	/** The room list leaves it out; the one-room status carries it. */
 	role?: string;
+	/** The room list leaves it out; the one-room status carries it. */
 	model?: { provider: string; model: string } | string;
 	/** The room's two model rows, resolved on the server. */
 	models?: RoomModelsView;
-	l1a: { path: string; exists: boolean; bytes?: number };
-	l1b: { path: string; exists: boolean; bytes?: number; sections: string[]; missingSections: string[] };
-	sectionRegistry: { path: string; exists: boolean; missingSections: string[] };
+	/** The room list leaves it out; the one-room status carries it. */
+	l1a?: { path: string; exists: boolean; bytes?: number };
+	/** The room list keeps `sections` only; the one-room status carries the rest. */
+	l1b: { path?: string; exists?: boolean; bytes?: number; sections: string[]; missingSections?: string[] };
+	/** The room list leaves it out; the one-room status carries it. */
+	sectionRegistry?: { path: string; exists: boolean; missingSections: string[] };
 	recentContext: { fullEntries: number; softCap: number; hardCap: number; blockCap?: number };
 	memoryStatus: {
 		recentContextCount: number;
@@ -1391,6 +1409,7 @@ export interface PersistentAgentStatus {
 		notesToSort?: number;
 	};
 	scheduleSummary: PersistentRoomScheduleSummary;
+	/** The room list leaves it out; the one-room status carries it. */
 	promptBudget?: {
 		l0EstimatedTokens: number;
 		l1aEstimatedTokens: number;
@@ -1400,6 +1419,7 @@ export interface PersistentAgentStatus {
 		state: "healthy" | "warning" | "pressure" | "hard";
 		thresholds: { warning: number; pressure: number; hard: number };
 	};
+	/** The room list leaves it out; the one-room status carries it. */
 	memoryBudgetTokens?: number;
 	// The room saves a clean Memorize without the card, and its Start skips the first read.
 	fastPathSecondApproval?: boolean;
@@ -1535,6 +1555,8 @@ type ChatItemOfKind =
 			result?: string;
 			/** Tool result `details` object, when the server sends one (e.g. fetch_url title/finalUrl). */
 			details?: any;
+			/** What a room's yes on this step gave was taken back with Remove or Turn off: saved, so the line under it stays true. */
+			takenBack?: boolean;
 			/** When the step began (epoch ms), as the server stamped its start. */
 			startedAt?: number;
 			/** When it ended, by the same clock, so the row shows its own time: drawn only, never saved. */
@@ -1544,8 +1566,28 @@ type ChatItemOfKind =
 			kind: "approval";
 			id: string;            // chat item id
 			requestId: string;     // server-side ui_request id
-			uiKind: "confirm" | "select" | "input";
+			uiKind: "confirm" | "select" | "input" | "site" | "outside" | "run" | "folder" | "commands" | "connector";
 			title: string;
+			/** A folder card: the access it asks for, whether the room has a folder of its own, whether Choose a folder… still works, and the line a refused pick left. */
+			access?: "read" | "write";
+			roomHasFolder?: boolean;
+			canChoose?: boolean;
+			line?: string;
+			/** A commands card: which line it shows, and whether its yes is Turn on anyway. */
+			commandsLine?: "in-box" | "in-box-read-only" | "no-box" | "unprotected";
+			anyway?: boolean;
+			/** A site or connector card: whether the answer may last for the room; for the web reader's card the page's address, hidden characters already written out. */
+			lasting?: boolean;
+			/** A connector card: the connector's name as shown, what the room would send (one line of JSON, hidden characters already written out) and how many characters were cut from its end. */
+			connector?: string;
+			sent?: string;
+			cut?: number;
+			address?: string;
+			/** The run-outside and run questions: the command and the model's reason, hidden characters already written out. */
+			command?: string;
+			reason?: string;
+			/** The run question: the folder its command runs in, hidden characters already written out. */
+			folder?: string;
 			message?: string;
 			detail?: string;
 			options?: string[];
@@ -1557,6 +1599,14 @@ type ChatItemOfKind =
 			stopped?: true;
 			/** When it was asked, by this page's clock: a message the person started typing after this declines it (question-keys.ts). Drawn only. */
 			openedAt?: number;
+			/** When the server last sent this card, by this page's clock: the panel's pause counts from the later of this and `openedAt`. Drawn only. */
+			shownAt?: number;
+			/** A folder card the server is working on a press for (its window open, or a folder being looked at): which press. Drawn only. */
+			choosing?: FolderPanelPress | null;
+			/** A folder card's folder, as the server shows it: its real name and path, and whether one click may give it. Drawn only. */
+			suggested?: SuggestedFolder;
+			/** A site or commands card whose yes couldn't be saved: the line it shows with its buttons back. Drawn only. */
+			failure?: string;
 	  }
 	// `details`: a failed turn's line keeps the provider's own sentence, keys masked, behind Details.
 	// `returnedId`: the line of a message handed back to the box, by the step back's id.

@@ -598,7 +598,7 @@
 	color: var(--user-fg);
 	border-radius: 10px;
 	padding: 12px 16px;
-	font-weight: 500;
+	font-weight: 400;
 }
 .absorb-discussion-message.assistant {
 	align-self: flex-start;
@@ -702,11 +702,6 @@
 .absorb-discussion-counter.full {
 	color: var(--danger);
 }
-/* Drafting the update is the discussion's primary exit; keep it compact but filled. */
-.absorb-discussion-actions .absorb-discussion-generate {
-	font-size: 12px;
-	padding: 6px 12px;
-}
 .absorb-discussion-message.pending {
 	display: flex;
 	align-items: center;
@@ -716,30 +711,5 @@
 }
 .landing-action {
 	align-self: flex-start;
-	background: var(--exx-action-primary-bg);
-	border: 1px solid var(--exx-action-primary-bg);
-	border-radius: var(--exx-radius-control);
-	color: var(--exx-action-primary-fg);
-	font-family: var(--exx-font-display);
-	font-weight: 700;
-	padding: 11px 16px;
-	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-.landing-action:hover,
-.landing-action:focus-visible {
-	background: var(--exx-action-primary-hover-bg);
-	border-color: var(--exx-action-primary-hover-bg);
-	color: var(--exx-action-primary-fg);
-}
-.landing-action.secondary {
-	background: var(--exx-action-secondary-bg);
-	border-color: var(--exx-action-secondary-border);
-	color: var(--exx-action-secondary-fg);
-}
-.landing-action.secondary:hover,
-.landing-action.secondary:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	border-color: var(--border);
-	color: var(--fg);
 }
 

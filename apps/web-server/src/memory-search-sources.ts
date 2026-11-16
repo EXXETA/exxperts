@@ -42,7 +42,8 @@
 // — the one cache is in this process's memory and is dropped whenever a watched
 // file's mtime moves. That matters more than it looks: the search is read on
 // every question, and a read that wrote would rewrite a room's memory for
-// asking it something.
+// asking it something. The one write is not this module's: the room is settled
+// first (room-settle.ts), and that writes only what a crash left half done.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -50,6 +51,7 @@ import path from "node:path";
 import { MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, type ArchivedEntry, type MemoryEntry } from "./memory-entries.js";
 import { readArchive } from "./memory-entries-store.js";
 import { recentContextSessions } from "./absorb-consolidation.js";
+import { settleRoom } from "./room-settle.js";
 import { buildIndex, type SearchDocument, type SearchIndex, type SearchSource } from "./memory-search-index.js";
 import { readSessionPathMessages } from "./session-path-reader.js";
 // The reason words live with the tool that reads them back to the room: a
@@ -617,6 +619,7 @@ function countBySource(docs: readonly SearchDocument[]): Record<SearchSource, nu
  * hand edit or a rewritten transcript each rebuild it, and nothing else does.
  */
 export function loadRoomCorpus(roomId: string, options: CollectRoomDocumentsOptions = {}): RoomCorpus {
+	settleRoom(roomId);
 	const agentId = createPersistentAgentInstance(roomId).agentId;
 	const cached = ROOM_CORPUS.get(agentId);
 	if (cached && watchedStillHolds(cached.builtFrom)) return cached;

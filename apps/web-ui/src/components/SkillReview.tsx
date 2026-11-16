@@ -58,7 +58,7 @@ export function SkillReview({
 					<h2>{candidate.name || candidate.id}</h2>
 					{candidate.description && !descriptionEditable && <p className="skill-review-desc">{candidate.description}</p>}
 				</div>
-				<button className="icon-btn" onClick={onCancel} aria-label="Cancel">Cancel</button>
+				<button className="rs-btn" onClick={onCancel} aria-label="Cancel">Cancel</button>
 			</div>
 
 			<p className="skill-review-lead">

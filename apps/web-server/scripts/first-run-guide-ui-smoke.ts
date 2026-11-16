@@ -233,13 +233,13 @@ try {
 			checkWords(read, "phone", FIRST_STEP, DESKTOP_TILES);
 			check(new Set(read.flowTops).size === 4, `phone: the flow runs top to bottom, got ${JSON.stringify(read.flowTops)}`);
 			check(new Set(read.tileLefts).size === 1, `phone: the tiles are one column, got ${JSON.stringify(read.tileLefts)}`);
-			// The first tap the guide asks of a new person: the corners of a 44 px square still land on Close.
+			// The first tap the guide asks of a new person: Close is a 44 px button, and a tap at the middle of each of its edges lands on it.
 			const closeTap = await guide(page).getByRole("button", { name: "Close" }).evaluate((button) => {
 				const box = button.getBoundingClientRect();
 				const [x, y] = [box.left + box.width / 2, box.top + box.height / 2];
-				return [[-21, -21], [21, -21], [-21, 21], [21, 21]].map(([dx, dy]) => button.contains(document.elementFromPoint(x + dx, y + dy)));
+				return [box.width >= 44 && box.height >= 44, ...[[-21, 0], [21, 0], [0, -21], [0, 21]].map(([dx, dy]) => button.contains(document.elementFromPoint(x + dx, y + dy)))];
 			});
-			check(closeTap.every(Boolean), `phone: Close takes a 44 px tap, corners ${JSON.stringify(closeTap)}`);
+			check(closeTap.every(Boolean), `phone: Close takes a 44 px tap, its size and edges ${JSON.stringify(closeTap)}`);
 			await guide(page).getByRole("button", { name: "Close" }).tap();
 			await guide(page).waitFor({ state: "detached" });
 			check(await seen(page), "the X marks it seen on a phone");

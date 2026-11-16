@@ -7,6 +7,8 @@
 // room's column and survives a reload and a server restart. Forget in Room
 // settings asks the bin's question, with its running-answer line, and sends
 // one request. Instructions' text wraps before Clear, which sits in its box. Every danger word reads at 4.5:1 in dark, and light keeps its red.
+// The gear menu's Theme row holds three icons, and each sets its theme.
+// The custom connector form's unchosen radio is an empty ring, and "Add another header" has its help line's size and colour, underlined.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -16,7 +18,8 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
+import { CHOOSE_FOLDER } from "../src/room-box/card-text.js";
 
 const waitUntil = waitEvery(100);
 
@@ -60,7 +63,7 @@ const QUIET_BODY = "This deletes this conversation for good. Nothing from it is 
 const RUNNING_BODY = `The response currently being written will be stopped. ${QUIET_BODY}`;
 const HOLD = "Hold this answer open.";
 const SCHEDULE = { name: "Weekly summary", type: "once", schedule: "+30m", prompt: "Write the weekly summary.", enabled: true };
-const BOX = ".settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-table, .skill-table";
+const BOX = ".settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-list, .skill-table";
 // A task that ran, so the Recent runs list has rows to read.
 const RUN = { kind: "scheduled-prompt", status: "succeeded", source: { scheduleId: "gone-task" }, createdAt: "2026-01-05T09:00:00.000Z", updatedAt: "2026-01-05T09:01:00.000Z", finishedAt: "2026-01-05T09:01:00.000Z" };
 const RECENT_RUNS = { runs: [{ ...RUN, runId: "run-1" }, { ...RUN, runId: "run-2" }] };
@@ -178,6 +181,7 @@ async function installColourTools(page: Page): Promise<void> {
 			return ratio(over(rgba(getComputedStyle(element).color), back), back);
 		};
 		(window as any).__fillContrast = (element: Element) => ratio(behind(element), behind(element.parentElement!.closest(".settings-dialog")!));
+		(window as any).__stepOn = (element: Element) => ratio(behind(element), behind(element.parentElement!));
 		(window as any).__colour = (element: Element) => rgba(getComputedStyle(element).color).slice(0, 3).join(",");
 		(window as any).__rgb = (element: Element) => rgba(getComputedStyle(element).color).slice(0, 3);
 		(window as any).__line = (colour: string, width: string, style: string) => parseFloat(width) > 0 && style !== "none" && rgba(colour)[3] > 0;
@@ -242,6 +246,125 @@ async function assertLook(page: Page, where: string, panes: string[], paneWithou
 	}
 }
 
+// Every connector row, its button and "⋯" included, ends inside the list's box,
+// and the pane never scrolls sideways.
+async function assertRowsInsideBox(page: Page, where: string): Promise<void> {
+	await page.locator(".connector-item", { hasText: "From Claude Desktop" }).waitFor({ timeout: 10000 });
+	const read = await page.evaluate(() => {
+		const pane = document.querySelector(".settings-dialog-pane")!;
+		const box = document.querySelector(".connector-list")!.getBoundingClientRect();
+		const past = [...document.querySelectorAll(".connector-item")]
+			.filter((row) => row.getBoundingClientRect().right > box.right + 0.5)
+			.map((row) => row.querySelector(".connector-item-name-text")?.textContent ?? "?");
+		return { past, sideways: pane.scrollWidth - pane.clientWidth };
+	});
+	same(read.past, [], `${where}: rows that run past the box`);
+	assert(read.sideways <= 0, `${where}: the pane scrolls ${read.sideways} px sideways`);
+}
+
+// A row's "⋯" by keyboard alone: the menu takes the focus, Remove asks with Keep
+// focused, and Escape keeps the connector and closes nothing else.
+async function assertRowMenuByKeyboard(page: Page, where: string): Promise<void> {
+	const row = page.locator(".connector-item", { hasText: "tickets-server" });
+	const focused = () => page.evaluate(() => `${document.activeElement?.getAttribute("role") ?? document.activeElement?.tagName.toLowerCase()}: ${document.activeElement?.textContent?.trim()}`);
+	await row.locator("button.connector-item-more").focus();
+	await page.keyboard.press("Enter");
+	await page.getByRole("menuitem", { name: "Remove" }).waitFor({ timeout: 5000 });
+	// The open "⋯" stands out from the box behind it in both schemes, once its fill's short fade has run.
+	const stepOn = () => row.locator("button.connector-item-more").evaluate((element) => (window as any).__stepOn(element) as number);
+	await waitUntil(async () => (await stepOn()) >= 1.06, `${where}: the open "⋯" stands out from its box`).catch(async () => assert(false, `${where}: the open "⋯" is ${(await stepOn()).toFixed(2)}:1 against its box`));
+	await waitUntil(async () => (await focused()).startsWith("menuitem:"), `${where}: "⋯" opened by Enter puts the focus on its first item`);
+	await page.keyboard.press("End");
+	same(await focused(), "menuitem: Remove", `${where}: End reaches Remove`);
+	await page.keyboard.press("Enter");
+	await waitUntil(async () => (await focused()) === "button: Keep", `${where}: Remove asks with Keep focused`);
+	await page.keyboard.press("Escape");
+	await waitUntil(async () => (await focused()) === "button: ···", `${where}: Escape keeps it and gives the focus back to "⋯"`);
+	assert(await row.isVisible() && await page.locator(".settings-dialog").isVisible(), `${where}: Escape keeps the connector and the Settings window`);
+}
+
+// On a phone, the row menu's items are 44 px tall, Remove asks under the row with
+// Keep and Remove side by side, each 44 px tall and half the width, and an opened
+// row keeps its spacing.
+async function assertPhoneRowParts(page: Page, where: string): Promise<void> {
+	const row = page.locator(".connector-item", { hasText: "tickets-server" });
+	await row.locator("button.connector-item-more").click();
+	const items = await page.locator(".ai-profile-menu [role=menuitem]").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+	assert(items.length > 0 && items.every((height) => height >= 44), `${where}: the row menu's items are ${items.join(", ")} px tall on touch`);
+	await page.getByRole("menuitem", { name: "Remove" }).click();
+	const keep = row.getByRole("button", { name: "Keep", exact: true });
+	await keep.waitFor({ timeout: 5000 });
+	const sizes = await row.locator(".connector-ask-btns .rs-btn").evaluateAll((buttons) => buttons.map((button) => {
+		const { width, height, top } = button.getBoundingClientRect();
+		return { width, height, top };
+	}));
+	same(sizes.length, 2, `${where}: Keep and Remove`);
+	for (const size of sizes) assert(size.height >= 44, `${where}: a remove button is ${size.height} px tall`);
+	assert(sizes[0].top === sizes[1].top && Math.abs(sizes[0].width - sizes[1].width) <= 1, `${where}: Keep and Remove sit side by side, half each`);
+	const tag = await row.locator(".connector-item-name .connector-dir-kind").evaluate((element) => ({ text: element.textContent, cut: element.scrollWidth > element.clientWidth }));
+	assert(!tag.cut, `${where}: while Remove asks, the "${tag.text}" tag is cut short`);
+	await keep.click();
+	await row.locator("button.connector-item-more").waitFor({ timeout: 5000 });
+	// "⋯" sits level with the name line when a row has no button, and with the button when it has one.
+	const levels = await page.locator(".connector-item-row").evaluateAll((rows) => rows.map((one) => {
+		const middle = (selector: string) => { const box = one.querySelector(selector)?.getBoundingClientRect(); return box ? box.top + box.height / 2 : null; };
+		const button = middle(".connector-slot-btn");
+		return { name: one.querySelector(".connector-item-name-text")?.textContent ?? "?", off: Math.abs(middle(".connector-item-more")! - (button ?? middle(".connector-item-name")!)), button: button !== null };
+	}));
+	assert(levels.some((one) => one.button) && levels.some((one) => !one.button), `${where}: rows with and without a button`);
+	same(levels.filter((one) => one.off > 1).map((one) => one.name), [], `${where}: rows whose "⋯" is off its name line or button`);
+	// The button under a failed row's line is finger size itself: 44 px tall, its top and bottom edges land on it.
+	const failed = page.locator(".connector-item", { hasText: "notes-server" });
+	await failed.locator(".connector-item-hit").click();
+	const way = failed.locator("button.connector-way").first();
+	await way.waitFor({ timeout: 5000 });
+	const reach = await way.evaluate((button) => {
+		const { left, width, top, bottom } = button.getBoundingClientRect();
+		const lands = (y: number) => button.contains(document.elementFromPoint(left + width / 2, y));
+		return { height: bottom - top, above: lands(top + 1), below: lands(bottom - 1) };
+	});
+	assert(reach.height >= 44 && reach.above && reach.below, `${where}: the ${await way.textContent()} button under the line takes a touch only ${reach.height} px tall`);
+	await failed.locator(".connector-item-hit").click();
+	// The imported connector's closing line stands apart from the value above it, as the pairs do.
+	const imported = page.locator(".connector-item", { hasText: "From Claude Desktop" });
+	await imported.locator(".connector-item-hit").click();
+	const note = imported.locator(".connector-note");
+	await note.waitFor({ timeout: 5000 });
+	const gap = await note.evaluate((element) => element.getBoundingClientRect().top - element.previousElementSibling!.getBoundingClientRect().bottom);
+	assert(gap >= 12, `${where}: the imported connector's note sits ${gap} px under the value above it`);
+	await imported.locator(".connector-item-hit").click();
+}
+
+// The custom connector form: the unchosen way to connect is an empty ring in
+// both schemes, as the chosen one is a ring with a dot, and "Add another header"
+// has the help line's size and colour, underlined; on touch a header's "×" is 44 px.
+async function assertAddFormQuiet(page: Page, where: string): Promise<void> {
+	await page.locator(".settings-dialog-pane .pane-head-actions .rs-btn").click();
+	const form = page.locator(".connector-custom-form");
+	await form.waitFor({ timeout: 5000 });
+	const radios = await form.locator(".connector-form-kind input[type=radio]").evaluateAll((inputs) => inputs.map((input) => {
+		const style = getComputedStyle(input);
+		return { checked: (input as HTMLInputElement).checked, look: style.appearance, fill: style.backgroundColor };
+	}));
+	same(radios.length, 2, `${where}: two ways to connect`);
+	for (const radio of radios.filter((one) => !one.checked)) same([radio.look, radio.fill], ["none", "rgba(0, 0, 0, 0)"], `${where}: the unchosen way to connect is an empty ring`);
+	await form.locator(".connector-oauth-toggle").nth(1).click();
+	const add = form.locator(".connector-header-add");
+	await add.waitFor({ timeout: 5000 });
+	const read = await add.evaluate((element) => {
+		const help = element.parentElement!.querySelector(".cli-note")!;
+		const own = getComputedStyle(element);
+		return { line: own.textDecorationLine, size: own.fontSize, colour: (window as any).__colour(element), help: [getComputedStyle(help).fontSize, (window as any).__colour(help)] };
+	});
+	same([read.line, read.size, read.colour], ["underline", ...read.help], `${where}: "Add another header" has the help line's size and colour, underlined`);
+	if (await page.evaluate(() => matchMedia("(pointer: coarse)").matches)) {
+		const remove = await form.locator(".connector-header-remove").first().evaluate((element) => element.getBoundingClientRect());
+		assert(remove.width >= 44 && remove.height >= 44, `${where}: a header's remove button is ${remove.width}x${remove.height} px on touch`);
+	}
+	await form.locator(".settings-form-foot .rs-btn").first().click();
+	await form.waitFor({ state: "detached", timeout: 5000 });
+}
+
 // Clear hangs in the box's corner: a long line and a long unbroken word wrap
 // before it, and no text ever runs under it.
 async function assertTextWrapsBeforeClear(page: Page, where: string, boxArea: string): Promise<void> {
@@ -291,7 +414,7 @@ async function assertDangerWords(page: Page, where: string): Promise<void> {
 	assert(chosen >= 4.5, `${where}: "Archive or delete" on its chosen row is ${chosen.toFixed(2)}:1`);
 	await goToPane(page, "Scheduled tasks");
 	await page.locator(".room-schedules-run").first().waitFor({ timeout: 10000 });
-	const remove = page.locator(".rs-quiet-danger:visible").first();
+	const remove = page.locator(".room-schedules-section .rs-btn-danger:visible").first();
 	await remove.waitFor({ timeout: 10000 });
 	const onBox = await remove.evaluate(read);
 	assert(onBox >= 4.5, `${where}: "Delete" in Scheduled tasks is ${onBox.toFixed(2)}:1`);
@@ -316,9 +439,8 @@ async function enterRoom(page: Page, room: string): Promise<void> {
 }
 
 async function send(page: Page, text: string): Promise<void> {
-	const composer = page.locator("textarea").first();
-	await composer.fill(text);
-	await composer.press("Enter");
+	await page.locator("textarea").first().fill(text);
+	await sendFromBox(page);
 }
 
 // So the Conversation pane has a row to show.
@@ -347,11 +469,14 @@ async function checkLookOnEveryPane(browser: Browser): Promise<void> {
 			await assertLook(page, `${where} Settings`, SETTINGS_ORDER, ["Instructions"]);
 			await goToPane(page, "Instructions");
 			await assertTextWrapsBeforeClear(page, `${where} Settings`, ".settings-overlay .settings-dialog-pane");
-			// A connector that cannot be reached paints its failure in red words too.
+			// A connector that cannot be reached, found by the page's own check, is drawn in its failed look too.
 			await goToPane(page, "Connectors");
-			await page.locator(".connector-row").first().getByRole("button", { name: "Test" }).click();
-			await page.locator(".connector-status-failed").first().waitFor({ timeout: 15000 });
+			await page.locator(".connector-dot-err").first().waitFor({ timeout: 15000 });
 			await assertLook(page, `${where} Settings`, ["Connectors"], []);
+			await assertRowsInsideBox(page, `${where} Connectors`);
+			if (device === "desktop") await assertRowMenuByKeyboard(page, `${where} Connectors`);
+			else await assertPhoneRowParts(page, `${where} Connectors`);
+			await assertAddFormQuiet(page, `${where} Connectors`);
 			if (device === "phone") await page.locator(".settings-dialog-back").click();
 			await closeDialog(page);
 
@@ -466,6 +591,77 @@ async function checkAppearance(browser: Browser): Promise<void> {
 	console.log("  ok  Appearance: the theme, Wide at 960 px through a reload and a restart, Theme alone on a phone");
 }
 
+// The gear menu's Theme row: three icons on the label's line, each named by
+// its word, and each press sets the theme it names (System follows the
+// device, in both directions). On a phone each is a finger's 44 px and the
+// row stays inside the menu.
+async function checkMenuThemeRow(browser: Browser): Promise<void> {
+	for (const [where, options] of [
+		["1280", { viewport: { width: 1280, height: 900 } }],
+		["390", { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true }],
+	] as const) {
+		const context = await browser.newContext({ ...options, colorScheme: "light" });
+		const page = await context.newPage();
+		await signIn(page);
+		const menu = page.locator(".sidebar-config-menu");
+		const themes = menu.getByRole("group", { name: "Theme" });
+		const openMenu = async () => {
+			if (await menu.count()) return;
+			await page.locator(".product-sidebar-footer button, .home-gear, button[aria-label='Settings']").first().click();
+			await themes.waitFor({ timeout: 5000 });
+		};
+		await openMenu();
+		same(await menu.locator(".menu-row-label").allInnerTexts(), ["Theme"], `${where}: the menu's row is called Theme`);
+		const buttons = themes.getByRole("button");
+		same(await buttons.evaluateAll((all) => all.map((one) => `${one.getAttribute("aria-label")}:${(one.textContent ?? "").trim()}:${one.querySelector("svg") ? "icon" : "none"}`)), ["System::icon", "Light::icon", "Dark::icon"], `${where}: three icons, named System, Light and Dark`);
+		const line = await page.evaluate(() => {
+			const label = document.querySelector(".sidebar-config-menu .menu-row-label")!.getBoundingClientRect();
+			const group = document.querySelector(".sidebar-config-menu .menu-theme-seg")!.getBoundingClientRect();
+			const box = document.querySelector(".sidebar-config-menu")!.getBoundingClientRect();
+			return { shared: label.top < group.bottom && group.top < label.bottom, inside: group.left >= box.left && group.right <= box.right };
+		});
+		assert(line.shared && line.inside, `${where}: the icons share Theme's line inside the menu, got ${JSON.stringify(line)}`);
+		if (where === "390") {
+			const sizes = await buttons.evaluateAll((all) => all.map((one) => { const box = one.getBoundingClientRect(); return Math.min(box.width, box.height); }));
+			assert(sizes.every((size) => size >= 43.5), `390: each theme icon is a finger's 44 px, got ${sizes.join(", ")}`);
+		}
+		const press = async (name: string, device: "light" | "dark", theme: string) => {
+			await page.emulateMedia({ colorScheme: device });
+			await openMenu();
+			await themes.getByRole("button", { name, exact: true }).click();
+			await waitUntil(() => page.evaluate((want) => document.documentElement.dataset.theme === want, theme), `${where}: ${name} on a ${device} device`, 5000).catch(() => {});
+			same(await page.evaluate(() => document.documentElement.dataset.theme), theme, `${where}: ${name} on a ${device} device gives the ${theme} theme`);
+			await openMenu();
+			same(await themes.locator('[aria-pressed="true"]').evaluateAll((all) => all.map((one) => one.getAttribute("aria-label"))), [name], `${where}: ${name} is the one chosen`);
+			await checkMenuRowSpacing(page, `${where}, ${name} chosen, ${theme} theme`, where === "390");
+		};
+		await press("Dark", "light", "dark");
+		await press("System", "light", "light");
+		await press("System", "dark", "dark");
+		await press("Light", "dark", "light");
+		await context.close();
+	}
+	console.log("  ok  the gear menu's Theme row: three icons on its line, each sets its theme, a finger's size on a phone, and with a mouse as tall as Settings and Help");
+}
+
+// The menu's Theme, Settings and Help rows stand evenly spaced. With a mouse
+// the Theme row is no taller than the others and each icon stays at least
+// 24 px in both directions; on a phone every row is a finger's 44 px.
+async function checkMenuRowSpacing(page: Page, where: string, finger: boolean): Promise<void> {
+	const rows = await page.evaluate(() => {
+		const menu = document.querySelector(".sidebar-config-menu")!;
+		const items = [...menu.querySelectorAll(".menu-item")];
+		return {
+			rows: [menu.querySelector(".menu-row"), ...["Settings", "Help"].map((words) => items.find((item) => (item.textContent ?? "").trim().startsWith(words)))].map((row) => { const box = row!.getBoundingClientRect(); return { middle: (box.top + box.bottom) / 2, height: box.height }; }),
+			icons: [...menu.querySelectorAll(".menu-theme-seg button")].map((button) => { const box = button.getBoundingClientRect(); return Math.min(box.width, box.height); }),
+		};
+	});
+	const [theme, settings, help] = rows.rows.map((row) => row.middle);
+	assert(Math.abs((settings - theme) - (help - settings)) <= 1, `${where}: Theme, Settings and Help stand evenly spaced, their middles at ${[theme, settings, help].map((at) => at.toFixed(1)).join(", ")}`);
+	assert(rows.icons.length === 3 && rows.icons.every((size) => size >= (finger ? 43.5 : 24)), `${where}: each theme icon is at least ${finger ? 44 : 24} px, got ${rows.icons.join(", ")}`);
+	if (finger) assert(rows.rows.every((row) => row.height >= 43.5), `${where}: Theme, Settings and Help are each a finger's 44 px tall, got ${rows.rows.map((row) => row.height).join(", ")}`);
+}
+
 async function dialogWords(page: Page) {
 	const dialog = page.getByRole("alertdialog");
 	await dialog.waitFor({ timeout: 5000 });
@@ -490,7 +686,7 @@ async function checkForget(browser: Browser): Promise<void> {
 	await page.locator('button[aria-label="Room settings"]').first().click();
 	await page.waitForSelector(".rs-shell", { timeout: 10000 });
 	await goToPane(page, "Conversation");
-	const forgetRow = page.locator(".room-session-section").getByRole("button", { name: "Forget…" });
+	const forgetRow = page.locator(".room-session-section").getByRole("button", { name: "Forget", exact: true });
 	await forgetRow.click();
 	same(await dialogWords(page), FORGET_WORDS(QUIET_BODY), "the pane's question, idle");
 	assert((await page.locator(".room-session-section").getByText("Forget conversation").count()) === 0, "the inline confirmation is gone");
@@ -528,7 +724,7 @@ async function checkForget(browser: Browser): Promise<void> {
 	await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
 	await openRoomCardSettings(page, "Home Forget Room");
 	await goToPane(page, "Conversation");
-	await page.locator(".room-session-section").getByRole("button", { name: "Forget…" }).click();
+	await page.locator(".room-session-section").getByRole("button", { name: "Forget", exact: true }).click();
 	same(await dialogWords(page), FORGET_WORDS(QUIET_BODY), "the question from Home's card");
 	await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
 	await closeDialog(page);
@@ -541,7 +737,7 @@ async function checkForget(browser: Browser): Promise<void> {
 	await openRoomCardSettings(page, "Home Forget Room");
 	await goToPane(page, "Conversation");
 	await page.locator(".room-session-section").getByText("(in use)").waitFor({ timeout: 15000 });
-	await page.locator(".room-session-section").getByRole("button", { name: "Forget…" }).click();
+	await page.locator(".room-session-section").getByRole("button", { name: "Forget", exact: true }).click();
 	same(await dialogWords(page), FORGET_WORDS(RUNNING_BODY), "the question from Home's card while an answer runs");
 	await page.getByRole("alertdialog").getByRole("button", { name: "Forget", exact: true }).click();
 	await page.getByText("This conversation is forgotten. The room starts a fresh one on next open.").waitFor({ timeout: 10000 });
@@ -555,12 +751,14 @@ async function checkSetWorkspaceLink(browser: Browser): Promise<void> {
 	const page = await context.newPage();
 	await signIn(page);
 	await enterRoom(page, "Look Room");
-	await page.getByRole("button", { name: "Set workspace" }).click();
+	// A computer whose folder window can't open, as the route answers for one: Choose folder lands on Folder, where a path can be typed.
+	await page.route("**/api/system/choose-folder", (route) => route.fulfill({ status: 501, contentType: "application/json", body: JSON.stringify({ error: "No folder window here.", code: "unsupported_platform", supported: false, cancelled: false }) }));
+	await page.getByRole("button", { name: CHOOSE_FOLDER }).click();
 	await page.waitForSelector(".rs-shell", { timeout: 10000 });
-	same(await activePane(page), "Folder", "Set workspace opens Room settings at Folder");
+	same(await activePane(page), "Folder", "Choose folder with no folder window opens Room settings at Folder");
 	await closeDialog(page);
 	await context.close();
-	console.log("  ok  Set workspace lands on Folder");
+	console.log("  ok  Choose folder with no folder window lands on Folder");
 }
 
 try {
@@ -582,6 +780,11 @@ try {
 	};
 	const lookRoom = makeRoom("Look Room");
 	for (const name of ["Width Room", "Forget Room", "Home Forget Room"]) makeRoom(name);
+	// A connector from Claude Desktop: its row's tag is the longest a row carries.
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ imports: ["claude-desktop"], mcpServers: {} }));
+	const desktopDir = path.join(tempHome, "Library", "Application Support", "Claude");
+	fs.mkdirSync(desktopDir, { recursive: true });
+	fs.writeFileSync(path.join(desktopDir, "claude_desktop_config.json"), JSON.stringify({ mcpServers: { "google-drive": { command: "npx", args: ["-y", "@modelcontextprotocol/server-gdrive"] } } }));
 
 	await startServer();
 	const seed = async (method: "POST" | "PUT", route: string, body: unknown): Promise<void> => {
@@ -609,6 +812,7 @@ try {
 		await checkPanesLessDevices(browser);
 		await checkSetWorkspaceLink(browser);
 		await checkAppearance(browser);
+		await checkMenuThemeRow(browser);
 		await checkForget(browser);
 	} finally {
 		await browser.close();

@@ -17,6 +17,14 @@ function readRoomOrder(): Promise<RoomOrderResponse> {
 }
 
 /**
+ * What a failed save was, while the controller remembers one: an arrangement
+ * (arrange mode's Done, or the way out of Home while arranging), whose failure
+ * the page says in its own words, or a choice from the menu, said in the
+ * words the controller kept.
+ */
+export type HomeRoomOrderFailedSave = { kind: "arrangement" } | { kind: "mode"; sentence: string };
+
+/**
  * The hook around the home screen's order controller: one controller for the
  * life of the app (a save may outlive the home screen it was started on, and
  * what it answers must still be remembered), told when the home screen is
@@ -27,15 +35,24 @@ function readRoomOrder(): Promise<RoomOrderResponse> {
  * refresh closes over the app's state, so only the newest instance is safe
  * to call). The hook only hands them over; when they are asked for, and what
  * is done with them, is the controller's.
+ *
+ * `failedSave` tells which kind of save the controller's sentence is about:
+ * the transport notes whether each save it sends is an arrangement. Saves
+ * never overlap and a starting save clears the sentence (home-room-order.ts,
+ * rules 2 and 4), so a sentence always belongs to the last save sent.
  */
-export function useHomeRoomOrder(homeShown: boolean, rooms: { statuses: ReadonlyArray<{ id: string; lastUsedAt?: string | null }>; refresh: RefreshRooms }): { view: HomeRoomOrderView; choose: (choice: RoomOrderChoice) => Promise<boolean> } {
+export function useHomeRoomOrder(homeShown: boolean, rooms: { statuses: ReadonlyArray<{ id: string; lastUsedAt?: string | null }>; refresh: RefreshRooms }): { view: HomeRoomOrderView; failedSave: HomeRoomOrderFailedSave | null; choose: (choice: RoomOrderChoice) => Promise<boolean> } {
 	const roomsRef = useRef(rooms);
 	roomsRef.current = rooms;
+	const lastSentArrangementRef = useRef(false);
 	const controllerRef = useRef<HomeRoomOrderController | null>(null);
 	if (!controllerRef.current) {
 		controllerRef.current = createHomeRoomOrderController({
 			read: readRoomOrder,
-			save: saveRoomOrder,
+			save: (choice) => {
+				lastSentArrangementRef.current = choice.customOrder !== undefined;
+				return saveRoomOrder(choice);
+			},
 			refreshLastUsed: lastUsedRefreshFrom((onFetched) => roomsRef.current.refresh(onFetched)),
 			lastUsedInHand: () => roomLastUsedTimes(roomsRef.current.statuses),
 		});
@@ -47,5 +64,6 @@ export function useHomeRoomOrder(homeShown: boolean, rooms: { statuses: Readonly
 		controller.arrive();
 		return () => controller.leave();
 	}, [controller, homeShown]);
-	return { view, choose: controller.choose };
+	const failedSave: HomeRoomOrderFailedSave | null = view.saveError === null ? null : lastSentArrangementRef.current ? { kind: "arrangement" } : { kind: "mode", sentence: view.saveError };
+	return { view, failedSave, choose: controller.choose };
 }

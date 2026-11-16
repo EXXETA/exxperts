@@ -12,8 +12,15 @@
 //   naming Remember and Forget, with the numbers the fit used;
 // - a switch rebinds the live session: the socket hears model_switched with a
 //   "Continued on" line, the Pi session gains a model_change entry, the
-//   conversation's lock moves with the old one in its history, and the room's
-//   conversation pick stays the default for new conversations;
+//   conversation's lock moves with the old one in its history, and the pick
+//   becomes the room's conversation model: Room settings' read, a new
+//   conversation and a scheduled run's fresh start take it, and the room's
+//   Memory model is left as it was;
+// - a room that follows the default keeps following when the pick is the
+//   default's model, and gets the pick as its own when it is another; picking
+//   the model a conversation already runs makes it the room's too;
+// - every refused switch (busy, answering, remembering, a model not offered,
+//   too long) and a failed rebind leave the room's models as they were;
 // - each provider then gets the whole conversation in its own shape (two
 //   images, the tool call and its result, no thinking block on the OpenAI
 //   side), and neither ever sees the "Continued on" line, which is not in
@@ -196,7 +203,14 @@ try {
 	const roomModels = await import("../src/room-models.js");
 	const agentId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Switch Model Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 	const conversationId = "c_switch_0001";
-	roomModels.writeRoomModels(agentId, { conversation: CLAUDE });
+	roomModels.writeRoomModels(agentId, { conversation: CLAUDE, memory: CLAUDE });
+	// A room that follows the default (Claude, the saved profile's first model): only its Memory row is its own.
+	const defaultRoomId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Default Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
+	const defaultConversationId = "c_switch_default_0001";
+	roomModels.writeRoomModels(defaultRoomId, { memory: GPT });
+	agents.writePersistentAgentThread(defaultRoomId, defaultConversationId, { state: "active", origin: "home", model: GPT, items: [] }, {
+		createRuntime: ({ model }) => agents.createPersistentAgentPiSessionJsonlThreadRuntime({ agentId: defaultRoomId, threadId: defaultConversationId, model, cwd: threadCwd }),
+	});
 	const created = agents.writePersistentAgentThread(agentId, conversationId, { state: "active", origin: "home", model: CLAUDE, items: [] }, {
 		createRuntime: ({ model }) => agents.createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: conversationId, model, cwd: threadCwd }),
 	});
@@ -226,6 +240,10 @@ try {
 	pass("the seeded conversation (two images, signed thinking, a tool pair) runs on Claude");
 
 	const switchTo = (lock: { provider: string; model: string }) => api(`/api/persistent-agents/${agentId}/threads/${conversationId}/switch-model`, { method: "POST", body: JSON.stringify(lock) });
+	const modelsFileText = (room = agentId) => fs.readFileSync(roomModels.roomModelsPath(room), "utf-8");
+	const memoryRow = (room = agentId) => JSON.stringify(JSON.parse(modelsFileText(room)).memory);
+	const memoryBefore = memoryRow();
+	const roomConversationModel = async (room = agentId) => (await api(`/api/persistent-agents/${room}/models`)).body.models.conversation;
 
 	// --- Refused in flight ------------------------------------------------------------
 	const hangBefore = requests.length;
@@ -233,8 +251,10 @@ try {
 	socket.send(JSON.stringify({ type: "prompt", text: "A long one." }));
 	await waitUntil(() => requests.length > hangBefore, "the hanging turn reaches the provider");
 	hangTurn = false;
+	const beforeInFlight = modelsFileText();
 	const inFlight = await switchTo(GPT);
 	assert(inFlight.status === 409 && inFlight.body?.error && inFlight.body?.code === "switch_answering", `a switch during a turn is refused, got ${inFlight.status} ${JSON.stringify(inFlight.body)}`);
+	assert(modelsFileText() === beforeInFlight, `a switch refused while answering leaves the room's models, got ${modelsFileText()}`);
 	socket.send(JSON.stringify({ type: "abort" }));
 	await waitUntil(async () => (await api(`/api/persistent-agents/${agentId}/status`)).body?.activeThread?.inFlight === false, "the stopped turn settled");
 	pass("a switch while a turn is in flight is refused");
@@ -245,8 +265,10 @@ try {
 	const rememberBefore = requests.length;
 	const propose = authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/checkpoint/propose`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId, density: "standard" }), signal: cancel.signal }).catch(() => null);
 	await waitUntil(() => requests.slice(rememberBefore).some((request) => request.raw.includes("Checkpoint Compression Constitution")), "the Remember call reaches the provider");
+	const beforeRemembering = modelsFileText();
 	const whileRemembering = await switchTo(GPT);
 	assert(whileRemembering.status === 409 && whileRemembering.body?.error && whileRemembering.body?.code === "switch_remembering", `a switch while Remember reads is refused, got ${whileRemembering.status} ${JSON.stringify(whileRemembering.body)}`);
+	assert(modelsFileText() === beforeRemembering, `a switch refused while Remember reads leaves the room's models, got ${modelsFileText()}`);
 	// Closing the request no longer stops a Remember (it runs as a job); Cancel does.
 	cancel.abort();
 	await propose;
@@ -256,16 +278,26 @@ try {
 	pass("a switch while Remember reads the conversation is refused");
 
 	// --- Refused when it does not fit ------------------------------------------------------
+	const beforeTooSmall = modelsFileText();
 	const tooSmall = await switchTo(TINY);
+	assert(modelsFileText() === beforeTooSmall, `a switch refused as too long leaves the room's models, got ${modelsFileText()}`);
 	assert(tooSmall.status === 409 && tooSmall.body?.code === "switch_too_long" && /^This conversation is too long for Gemma 3 12b to read\. /.test(tooSmall.body?.error) && !/tokens|holds about/.test(tooSmall.body?.error) && /It stays on its current model\. To continue on Gemma 3 12b, Remember it and start a new conversation\.$/.test(tooSmall.body?.error) && !/Forget|compact/.test(tooSmall.body?.error) && !/gemma-3-12b/.test(tooSmall.body?.error), `a target too small is refused with Remember named, never Forget, got ${tooSmall.status} ${JSON.stringify(tooSmall.body?.error)}`);
 	const fit = tooSmall.body.fit;
 	assert(fit.window === 20000 && fit.reserve === 16384 && fit.available === 3616 && fit.margin === 1.15 && fit.needed > fit.available && fit.estimated.systemPrompt > 0 && fit.estimated.tools > 0 && fit.estimated.toolsFrom === "session", `the refusal carries the numbers the fit used, got ${JSON.stringify(fit)}`);
 	console.log(`      fit on Gemma 3 12b: measured ${fit.measured}, estimated messages ${fit.estimated.messages} + system prompt ${fit.estimated.systemPrompt} + tools ${fit.estimated.tools} (${fit.estimated.toolsFrom}), x${fit.margin} = ${fit.needed} needed against ${fit.window} - ${fit.reserve} = ${fit.available}`);
 	pass("a target window too small is refused with Remember and Forget named and the fit's numbers");
 
+	// --- Refused for a model not offered ------------------------------------------------------
+	const beforeNotOffered = modelsFileText();
+	const notOffered = await switchTo({ provider: GPT.provider, model: "not-offered-fake" });
+	assert(notOffered.status === 400 && notOffered.body?.error, `a model the room is not offered is refused, got ${notOffered.status} ${JSON.stringify(notOffered.body)}`);
+	assert(modelsFileText() === beforeNotOffered, `a switch refused for a model not offered leaves the room's models, got ${modelsFileText()}`);
+	pass("a switch to a model not offered is refused and leaves the room's models");
+
 	// --- Claude to GPT, live ------------------------------------------------------------------
 	const toGpt = await switchTo(GPT);
-	assert(toGpt.status === 200 && toGpt.body.fit.fits === true && toGpt.body.models.conversation.stored?.model === CLAUDE.model, `the switch to GPT goes through and the room's pick stays, got ${toGpt.status} ${JSON.stringify(toGpt.body).slice(0, 300)}`);
+	assert(toGpt.status === 200 && toGpt.body.fit.fits === true && toGpt.body.models.conversation.stored?.model === GPT.model, `the switch to GPT goes through and its answer shows GPT as the room's conversation model, got ${toGpt.status} ${JSON.stringify(toGpt.body).slice(0, 300)}`);
+	assert((await roomConversationModel()).stored?.model === GPT.model && memoryRow() === memoryBefore, `Room settings' read shows GPT as the room's conversation model and the Memory row as it was, got ${modelsFileText()}`);
 	await waitUntil(() => frames.some((frame) => frame.type === "model_switched"), "the model_switched frame");
 	const switchedFrame = frames.find((frame) => frame.type === "model_switched");
 	assert(switchedFrame.model?.model === GPT.model && switchedFrame.notice?.text === "Continued on GPT Fake", `the socket hears the new model and the line, got ${JSON.stringify(switchedFrame)}`);
@@ -275,7 +307,7 @@ try {
 	const sessionFile = path.join(agentsRoot, agentId, thread.runtime.sessionFileRelPath);
 	const modelChanges = () => fs.readFileSync(sessionFile, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => entry.type === "model_change");
 	assert(modelChanges().some((entry) => entry.provider === GPT.provider && entry.modelId === GPT.model), "the Pi session gains a model_change entry for GPT");
-	pass("the switch rebinds the live session: the frame, the line, the model_change entry, the lock and its history; the room's pick stays");
+	pass("the switch rebinds the live session: the frame, the line, the model_change entry, the lock and its history; the pick is the room's conversation model, its Memory model left");
 
 	const onGpt = await turn(agentId, "Second question, now on GPT.");
 	assert(onGpt.api === "openai" && onGpt.body.model === GPT.model, "the next turn goes to GPT");
@@ -311,7 +343,9 @@ try {
 	for (const owner of [{ surface: "scheduler", pid: process.pid, lockId: "smoke-run" }]) {
 		assert(roomLock.tryAcquire(agentId, owner).ok, `the smoke holds the room as ${owner.surface}`);
 		try {
+			const beforeHeld = modelsFileText();
 			const held = await switchTo(GPT);
+			assert(modelsFileText() === beforeHeld, `a switch refused while ${owner.surface} holds the room leaves the room's models, got ${modelsFileText()}`);
 			const expected = "This room is working on a scheduled background task. Wait for it to finish, then switch the model.";
 			assert(held.status === 409 && held.body?.code === "switch_room_busy" && held.body?.error === expected, `a switch while ${owner.surface} holds the room is refused in the words the model panel shows, got ${held.status} ${JSON.stringify(held.body)}`);
 		} finally {
@@ -419,13 +453,23 @@ try {
 	assert(awaySecond.body.notice?.replaces === awayFirst.body.notice?.id && thread.items.at(-1).id === awaySecond.body.notice?.id && !lineIds(thread.items).includes(awayFirst.body.notice?.id), `the next switch replaces that line, got ${JSON.stringify({ notice: awaySecond.body.notice, lines: lineIds(thread.items) })}`);
 	pass("a late save that lacks an answer landed before the switch keeps the switch's line after it, and the next switch replaces it");
 
-	// --- The room's pick is the default for new conversations ---
-	const roomPick = (await api(`/api/persistent-agents/${agentId}/models`)).body.models.conversation;
-	assert(roomPick.stored?.model === CLAUDE.model, `no switch wrote the room's pick, got ${JSON.stringify(roomPick.stored)}`);
+	// --- The last pick is the room's conversation model, for everything that starts after it ---
+	const lastPick = await switchTo(GPT);
+	assert(lastPick.status === 200 && (await roomConversationModel()).stored?.model === GPT.model && memoryRow() === memoryBefore, `after a switch with no live socket the pick is the room's conversation model and the Memory row is as it was, got ${lastPick.status} ${modelsFileText()}`);
+	const scheduled = roomModels.resolveScheduledRoomModel(agentId);
+	assert(scheduled.provider === GPT.provider && scheduled.model === GPT.model, `a scheduled run's fresh start resolves the pick, got ${JSON.stringify(scheduled)}`);
+	const onPickId = "c_switch_on_pick_0001";
+	const onPick = await api(`/api/persistent-agents/${agentId}/threads/${onPickId}`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "home", items: [] }) });
+	assert(onPick.status === 200 && onPick.body.thread.model.model === GPT.model, `a new conversation starts on the pick, got ${onPick.status} ${JSON.stringify(onPick.body?.thread?.model)}`);
+	pass("after a switch the pick is the room's conversation model: Room settings' read, a new conversation and a scheduled run's fresh start take it; the Memory row is as it was");
+	const lastBack = await switchTo(CLAUDE);
+	assert(lastBack.status === 200, `the switch back to Claude goes through, got ${lastBack.status}`);
+	const roomPick = await roomConversationModel();
+	assert(roomPick.stored?.model === CLAUDE.model, `the switch back makes Claude the room's conversation model again, got ${JSON.stringify(roomPick.stored)}`);
 	const emptyId = "c_switch_empty_0001";
 	const created2 = await api(`/api/persistent-agents/${agentId}/threads/${emptyId}`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "home", items: [] }) });
 	assert(created2.status === 200 && created2.body.thread.model.model === CLAUDE.model, `a new conversation starts on the room's pick, got ${created2.status} ${JSON.stringify(created2.body?.thread?.model)}`);
-	pass("a switch leaves the room's pick unchanged, and a new conversation starts on it");
+	pass("the switch back is the room's conversation model again, and a new conversation starts on it");
 
 	// --- A switch on an empty conversation stays through its boot and first message ---
 	const switchEmpty = await api(`/api/persistent-agents/${agentId}/threads/${emptyId}/switch-model`, { method: "POST", body: JSON.stringify(GPT) });
@@ -454,14 +498,16 @@ try {
 	assert(brittleProbe.body.fit.estimated.systemPrompt > 2_400, `the room's boot prompt is larger than the small model's boot budget, got ${brittleProbe.body.fit.estimated.systemPrompt}`);
 	fs.writeFileSync(settingsPath, JSON.stringify({ compaction: { reserveTokens: brittleProbe.body.fit.window - brittleProbe.body.fit.needed - 1_000 } }, null, 2), { mode: 0o600 });
 	try {
+		const beforeFailedRebind = modelsFileText();
 		const failedRebind = await api(`/api/persistent-agents/${agentId}/threads/${emptyId}/switch-model`, { method: "POST", body: JSON.stringify(BRITTLE) });
 		assert(failedRebind.status >= 400 && failedRebind.body?.model?.model === BRITTLE.model && failedRebind.body?.code, `a failed rebind answers with the stored model and a code, got ${failedRebind.status} ${JSON.stringify(failedRebind.body)}`);
+		assert(modelsFileText() === beforeFailedRebind, `a failed rebind leaves the room's models, got ${modelsFileText()}`);
 		const stored = (await api(`/api/persistent-agents/${agentId}/threads/${emptyId}`)).body.thread;
 		assert(stored.model.model === BRITTLE.model, `the answer is the conversation's stored model, got ${JSON.stringify(stored.model)}`);
 	} finally {
 		fs.rmSync(settingsPath, { force: true });
 	}
-	pass("a live switch whose rebind fails answers with the model the conversation is stored on");
+	pass("a live switch whose rebind fails answers with the model the conversation is stored on, and leaves the room's models");
 
 	// --- Picking the model an empty conversation is already on marks it too ---
 	socket.close();
@@ -479,6 +525,34 @@ try {
 	const sameAfter = (await api(`/api/persistent-agents/${agentId}/threads/${sameId}`)).body.thread;
 	assert(sameAfter.model.model === CLAUDE.model && sameAfter.items.length === 0, `the conversation stays on the model picked for it, with no line, got ${JSON.stringify({ model: sameAfter.model, items: sameAfter.items })}`);
 	pass("picking the model an empty conversation is already on keeps it there when the room's pick changes");
+
+	// --- Picking the model the conversation already runs is still a pick ---
+	const samePickAgain = await api(`/api/persistent-agents/${agentId}/threads/${sameId}/switch-model`, { method: "POST", body: JSON.stringify(CLAUDE) });
+	assert(samePickAgain.status === 200 && !samePickAgain.body.notice && samePickAgain.body.models.conversation.stored?.model === CLAUDE.model, `picking the model the conversation runs, on a room set to another, makes it the room's, got ${samePickAgain.status} ${JSON.stringify(samePickAgain.body?.models?.conversation)}`);
+	assert((await roomConversationModel()).stored?.model === CLAUDE.model && memoryRow() === memoryBefore, `Room settings' read shows it, the Memory row as it was, got ${modelsFileText()}`);
+	pass("picking the model the conversation already runs makes it the room's conversation model");
+
+	// --- A room that follows the default ---
+	const switchDefaultRoom = (lock: { provider: string; model: string }) => api(`/api/persistent-agents/${defaultRoomId}/threads/${defaultConversationId}/switch-model`, { method: "POST", body: JSON.stringify(lock) });
+	const defaultRoomBefore = modelsFileText(defaultRoomId);
+	const toDefault = await switchDefaultRoom(CLAUDE);
+	assert(toDefault.status === 200 && toDefault.body.models.conversation.stored === null && toDefault.body.models.conversation.effective?.model === CLAUDE.model, `a pick of the default's model keeps the room on the default, got ${toDefault.status} ${JSON.stringify(toDefault.body?.models?.conversation)}`);
+	assert(modelsFileText(defaultRoomId) === defaultRoomBefore, `the room's models file is as it was, with no conversation row, got ${modelsFileText(defaultRoomId)}`);
+	pass("a room that follows the default keeps following when the pick is the default's model");
+	const offDefault = await switchDefaultRoom(GPT);
+	assert(offDefault.status === 200 && offDefault.body.models.conversation.stored?.model === GPT.model, `a pick of another model becomes the room's own, got ${offDefault.status} ${JSON.stringify(offDefault.body?.models?.conversation)}`);
+	assert(JSON.parse(modelsFileText(defaultRoomId)).conversation?.model === GPT.model && memoryRow(defaultRoomId) === JSON.stringify(GPT), `the room's file gets the conversation row, its Memory row as it was, got ${modelsFileText(defaultRoomId)}`);
+	pass("a room that follows the default gets the pick as its own when it is another model, its Memory row left");
+
+	// --- A models file that is there but cannot be read is never written over ---
+	const backOnClaude = await switchDefaultRoom(CLAUDE);
+	assert(backOnClaude.status === 200 && JSON.parse(modelsFileText(defaultRoomId)).conversation?.model === CLAUDE.model, `the room's own pick follows the switch back, got ${backOnClaude.status} ${modelsFileText(defaultRoomId)}`);
+	const unreadable = `{"schemaVersion":1,"memory":{"provider":"${GPT.provider}","model":"${GPT.model}"},}\n`;
+	fs.writeFileSync(roomModels.roomModelsPath(defaultRoomId), unreadable, { mode: 0o600 });
+	const overUnreadable = await switchDefaultRoom(GPT);
+	assert(overUnreadable.status === 200, `the switch itself goes through, got ${overUnreadable.status} ${JSON.stringify(overUnreadable.body)}`);
+	assert(modelsFileText(defaultRoomId) === unreadable, `a models file that cannot be read keeps its bytes, got ${modelsFileText(defaultRoomId)}`);
+	pass("a switch never writes over a models file that cannot be read");
 
 	console.log("conversation switch model smoke passed");
 } catch (error) {

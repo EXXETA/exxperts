@@ -20,7 +20,11 @@
 	flex-direction: column;
 	gap: 12px;
 }
+/* The name's first line, the status mark and the gear share one centre
+   line, the gear's 28 px (a finger's gear pulls back to it): a name that
+   wraps keeps the mark and the gear on its first line. */
 .persistent-agent-header {
+	--card-head-line: 28px;
 	display: flex;
 	align-items: flex-start;
 	gap: 10px;
@@ -31,6 +35,11 @@
 	gap: 5px;
 	min-width: 0;
 }
+.persistent-agent-title-block h2 {
+	padding-top: calc((var(--card-head-line) - 1lh) / 2);
+}
+/* Under the name, as wide as its words: a long badge beside the name would wrap it. */
+.persistent-agent-title-block > .persistent-agent-badge { justify-self: start; }
 .persistent-agent-title-row {
 	display: flex;
 	align-items: center;
@@ -196,22 +205,13 @@
 	flex: 0 0 auto;
 	gap: 8px;
 }
-/* The card's buttons read in the card's own face and size; the padding keeps
-   them at the 29px the row had in the display face, so cards do not grow. */
-.persistent-agent-actions .landing-action,
-.persistent-agent-actions .inline-action {
-	font-family: var(--exx-font-sans);
-	font-size: 13px;
-	line-height: 1;
-	padding: 7px 12px;
-}
-/* Wide enough for "Entering…", so the row does not jump on a click. */
+/* Wide enough for "Entering…", so the row does not jump on a click; a
+   finger's size has wider sides. */
 .persistent-agent-actions .landing-action {
 	min-width: 92px;
-	text-align: center;
 }
-.persistent-agent-actions .inline-action {
-	color: color-mix(in srgb, var(--fg-soft) 84%, var(--muted));
+@media (hover: none), (max-width: 760px) {
+	.persistent-agent-actions .landing-action { min-width: 100px; }
 }
 /* The card's foot: why Maintain is greyed, right above the action row, both
    kept at the card's bottom however tall the row of cards makes it. */
@@ -228,11 +228,6 @@
 	font-size: 11px;
 	line-height: 1.4;
 	text-wrap: pretty;
-}
-.persistent-agent-actions .landing-action:disabled,
-.persistent-agent-actions .inline-action:disabled {
-	cursor: not-allowed;
-	opacity: 0.45;
 }
 .persistent-agent-card .persistent-agent-model {
 	margin-left: auto;
@@ -362,28 +357,20 @@
 	border-color: var(--border-soft);
 	color: var(--fg);
 }
-.inline-action {
-	background: var(--exx-action-secondary-bg);
-	border: 1px solid var(--exx-action-secondary-border);
-	border-radius: var(--exx-radius-control);
-	color: var(--exx-action-secondary-fg);
-	font-family: var(--exx-font-display);
-	font-size: 11px;
-	font-weight: 700;
-	padding: 8px 10px;
-	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-.inline-action:hover,
-.inline-action:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	border-color: var(--border);
-	color: var(--fg);
-}
-.inline-action:disabled {
-	opacity: 0.45;
-	cursor: not-allowed;
-}
-.landing-action:disabled {
-	opacity: 0.45;
-	cursor: not-allowed;
+
+/* A finger's 44 px gear keeps its 28 px place in the card's head: the tap
+   area reaches past the head's edge instead of pushing the title row down,
+   and into the gap before it, so the name keeps its width. A button is
+   never wider than its box (max-width: 100%), and the box is 8 px short of
+   the gear once it reaches left, so the gear lifts that limit; the pull to
+   the right is the end box's, so its mark stays in line with the others'. */
+@media (hover: none), (max-width: 760px) {
+	.persistent-agent-card .card-gear-btn {
+		margin-block: calc((28px - var(--exx-btn-h)) / 2);
+		margin-left: calc((28px - var(--exx-btn-h)) / 2);
+		max-width: none;
+	}
+	.persistent-agent-header-end:has(> .card-gear-btn) {
+		margin-right: calc((28px - var(--exx-btn-h)) / 2);
+	}
 }

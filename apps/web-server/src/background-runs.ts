@@ -697,9 +697,7 @@ export function recoverExpiredBackgroundRunLeases(input: RecoverExpiredBackgroun
 	const nowIso = now.toISOString();
 	const limit = normalizeListLimit(input.limit);
 	const scope = input.scope ? normalizeScope(input.scope) : undefined;
-	const candidates = readBackgroundRunDirectoryEntries()
-		.filter((entry) => entry.isDirectory() && isValidBackgroundRunId(entry.name))
-		.map((entry) => readBackgroundRun(entry.name))
+	const candidates = readAllBackgroundRuns()
 		.filter((record) => record.status === "running")
 		.filter((record) => !!record.lease && !isBackgroundRunLeaseActive(record.lease, now))
 		.filter((record) => !input.kind || record.kind === input.kind)
@@ -779,8 +777,9 @@ export interface ReviveTransientlyBlockedBackgroundRunsInput extends RecoverExpi
 }
 
 /**
- * A run blocked on a prepared conversation that will not come back: a later run of its task took its place, or
- * that conversation ended, or (a run blocked before the update) no conversation was recorded to wait for.
+ * A run that will not come back. A later run of its task took its place: a queued or waiting run, or one blocked
+ * on a prepared conversation. Or, for a blocked one, that conversation ended, or (a run blocked before the update)
+ * no conversation was recorded to wait for.
  */
 export const SUPERSEDED_BY_LATER_RUN = "superseded_by_later_run";
 export const PREPARED_CONVERSATION_ENDED = "prepared_conversation_ended";
@@ -795,22 +794,73 @@ function runDueAt(record: BackgroundRunRecord): string {
 	return record.source.dueAt ? normalizeIsoDateString(record.source.dueAt, "dueAt") : record.createdAt;
 }
 
-export function reviveTransientlyBlockedBackgroundRuns(input: ReviveTransientlyBlockedBackgroundRunsInput = {}): BackgroundRunRecord[] {
-	const now = normalizeNow(input.now);
-	const nowIso = now.toISOString();
-	const limit = normalizeListLimit(input.limit);
-	const scope = input.scope ? normalizeScope(input.scope) : undefined;
-	const records = readBackgroundRunDirectoryEntries()
-		.filter((entry) => entry.isDirectory() && isValidBackgroundRunId(entry.name))
-		.map((entry) => readBackgroundRun(entry.name));
-	// A run that met the prepared conversation comes back once per task: the newest run of its task, while that
-	// conversation is still the room's. Older occurrences, and runs that met an earlier conversation, stay blocked.
+function newestDueByTask(records: BackgroundRunRecord[]): Map<string, string> {
 	const newestDue = new Map<string, string>();
 	for (const record of records) {
 		const key = runTaskKey(record);
 		const due = runDueAt(record);
 		if (!newestDue.has(key) || due > newestDue.get(key)!) newestDue.set(key, due);
 	}
+	return newestDue;
+}
+
+function readAllBackgroundRuns(): BackgroundRunRecord[] {
+	return readBackgroundRunDirectoryEntries()
+		.filter((entry) => entry.isDirectory() && isValidBackgroundRunId(entry.name))
+		.map((entry) => readBackgroundRun(entry.name));
+}
+
+function isPendingBackgroundRun(record: BackgroundRunRecord, now: Date): boolean {
+	return (record.status === "queued" || record.status === "deferred") && (!record.lease || !isBackgroundRunLeaseActive(record.lease, now));
+}
+
+/**
+ * Only a task's newest queued or waiting run among `runs` runs: each older one ends cancelled, superseded, unless
+ * `keep` holds it. A room held through several due times runs its task once when it is free, not once per due time.
+ */
+function supersedeOlderPendingBackgroundRuns(input: { runs: BackgroundRunRecord[]; now?: Date; keep?: (record: BackgroundRunRecord) => boolean }): BackgroundRunRecord[] {
+	const now = normalizeNow(input.now);
+	const nowIso = now.toISOString();
+	const pending = input.runs.filter((record) => isPendingBackgroundRun(record, now));
+	const newestDue = newestDueByTask(pending);
+	const superseded: BackgroundRunRecord[] = [];
+	for (const candidate of pending) {
+		if (runDueAt(candidate) === newestDue.get(runTaskKey(candidate)) || input.keep?.(candidate)) continue;
+		try {
+			const ended = withBackgroundRunMutationLock(candidate.runId, () => {
+				const existing = readBackgroundRun(candidate.runId);
+				if (!isPendingBackgroundRun(existing, now)) return null;
+				const record = normalizeRecord(removeUndefinedOptionalFields({
+					...existing,
+					status: "cancelled",
+					reason: SUPERSEDED_BY_LATER_RUN,
+					message: "A later run of this task took its place.",
+					finishedAt: nowIso,
+					updatedAt: nowIso,
+					revision: nextRevision(existing),
+					lease: undefined,
+				}));
+				atomicWriteJson(backgroundRunRecordPath(candidate.runId), record);
+				return record;
+			});
+			if (ended) superseded.push(ended);
+		} catch (error) {
+			// One run that cannot be ended must not stop the tick for every room.
+			console.warn(`Failed to supersede background run: ${candidate.runId}`, error);
+		}
+	}
+	return superseded;
+}
+
+export function reviveTransientlyBlockedBackgroundRuns(input: ReviveTransientlyBlockedBackgroundRunsInput = {}): BackgroundRunRecord[] {
+	const now = normalizeNow(input.now);
+	const nowIso = now.toISOString();
+	const limit = normalizeListLimit(input.limit);
+	const scope = input.scope ? normalizeScope(input.scope) : undefined;
+	const records = readAllBackgroundRuns();
+	// A run that met the prepared conversation comes back once per task: the newest run of its task, while that
+	// conversation is still the room's. Older occurrences, and runs that met an earlier conversation, stay blocked.
+	const newestDue = newestDueByTask(records);
 	/** For a prepared-conversation block: null when it comes back, the final reason when it never will, "" when that cannot be told yet. */
 	const endsAs = (record: BackgroundRunRecord): string | null => {
 		if (record.reason !== PREPARED_CONVERSATION_BLOCK) return null;
@@ -880,36 +930,54 @@ export function reviveTransientlyBlockedBackgroundRuns(input: ReviveTransientlyB
 }
 
 export function listClaimableScheduledPromptBackgroundRuns(options: ListClaimableScheduledPromptBackgroundRunsOptions = {}): BackgroundRunRecord[] {
-	const now = normalizeNow(options.now);
 	const limit = normalizeListLimit(options.limit);
 	const scope = options.scope ? normalizeScope(options.scope) : undefined;
 	const schedulerJobId = normalizeSchedulerJobId(options.schedulerJobId);
-	const records = readBackgroundRunDirectoryEntries()
-		.filter((entry) => entry.isDirectory() && isValidBackgroundRunId(entry.name))
-		.map((entry) => readBackgroundRun(entry.name))
-		.filter((record) => record.kind === "scheduled-prompt")
-		.filter((record) => record.status === "queued" || record.status === "deferred")
-		.filter((record) => !record.lease || !isBackgroundRunLeaseActive(record.lease, now))
+	return claimableScheduledPromptRuns(normalizeNow(options.now))
 		.filter((record) => !scope || scopesEqual(record.scope, scope))
 		.filter((record) => !schedulerJobId || record.source.schedulerJobId === schedulerJobId)
+		.slice(0, limit);
+}
+
+/**
+ * The waiting runs a scheduler tick tries, oldest first: each task's newest, the older ones ending superseded
+ * unless `keep` holds them. Never capped, since superseding over the whole read leaves about one run per task.
+ */
+export function claimableNewestScheduledPromptRuns(input: { now?: Date; keep?: (record: BackgroundRunRecord) => boolean } = {}): BackgroundRunRecord[] {
+	const now = normalizeNow(input.now);
+	const runs = claimableScheduledPromptRuns(now);
+	const superseded = new Set(supersedeOlderPendingBackgroundRuns({ runs, now, keep: input.keep }).map((record) => record.runId));
+	return runs.filter((record) => !superseded.has(record.runId));
+}
+
+function claimableScheduledPromptRuns(now: Date): BackgroundRunRecord[] {
+	return readAllBackgroundRuns()
+		.filter((record) => record.kind === "scheduled-prompt")
+		.filter((record) => isPendingBackgroundRun(record, now))
 		.sort(compareClaimableScheduledPromptRunsOldestFirst);
-	return records.slice(0, limit);
 }
 
 export function listBackgroundRuns(options: ListBackgroundRunsOptions = {}): BackgroundRunRecord[] {
-	const entries = readBackgroundRunDirectoryEntries();
+	return listBackgroundRunsWithNewestPerSchedule(options).runs;
+}
+
+/** A listing, and each schedule job's newest run among all the runs it matched, however far past the limit that run sits. */
+export function listBackgroundRunsWithNewestPerSchedule(options: ListBackgroundRunsOptions = {}): { runs: BackgroundRunRecord[]; newestPerSchedule: BackgroundRunRecord[] } {
 	const limit = normalizeListLimit(options.limit);
 	const scope = options.scope ? normalizeScope(options.scope) : undefined;
 	const schedulerJobId = normalizeSchedulerJobId(options.schedulerJobId);
-	const records = entries
-		.filter((entry) => entry.isDirectory() && isValidBackgroundRunId(entry.name))
-		.map((entry) => readBackgroundRun(entry.name))
+	const records = readAllBackgroundRuns()
 		.filter((record) => !options.kind || record.kind === options.kind)
 		.filter((record) => !options.status || record.status === options.status)
 		.filter((record) => !scope || scopesEqual(record.scope, scope))
 		.filter((record) => !schedulerJobId || record.source.schedulerJobId === schedulerJobId)
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-	return records.slice(0, limit);
+	const newestPerSchedule = new Map<string, BackgroundRunRecord>();
+	for (const record of records) {
+		const jobId = record.source.schedulerJobId;
+		if (jobId && !newestPerSchedule.has(jobId)) newestPerSchedule.set(jobId, record);
+	}
+	return { runs: records.slice(0, limit), newestPerSchedule: [...newestPerSchedule.values()] };
 }
 
 export function findBackgroundRunByScheduledOccurrence(input: FindBackgroundRunByScheduledOccurrenceInput): BackgroundRunRecord | null {

@@ -5,9 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
 import { pairDevice } from "./smoke-pairing.js";
 import { waitForTurnSettled } from "./smoke-turn-settle.js";
+import { ANSWER_FLOOR_MS } from "../src/room-box/card-text.js";
 
 // A turn that finishes with nobody in the room keeps its steps: the reads it
 // made, the one it was refused, and a call that never got its result, saved
@@ -27,7 +28,7 @@ const repoRoot = path.resolve(webServerDir, "..", "..");
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-away-steps-"));
 const home = path.join(tempRoot, "home");
-const workspaceRoot = path.join(tempRoot, "workspace");
+const workspaceRoot = path.join(home, "workspace");
 fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "NOTES-NEEDLE: the export runs on Fridays.\n", { mode: 0o600 });
 fs.writeFileSync(path.join(workspaceRoot, "server.key"), "-----BEGIN PRIVATE KEY-----\nnot a real key\n", { mode: 0o600 });
@@ -252,16 +253,18 @@ try {
 	assert(commandCreated.status === 201 && commandRoom, `the command room was created, got ${commandCreated.status}`);
 	const commandWorkspace = await json(`/api/persistent-agents/${encodeURIComponent(commandRoom)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, displayLabel: "Away Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }) });
 	assert(commandWorkspace.status === 200, `Full access with the terminal on, got ${commandWorkspace.status}`);
+	// Ask before each command, as the person chose: a new room on a Mac runs them without asking.
+	assert((await putRunWithoutAsking(`http://127.0.0.1:${port}/api/persistent-agents/${encodeURIComponent(commandRoom)}/bash-settings`, false)).status === 200, "Ask before each command");
 	const commandThread = `/api/persistent-agents/${encodeURIComponent(commandRoom)}/threads/conv-command`;
 	const commandModel = { provider: "openai-compatible", model: "room-model" };
 	assert((await json(commandThread, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: commandModel, items: [] }) })).status === 200, "the command thread was seeded");
 	const commandSocket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${commandRoom}&conversationId=conv-command&modelProvider=openai-compatible&model=room-model&reattach=1`, { headers: { ...SMOKE_AUTH_HEADERS } });
 	await new Promise<void>((resolve, reject) => { commandSocket.addEventListener("open", () => resolve()); commandSocket.addEventListener("error", () => reject(new Error("websocket failed to connect"))); });
-	const asked = new Promise<any>((resolve) => commandSocket.addEventListener("message", (event: any) => { try { const frame = JSON.parse(String(event.data)); if (frame?.type === "ui_request" && frame.kind === "confirm") resolve(frame); } catch {} }));
+	const asked = new Promise<any>((resolve) => commandSocket.addEventListener("message", (event: any) => { try { const frame = JSON.parse(String(event.data)); if (frame?.type === "ui_request" && frame.kind === "run") resolve(frame); } catch {} }));
 	script = [{ name: "bash", args: { command: "rm report-old.txt" } }, { name: "", args: {}, fail: true }];
 	commandSocket.send(JSON.stringify({ type: "prompt", text: "Remove the old report while I close the window." }));
 	const question = await Promise.race([asked, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the room never asked to run the command")), 30_000))]);
-	const keptCard = { kind: "approval", id: "card-command", requestId: question.id, uiKind: "confirm", title: question.title, message: question.message };
+	const keptCard = { kind: "approval", id: "card-command", requestId: question.id, uiKind: "run", title: question.title, command: question.command, folder: question.folder };
 	assert((await json(commandThread, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: commandModel, items: [{ kind: "user", id: "u-command", text: "Remove the old report while I close the window." }, keptCard] }) })).status === 200, "the page's save with the card is taken");
 	commandSocket.close();
 	// A landing nobody watched leaves the conversation on standby.
@@ -359,17 +362,19 @@ try {
 	const returnedCard = await (async () => {
 		const by = Date.now() + 30_000;
 		while (!returned) { if (hookFailure) throw hookFailure; assert(Date.now() < by, "the person came back"); await new Promise((resolve) => setTimeout(resolve, 50)); }
-		return returned.waitFor((frame) => frame.type === "ui_request" && frame.kind === "confirm", "the command card reached the person who came back");
+		return returned.waitFor((frame) => frame.type === "ui_request" && frame.kind === "run", "the command card reached the person who came back");
 	})();
-	assert(String(returnedCard.message ?? "").includes("ls"), `the card names the command, got ${JSON.stringify(returnedCard)}`);
-	assert(!leaving.frames.some((frame) => frame.type === "ui_request" && frame.kind === "confirm"), "the window that left never got the card");
+	assert(returnedCard.command === "ls", `the card names the command, got ${JSON.stringify(returnedCard)}`);
+	assert(!leaving.frames.some((frame) => frame.type === "ui_request" && frame.kind === "run"), "the window that left never got the card");
 	const takeover = await openRoomSocket(returnConversation);
-	const movedCard = await takeover.waitFor((frame) => frame.type === "ui_request" && frame.kind === "confirm", "the open card is asked again in the tab that came back last");
-	assert(movedCard.id === returnedCard.id && movedCard.message === returnedCard.message, `the same question moves, got ${JSON.stringify(movedCard)}`);
+	const movedCard = await takeover.waitFor((frame) => frame.type === "ui_request" && frame.kind === "run", "the open card is asked again in the tab that came back last");
+	assert(movedCard.id === returnedCard.id && movedCard.command === returnedCard.command, `the same question moves, got ${JSON.stringify(movedCard)}`);
 	const replayDone = takeover.frames.findIndex((frame) => frame.type === "turn_reattach_replay_done");
 	assert(replayDone >= 0 && replayDone < takeover.frames.indexOf(movedCard), "the card comes after the replay, so the page shows it live");
 	await returned!.waitFor((frame) => frame.type === "error" && frame.code === "room_displaced", "the displaced window is told");
 	returned!.ws.send(JSON.stringify({ type: "ui_response", id: returnedCard.id, value: false }));
+	// A floor after the card was sent again, as a person reads first: a yes sooner is asked again.
+	await new Promise((resolve) => setTimeout(resolve, ANSWER_FLOOR_MS + 50));
 	takeover.ws.send(JSON.stringify({ type: "ui_response", id: movedCard.id, value: true }));
 	await takeover.waitFor((frame) => frame.type === "event" && frame.event?.type === "agent_end", "the turn ended in the tab that answered");
 	assert(gatewayLog.slice(-3).join(",") === "read,bash,text" && lastToolResult.includes("notes.txt"), `the approved command ran (the displaced window's decline did not count), got ${gatewayLog.join(",")} with ${JSON.stringify(lastToolResult.slice(0, 200))}`);
@@ -397,7 +402,7 @@ try {
 	const viewedBy = Date.now() + 30_000;
 	while (!viewing) { if (hookFailure) throw hookFailure; assert(Date.now() < viewedBy, "the viewing-only device came back"); await new Promise((resolve) => setTimeout(resolve, 50)); }
 	await viewing.waitFor((frame) => frame.type === "event" && frame.event?.type === "agent_end", "the command was declined at once and the turn ended");
-	assert(!viewing.frames.some((frame) => frame.type === "ui_request" && frame.kind === "confirm"), "the viewing-only device got no card it cannot answer");
+	assert(!viewing.frames.some((frame) => frame.type === "ui_request" && frame.kind === "run"), "the viewing-only device got no card it cannot answer");
 	assert(gatewayLog.slice(-3).join(",") === "read,bash,text" && lastToolResult.startsWith("The user left the room"), `the room was told nobody is there to approve, got ${gatewayLog.join(",")} with ${JSON.stringify(lastToolResult.slice(0, 200))}`);
 	viewing.ws.close();
 	console.log("ok 2f a viewing-only device that comes back mid-answer leaves the room's questions declined as if nobody were there");
@@ -436,8 +441,8 @@ try {
 	script = [{ name: "bash", args: { command: "rm report-old.txt" } }, { name: "", args: {}, fail: true }];
 	const keptAsk = "Remove the old report while I close the window, keyed.";
 	keptSocket.ws.send(JSON.stringify({ type: "prompt", text: keptAsk, id: "kv2h", shown: { text: keptAsk, files: [] } }));
-	const keptQuestion = await keptSocket.waitFor((frame) => frame.type === "ui_request" && frame.kind === "confirm", "the room asks to run the command");
-	assert((await json(keptThread, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: commandModel, items: [{ kind: "user", id: "kv2h", text: keptAsk }, { kind: "approval", id: "card-kept", requestId: keptQuestion.id, uiKind: "confirm", title: keptQuestion.title, message: keptQuestion.message }] }) })).status === 200, "the page's save with the card is taken");
+	const keptQuestion = await keptSocket.waitFor((frame) => frame.type === "ui_request" && frame.kind === "run", "the room asks to run the command");
+	assert((await json(keptThread, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: commandModel, items: [{ kind: "user", id: "kv2h", text: keptAsk }, { kind: "approval", id: "card-kept", requestId: keptQuestion.id, uiKind: "run", title: keptQuestion.title, command: keptQuestion.command, folder: keptQuestion.folder }] }) })).status === 200, "the page's save with the card is taken");
 	keptSocket.ws.close();
 	await waitForTurnSettled(json, commandRoom, `${keptView}: the kept-card turn has settled`);
 	const keptItems: any[] = (await json(keptThread)).body?.thread?.items ?? [];

@@ -14,7 +14,7 @@
 //
 // Steps: (1) resolve the payload archive, hard-matched to the root
 // package.json version (no lexicographic latest: 0.6.10 sorts under 0.6.8);
-// (2) stage its app/ + vendor/node/ tree into build/server and trim app/ to
+// (2) stage its app/ + vendor/ tree into build/server and trim app/ to
 // what the desktop app runs (scripts/prune-payload.mjs); (3) regenerate
 // the icons every run so icon changes always ship; (4) sync the shell version
 // to the root version so artifacts carry the product version; (5) run
@@ -33,7 +33,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { countFiles, pruneDesktopPayload } from "./prune-payload.mjs";
+import { countFiles, DESKTOP_TARGETS, pruneDesktopPayload } from "./prune-payload.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(desktopRoot, "..", "..");
@@ -57,7 +57,7 @@ const quoteForShell = (args) => {
 
 const HOST_TARGET = { darwin: "darwin-arm64", win32: "win-x64", linux: "linux-x64" }[process.platform];
 const target = argValue("--target") ?? HOST_TARGET;
-if (!["darwin-arm64", "win-x64"].includes(target)) {
+if (!DESKTOP_TARGETS.includes(target)) {
   console.error(`[package] unsupported target "${target}" (darwin-arm64 or win-x64).`);
   process.exit(2);
 }
@@ -134,7 +134,7 @@ if (!path.basename(archivePath).startsWith(`exxperts-${rootPkg.version}-${target
   process.exit(1);
 }
 
-// Step 2: stage app/ + vendor/node/ into build/server. Extracted fresh every
+// Step 2: stage app/ + vendor/ into build/server. Extracted fresh every
 // run so a stale tree can never ship. tar -xf autodetects tar.gz and zip
 // (macOS bsdtar; Windows System32 tar.exe likewise).
 const stageDir = path.join(buildDir, "server-stage");
@@ -165,9 +165,10 @@ if (!fs.existsSync(vendoredNode)) {
 
 // Step 2a: the archive also carries the CLI, which the desktop app never
 // runs; trim app/ to the bundled server, the shell's helpers and the Health
-// Check. The prune fails the build when the result misses anything they need.
+// Check, for the target. The prune fails the build when the result misses
+// anything they need.
 try {
-  pruneDesktopPayload(path.join(serverDir, "app"));
+  pruneDesktopPayload(path.join(serverDir, "app"), { target });
 } catch (err) {
   console.error(`[package] ${err.message}`);
   process.exit(1);

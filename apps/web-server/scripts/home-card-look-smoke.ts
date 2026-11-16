@@ -1,10 +1,16 @@
 // Home's room card on a real Home: its buttons and its memory line's words.
 // Two rooms, one fresh and one with three remembered conversations waiting.
-// The card's buttons (Enter, Maintain) are in the card's own face, Sen Bold
-// 13px, 29px tall, at desktop and phone width, and "Entering…" fits on one
-// line in Enter; the Create room buttons beside the cards keep the display
+// The card's buttons (Enter, Maintain) are the button family's small size,
+// Sen Medium 13px, at desktop and phone width, 28px tall on a desktop and 44px
+// at phone width, a finger's target, and "Entering…" fits on one line in
+// Enter; the Create room dialog's buttons are in Sen too, not the display
 // face. The memory line says "nothing to memorize" and "3 to memorize", and
-// the bar is named "Conversations to memorize: N of <limit>".
+// the bar is named "Conversations to memorize: N of <limit>". A card's name
+// shares one centre line with its status mark and gear (its first line when
+// it wraps), and a finger's gear leaves the name the width a mouse's gear
+// does. Where cards stand side by side, the New room tile alone in its row is
+// as tall as the card before it, also when that card grows or Sort puts a
+// taller card there; in one column (a phone, a narrow window) it keeps its 85 px.
 // The one-line form, drawn when the status has no hard cap, is never sent by
 // this server; its words are checked by taking the hard cap out of the status
 // answers the page reads, the one stub in this smoke.
@@ -22,6 +28,9 @@ const waitUntil = waitEvery(100);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
+}
+function same(actual: unknown, expected: unknown, what: string): void {
+	assert(JSON.stringify(actual) === JSON.stringify(expected), `${what}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 }
 
 // A machine without Chromium cannot run a browser assertion at all; skip whole.
@@ -92,6 +101,8 @@ async function buttonLook(page: Page, selector: string): Promise<ButtonLook> {
 const firstFace = (fontFamily: string) => fontFamily.split(",")[0].trim().replace(/^["']|["']$/g, "");
 
 const card = (name: string) => `.persistent-agent-card:has(h2:text-is("${name}"))`;
+// A desktop has the family's small 28px; at phone width a finger needs 44.
+const buttonHeight = (width: number) => (width === 390 ? 44 : 28);
 
 /** A signed-in Home; `beforeLoad` runs on the page first, so a route it adds sees the page's first requests. */
 async function openHome(browser: Browser, width: number, colorScheme: "light" | "dark", beforeLoad?: (page: Page) => Promise<unknown>) {
@@ -106,6 +117,106 @@ async function waitForCards(page: Page): Promise<void> {
 	const dismiss = page.locator(".whats-new-close");
 	if (await dismiss.count()) await dismiss.click();
 	await page.evaluate(() => document.fonts.ready);
+}
+
+/** Where each card's head sits: the middle of its name's first line and of each thing at its end (status mark, gear), and how many lines the name takes. */
+async function readHeads(page: Page) {
+	return page.evaluate(() => [...document.querySelectorAll(".persistent-agent-card")].map((card) => {
+		const name = card.querySelector(".persistent-agent-header h2")!;
+		const range = document.createRange();
+		range.selectNodeContents(name);
+		const lines = [...range.getClientRects()].filter((rect) => rect.width > 0);
+		return {
+			name: (name.textContent ?? "").slice(0, 24),
+			lines: new Set(lines.map((rect) => Math.round(rect.top))).size,
+			line: (lines[0].top + lines[0].bottom) / 2,
+			ends: [...card.querySelectorAll(".persistent-agent-header-end > *")].map((element) => { const box = element.getBoundingClientRect(); return `${element.className.split(" ").pop()}:${((box.top + box.bottom) / 2).toFixed(1)}`; }),
+		};
+	}));
+}
+// A long name, to wrap: set on the page's own heading and put back after.
+const LONG_NAME = "The quarterly planning room for the northern region's client contracts";
+async function renameOnPage(page: Page, index: number, name: string | null): Promise<string> {
+	return page.evaluate(([at, next]) => {
+		const heading = document.querySelectorAll(".persistent-agent-card .persistent-agent-header h2")[at as number]!;
+		const before = heading.textContent ?? "";
+		if (next !== null) heading.textContent = next as string;
+		return before;
+	}, [index, name] as const);
+}
+
+/** A card's name sits on one centre line with its status mark and gear; a name that wraps keeps them on its first line. */
+async function checkHeadLine(page: Page, where: string): Promise<void> {
+	const offLine = (heads: Awaited<ReturnType<typeof readHeads>>) => heads.flatMap((head) => head.ends.filter((end) => Math.abs(Number(end.split(":")[1]) - head.line) > 1).map((end) => `${head.name}: name's line at ${head.line.toFixed(1)}, ${end}`));
+	const heads = await readHeads(page);
+	assert(heads.length === 2 && heads.every((head) => head.lines === 1 && head.ends.length > 0), `${where}: two cards, each name on one line with a mark or gear at its end, got ${JSON.stringify(heads)}`);
+	same(offLine(heads), [], `${where}: a name and its mark and gear on one centre line`);
+	const before = await renameOnPage(page, 0, LONG_NAME);
+	const wrapped = (await readHeads(page))[0];
+	await renameOnPage(page, 0, before);
+	assert(wrapped.lines > 1, `${where}: the long name wraps, got ${JSON.stringify(wrapped)}`);
+	same(offLine([wrapped]), [], `${where}: a name that wraps keeps its mark and gear on its first line`);
+	// A finger's gear reaches into the space around it, so the name keeps the width it has beside the 28 px gear a mouse gets.
+	const room = await page.evaluate(() => {
+		const name = document.querySelector(".persistent-agent-card .persistent-agent-header h2")!;
+		const gear = name.closest(".persistent-agent-card")!.querySelector<HTMLElement>(".card-gear-btn")!;
+		const now = name.getBoundingClientRect().width;
+		const pulls = [gear, gear.parentElement!];
+		for (const element of pulls) element.style.setProperty("margin", "0", "important");
+		gear.style.setProperty("width", "28px", "important");
+		gear.style.setProperty("min-width", "0", "important");
+		const beside28 = name.getBoundingClientRect().width;
+		for (const element of pulls) element.style.removeProperty("margin");
+		gear.style.removeProperty("width");
+		gear.style.removeProperty("min-width");
+		return { now, beside28 };
+	});
+	assert(Math.abs(room.now - room.beside28) <= 0.5, `${where}: the name is ${room.now} px wide, ${room.beside28} px beside a 28 px gear`);
+	// Every card's gear is the family's size and its mark sits as far from its card's right edge, with a status mark beside it or none.
+	const gears = await page.locator(".persistent-agent-card .card-gear-btn").evaluateAll((all) => all.map((gear) => { const box = gear.getBoundingClientRect(); const mark = gear.querySelector("svg")!.getBoundingClientRect(); const card = gear.closest(".persistent-agent-card")!.getBoundingClientRect(); return { size: `${box.width}x${box.height}`, mark: +(card.right - mark.left - mark.width / 2).toFixed(1), marked: gear.parentElement!.children.length > 1 }; }));
+	const size = where.startsWith("390") ? "44x44" : "28x28";
+	assert(gears.every((gear) => gear.size === size) && gears.every((gear) => Math.abs(gear.mark - gears[0].mark) <= 0.5), `${where}: every card's gear is ${size} with its mark in one column, got ${JSON.stringify(gears)}`);
+}
+
+/** The height the New room tile has always had in a phone's or a narrow window's one column. */
+const PHONE_TILE_HEIGHT = 85;
+/** Where cards stand side by side, the New room tile alone in its row is as tall as the room card before it, also once that card grows; beside a card it is the row's height. In one column (a phone, a narrow window) it keeps its own 85 px. */
+async function checkTileHeight(page: Page, where: string, mustBeAlone: boolean): Promise<void> {
+	const read = () => page.evaluate(() => {
+		const tile = document.querySelector(".landing-grid > .add-room-card")!;
+		const card = tile.previousElementSibling!;
+		const [t, c] = [tile.getBoundingClientRect(), card.getBoundingClientRect()];
+		const inside = [...tile.children].map((child) => child.getBoundingClientRect()).filter((box) => box.height > 0);
+		const above = Math.min(...inside.map((box) => box.top)) - t.top;
+		const below = t.bottom - Math.max(...inside.map((box) => box.bottom));
+		return { alone: t.top >= c.bottom, column: t.left === c.left, tile: Math.round(t.height * 10) / 10, card: Math.round(c.height * 10) / 10, offCentre: Math.round((above - below) * 10) / 10 };
+	});
+	const first = await read();
+	if (mustBeAlone) assert(first.alone, `${where}: the New room tile has a row of its own, got ${JSON.stringify(first)}`);
+	if (first.column) {
+		assert(Math.abs(first.tile - PHONE_TILE_HEIGHT) <= 1 && Math.abs(first.offCentre) <= 1, `${where}: in one column the New room tile is ${PHONE_TILE_HEIGHT} px tall with its plus and words centred, got ${JSON.stringify(first)}`);
+		return;
+	}
+	assert(Math.abs(first.tile - first.card) <= 1, `${where}: the New room tile ${first.alone ? "alone in its row" : "beside the cards"} is ${first.tile} px tall, the room card ${first.card} px`);
+	if (!first.alone) return;
+	const before = await renameOnPage(page, 1, LONG_NAME);
+	let grown = await read();
+	await waitUntil(async () => { grown = await read(); return grown.card > first.card && Math.abs(grown.tile - grown.card) <= 1; }, `${where}: the tile follows the card it sits under`, 5000).catch(() => {});
+	await renameOnPage(page, 1, before);
+	assert(grown.card > first.card && Math.abs(grown.tile - grown.card) <= 1, `${where}: the card grew to ${grown.card} px and the tile is ${grown.tile} px`);
+
+	// The first card made taller, then the order turned round with Sort: the tall card now sits over the tile, with no box resized.
+	const names = () => page.locator(".persistent-agent-card h2").allInnerTexts();
+	const order = await names();
+	const tall = await renameOnPage(page, 0, LONG_NAME);
+	const turned = [...order].reverse();
+	await page.locator(".room-sort-row .room-sort-btn").first().click();
+	await page.getByRole("menuitemradio", { name: turned[0] === [...order].sort()[0] ? "Name A→Z" : "Name Z→A" }).click();
+	await waitUntil(async () => (await names()).at(-1) === LONG_NAME, `${where}: the cards change places`, 5000);
+	let swapped = await read();
+	await waitUntil(async () => { swapped = await read(); return Math.abs(swapped.tile - swapped.card) <= 1; }, `${where}: the tile follows its new neighbour`, 3000).catch(() => {});
+	await page.evaluate(([long, text]) => { for (const heading of document.querySelectorAll(".persistent-agent-card .persistent-agent-header h2")) if (heading.textContent === long) heading.textContent = text; }, [LONG_NAME, tall]);
+	assert(Math.abs(swapped.tile - swapped.card) <= 1, `${where}: after Sort put the tall card over the tile, the card is ${swapped.card} px and the tile ${swapped.tile} px`);
 }
 
 let server: ChildProcessWithoutNullStreams | undefined;
@@ -176,24 +287,36 @@ try {
 			const where = `${width}px ${colorScheme}`;
 			const { context, page } = await openHome(browser, width, colorScheme);
 			await waitForCards(page);
-			assert(await page.evaluate(() => document.fonts.check("700 13px Sen")), `${where}: Sen Bold is loaded`);
+			// A face that matches, loaded: fonts.check alone answers yes when none matches.
+			const faces = await page.evaluate(() => [...document.fonts].filter((face) => face.family.replace(/["']/g, "") === "Sen").map((face) => `${face.weight}:${face.status}`));
+			assert(faces.includes("500:loaded"), `${where}: Sen Medium is loaded, the faces are ${faces.join(", ")}`);
 			for (const [name, kind, text] of [["Fresh Room", "landing-action", "Enter"], ["Client Notes", "landing-action", "Enter"], ["Client Notes", "inline-action", "Maintain"]] as const) {
 				const look = await buttonLook(page, `${card(name)} .persistent-agent-actions .${kind}`);
 				assert(look.text === text, `${where}: ${name}'s ${kind} reads ${text}, got ${JSON.stringify(look.text)}`);
-				assert(firstFace(look.fontFamily) === "Sen" && look.fontSize === "13px" && look.fontWeight === "700", `${where}: ${name}'s ${text} is Sen Bold 13px, got ${JSON.stringify(look)}`);
-				assert(look.height === 29, `${where}: ${name}'s ${text} keeps the row's 29px, got ${look.height}`);
+				assert(firstFace(look.fontFamily) === "Sen" && look.fontSize === "13px" && look.fontWeight === "500", `${where}: ${name}'s ${text} is Sen Medium 13px, got ${JSON.stringify(look)}`);
+				assert(look.height === buttonHeight(width), `${where}: ${name}'s ${text} is ${buttonHeight(width)}px tall, got ${look.height}`);
 				assert(look.fitsOneLine, `${where}: ${name}'s ${text} fits on one line, got ${JSON.stringify(look)}`);
 			}
-			// The allowed neighbour: the same two looks in Home's Create room dialog keep the display face.
+			await checkHeadLine(page, where);
+			await checkTileHeight(page, where, width === 390);
+			// Home's Create room dialog: its two buttons are the family's regular size, in Sen, not the display face.
 			await page.getByRole("button", { name: "Create a new room" }).click();
 			for (const [kind, text] of [["landing-action", "Create room"], ["inline-action", "Cancel"]] as const) {
 				const look = await buttonLook(page, `.create-room-overlay .create-room-actions .${kind}`);
-				assert(look.text === text && firstFace(look.fontFamily) === "Bandeins Strange", `${where}: Create room's ${text} keeps the display face, got ${JSON.stringify(look)}`);
+				assert(look.text === text && firstFace(look.fontFamily) === "Sen" && look.fontWeight === "500" && look.height === (width === 390 ? 44 : 32), `${where}: Create room's ${text} is Sen Medium at the regular size, got ${JSON.stringify(look)}`);
 			}
 			await closeContext(context);
 		}
 	}
-	console.log("ok the card's buttons are Sen Bold 13px and 29px tall at desktop and phone width, light and dark");
+	console.log("ok the card's buttons are Sen Medium 13px, 28px tall on a desktop and 44px at phone width, light and dark");
+	// At 1280 two cards fill a row, so the tile has one of its own on a desktop too; at 800 a narrow window stands the cards in one column, as a phone does.
+	for (const width of [1280, 800]) {
+		const { context, page } = await openHome(browser, width, "light");
+		await waitForCards(page);
+		await checkTileHeight(page, `${width}px light`, true);
+		await closeContext(context);
+	}
+	console.log("ok a card's name, status mark and gear share one centre line, wrapped or not, and the New room tile alone in its row is a card's height");
 
 	// "Entering…" in Enter: the page's requests are held from the click on, so the word stays to be measured.
 	// Each width enters a room of its own: a room once entered holds its conversation and offers Resume.
@@ -211,7 +334,7 @@ try {
 		const entering = await buttonLook(page, enter);
 		const enteringWidth = await widthOf();
 		release();
-		assert(entering.fitsOneLine && entering.height === 29, `${width}px: "Entering…" fits on one line at 29px, got ${JSON.stringify(entering)}`);
+		assert(entering.fitsOneLine && entering.height === buttonHeight(width), `${width}px: "Entering…" fits on one line at ${buttonHeight(width)}px, got ${JSON.stringify(entering)}`);
 		assert(Math.abs(enteringWidth - enterWidth) < 0.5, `${width}px: Enter keeps its width while entering, so the row does not jump: ${enterWidth}px, then ${enteringWidth}px`);
 		await closeContext(context);
 	}

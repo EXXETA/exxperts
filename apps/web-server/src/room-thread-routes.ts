@@ -5,9 +5,9 @@ import { getPersistentRoomToolPolicy } from "./persistent-room-tool-policy.js";
 import { latestTurnKey, rememberRemovedIds, removedIdsOf } from "./persistent-agent-turns.js";
 import { isShared, legacyInsertIndex, mergeSaveById, readRemovedIds } from "./thread-items-by-id.js";
 import { isModelSwitchLine } from "./persistent-agent-conversation-model.js";
-import { resolvePersistentRoomEffectiveWorkspacePolicy, resolvePersistentRoomNewConversationWorkspacePolicy, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, type PersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
+import { resolvePersistentRoomEffectiveWorkspacePolicy, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, type PersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
-import { createRoomModelCatalog, type RoomModelCatalog } from "./room-models.js";
+import { createRoomModelCatalog, keepChatPickAsRoomModel, type RoomModelCatalog } from "./room-models.js";
 import { checkpointPromptTokenBudget } from "./persistent-agent-boot.js";
 import { effectiveConversationEffortChoice, isRoomEffortLevel, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
 import type { PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
@@ -176,7 +176,9 @@ function mergeThreadSave(agentId: string, threadId: string, incoming: unknown, r
 	// The memory keeps only the newest removals; this save's own all count.
 	const removed = new Set([...removedIdsOf(agentId, threadId), ...removedNow]);
 	const byId = removed.size > 0 || existingItems.some(isShared) || incoming.some((item: any) => item && typeof item === "object" && "landed" in item);
-	const merged = byId ? mergeSaveById(existingItems, incoming, removed, (key) => latestTurnKey(agentId, threadId) === key) : incoming;
+	// Read once: the marker lives in a file, and a save carries many items.
+	const latest = byId ? latestTurnKey(agentId, threadId) : undefined;
+	const merged = byId ? mergeSaveById(existingItems, incoming, removed, (key) => latest === key) : incoming;
 	// The old merge brings back old landings, never one the page removed.
 	const kept = removed.size > 0 ? existingItems.filter((item: any) => !removed.has(String(item?.id ?? ""))) : existingItems;
 	// Last, so a line goes after every landing a merge brought back.
@@ -230,11 +232,11 @@ app.put("/api/persistent-agents/:id/threads/:threadId", { bodyLimit: 64 * 1024 *
 // the system prompt and the tool definitions, with a 15 percent margin, under
 // the new window minus the compaction reserve. A null measurement never
 // refuses (it only means no answer since the last compaction; the estimate
-// always exists). The switch changes only this conversation: the room's pick
-// stays the default for new ones. A refusal before anything was written
-// carries a code (switch_room_busy, switch_answering, switch_remembering,
-// switch_too_long); a failure after the conversation moved answers with the
-// model it is stored on now.
+// always exists). Once the conversation runs on the pick, the pick is also the
+// room's conversation model (keepChatPickAsRoomModel). A refusal before
+// anything was written carries a code (switch_room_busy, switch_answering,
+// switch_remembering, switch_too_long); a failure after the conversation moved
+// answers with the model it is stored on now, and leaves the room's model.
 app.post("/api/persistent-agents/:id/threads/:threadId/switch-model", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	const threadId = String((req.params as any).threadId ?? "").trim();
@@ -296,6 +298,9 @@ app.post("/api/persistent-agents/:id/threads/:threadId/switch-model", async (req
 		} else {
 			markPersistentAgentThreadModelChosen(status.id, threadId);
 		}
+		// The conversation already runs on the pick: a failed write only leaves the
+		// room's model as it was, which the answer's `models` then shows.
+		try { keepChatPickAsRoomModel(status.id, lock, catalog); } catch (error) { app.log.warn({ err: error }, "failed to keep the chat's pick as the room's conversation model"); }
 		return { agentId: status.id, conversationId: threadId, model: roomModelLockPayload(lock, registry, catalog), notice: written, fit, models: roomModelsPayload(status.id, createRoomModelCatalog()) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -370,12 +375,11 @@ type FreshNeeds = { bootTokens: number; tools: number; reserve: number };
  * What a new conversation of this room needs from a model before anything is
  * said: the boot prompt it would start on (the room's memory as it is now,
  * plus `extraTokens` a save is about to add) and the room's tool list, both
- * under the room's workspace settings, which a new conversation starts on
- * whatever `threadId` keeps for itself. Built once, compared per model by
- * freshFitOn.
+ * under the room's folder settings, which every conversation runs on. Built
+ * once, compared per model by freshFitOn.
  */
 function freshConversationNeeds(agentId: string, threadId: string, model: PersistentAgentModelLock, extraTokens = 0): FreshNeeds {
-	const policy = resolvePersistentRoomNewConversationWorkspacePolicy(agentId, threadId);
+	const policy = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadId);
 	const workspaceCapability = policy.capability;
 	const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(policy, REPO_ROOT);
 	const boot = buildPersistentAgentBootContext({ agentId, conversationId: threadId, sessionId: null, model, ...(workspaceCapability ? { workspaceCapability } : {}) });

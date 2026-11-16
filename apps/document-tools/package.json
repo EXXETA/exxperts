@@ -1,0 +1,23 @@
+{
+  "name": "exxperts-document-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The document packages the app carries beside its Node, each built to one file by scripts/bundle-document-tools.mjs.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.12",
+    "docx": "9.15.2",
+    "docxtemplater": "3.71.1",
+    "exceljs": "4.4.0",
+    "jszip": "3.10.2",
+    "pdf-lib": "1.17.1",
+    "pizzip": "3.3.0",
+    "pptx-automizer": "0.9.4",
+    "pptxgenjs": "4.0.1"
+  },
+  "overrides": {
+    "image-size": "2.1.0",
+    "unzipper": "0.12.3",
+    "uuid": "11.1.1"
+  }
+}

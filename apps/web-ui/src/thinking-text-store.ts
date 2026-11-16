@@ -5,6 +5,7 @@
 // and nothing here is ever saved: after a reload an answer shows no thinking.
 import { useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type UIEvent } from "react";
 import type { ChatItem } from "./types";
+import { tookText } from "./work-look";
 
 type ThinkingItem = Extract<ChatItem, { kind: "thinking" }>;
 
@@ -192,9 +193,7 @@ export function useOpenThought<T extends HTMLElement>(id: string, words: readonl
 	return { open: open && words.length > 0, toggle, ref, onScroll };
 }
 
-/** "Thought for 12 s", "Thought for 1 min 5 s", or "Thought briefly" for a short block with words. */
+/** "Thought for 1.7 s", "Thought for 12 s", "Thought for 1 min 5 s", rounded as a card's head is so the two agree, or "Thought briefly" for a short block with words. Under 50 ms it reads "<0.1 s", as a step's own time does, where a head of that length would say "0.0 s". */
 export function thoughtForText(ms: number, hasText: boolean): string {
-	if (ms < 1000 && hasText) return "Thought briefly";
-	const seconds = Math.max(1, Math.round(ms / 1000));
-	return seconds < 60 ? `Thought for ${seconds} s` : `Thought for ${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+	return ms < 1000 && hasText ? "Thought briefly" : `Thought for ${tookText(ms)}`;
 }

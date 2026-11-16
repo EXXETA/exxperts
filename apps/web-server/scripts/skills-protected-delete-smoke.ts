@@ -82,6 +82,10 @@ try {
 		const { ctx, page } = await openSkills(false);
 		const sharedRow = page.locator(".skill-table-row").filter({ hasText: "brand-voice" });
 		assert((await sharedRow.locator(".skill-table-cell").last().innerText()).trim() === "Shared", "the table names a shared skill's source where the date would be");
+		// On a desktop each fact sits under its own heading.
+		const headingLeft = (await page.locator(".skill-table-head span").filter({ hasText: "Updated" }).boundingBox())?.x ?? NaN;
+		const cellLeft = (await sharedRow.locator(".skill-table-cell").last().boundingBox())?.x ?? NaN;
+		assert(Math.abs(headingLeft - cellLeft) <= 2, `the source sits under "Updated" (heading at ${headingLeft}, cell at ${cellLeft})`);
 
 		await sharedRow.click();
 		await page.waitForSelector(".skill-detail", { timeout: 10000 });

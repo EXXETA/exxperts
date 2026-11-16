@@ -256,6 +256,7 @@ export {
 	type Skill,
 	type SkillFrontmatter,
 } from "./core/skills.js";
+export { appendFileFlushed, renameOver, syncFolder, type WriteFileAtomicOptions, writeFileAtomic } from "./core/safe-write.js";
 export { createSyntheticSourceInfo } from "./core/source-info.js";
 // Tools
 export {

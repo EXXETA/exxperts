@@ -3,12 +3,13 @@
 // new conversation on it, marked as chosen, with its "Continued on" line, in
 // one write. Against a real spawned server:
 // - reviewed: progress and result return `continueOn` after a reload, and the
-//   save opens the new conversation on it; the room's default stays;
+//   save opens the new conversation on it, which becomes the room's
+//   conversation model, its Memory model left as it was;
 // - automatic (the page saves right after the proposal): the same;
-// - cancel and discard switch nothing;
+// - cancel and discard switch nothing, and leave the room's models;
 // - a save whose new entry makes the picked model too small for a new
 //   conversation still saves, and the new conversation starts on the model it
-//   would have had, its first line saying why.
+//   would have had, its first line saying why; the room's models stay.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -161,6 +162,9 @@ try {
 		return (await api(`/api/persistent-agents/${agentId}/threads/${freshId}`)).body.thread;
 	};
 	const roomPick = async () => (await api(`/api/persistent-agents/${agentId}/models`)).body.models.conversation.stored;
+	const modelsFileText = () => fs.readFileSync(roomModels.roomModelsPath(agentId), "utf-8");
+	const memoryRow = () => JSON.stringify(JSON.parse(modelsFileText()).memory);
+	const memoryBefore = memoryRow();
 
 	// --- Reviewed, with a reload during the review ---
 	await say(first, BIG);
@@ -175,8 +179,9 @@ try {
 	const reviewedFresh = await approve(first, result.body);
 	assert(reviewedFresh.model.model === OTHER.model && reviewedFresh.modelChosen === true, `the new conversation opens on the picked model, chosen, got ${JSON.stringify({ model: reviewedFresh.model, chosen: reviewedFresh.modelChosen })}`);
 	assert(reviewedFresh.items.length === 1 && reviewedFresh.items[0].kind === "system" && reviewedFresh.items[0].text === "Continued on Other Fake", `its first line is the Continued on line, got ${JSON.stringify(reviewedFresh.items)}`);
-	assert((await roomPick())?.model === BIG.model, "the room's default is not written");
-	pass("reviewed: continueOn survives a reload, and the save opens the new conversation on it, chosen, with its line; the room's default stays");
+	assert((await roomPick())?.model === OTHER.model, `the picked model becomes the room's conversation model, got ${JSON.stringify(await roomPick())}`);
+	assert(memoryRow() === memoryBefore, `the room's Memory model is left as it was, got ${memoryRow()}`);
+	pass("reviewed: continueOn survives a reload, and the save opens the new conversation on it, chosen, with its line; it becomes the room's conversation model, the Memory model left");
 
 	// --- Automatic: the save right after the proposal ---
 	await say(reviewedFresh.threadId, OTHER);
@@ -184,9 +189,11 @@ try {
 	assert(waited.status === 200 && waited.body?.continueOn?.model === BIG.model, `the waited proposal carries continueOn, got ${waited.status} ${JSON.stringify(waited.body?.continueOn)}`);
 	const automaticFresh = await approve(reviewedFresh.threadId, waited.body);
 	assert(automaticFresh.model.model === BIG.model && automaticFresh.modelChosen === true && automaticFresh.items[0]?.text === "Continued on Big Fake", `the automatic save opens the new conversation on the picked model with its line, got ${JSON.stringify({ model: automaticFresh.model, items: automaticFresh.items })}`);
-	pass("automatic: the save right after the proposal opens the new conversation on the picked model");
+	assert((await roomPick())?.model === BIG.model && memoryRow() === memoryBefore, `the picked model becomes the room's conversation model, the Memory model left, got ${modelsFileText()}`);
+	pass("automatic: the save right after the proposal opens the new conversation on the picked model, and it becomes the room's");
 
 	// --- Cancel and discard switch nothing ---
+	const beforeCancel = modelsFileText();
 	await say(automaticFresh.threadId, BIG);
 	await proposeInBackground(automaticFresh.threadId, OTHER);
 	const cancelled = await api(`/api/persistent-agents/${agentId}/checkpoint/cancel`, { method: "POST", body: JSON.stringify({ conversationId: automaticFresh.threadId }) });
@@ -195,6 +202,7 @@ try {
 	assert(kept.status === 200 && kept.body?.continueOn === undefined, `the kept proposal no longer carries it, got ${kept.status} ${JSON.stringify(kept.body?.continueOn)}`);
 	const afterCancel = await approve(automaticFresh.threadId, kept.body);
 	assert(afterCancel.model.model === BIG.model && !afterCancel.modelChosen && afterCancel.items.length === 0, `after a cancel the save switches nothing, got ${JSON.stringify({ model: afterCancel.model, chosen: afterCancel.modelChosen, items: afterCancel.items })}`);
+	assert(modelsFileText() === beforeCancel, `after a cancel the room's models are as they were, got ${modelsFileText()}`);
 	await say(afterCancel.threadId, BIG);
 	await proposeInBackground(afterCancel.threadId, OTHER);
 	const discarded = await api(`/api/persistent-agents/${agentId}/checkpoint/cancel`, { method: "POST", body: JSON.stringify({ conversationId: afterCancel.threadId, discard: true }) });
@@ -204,8 +212,8 @@ try {
 	assert(plain.body?.continueOn === undefined, "a Remember after a discard carries no switch");
 	const afterDiscard = await approve(afterCancel.threadId, plain.body);
 	assert(afterDiscard.model.model === BIG.model && !afterDiscard.modelChosen && afterDiscard.items.length === 0, `after a discard the save switches nothing, got ${JSON.stringify({ model: afterDiscard.model, items: afterDiscard.items })}`);
-	assert((await roomPick())?.model === BIG.model, "the room's default is still not written");
-	pass("cancel and discard switch nothing, and the room's default stays");
+	assert(modelsFileText() === beforeCancel, `after a discard the room's models are as they were, got ${modelsFileText()}`);
+	pass("cancel and discard switch nothing, and leave the room's models");
 
 	// --- Save on a proposal another generation replaced the pick of ---
 	await say(afterDiscard.threadId, BIG);
@@ -263,12 +271,14 @@ try {
 	assert(tight.body?.continueOn?.model === MID.model, "the Remember keeps the mid model to continue on");
 	// The person's entry, long enough (about 1,700 tokens) to tip the mid model over.
 	const longEntry = String(tight.body.proposedRecentContext).replace("**Body:**\n", `**Body:**\n- ${"The launch plan has many careful details to keep. ".repeat(140)}\n`);
+	const beforeFellBack = modelsFileText();
 	const tooSmall = await approve(recoveredFresh.threadId, tight.body, longEntry);
 	const closed = (await api(`/api/persistent-agents/${agentId}/threads/${recoveredFresh.threadId}`)).body.thread;
 	assert(closed.state === "closed" && closed.closedReason === "checkpoint", "the memory still saves");
 	assert(tooSmall.model.model === BIG.model && !tooSmall.modelChosen, `the new conversation starts on the model it would have had, got ${JSON.stringify({ model: tooSmall.model, chosen: tooSmall.modelChosen })}`);
 	assert(tooSmall.items.length === 1 && tooSmall.items[0].text === "With this save the room's memory no longer fits Mid Fake, so this conversation started on Big Fake.", `its first line says why, got ${JSON.stringify(tooSmall.items)}`);
-	pass("a save whose entry makes the picked model too small saves, and the new conversation starts on its old model with one line saying why");
+	assert(modelsFileText() === beforeFellBack, `a save that fell back leaves the room's models as they were, got ${modelsFileText()}`);
+	pass("a save whose entry makes the picked model too small saves, and the new conversation starts on its old model with one line saying why; the room's models stay");
 
 	// --- A conversation with its own workspace settings ---
 	// A new conversation starts on the room's settings, not on the ones this

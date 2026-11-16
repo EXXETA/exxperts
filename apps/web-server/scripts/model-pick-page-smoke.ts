@@ -12,11 +12,16 @@
 // - a model this conversation is too long for opens the window; Remember and
 //   switch runs Remember, and the new conversation runs on the picked model
 //   with its one "Continued on" line;
-// - in a room this save would fill, the window offers Remember only.
+// - in a room this save would fill, the window offers Remember only;
+// - a model picked in the chat is the room's model from then on: a Remember
+//   and switch cancelled takes only its own switch with it, and Remember run
+//   again starts the new conversation on the chat's pick.
 // - the level's name under the dial draws as a real semibold, 16px at desktop
 //   and 17px in the phone's sheet, light and dark; the chosen level's word
 //   around the arc alone is lit, after a click, an arrow key and a drag, and
 //   while a pick waits;
+// - with the server's answers held back, two quick dial moves never show the
+//   earlier level again; the last answer still applies, also on a new socket;
 // - the dial's arc deepens from Low to Max in the colours a person sees, the
 //   grey track past the knob, on ladders of two to six rungs, light and dark;
 // - the needle swings on a key or a click and settles after a drag, under half
@@ -36,7 +41,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page, type WebSocketRoute } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -184,7 +189,7 @@ async function enterRoom(page: Page, name: string): Promise<void> {
 async function sendAndWait(page: Page, text: string, answer: string): Promise<void> {
 	const composer = page.locator("textarea").first();
 	await composer.fill(text);
-	await composer.press("Enter");
+	await sendFromBox(page);
 	await page.getByText(answer).last().waitFor({ timeout: 20000 });
 	await waitUntil(async () => (await page.locator(".stop-btn").count()) === 0, "the answer has ended");
 }
@@ -194,9 +199,21 @@ async function openModels(page: Page): Promise<void> {
 	const panel = page.locator(".model-pick-panel");
 	if (!(await panel.count())) await page.locator(".model-pick-trigger").first().click();
 	await panel.waitFor({ timeout: 10000 });
+	const rows = panel.locator(".model-pick-row");
 	const toModels = panel.locator(".model-pick-effort-model");
-	if (await toModels.count()) await toModels.click();
-	await panel.locator(".model-pick-row").first().waitFor({ timeout: 10000 });
+	// A one-rung model has no effort view, and the room can say so after the panel opened: the button then goes for good, so a press is short and tried again.
+	await waitUntil(async () => {
+		if (await rows.count()) return true;
+		await toModels.click({ timeout: 1000 }).catch(() => {});
+		return false;
+	}, "the panel shows the models", 30_000);
+}
+
+/** The mid model's row, once the read this open asked for has marked it: the last read's rows stand until that read lands. */
+async function midRowMarked(page: Page) {
+	const row = page.locator(".model-pick-panel .model-pick-row").filter({ hasText: "Mid Fake" });
+	await row.getByText("New conversation", { exact: true }).waitFor({ timeout: 10000 });
+	return row;
 }
 
 async function pick(page: Page, name: string): Promise<void> {
@@ -423,6 +440,7 @@ try {
 	const pinId = newRoom("Pin Room");
 	const gatewayId = newRoom("Gateway Room");
 	newRoom("Dial Room");
+	newRoom("Late Answer Room");
 	newRoom("Spring Room");
 	setRecentContextEntries(agents, fullId, 19);
 
@@ -491,6 +509,8 @@ try {
 		await waitUntil(async () => Number((await focused(page)).valueNow) !== before, "an arrow moves the slider");
 		await page.keyboard.press("Tab");
 		assert((await focused(page)).className.includes("model-pick-effort-model"), `Tab moves to the model's name, got ${JSON.stringify(await focused(page))}`);
+		// The name carries its context window once the panel's read is in: the list has rows to take the focus.
+		await page.locator(".model-pick-effort-model .model-pick-row-context").waitFor({ timeout: 10000 });
 		await page.keyboard.press("Enter");
 		await waitUntil(async () => (await focused(page)).role === "option", "Enter on the name shows the models, focus on the one in use");
 		assert((await focused(page)).text.includes("Claude Fake"), `focus lands on the model in use, got ${JSON.stringify(await focused(page))}`);
@@ -593,7 +613,7 @@ try {
 		const releaseDial = holdAnswers();
 		const dialComposer = dialPage.locator("textarea").first();
 		await dialComposer.fill("A question held while a pick waits.");
-		await dialComposer.press("Enter");
+		await sendFromBox(dialPage);
 		await dialPage.locator(".stop-btn").waitFor({ timeout: 15000 });
 		await pick(dialPage, "GPT Fake");
 		await dialPage.locator(".model-pick-trigger").first().click();
@@ -604,6 +624,122 @@ try {
 		await dialPage.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 15000 });
 		await dialCtx.close();
 		pass("while a pick waits, the chosen word stays lit");
+	}
+
+	// --- A dial answer that comes late: only the answer to the newest pick moves the dial ------
+	{
+		const lateCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+		const latePage = await lateCtx.newPage();
+		// Every answer to a dial move waits here, with the socket it came on, until the row lets it through.
+		const heldAnswers: Array<{ socket: WebSocketRoute; frame: any }> = [];
+		const sockets: WebSocketRoute[] = [];
+		let refuseSockets = false;
+		let refusedSockets = 0;
+		await latePage.routeWebSocket(/\/ws\?/, (ws) => {
+			if (refuseSockets) {
+				refusedSockets += 1;
+				void ws.close({ code: 4000, reason: "down" }).catch(() => {});
+				return;
+			}
+			const room = ws.connectToServer();
+			sockets.push(ws);
+			room.onMessage((message) => {
+				const frame = typeof message === "string" ? JSON.parse(message) : null;
+				if (frame?.type === "effort") heldAnswers.push({ socket: ws, frame });
+				else ws.send(message);
+			});
+			ws.onMessage((message) => room.send(message));
+		});
+		await enterRoom(latePage, "Late Answer Room");
+		await latePage.locator(".model-pick-trigger").first().click();
+		const lateSlider = latePage.locator(".model-pick-panel [role=slider]");
+		await lateSlider.waitFor({ timeout: 10000 });
+		const lateRungs = await latePage.locator(".effort-dial-label").allInnerTexts();
+		assert(lateRungs.length >= 3, `the dial has rungs to move over, got ${JSON.stringify(lateRungs)}`);
+		const moveTo = async (word: string) => {
+			const box = await latePage.locator(".effort-dial-label").filter({ hasText: new RegExp(`^${word}$`) }).boundingBox();
+			assert(box, `the word ${word} shows around the arc`);
+			await latePage.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+		};
+		// Every level the dial shows, in order, each one as it is drawn.
+		const watchDial = () => lateSlider.evaluate((slider) => {
+			const seen: Array<string | null> = [];
+			(window as any).dialLevels = seen;
+			new MutationObserver(() => { seen.push(slider.getAttribute("aria-valuetext")); }).observe(slider, { attributes: true, attributeFilter: ["aria-valuetext"] });
+		});
+		const dialLevels = () => latePage.evaluate(() => (window as any).dialLevels as string[]);
+		const answersOwed = (count: number) => waitUntil(() => heldAnswers.length === count, `the server has answered ${count} dial moves`);
+		// Lets the oldest answer through, saying `settled` when given. A reading of the
+		// context ring goes right behind it, so a ring showing it means the answer is drawn.
+		let ringReading = 40;
+		const letAnswerThrough = async (settled?: string) => {
+			const held = heldAnswers.shift();
+			assert(held, "an answer is held");
+			held.socket.send(JSON.stringify(settled ? { ...held.frame, level: held.frame.ladder[lateRungs.indexOf(settled)].level } : held.frame));
+			ringReading += 1;
+			held.socket.send(JSON.stringify({ type: "usage_turn", contextHealth: { zone: "green", tokens: ringReading * 1000, checkpointTokens: 100000, checkpointPercent: ringReading } }));
+			await latePage.locator(".composer-context-pill-label").filter({ hasText: `${ringReading}%` }).first().waitFor({ state: "attached", timeout: 10000 });
+		};
+
+		const [earlier, later, other] = [lateRungs[lateRungs.length - 1]!, lateRungs[lateRungs.length - 2]!, lateRungs[0]!];
+		await watchDial();
+		await moveTo(earlier);
+		await latePage.waitForFunction((word) => (window as any).dialLevels.includes(word), earlier);
+		await moveTo(later);
+		await answersOwed(2);
+		await assertLevelLit(latePage, later, "with both answers held");
+		await letAnswerThrough();
+		const afterOlder = await lateSlider.getAttribute("aria-valuetext");
+		assert(afterOlder === later, `the older answer leaves the dial on ${later}, it shows ${afterOlder}`);
+		await letAnswerThrough();
+		await assertLevelLit(latePage, later, "after the last answer");
+		const shown = await dialLevels();
+		assert(shown.lastIndexOf(earlier) < shown.indexOf(later) && shown[shown.length - 1] === later, `the dial never goes back to ${earlier} once it shows ${later}, showed ${JSON.stringify(shown)}`);
+		pass("two quick dial moves with the answers held back: the earlier level never shows again, and the dial ends on the last");
+
+		await moveTo(earlier);
+		await moveTo(later);
+		await answersOwed(2);
+		await letAnswerThrough();
+		await letAnswerThrough(other);
+		await assertLevelLit(latePage, other, "after the server settled on another level");
+		pass("the last answer still applies: a level the server settles on differently from the pick shows");
+
+		// A socket that goes with an answer owed: that answer never comes, and the new socket's still count.
+		await moveTo(later);
+		await answersOwed(1);
+		const socketsBefore = sockets.length;
+		heldAnswers.length = 0;
+		await sockets[sockets.length - 1]!.close({ code: 4000, reason: "down" });
+		await waitUntil(() => sockets.length > socketsBefore, "the page opens a new socket");
+		await latePage.locator(".composer-context-pill:not(.composer-context-waiting)").first().waitFor({ timeout: 15000 });
+		if (!(await lateSlider.count())) await latePage.locator(".model-pick-trigger").first().click();
+		await lateSlider.waitFor({ timeout: 10000 });
+		await assertLevelLit(latePage, later, "on the new socket, as its ready frame says");
+		await moveTo(earlier);
+		await answersOwed(1);
+		await letAnswerThrough(other);
+		await assertLevelLit(latePage, other, "after an answer on the new socket");
+		pass("after a socket goes with an answer owed, the dial follows the new socket's answers");
+
+		// A level picked while the socket is down goes out when it is back, and its answer counts like any other.
+		const socketsUp = sockets.length;
+		refuseSockets = true;
+		await sockets[sockets.length - 1]!.close({ code: 4000, reason: "down" });
+		await waitUntil(() => refusedSockets > 0, "the page tries for a new socket");
+		await moveTo(later);
+		refuseSockets = false;
+		await waitUntil(() => sockets.length > socketsUp, "the socket is back");
+		await answersOwed(1);
+		await moveTo(earlier);
+		await answersOwed(2);
+		await letAnswerThrough();
+		const afterSentOnReturn = await lateSlider.getAttribute("aria-valuetext");
+		assert(afterSentOnReturn === earlier, `the answer to the level sent on return leaves the dial on ${earlier}, it shows ${afterSentOnReturn}`);
+		await letAnswerThrough();
+		await assertLevelLit(latePage, earlier, "after the last answer on return");
+		pass("a level picked while the socket was down: its answer does not put back a newer move");
+		await lateCtx.close();
 	}
 
 	// --- The dial's arc and needle: the colours on screen, then the motion ------------------
@@ -743,6 +879,9 @@ try {
 		assert(settle.ms > 0 && settle.ms < 500, `the settle takes under half a second, got ${settle.ms}`);
 		assert(firstLeaves(settle.angles, rung) > 0 && Math.abs(settle.angles[0]! - rung) < 0.5, `the drag ended rising: the needle leaves its rung upwards and comes back, got ${settle.angles.slice(0, 12)}`);
 		await atRest(springPage, "after the settle");
+		// The motion's event comes with a frame, which on a slow machine is after the motion has been walked to its end.
+		await waitUntil(async () => (await dialMotionLog(springPage)).length > movesInDrag, "the release's motion is on the record");
+		await afterTwoFrames(springPage);
 		assert((await dialMotionLog(springPage)).length === movesInDrag + 1, `the release starts one motion, got ${await dialMotionLog(springPage)}`);
 		await springPage.mouse.move(thirdWord.x, thirdWord.y);
 		await springPage.mouse.down();
@@ -896,7 +1035,7 @@ try {
 	const release = holdAnswers();
 	const composer = page.locator("textarea").first();
 	await composer.fill("Second question, held on Claude.");
-	await composer.press("Enter");
+	await sendFromBox(page);
 	await page.locator(".stop-btn").waitFor({ timeout: 15000 });
 	await pick(page, "GPT Fake");
 	assert((await triggerName(page)) === "GPT Fake", `the control shows the pick at once, got ${await triggerName(page)}`);
@@ -909,8 +1048,7 @@ try {
 	await page.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 15000 });
 	// The page held the message until the switch landed: it goes now if it stayed in the box.
 	if ((await composer.inputValue()).trim()) {
-		await waitUntil(async () => !(await page.locator('button[title="Send"]').first().isDisabled()), "Send is back once the switch landed");
-		await composer.press("Enter");
+		await sendFromBox(page);
 	}
 	await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
 	const held = requests.filter((request) => request.asked.includes("Second question, held"));
@@ -984,8 +1122,7 @@ try {
 		loseSwitch = false;
 		const lostComposer = lostPage.locator("textarea").first();
 		await lostComposer.fill("Second question after the lost answer.");
-		await waitUntil(async () => !(await lostSend.isDisabled()), "Send is back once the stored conversation is read");
-		await lostComposer.press("Enter");
+		await sendFromBox(lostPage);
 		await waitUntil(async () => {
 			const thread = await storedLost();
 			return (thread?.items ?? []).some((item: any) => item.kind === "user" && String(item.text).includes("Second question after the lost answer.")) && (await lostPage.locator(".stop-btn").count()) === 0;
@@ -1048,7 +1185,7 @@ try {
 		assert(repick.status === 200, `the room's default changes, got ${repick.status}`);
 		const before = requests.length;
 		await pinPage.locator("textarea").first().fill("The first question, after the room's default moved.");
-		await pinPage.locator("textarea").first().press("Enter");
+		await sendFromBox(pinPage);
 		// A conversation's first message carries the room's state after it, so the request is matched on its whole body.
 		await waitUntil(() => requests.slice(before).some((request) => request.raw.includes("after the room's default moved")), "the first question reaches a model");
 		const asked = requests.slice(before).filter((request) => request.raw.includes("after the room's default moved"));
@@ -1101,7 +1238,7 @@ try {
 			const answers = await page.locator(".messages").getByText(/^Answer from /).count();
 			const composer = page.locator("textarea").first();
 			await composer.fill(`Long message ${round}: ${"words to read ".repeat(4000)}`);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => (await page.locator(".messages").getByText(/^Answer from /).count()) > answers && (await page.locator(".stop-btn").count()) === 0, `the long message ${round} is answered`);
 		}
 		const mid = await optionsOf(agentId);
@@ -1110,9 +1247,7 @@ try {
 	await fitMidToFreshConversation(pickId);
 	await outgrowMid(pickId);
 	await openModels(page);
-	const midRow = page.locator(".model-pick-panel .model-pick-row").filter({ hasText: "Mid Fake" });
-	assert((await midRow.innerText()).includes("New conversation"), `the mid model is marked for a new conversation, got ${await midRow.innerText()}`);
-	await midRow.click();
+	await (await midRowMarked(page)).click();
 	const switchWindow = page.getByRole("dialog", { name: "Switch to Mid Fake?" });
 	await switchWindow.waitFor({ timeout: 10000 });
 	assert((await switchWindow.getByRole("heading").innerText()) === "Switch to Mid Fake?", `a window that can switch asks it, got ${await switchWindow.getByRole("heading").innerText()}`);
@@ -1141,7 +1276,7 @@ try {
 	await fitMidToFreshConversation(fullId);
 	await outgrowMid(fullId);
 	await openModels(page);
-	await page.locator(".model-pick-panel .model-pick-row").filter({ hasText: "Mid Fake" }).click();
+	await (await midRowMarked(page)).click();
 	const fullWindow = page.getByRole("dialog", { name: "Mid Fake needs a new conversation" });
 	await fullWindow.waitFor({ timeout: 10000 });
 	assert((await fullWindow.getByRole("heading").innerText()) === "Mid Fake needs a new conversation", `a window that cannot switch asks no switch question, got ${await fullWindow.getByRole("heading").innerText()}`);
@@ -1157,11 +1292,13 @@ try {
 	await enterRoom(page, "Cancel Room");
 	await pick(page, "GPT Fake");
 	await page.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 15000 });
+	const cancelRoomModel = async () => (await api(`/api/persistent-agents/${cancelId}/models`)).body.models.conversation.stored?.model;
+	assert((await cancelRoomModel()) === GPT.model, `the pick in the chat is the room's conversation model, got ${await cancelRoomModel()}`);
 	const startRememberAndSwitch = async () => {
 		await fitMidToFreshConversation(cancelId);
 		await outgrowMid(cancelId);
 		await openModels(page);
-		await page.locator(".model-pick-panel .model-pick-row").filter({ hasText: "Mid Fake" }).click();
+		await (await midRowMarked(page)).click();
 		const ask = page.getByRole("dialog", { name: "Switch to Mid Fake?" });
 		await ask.waitFor({ timeout: 10000 });
 		await ask.getByRole("button", { name: "Remember and switch" }).click();
@@ -1190,9 +1327,9 @@ try {
 	await waitUntil(async () => (await api(`/api/persistent-agents/${cancelId}/status`)).body.runtime.activeThreadId !== cancelledFrom, "the new conversation is open");
 	const afterCancel = (await api(`/api/persistent-agents/${cancelId}/status`)).body.runtime.activeThreadId;
 	const afterCancelModel = (await api(`/api/persistent-agents/${cancelId}/threads/${afterCancel}`)).body.thread?.model?.model;
-	assert(afterCancelModel === CLAUDE.model, `a cancelled Remember and switch takes its switch with it: the new conversation starts on the room's default, Claude Fake, got ${afterCancelModel}`);
-	await waitUntil(async () => (await triggerName(page)) === "Claude Fake", "the control names the room's default");
-	pass("Remember and switch, cancelled: Remember run again starts the new conversation on the room's default");
+	assert(afterCancelModel === GPT.model && (await cancelRoomModel()) === GPT.model, `a cancelled Remember and switch takes its switch with it: the new conversation starts on the room's model, the chat's earlier pick GPT Fake, got ${afterCancelModel}, the room on ${await cancelRoomModel()}`);
+	await waitUntil(async () => (await triggerName(page)) === "GPT Fake", "the control names the room's model");
+	pass("Remember and switch, cancelled: Remember run again starts the new conversation on the room's model, the chat's earlier pick");
 	await page.locator(".model-pick-trigger").first().click();
 	const staleWait = page.locator(".model-pick-panel");
 	await staleWait.waitFor({ timeout: 10000 });

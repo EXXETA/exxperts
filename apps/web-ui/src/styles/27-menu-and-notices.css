@@ -62,19 +62,6 @@
 }
 .sidebar-config-menu .menu-update-later {
 	flex: none;
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 6px;
-	color: var(--muted);
-	font-size: var(--exx-font-size-xs);
-	padding: 6px 8px;
-	cursor: pointer;
-}
-.sidebar-config-menu .menu-update-later:hover,
-.sidebar-config-menu .menu-update-later:focus-visible {
-	color: var(--fg);
-	background: var(--panel-2);
-	outline: none;
 }
 
 /* Help ›: its rows, How it works and Shortcuts, open beside the menu as a
@@ -260,12 +247,17 @@
 	align-items: center;
 	gap: 12px;
 }
-/* A finger needs a 44px target: on a touch screen the notice's buttons (Set
-   workspace, Dismiss, a stopped room's ways on) grow to it. */
-@media (hover: none) {
-	.room-workspace-nudge-actions button { min-height: 44px; }
-}
 .room-workspace-nudge-text { text-wrap: pretty; }
+/* The no-folder notice's way out: a cross like the app's other crosses, its wash
+   reaching into the notice's padding as far on the right as above and below. */
+.room-workspace-nudge-dismiss {
+	margin: 0 -4px;
+}
+@media (hover: none) {
+	.room-workspace-nudge-dismiss { margin: 0 -10px; }
+}
+/* Wrapped under the line, Choose folder and the cross keep to the right, so the cross still closes the notice from its edge. */
+.room-workspace-nudge-actions:has(> .room-workspace-nudge-dismiss) { margin-left: auto; }
 /* A notice that stops the room on its key or sign-in: the failure lines' mark before its sentence. */
 .room-workspace-nudge-text.with-failure-mark {
 	display: flex;

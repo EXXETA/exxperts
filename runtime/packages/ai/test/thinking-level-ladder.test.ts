@@ -160,6 +160,20 @@ describe("getThinkingLevelLadder", () => {
 		expect(ladder.some((rung) => rung.level === "max")).toBe(false);
 	});
 
+	it.each([
+		["gemini-4-argon", ["low", "medium", "high"]],
+		["gemini-4-carbon", ["low", "medium", "high"]],
+		["gemini-4-hydrogen", ["low", "medium", "high", "xhigh"]],
+	] as const)("gives %s on a Google key the levels Google names for it, with no off and no minimal", (modelId, levels) => {
+		// Gemini 4 cannot stop thinking and has no minimal level; only Hydrogen
+		// goes on to xhigh.
+		const model = getModel("google", modelId);
+		expect(model).toBeDefined();
+		const ladder = getThinkingLevelLadder(model!);
+		expect(ladder.map((rung) => rung.level)).toEqual(levels);
+		expect(ladder.map((rung) => rung.label)).toEqual(levels.map((level) => level.toUpperCase()));
+	});
+
 	it("gives a non-reasoning model a single off rung", () => {
 		const model = getModel("anthropic", "claude-haiku-4-5");
 		expect(model).toBeDefined();

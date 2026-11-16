@@ -52,6 +52,7 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	{ model: "claude-fable-5", name: "Claude Fable 5" },
 	// The 0.13.1 catalogue rows: the prettifier already produces them; pinned so they cannot drift.
 	{ model: "claude-fable-5-1", name: "Claude Fable 5.1" },
+	{ model: "claude-fable-5-2", name: "Claude Fable 5.2" },
 	{ model: "gpt-6-astra", name: "GPT-6 Astra" },
 	{ model: "claude-opus-5-5", name: "Claude Opus 5.5" },
 	{ model: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },

@@ -14,7 +14,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 import { closeBrowser, closeContext } from "./smoke-close-context.js";
 
 const waitUntil = waitEvery(150);
@@ -157,7 +157,7 @@ try {
 			await p.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 			await p.waitForTimeout(800);
 			await composer.fill("We moved the launch to May.");
-			await composer.press("Enter");
+			await sendFromBox(p);
 			await waitUntil(async () => (await p.getByText("Answer from claude-fake.").count()) === 1, `the answer in ${room}`);
 			await p.waitForTimeout(800);
 			await p.getByRole("button", { name: "Remember", exact: true }).click();

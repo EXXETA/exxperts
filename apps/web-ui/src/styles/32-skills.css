@@ -559,7 +559,7 @@
 	min-width: 0;
 }
 .skill-import-option-name {
-	font-weight: 500;
+	font-weight: 400;
 }
 .skill-import-option-desc {
 	color: var(--muted);
@@ -792,3 +792,35 @@
 .task-notes .task-summary { max-height: 300px; overflow: auto; }
 .consult-answer { max-height: 340px; overflow: auto; }
 
+/* Room settings, Connectors: the tools a connector may use without asking, each with its Remove at the computer,
+   on a line of their own under the connector's: indented to its name (the 28px icon and the row's gap), and to the row's right edge. */
+.room-connectors-section .room-skills-row {
+	flex-wrap: wrap;
+}
+.room-connector-allowed {
+	display: grid;
+	gap: 4px;
+	flex-basis: 100%;
+	padding: 0 0 6px 40px;
+	font-size: 13px;
+}
+.room-connector-allowed-label {
+	color: var(--muted);
+}
+.room-connector-allowed ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 4px;
+}
+.room-connector-allowed li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+}
+.room-connector-allowed li > span {
+	overflow-wrap: anywhere;
+}

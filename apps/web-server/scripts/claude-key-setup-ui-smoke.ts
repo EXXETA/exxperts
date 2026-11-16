@@ -3,6 +3,13 @@
 // key exists), with a Claude sign-in already stored:
 //
 // - a refused key's line shows, in Add provider and in Replace API key;
+// - in Add a provider, the whole line lands inside the dialog's visible area
+//   with no scrolling by the person, wherever the row sits: the filter on, the
+//   last provider, a short window, phone width, the keyboard open, and a pane
+//   scrolled away during the save; a line already in view moves nothing;
+// - the form stays in view with it, and the card's rounded end stays clear of
+//   the dialog's bottom edge, on the last provider and on one in the middle,
+//   where a second press on Save key's old place opens no other row;
 // - Approve models shows dated model ids by their names, and the date only
 //   where two models would read the same;
 // - after Approve models, the Default models Memory list shows the new
@@ -63,6 +70,30 @@ const KEY_PROVIDER = "anthropic-api-key";
 const SIGN_IN = { type: "oauth", access: "sk-ant-oat01-synthetic-sign-in", refresh: "synthetic-refresh", expires: Date.now() + 365 * 24 * 3600 * 1000 };
 const REFUSED_LINE = /did not accept this key/;
 
+const HIDDEN_CHARACTER = { key: "synthetic\tkey", line: /hidden character/ };
+const SIGN_IN_TOKEN = { key: "sk-ant-oat01-synthetic", line: /sign-in token/ };
+const DESKTOP = { viewport: { width: 1440, height: 900 } };
+const SHORT_WINDOW = { viewport: { width: 1440, height: 560 } };
+const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
+const CLAUDE_KEY_ROW = /^Claude API key$/;
+// "end" is where focus leaves the field of a row low in the list: on the pane's
+// bottom edge, the line's place just past it. No row means the list's last one.
+const REFUSAL_CASES = [
+	{ name: "the filter on, hidden character", device: DESKTOP, filter: "claude", row: CLAUDE_KEY_ROW, refusal: HIDDEN_CHARACTER, field: "end" },
+	{ name: "the filter on, sign-in token", device: DESKTOP, filter: "claude", row: CLAUDE_KEY_ROW, refusal: SIGN_IN_TOKEN, field: "end" },
+	{ name: "the last provider", device: DESKTOP, refusal: HIDDEN_CHARACTER, field: "end" },
+	{ name: "a short window", device: SHORT_WINDOW, filter: "claude", row: CLAUDE_KEY_ROW, refusal: SIGN_IN_TOKEN, field: "end" },
+	{ name: "phone width, the last provider", device: PHONE, refusal: HIDDEN_CHARACTER, field: "end" },
+	{ name: "phone width, sign-in token", device: PHONE, filter: "claude", row: CLAUDE_KEY_ROW, refusal: SIGN_IN_TOKEN, field: "end" },
+	{ name: "phone width, the keyboard open on the last provider", device: PHONE, refusal: HIDDEN_CHARACTER, field: "end", keyboard: 320 },
+	{ name: "the pane scrolled away during the save", device: DESKTOP, row: CLAUDE_KEY_ROW, refusal: SIGN_IN_TOKEN, field: "center", scrolledAway: true },
+	{ name: "a provider in the middle of the list", device: DESKTOP, middle: true, refusal: HIDDEN_CHARACTER, field: "end" },
+	{ name: "phone width, a provider in the middle of the list", device: PHONE, middle: true, refusal: HIDDEN_CHARACTER, field: "end" },
+] as const satisfies ReadonlyArray<{ name: string; device: object; filter?: string; row?: RegExp; middle?: true; refusal: { key: string; line: RegExp }; field: ScrollLogicalPosition; keyboard?: number; scrolledAway?: boolean }>;
+// How far from the dialog's bottom edge the card's end must sit, above it or below it, to read as an end and not as a cut.
+const CARD_END_CLEAR = 16;
+const REFUSED_LINE_BOX = ".add-provider-key-error";
+
 // The key check at save (GET /v1/models): refused or accepted.
 let keyRefused = true;
 const endpoint = http.createServer((req, res) => {
@@ -80,11 +111,15 @@ const endpoint = http.createServer((req, res) => {
 	});
 });
 
-/** The Default models Memory picker's groups, each with its options and which one is tagged. */
-async function memoryDefaults(page: Page): Promise<Record<string, { names: string[]; recommended: string[] }>> {
+/**
+ * The Default models Memory picker's groups, each with its options and which one is tagged.
+ * `shown` is an option a save has just added, read for once it is there: the list follows the status read after the save, which lands after the window closes.
+ */
+async function memoryDefaults(page: Page, shown?: { group: string; option: string }): Promise<Record<string, { names: string[]; recommended: string[] }>> {
 	const pick = page.locator(".settings-overlay .ai-defaults-group .room-model-row").nth(1).locator(".room-model-pick");
 	await pick.click();
 	await page.locator(".room-model-menu-group").first().waitFor({ timeout: 10000 });
+	if (shown) await page.locator(`.room-model-menu-group[aria-label="${shown.group}"] .room-model-option-name`).filter({ hasText: shown.option }).first().waitFor({ timeout: 10000 });
 	const groups = await page.locator(".room-model-menu-group[aria-label]").evaluateAll((nodes) => Object.fromEntries(nodes.map((node) => [
 		node.getAttribute("aria-label") ?? "",
 		{
@@ -94,6 +129,39 @@ async function memoryDefaults(page: Page): Promise<Record<string, { names: strin
 	])));
 	await page.keyboard.press("Escape");
 	return groups;
+}
+
+/** Settings, AI setup, Add provider, from a page just opened. */
+async function openAddProvider(page: Page): Promise<void> {
+	await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+	await page.waitForLoadState("networkidle");
+	const dismiss = page.locator(".whats-new-close");
+	if (await dismiss.count()) await dismiss.click();
+	await page.locator(".product-sidebar-footer button").first().click();
+	await page.locator(".sidebar-config-menu button, .sidebar-config-menu a").filter({ hasText: /Settings/ }).first().click();
+	await page.waitForSelector(".settings-overlay", { timeout: 10000 });
+	await page.locator(".settings-dialog-nav button").filter({ hasText: "AI setup" }).first().click();
+	await page.getByRole("button", { name: "Add provider" }).click();
+}
+
+/** How many pixels of an element lie outside the dialog's visible area, a keyboard's height included; 0 is all of it in view. */
+function outOfView(page: Page, selector: string, keyboard: number): Promise<number> {
+	return page.locator(selector).evaluate((element, covered) => {
+		const pane = element.closest(".settings-dialog-pane")!.getBoundingClientRect();
+		const dialog = element.closest(".settings-dialog")!.getBoundingClientRect();
+		const box = element.getBoundingClientRect();
+		const top = Math.max(pane.top, dialog.top, 0);
+		const bottom = Math.min(pane.bottom, dialog.bottom, window.innerHeight) - covered;
+		return Math.max(0, top - box.top, box.bottom - bottom);
+	}, keyboard);
+}
+
+/** How far the refused row's card ends above the dialog's visible bottom edge, a keyboard's height included; below the edge is negative. */
+function cardEndAboveEdge(page: Page, keyboard: number): Promise<number> {
+	return page.locator(".add-provider-key-error").evaluate((line, covered) => {
+		const pane = line.closest(".settings-dialog-pane")!.getBoundingClientRect();
+		return Math.min(pane.bottom, window.innerHeight) - covered - line.closest(".settings-rows")!.getBoundingClientRect().bottom;
+	}, keyboard);
 }
 
 let server: ChildProcessWithoutNullStreams | undefined;
@@ -125,19 +193,89 @@ try {
 
 	const browser = await chromium.launch();
 	try {
+		// Add provider: a refused line lands in view, wherever the row sits.
+		for (const refused of REFUSAL_CASES) {
+			const ctx = await browser.newContext(refused.device);
+			const page = await ctx.newPage();
+			await openAddProvider(page);
+			if ("filter" in refused) await page.getByRole("textbox", { name: "Filter providers" }).fill(refused.filter);
+			const rows = page.locator(".add-provider-row-group").filter({ has: page.getByRole("button", { name: "Add key" }) });
+			// The list fills after the panel opens, so its rows are counted once they show.
+			await rows.last().waitFor({ timeout: 10000 });
+			const middle = Math.floor(await rows.count() / 2);
+			if ("middle" in refused) assert(middle > 0 && middle < await rows.count() - 1, `${refused.name}: row ${middle} of ${await rows.count()} is not in the middle`);
+			const row = "row" in refused ? rows.filter({ has: page.locator(".settings-row-label", { hasText: refused.row }) }) : "middle" in refused ? rows.nth(middle) : rows.last();
+			await row.getByRole("button", { name: "Add key" }).click();
+			const form = page.locator(".add-provider-row-key-form");
+			const field = form.locator("input");
+			await field.fill(refused.refusal.key);
+			await field.evaluate((input, block) => input.scrollIntoView({ block }), refused.field);
+			const pane = page.locator(".settings-dialog-pane");
+			if (refused.field === "end") {
+				const gap = await field.evaluate((input) => input.closest(".settings-dialog-pane")!.getBoundingClientRect().bottom - input.getBoundingClientRect().bottom);
+				assert(Math.abs(gap) <= 2, `${refused.name}: the field starts on the pane's bottom edge, ${gap}px off it`);
+			}
+			const keyboard = "keyboard" in refused ? refused.keyboard : 0;
+			if (keyboard) await page.evaluate((height) => document.documentElement.style.setProperty("--phone-keyboard-lift", `${height}px`), keyboard);
+			if ("scrolledAway" in refused) {
+				await page.route("**/api/auth/api-key", async (route) => {
+					await pane.evaluate((scroller) => { scroller.scrollTop = scroller.scrollHeight; });
+					await route.continue();
+				});
+			}
+			const save = form.getByRole("button", { name: "Save key" });
+			await save.scrollIntoViewIfNeeded();
+			const saveAt = (await save.boundingBox())!;
+			await save.click();
+			await page.locator(".add-provider-key-error").waitFor({ timeout: 10000 });
+			assert(refused.refusal.line.test(await page.locator(".add-provider-key-error").innerText()), `${refused.name}: the refusal's own line shows`);
+			await waitUntil(async () => await outOfView(page, REFUSED_LINE_BOX, keyboard) === 0, "the refused line is in view", 3000).catch(async () => {
+				throw new Error(`${refused.name}: ${await outOfView(page, REFUSED_LINE_BOX, keyboard)}px of the refused line is out of view`);
+			});
+			// A pane scrolled away on purpose comes back only as far as the line.
+			if (!("scrolledAway" in refused)) {
+				const formOut = await outOfView(page, ".add-provider-row-key-form", keyboard);
+				assert(formOut === 0, `${refused.name}: ${formOut}px of the key form is out of view`);
+				const cardEnd = await cardEndAboveEdge(page, keyboard);
+				assert(Math.abs(cardEnd) >= CARD_END_CLEAR, `${refused.name}: the card ends ${cardEnd}px above the dialog's bottom edge`);
+			}
+			// A quick second press lands where Save key was: the scroll must not have slid the next row's button there.
+			if ("middle" in refused) {
+				const pressAt = { x: saveAt.x + saveAt.width / 2, y: saveAt.y + saveAt.height / 2 };
+				assert(await pane.evaluate((scroller, point) => { const box = scroller.getBoundingClientRect(); return point.y > box.top && point.y < box.bottom; }, pressAt), `${refused.name}: Save key's old place is inside the pane`);
+				await page.mouse.click(pressAt.x, pressAt.y);
+				assert(await page.locator(".add-provider-key-error").count() === 1, `${refused.name}: a second press where Save key was leaves the form and its sentence`);
+			}
+			pass(`a refused key's whole line is in view: ${refused.name}`);
+			await ctx.close();
+		}
+
+		// The allowed neighbour: a line that lands in view moves nothing.
+		{
+			const ctx = await browser.newContext(DESKTOP);
+			const page = await ctx.newPage();
+			await openAddProvider(page);
+			const row = page.locator(".add-provider-row-group").filter({ has: page.locator(".settings-row-label", { hasText: CLAUDE_KEY_ROW }) });
+			await row.getByRole("button", { name: "Add key" }).click();
+			const form = page.locator(".add-provider-row-key-form");
+			await form.locator("input").fill(SIGN_IN_TOKEN.key);
+			await form.locator("input").evaluate((input) => input.scrollIntoView({ block: "center" }));
+			const pane = page.locator(".settings-dialog-pane");
+			const before = await pane.evaluate((scroller) => scroller.scrollTop);
+			await form.getByRole("button", { name: "Save key" }).click();
+			await page.locator(".add-provider-key-error").waitFor({ timeout: 10000 });
+			assert(await outOfView(page, REFUSED_LINE_BOX, 0) === 0, "a line landing mid-pane is in view");
+			const after = await pane.evaluate((scroller) => scroller.scrollTop);
+			assert(after === before, `a line already in view leaves the pane where it was, moved from ${before} to ${after}`);
+			pass("a refused line already in view moves nothing");
+			await ctx.close();
+		}
+
 		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		const page = await ctx.newPage();
-		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
-		await page.waitForLoadState("networkidle");
-		const dismiss = page.locator(".whats-new-close");
-		if (await dismiss.count()) await dismiss.click();
-		await page.locator(".product-sidebar-footer button").first().click();
-		await page.locator(".sidebar-config-menu button, .sidebar-config-menu a").filter({ hasText: /Settings/ }).first().click();
-		await page.waitForSelector(".settings-overlay", { timeout: 10000 });
-		await page.locator(".settings-dialog-nav button").filter({ hasText: "AI setup" }).first().click();
+		await openAddProvider(page);
 
 		// Add provider: a refused key's line shows.
-		await page.getByRole("button", { name: "Add provider" }).click();
 		const keyRow = page.locator(".add-provider-row-group").filter({ has: page.locator(".settings-row-label", { hasText: /^Claude API key$/ }) });
 		await keyRow.getByRole("button", { name: "Add key" }).click();
 		const addForm = keyRow.locator(".add-provider-row-key-form");
@@ -164,7 +302,7 @@ try {
 		await modal.waitFor({ state: "detached", timeout: 10000 });
 
 		// The key's models carry the sign-in's Recommended tag.
-		let groups = await memoryDefaults(page);
+		let groups = await memoryDefaults(page, { group: "Claude API key", option: "Claude" });
 		assert(groups["Claude API key"] && groups.Claude, `the Memory list has the sign-in and the key, got ${JSON.stringify(groups)}`);
 		assert(groups.Claude.recommended.length === 1 && JSON.stringify(groups["Claude API key"].recommended) === JSON.stringify(groups.Claude.recommended), `the key tags the sign-in's recommended model, got ${JSON.stringify(groups)}`);
 		pass(`the key's Memory list tags ${groups.Claude.recommended[0]}, as the sign-in does`);
@@ -177,8 +315,7 @@ try {
 		await modal.getByRole("combobox", { name: "Memory model", exact: true }).selectOption("claude-haiku-5-5");
 		await modal.getByRole("button", { name: "Save profile" }).click();
 		await modal.waitFor({ state: "detached", timeout: 10000 });
-		await page.waitForTimeout(800);
-		groups = await memoryDefaults(page);
+		groups = await memoryDefaults(page, { group: "Claude API key", option: "Claude Haiku 5.5" });
 		assert(groups["Claude API key"].names.includes("Claude Haiku 5.5"), `after Approve models, the Default models Memory list shows the new memory model without a reload, got ${JSON.stringify(groups["Claude API key"])}`);
 		pass("the Default models Memory list follows Approve models at once");
 

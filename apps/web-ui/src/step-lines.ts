@@ -6,11 +6,24 @@
  */
 import { contentPolicyPlainLine } from "../../../pi-package/extensions/content-policy/words";
 import { STOPPED_BEFORE_ANSWER_SENTENCE } from "../../web-server/src/turn-ended-by";
+import { BOX_FAULT_SENTENCE, NOBODY_TO_OPEN_PAGE, PAGE_DECLINED, RUN_OUTSIDE_BOX_TOOL_NAME } from "../../web-server/src/room-box/card-text";
+import { connectorApprovalTitle } from "../../web-server/src/room-approval-titles";
+import { connectorAwayNote, declinedQuestionNoteText } from "../../web-server/src/thread-items-by-id";
 
 /** The step a refusal came from: its tool, what it was asked, and the details the tool sent back. */
 type Step = { name?: string; args?: any; details?: any };
 
+// The connector gate's answers when a call did not run (mcp/room-scope.ts): the person's No, and a card nobody
+// could answer, which ends with what the model must do; a change there must change its match here.
+const CONNECTOR_DECLINED = /^(You declined this, so nothing changed in .+?\.)(?: |$)/;
+const CONNECTOR_UNANSWERED = / Nothing was sent to (.+?)\. Leave this undone and say so\.$/;
+
 type Line = string | ((match: RegExpExecArray, step: Step) => string | null);
+
+/** Whether a step ran a command, in the room's box or outside it: both read and fold the same way. */
+export function isCommandStep(name: string | undefined): boolean {
+	return name === "bash" || name === RUN_OUTSIDE_BOX_TOOL_NAME;
+}
 
 /** The last part of a path, a file or a folder name, on either separator: the one reading for the step cards. */
 export function lastName(path: string): string {
@@ -35,6 +48,9 @@ const STOPPED_BEFORE_ANSWER = new RegExp(`^${STOPPED_BEFORE_ANSWER_SENTENCE.repl
 
 const CONNECTOR_OFF = "This connector is not on for this room. You can turn it on in Room settings, Connectors.";
 
+/** The skills folder's line while the room's commands are off. */
+export const SKILLS_FOLDER_COMMANDS_OFF_LINE = "Opens to this room only while Commands is on (Room settings, Folder).";
+
 // Each pattern is a sentence the tools write (persistent-room-workspace-tools.ts,
 // the runtime's file tools, mcp/room-scope.ts, persistent-room-skill-tool.ts,
 // persistent-room-shelf-tools.ts, persistent-room-bash-approval.ts, fetch_url,
@@ -48,7 +64,7 @@ const REFUSED_LINES: Array<[RegExp, Line]> = [
 	[/looks like a secret file or the app's own data, so rooms don't open it/, "Blocked: a secret file or the app's own data"],
 	[/^Path is blocked by workspace policy\./, "Blocked: a secret file or the app's own data"],
 	[/can be read but not changed by rooms/, "Read only: rooms can read this file but not change it"],
-	[/which opens to this room only while its terminal \(Bash\) is on/, "Opens to this room only with Bash on (Room settings, Workspace, Edit workspace)"],
+	[/which opens to this room only while its terminal \(Bash\) is on/, SKILLS_FOLDER_COMMANDS_OFF_LINE],
 	[/which a background run can't open\./, "A run in the background can't open the skills folder."],
 	[/rooms can read it only while Bash is on, and never change it\./, "Read only: rooms never change this file."],
 	[/^Path is outside the selected workspace\./, "That is outside this room's folder."],
@@ -85,12 +101,36 @@ const FAILED_LINES: Array<[RegExp, Line]> = [
 	[/^"([^"]*)" is not a specialist template\./, (match) => `No specialist called "${match[1]}" in this room.`],
 ];
 
+/**
+ * A connector call that did not run because the person said no or nobody was there to: the line its row says,
+ * the gate's own first sentence for a No, the away note's for a card nobody answered. Null for any other step,
+ * a card Stop answered among them.
+ */
+export function connectorNotRunLine(step: Step & { result?: unknown }): string | null {
+	const result = step.result;
+	if (step.name !== "mcp" || typeof result !== "string") return null;
+	const declined = CONNECTOR_DECLINED.exec(result);
+	if (declined) return declined[1];
+	const connector = CONNECTOR_UNANSWERED.exec(result)?.[1];
+	if (!connector || stoppedBeforeAsking(result) || stoppedBeforeAnswer(result)) return null;
+	// What the card asked to use, as the gate keeps it with the refusal.
+	if (typeof step.details?.use === "string" && step.details.use) return connectorAwayNote(step.details.use);
+	// A step saved before the gate kept it: the tool's words rebuilt, without the connector's prefix the room calls it by.
+	const tool = String(step.args?.tool ?? "");
+	const server = String(step.details?.server ?? "");
+	const prefix = `${server.replace(/-/g, "_")}_`;
+	return declinedQuestionNoteText(connectorApprovalTitle(readableToolName(server && tool.startsWith(prefix) ? tool.slice(prefix.length) : tool), connector));
+}
+
 /** What a failed step's card says: its plain line, and whether the step was refused rather than failed. Null when the result has no known cause. `sharedServer`: the page is on a server many people share. */
 export function stepOutcome(result: string, step: Step = {}, sharedServer = false): { line: string; refused: boolean } | null {
 	const policy = contentPolicyPlainLine(result);
 	if (policy) return { line: policy, refused: true };
+	const connectorNotRun = connectorNotRunLine({ ...step, result });
+	if (connectorNotRun) return { line: connectorNotRun, refused: true };
+	if (boxFault({ ...step, result })) return { line: BOX_FAULT_SENTENCE, refused: false };
 	if (nobodyToApprove(result)) {
-		const line = step.name === "delegate_task" ? "Nobody was there to approve it, so nothing was handed off." : step.name === "bash" ? "Nobody was there to approve it, so the command did not run." : "Nobody was there to approve it.";
+		const line = step.name === "delegate_task" ? "Nobody was there to approve it, so nothing was handed off." : isCommandStep(step.name) ? "Nobody was there to approve it, so the command did not run." : "Nobody was there to approve it.";
 		return { line, refused: true };
 	}
 	// The connector adapter's sign-in refusals vary in wording; its error code does not.
@@ -117,9 +157,22 @@ export function missingToolName(result: string | undefined): string | null {
 	return typeof result === "string" ? (NO_SUCH_TOOL.exec(result)?.[1] ?? null) : null;
 }
 
+/** Why the web reader didn't open a page: the person said no on its card, or nobody was there to answer it. Null for any other step. */
+export function pageNotOpened(step: Step & { status?: string; result?: unknown }): "declined" | "nobody" | null {
+	if (step.name !== "fetch_url" || step.status !== "error" || typeof step.result !== "string") return null;
+	if (step.result.startsWith(PAGE_DECLINED)) return "declined";
+	if (step.result.startsWith(NOBODY_TO_OPEN_PAGE)) return "nobody";
+	return null;
+}
+
 /** A command the person declined on its card, by the reason the approval guard writes. */
 export function commandDeclined(result: string | undefined): boolean {
 	return typeof result === "string" && result.startsWith("The user declined this command.");
+}
+
+/** A command that never ran because the room's box didn't start. The whole result, on a failed command: a file or a command's output can quote the sentence. */
+export function boxFault(step: Step & { status?: string; result?: unknown }): boolean {
+	return isCommandStep(step.name) && step.status === "error" && step.result === BOX_FAULT_SENTENCE;
 }
 
 /** A step that asked for approval while nobody was there to give it: the room's away answer, or a hand-off or a command asked with no page to ask on. */

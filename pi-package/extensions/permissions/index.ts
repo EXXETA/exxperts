@@ -83,6 +83,9 @@ function allowTool(t: string): boolean {
 		// own files/ folder by the tools themselves, default-on for every room.
 		t === "read_file" ||
 		t === "search_file" ||
+		// A room's asks change nothing by themselves: each shows a card, and only the person's answer at the computer gives a folder or turns on commands.
+		t === "ask_for_folder" ||
+		t === "ask_for_commands" ||
 		// delegate_task never acts by itself: it validates against the static
 		// template registry and requires per-delegation interactive user approval,
 		// which doubles as the specialist's only write grant.
@@ -100,7 +103,7 @@ export default function (pi: ExtensionAPI) {
 		&& persistentRoomWorkspaceAccessMode === "localFiles"
 		&& parsePersistentRoomBashEnabled(process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED)
 		&& parsePersistentRoomExecutionContext(process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT) === "manual";
-	const isPersistentRoomWorkspaceToolAllowed = (toolName: string): boolean => persistentRoomWorkspaceToolsAllowed.has(toolName) || (toolName === "bash" && persistentRoomBashAllowed);
+	const isPersistentRoomWorkspaceToolAllowed = (toolName: string): boolean => persistentRoomWorkspaceToolsAllowed.has(toolName) || ((toolName === "bash" || toolName === "run_outside_box") && persistentRoomBashAllowed);
 
 	pi.on("tool_call", async (event) => {
 		if (allowTool(event.toolName)) return;
@@ -109,7 +112,7 @@ export default function (pi: ExtensionAPI) {
 		// Build a directive, retry-friendly block reason. The model should pick
 		// the suggested alternative on the next turn without asking the user.
 		const t = event.toolName;
-		const fsTools = ["bash", "read", "ls", "find", "grep", "write", "edit"];
+		const fsTools = ["bash", "run_outside_box", "read", "ls", "find", "grep", "write", "edit"];
 		const hint = fsTools.includes(t)
 			? "This room has NO filesystem access. Do NOT retry with another filesystem tool. Tell the user plainly that file access must be enabled for this room in its workspace settings, then offer help on drafting, summaries, or knowledge-base aspects."
 			: "Answer directly with the tools available in this room.";

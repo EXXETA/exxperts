@@ -56,12 +56,14 @@ the switch with an explanation instead of exiting into nothing.
   app handles the re-sign-in itself; the old token simply stops working.
 - A profile is a second set of rooms, not a second computer. What it
   relocates is the exxperts data and nothing else: your home folder stays
-  your home folder, so tools running inside those sessions (git, ssh, gcloud)
-  read your normal dotfiles, the skills folder other tools share with
-  exxperts (`~/.agents/skills`) and the shared connector config
+  your home folder, so the skills folder other tools share with exxperts
+  (`~/.agents/skills`) and the shared connector config
   (`~/.config/mcp/mcp.json`) still count, and the headless browser downloaded
   by `exxperts setup chromium` is there without a second ~150 MB download per
-  profile.
+  profile. A command run outside the room, and a room's commands without
+  protection, read your normal dotfiles (git, ssh, gcloud); protected commands
+  can't read them, apart from git's settings files on a Mac
+  ([Folders, commands and protection](workspace-and-bash.md)).
 - Room workspaces granted inside a profile cannot reach the standard
   profile's state: the real `~/.exxperts` stays a forbidden workspace root
   even while a profile is loaded.
@@ -73,7 +75,7 @@ default that is your home folder: the standard tree at `~/.exxperts`,
 profiles at `~/.exxperts-<name>`. **Settings → Profiles** shows the current
 folder at the very top, and it can be moved.
 
-**Moving it**: click *Move…*, choose (or create) a folder in the picker; when
+**Moving it**: click *Move*, choose (or create) a folder in the picker; when
 no picker is available, type the path instead. Before anything happens,
 the row spells out exactly what a confirmation does: every profile
 (`.exxperts` and each `.exxperts-<name>`) moves into the chosen folder, then

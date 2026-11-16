@@ -147,10 +147,10 @@ Nothing enters or leaves memory without you:
    a pinned note when it is memorized. The summary says only what the
    conversation held, never how it was read or put together. The default
    Remember button shows you the proposal before saving; a room set to
-   remember without the preview saves it straight away. "Remember with
-   options…" always opens the full preview. Remember warns when the list
-   of waiting conversations is nearly full and asks you to Memorize
-   before remembering more.
+   remember without the preview saves it straight away. The arrow beside
+   Remember, "Choose what to keep", always opens the full preview. Remember
+   warns when the list of waiting conversations is nearly full and asks you
+   to Memorize before remembering more.
 2. **Memorize**: turns the waiting conversations into lasting notes, one
    conversation at a time. A first read says what the conversations hold
    and what needs your call; **Discuss first** lets you answer before

@@ -138,6 +138,17 @@ try {
 	assert(afterDelete.body.configuredConnectors.length === 0, "the deleted connector must be gone from the configured list");
 	assert(JSON.parse(fs.readFileSync(legacySettingsPath, "utf-8")).grantedConnectors.length === 0, "the legacy room's grant must be gone too");
 
+	// 5. The room's own answer names each connector as the person typed it,
+	// without its address: a member on a shared server reads only this.
+	const address = "http://127.0.0.1:9/team-wiki-mcp";
+	const added = await requestJson("/api/mcp/servers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Team wiki", url: address }) });
+	assert(added.status === 200 && added.body.name === "team-wiki", `adding a named connector should succeed, got ${added.status}: ${JSON.stringify(added.body)}`);
+	const named = await requestJson(`/api/persistent-agents/${roomId}/mcp-connectors`);
+	assert(JSON.stringify(named.body.displayNames) === JSON.stringify({ "team-wiki": "Team wiki" }), `the room's answer names the connector as typed, got ${JSON.stringify(named.body.displayNames)}`);
+	assert(!JSON.stringify(named.body).includes(address), "the room's answer never carries a connector's address");
+	const grantedNamed = await putGrant(roomId, "grant", "team-wiki");
+	assert(grantedNamed.status === 200 && grantedNamed.body.displayNames?.["team-wiki"] === "Team wiki", `a grant's answer names it too, got ${JSON.stringify(grantedNamed.body)}`);
+
 	console.log("persistent-room-mcp-grants-api-smoke: OK");
 } catch (error) {
 	console.error(error instanceof Error ? error.stack || error.message : error);

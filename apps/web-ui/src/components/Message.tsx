@@ -9,10 +9,11 @@ import { MarkdownRenderer, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
 import { MEMORY_RECALL_STEP, memoryRecallDisplayText } from "../memory-recall-display";
 import { answerStopNote, failureButtons, failureLineParts, failureLineWords, isStopLine, withoutSendAgain } from "../turn-failure-line";
-import { commandAborted, commandDeclined, lastName, missingToolName, nobodyToApprove, readableToolName, stepOutcome, stoppedBeforeAnswer, stoppedBeforeAsking } from "../step-lines";
+import { commandAborted, commandDeclined, isCommandStep, lastName, missingToolName, nobodyToApprove, readableToolName, stepOutcome, stoppedBeforeAnswer, stoppedBeforeAsking } from "../step-lines";
 import { SPECIALIST_TEMPLATE_LABELS } from "../../../web-server/src/specialist-template-labels";
 import { useRemoteClientContext } from "../remote-client-context";
 import { WAITING_CAPTION, type QueuedBubble } from "../outgoing-messages";
+import { askingWords } from "../mention-popover";
 import { isMacPlatform } from "../platform";
 
 // The message copy control (CopyButton.tsx): on assistant replies it sits
@@ -106,7 +107,7 @@ function genericChipName(name: string, status: ToolChatItem["status"]): string {
 
 export function summariseToolArgs(name: string, args: any): string {
 	if (!args || typeof args !== "object") return "";
-	if (name === "bash") return clip(String(args.command ?? ""));
+	if (isCommandStep(name)) return clip(String(args.command ?? ""));
 	if (name === "read" || name === "write" || name === "edit" || name === "ls") return clip(pathSummary(String(args.path ?? "")));
 	if (name === "find" || name === "grep") return clip([args.pattern, args.path].filter((part) => typeof part === "string" && part.trim()).join(" · "));
 	// Attachments tools take a plain shelf filename (`name`), never a path; a search
@@ -195,34 +196,35 @@ export interface QueuedBubbleActions {
  * left on hover; on a touch screen they sit in the row under it, beside Send
  * now. Copy is on every one; Edit and Remove on the ones nothing is sending
  * right now (QueuedBubble.takeBack). Under each, a quiet "Queued", then Send
- * now, with the chord's keys on the one Cmd/Ctrl+Enter sends; with text in
- * the message box the chord sends that text instead (`boxHasText`), so the
- * keys go. When the room takes one it becomes the conversation's own bubble
+ * now, with the chord's keys on the one Cmd/Ctrl+Enter sends; with words or
+ * a room's label in the message box the chord is the box's instead
+ * (`boxHolds`), so the keys go. When the room takes one it becomes the conversation's own bubble
  * in the same place.
  */
-export const QueuedBubbles = memo(function QueuedBubbles({ messages, actions, boxHasText }: { messages: ReadonlyArray<QueuedBubble>; actions: QueuedBubbleActions; boxHasText: boolean }) {
+export const QueuedBubbles = memo(function QueuedBubbles({ messages, actions, boxHolds }: { messages: ReadonlyArray<QueuedBubble>; actions: QueuedBubbleActions; boxHolds: boolean }) {
 	const mac = isMacPlatform();
 	return (
 		<div className="queued-messages">
 			{messages.map((message) => {
-				const chord = message.chord && !boxHasText;
+				const chord = message.chord && !boxHolds;
 				return (
 					<div key={message.id} className="bubble-row user queued" data-queued-id={message.id} data-held={message.held || undefined}>
 						<div className="queued-col">
 							<div className="queued-tools">
 								{message.takeBack && (
-									<button type="button" className="queued-tool" title="Edit" aria-label="Edit" onClick={() => actions.onEdit(message.id)}>
+									<button type="button" className="rs-btn rs-btn-icon rs-btn-sm" title="Edit" aria-label="Edit" onClick={() => actions.onEdit(message.id)}>
 										<PencilIcon size={15} />
 									</button>
 								)}
 								<CopyButton text={message.text} className="queued-tool" />
 								{message.takeBack && (
-									<button type="button" className="queued-tool" title="Remove" aria-label="Remove" onClick={() => actions.onRemove(message.id)}>
+									<button type="button" className="rs-btn rs-btn-icon rs-btn-sm" title="Remove" aria-label="Remove" onClick={() => actions.onRemove(message.id)}>
 										<CloseIcon size={15} />
 									</button>
 								)}
 							</div>
 							<div className="bubble user queued">
+								{message.asking && <span className="bubble-asking">{askingWords(message.asking)}</span>}
 								<UserMessageText text={message.text} />
 							</div>
 							<div className="bubble-queued-caption">
@@ -503,11 +505,11 @@ const MISSING_CONNECTOR_TOOLS = new Set(["tool_not_found", "tool_not_found_after
  * the whole fact, so the step has nothing to open.
  */
 function stateLabel(item: ToolChatItem, summary: string): { name: string; summary: string; labelOnly?: true } | null {
-	if (item.name === "bash" && item.status === "stopped") return { name: "⌨️ Stopped", summary };
+	if (isCommandStep(item.name) && item.status === "stopped") return { name: "⌨️ Stopped", summary };
 	if (item.status !== "error") return null;
 	const missing = missingToolName(item.result);
 	if (missing) return { name: `${GENERIC_TOOL_VIEWS[item.name]?.icon ?? "🛠️"} No such tool`, summary: readableToolName(missing), labelOnly: true };
-	if (item.name === "bash" && (commandDeclined(item.result) || nobodyToApprove(item.result) || stoppedBeforeAsking(item.result) || stoppedBeforeAnswer(item.result))) return { name: "⌨️ Not run", summary };
+	if (isCommandStep(item.name) && (commandDeclined(item.result) || nobodyToApprove(item.result) || stoppedBeforeAsking(item.result) || stoppedBeforeAnswer(item.result))) return { name: "⌨️ Not run", summary };
 	if (item.name === "delegate_task" && (nobodyToApprove(item.result) || stoppedBeforeAsking(item.result) || stoppedBeforeAnswer(item.result))) return { name: "🤝 Not handed off", summary };
 	if (item.name === "mcp") {
 		const args = item.args && typeof item.args === "object" ? item.args : {};
@@ -539,7 +541,7 @@ function elsewhereLabel(name: string): string {
  */
 function ToolChip({ item: shown, saidOnCard = false, elsewhere = false }: { item: ToolChatItem; saidOnCard?: boolean; elsewhere?: boolean }) {
 	// A command ended by Stop comes back as an error; the person stopped it, so it reads as stopped.
-	const item: ToolChatItem = shown.name === "bash" && shown.status === "error" && commandAborted(shown.result) ? { ...shown, status: "stopped", result: undefined } : shown;
+	const item: ToolChatItem = isCommandStep(shown.name) && shown.status === "error" && commandAborted(shown.result) ? { ...shown, status: "stopped", result: undefined } : shown;
 	// Read through the hook, so a card shown before the server answered takes its words once it does.
 	const { sharedServer } = useRemoteClientContext();
 	const failed = item.status === "error";
@@ -579,8 +581,8 @@ function ToolChip({ item: shown, saidOnCard = false, elsewhere = false }: { item
 			<span className="name">{chipName}</span>
 			{state && chipSummary && <span className="sep" aria-hidden="true">·</span>}
 			{/* A command cut at 160 characters, with nothing to open, can still be read in full. */}
-			{chipSummary && <span className="summary" title={labelOnly && item.name === "bash" ? String(item.args?.command ?? "") || undefined : undefined}>{chipSummary}</span>}
-			{!goesOnElsewhere && item.status === "running" && item.name === "bash" && <RunningFor since={item.startedAt} />}
+			{chipSummary && <span className="summary" title={labelOnly && isCommandStep(item.name) ? String(item.args?.command ?? "") || undefined : undefined}>{chipSummary}</span>}
+			{!goesOnElsewhere && item.status === "running" && isCommandStep(item.name) && <RunningFor since={item.startedAt} />}
 			{item.status === "running" && !goesOnElsewhere && <span className="spinner" />}
 		</>
 	);
@@ -743,10 +745,11 @@ function MessageTime({ ts }: { ts: number }) {
 
 type SystemChatItem = Extract<ChatItem, { kind: "system" }>;
 
-/** What the newest failure line's buttons do. `shared`: a shared server, where the admin is a way on no button takes. `reviewsMemory`: whether the room has memory Review can open on. */
+/** What the newest failure line's buttons do. `shared`: a shared server, where the admin is a way on no button takes. `reviewsMemory`: whether the room has memory Review can open on. `tryAgainUnavailable`: the room cannot take the press now, so Try again is grey. */
 export interface FailureLineActions {
 	shared: boolean;
 	reviewsMemory: boolean;
+	tryAgainUnavailable: boolean;
 	onTryAgain: (line: SystemChatItem) => void;
 	onReviewMemory: () => void;
 	onChooseModel: () => void;
@@ -797,11 +800,11 @@ function FailureLine({ item, newest, actions }: { item: SystemChatItem; newest: 
 				</div>
 				{(anyButton || toggle) && (
 					<div className="failure-actions">
-						{buttons?.tryAgain && <button type="button" className="rs-btn" onClick={() => actions?.onTryAgain(item)}>Try again</button>}
-						{buttons?.reviewMemory && <button type="button" className="rs-btn" onClick={() => actions?.onReviewMemory()}>Review memory</button>}
-						{buttons?.chooseModel && <button type="button" className="rs-btn" onClick={() => actions?.onChooseModel()}>Choose another model</button>}
-						{buttons?.replaceKey && <button type="button" className="rs-btn" onClick={() => actions?.onReplaceKey(item.provider ?? "")}>Replace key</button>}
-						{buttons?.aiSetup && <button type="button" className="rs-btn" onClick={() => actions?.onOpenAiSetup(item.provider ?? "")}>Open AI setup</button>}
+						{buttons?.tryAgain && <button type="button" className="rs-btn rs-btn-sm" disabled={actions?.tryAgainUnavailable} onClick={() => actions?.onTryAgain(item)}>Try again</button>}
+						{buttons?.reviewMemory && <button type="button" className="rs-btn rs-btn-sm" onClick={() => actions?.onReviewMemory()}>Review memory</button>}
+						{buttons?.chooseModel && <button type="button" className="rs-btn rs-btn-sm" onClick={() => actions?.onChooseModel()}>Choose another model</button>}
+						{buttons?.replaceKey && <button type="button" className="rs-btn rs-btn-sm" onClick={() => actions?.onReplaceKey(item.provider ?? "")}>Replace key</button>}
+						{buttons?.aiSetup && <button type="button" className="rs-btn rs-btn-sm" onClick={() => actions?.onOpenAiSetup(item.provider ?? "")}>Open AI setup</button>}
 						{toggle}
 					</div>
 				)}
@@ -857,8 +860,8 @@ export function BubbleEditor({ text, onCancel, onSend }: { text: string; onCance
 					}}
 				/>
 				<div className="bubble-edit-actions">
-					<button type="button" className="rs-btn" onClick={onCancel}>Cancel</button>
-					<button type="button" className="rs-btn rs-btn-primary" disabled={!changed} onClick={() => onSend(draft.trim())}>Send</button>
+					<button type="button" className="rs-btn rs-btn-sm" onClick={onCancel}>Cancel</button>
+					<button type="button" className="rs-btn rs-btn-primary rs-btn-sm" disabled={!changed} onClick={() => onSend(draft.trim())}>Send</button>
 				</div>
 			</div>
 		</div>

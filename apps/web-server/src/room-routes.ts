@@ -1,11 +1,22 @@
-import { listPersistentAgents, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, createPersistentAgentFromScaffoldInput, renamePersistentAgent, archivePersistentAgent, listArchivedPersistentAgents, getPersistentAgentLifecycleCounts, restorePersistentAgent, purgePersistentAgent } from "./persistent-agents.js";
-import { createRoomModelCatalog } from "./room-models.js";
-import { chooseLocalFolder, folderPickerPrompt } from "./local-folder-picker.js";
+import { listPersistentAgents, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, createPersistentAgentFromScaffoldInput, createPersistentAgentInstance, renamePersistentAgent, archivePersistentAgent, listArchivedPersistentAgents, getPersistentAgentLifecycleCounts, restorePersistentAgent, purgePersistentAgent } from "./persistent-agents.js";
+import { createRoomModelCatalog, resolveAiDefaults } from "./room-models.js";
+import { chooseLocalFolder, folderPickerPrompt, type LocalFolderPickerResult } from "./local-folder-picker.js";
 import { activeRoomLock } from "./server-install-root.js";
 import { detachedCookingRooms, reattachBufferProbe, TEST_INTROSPECTION_ENABLED } from "./room-live-sessions.js";
 import { app } from "./server-app.js";
 import { isLocalSystemChooseFolderRequest, remoteRoomExposure } from "./request-checks.js";
 import { roomModelsPayload } from "./ai-models.js";
+import { isSharedServer, serverHooks } from "./server-hooks.js";
+import { viewerOf } from "./persistent-agent-status.js";
+import { markPersistentAgentCreateAnswered } from "./persistent-agent-create.js";
+import { roomBoxSettled } from "./room-box/box-available.js";
+
+// The folder windows open now, each until its person answers: the server's stop closes them.
+const openFolderWindows = new Set<AbortController>();
+// preClose, not onClose: onClose runs only after the server has waited for every open request, a window's included.
+app.addHook("preClose", async () => {
+	for (const window of openFolderWindows) window.abort();
+});
 
 app.post("/api/system/choose-folder", async (req, reply) => {
 	if (!isLocalSystemChooseFolderRequest(req)) {
@@ -14,7 +25,18 @@ app.post("/api/system/choose-folder", async (req, reply) => {
 	// The client says what the folder is for, not what the dialog should say:
 	// an unknown purpose is not an error, it just gets the workspace prompt.
 	const purpose = (req.body as { purpose?: unknown } | null | undefined)?.purpose;
-	const result = await chooseLocalFolder({ prompt: folderPickerPrompt(purpose) });
+	// No time limit: the window stays until the person answers, and closes when the page goes before the answer or the server stops.
+	const window = new AbortController();
+	reply.raw.on("close", () => {
+		if (!reply.raw.writableFinished) window.abort();
+	});
+	openFolderWindows.add(window);
+	let result: LocalFolderPickerResult;
+	try {
+		result = await chooseLocalFolder({ prompt: folderPickerPrompt(purpose), signal: window.signal });
+	} finally {
+		openFolderWindows.delete(window);
+	}
 	if (result.ok) return { supported: result.supported, cancelled: result.cancelled, path: result.path };
 	const statusCode = result.code === "unsupported_platform" ? 501 : result.code === "folder_chooser_unavailable" ? 503 : 500;
 	return reply.code(statusCode).send({ error: result.error, code: result.code, supported: result.supported, cancelled: result.cancelled });
@@ -24,11 +46,13 @@ app.post("/api/system/choose-folder", async (req, reply) => {
 // turn with NO client attached, so the launcher card can offer stepping back
 // in; a room genuinely open in another window keeps its lock-and-stay-out.
 app.get("/api/persistent-agents", async (req) => {
+	const viewer = await viewerOf(req);
 	// Remote devices never see hidden rooms, in listings or anywhere else.
-	const rows = (req as any).exxRemoteDevice ? listPersistentAgents().filter((agent) => !remoteRoomExposure.isHidden(agent.id)) : listPersistentAgents();
-	// One read of the profiles and sign-ins for every room's model rows.
+	const rows = (req as any).exxRemoteDevice ? listPersistentAgents(viewer).filter((agent) => !remoteRoomExposure.isHidden(agent.id)) : listPersistentAgents(viewer);
+	// One read of the profiles, sign-ins and AI defaults for every room's model rows.
 	const catalog = createRoomModelCatalog();
-	return rows.map((agent) => ({ ...agent, models: roomModelsPayload(agent.id, catalog), activeLock: activeRoomLock(agent.id), answeringDetached: detachedCookingRooms.has(agent.id) }));
+	const aiDefaults = resolveAiDefaults(catalog);
+	return rows.map((agent) => ({ ...agent, models: roomModelsPayload(agent.id, catalog, aiDefaults), activeLock: activeRoomLock(agent.id), answeringDetached: detachedCookingRooms.has(agent.id) }));
 });
 
 // Test-only (EXXPERTS_TEST_INTROSPECTION=1): the replay-buffer probe, so the
@@ -48,7 +72,11 @@ app.get("/api/persistent-agent-modes", async () => ({
 
 app.post("/api/persistent-agents", async (req, reply) => {
 	try {
-		const result = createPersistentAgentFromScaffoldInput((req.body ?? {}) as any);
+		// On Windows, whether a new room starts with commands on waits for the check at start.
+		await roomBoxSettled();
+		const result = createPersistentAgentFromScaffoldInput((req.body ?? {}) as any, { idTail: serverHooks().roomIdTail, untilAnswered: !isSharedServer(), viewer: await viewerOf(req) });
+		reply.raw.once("finish", () => markPersistentAgentCreateAnswered(result.agent.id));
+		await serverHooks().roomCreated?.(req, { roomId: result.agent.id, createdAt: Number(createPersistentAgentInstance(result.agent.id).readAgentJson()?.createdAt) });
 		// The status carries the model rows the way GET .../status does, so
 		// Home can enter the new room on its conversation model at once.
 		return reply.code(201).send({ ...result, status: { ...result.status, models: roomModelsPayload(result.agent.id) } });
@@ -65,7 +93,7 @@ app.post("/api/persistent-agents/:id/rename", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const body = (req.body ?? {}) as any;
-		return renamePersistentAgent(idRaw, body.displayName, { dryRun: body.dryRun === true });
+		return renamePersistentAgent(idRaw, body.displayName, { dryRun: body.dryRun === true, viewer: await viewerOf(req) });
 	} catch (e) {
 		const message = (e as Error).message;
 		// Only errors that carry a statusCode (renamePersistentAgent's own
@@ -109,7 +137,7 @@ app.post("/api/persistent-agents/:id/archive", async (req, reply) => {
 // The archived shadow of the room list: everything GET /api/persistent-agents
 // hides. Counts only, no filesystem paths — the browser never learns roots.
 app.get("/api/persistent-agents/archived", async (req) => {
-	const rows = listArchivedPersistentAgents();
+	const rows = listArchivedPersistentAgents(await viewerOf(req));
 	return (req as any).exxRemoteDevice ? rows.filter((agent: { id: string }) => !remoteRoomExposure.isHidden(agent.id)) : rows;
 });
 
@@ -133,7 +161,7 @@ app.get("/api/persistent-agents/:id/lifecycle-counts", async (req, reply) => {
 app.post("/api/persistent-agents/:id/restore", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
-		return restorePersistentAgent(idRaw);
+		return restorePersistentAgent(idRaw, { viewer: await viewerOf(req) });
 	} catch (e) {
 		const message = (e as Error).message;
 		const statusCode = (e as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 500);

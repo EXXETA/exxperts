@@ -44,26 +44,28 @@ export function closeSidebarOnPhone(): void {
 // Narrowing to phone width closes the drawer; widening gives back the wide screen's choice.
 phoneQuery.addEventListener("change", () => setCollapsed(phoneQuery.matches || storedCollapsed()));
 
-// The mac app's window buttons keep their size under page zoom while the page
-// scales, so the toggle beside them needs the zoom (--window-zoom in
-// styles/35-sidebar-remote.css). The window has no frame there, so its outer size in points over
-// the page's size in CSS pixels is the zoom; DevTools docked in the window
-// shrinks the page along one axis only, so the smaller ratio is the zoom. A
-// zoom change is a resize. Early in a page load the window reports its outer
-// size as 0 and fills it in without a resize, so until then it looks again on
-// the next frame.
-function trackWindowZoom(): void {
-	if (!document.documentElement.classList.contains("desktop-app-mac")) return;
-	if (!window.outerWidth || !window.outerHeight) {
-		requestAnimationFrame(trackWindowZoom);
-		return;
-	}
-	const zoom = Math.min(window.outerWidth / window.innerWidth, window.outerHeight / window.innerHeight);
-	document.documentElement.style.setProperty("--window-zoom", String(zoom));
+// The mac app's top row is set in window points. Outside fullscreen the CSS
+// reads them from the window's title bar overlay (styles/34-desktop-app.css).
+// Fullscreen has no overlay, so the page gives the CSS the zoom there: the
+// window fills the screen, whose width does not change with zoom or lag behind
+// a window animation, as the window's own outer size does. DevTools docked in
+// the window or a split screen shrinks the page along one axis only, so the
+// smaller ratio is the zoom. A zoom change is a resize, and the overlay reports
+// going and coming back after the last resize.
+function trackMacFullscreen(): void {
+	const root = document.documentElement;
+	if (!root.classList.contains("desktop-app-mac")) return;
+	const { windowControlsOverlay: overlay } = navigator as Navigator & { windowControlsOverlay: EventTarget & { readonly visible: boolean } };
+	const update = () => {
+		root.classList.toggle("mac-fullscreen", !overlay.visible);
+		if (!overlay.visible) root.style.setProperty("--window-zoom", String(Math.min(window.screen.width / window.innerWidth, window.screen.height / window.innerHeight)));
+	};
+	window.addEventListener("resize", update);
+	overlay.addEventListener("geometrychange", update);
+	update();
 }
-window.addEventListener("resize", trackWindowZoom);
 // After the entry module has set the desktop classes.
-queueMicrotask(trackWindowZoom);
+queueMicrotask(trackMacFullscreen);
 
 function subscribe(cb: () => void): () => void {
 	listeners.add(cb);

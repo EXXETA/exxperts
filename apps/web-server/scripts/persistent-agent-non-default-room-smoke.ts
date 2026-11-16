@@ -59,7 +59,7 @@ function roomFolders(): string[] {
 }
 
 try {
-	const initiallyListed = listPersistentAgents();
+	const initiallyListed = listPersistentAgents("every room");
 	assert(Array.isArray(initiallyListed) && initiallyListed.length === 0, "fresh empty agents root should list no rooms");
 	assert(roomFolders().length === 0, `a fresh listing creates no room folder, got ${JSON.stringify(roomFolders())}`);
 
@@ -89,7 +89,7 @@ try {
 	const roomRoot = path.join(tempAgentsRoot, agentId);
 	assert(created.status.root === roomRoot, "created status root should point at selected room root");
 
-	const listed = listPersistentAgents();
+	const listed = listPersistentAgents("every room");
 	const listedIds = listed.map((status: any) => status.id);
 	assert(listedIds.includes(controlAgentId), "list should include control room");
 	assert(listedIds.includes(agentId), "list should include created selected room");

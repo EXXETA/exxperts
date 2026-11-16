@@ -84,6 +84,12 @@ export function confirmApprovalLabels(item: ApprovalItem): { approve: string; de
 	return fenced ? { approve: "Approve", decline: "Decline" } : { approve: "Yes", decline: "No" };
 }
 
+/** What the keys answer on a card the composer speaks for: each is the value and the words saved with it. */
+export function keyboardAnswers(item: ApprovalItem): { enter: [unknown, string]; escape: [unknown, string] } {
+	const labels = confirmApprovalLabels(item);
+	return { enter: [true, labels.approve], escape: [false, labels.decline] };
+}
+
 /** Whether a card still asks: nobody answered it, Stop did not close it, and it did not end with nobody there. */
 export function approvalAsking(item: ApprovalItem): boolean {
 	return !item.done && !item.stopped && !item.unanswered;

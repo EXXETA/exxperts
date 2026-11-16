@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { ANSWER_FLOOR_MS } from "../src/room-box/card-text.js";
+import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
 
 // A message sent while a room answers, over a real socket, the server
 // deciding where it goes from its own state (steer-route.ts):
@@ -50,7 +51,7 @@ const { serverLaunchArgs } = createRequire(import.meta.url)(path.join(repoRoot, 
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-steer-"));
 const home = path.join(tempRoot, "home");
-const workspaceRoot = path.join(tempRoot, "workspace");
+const workspaceRoot = path.join(home, "workspace");
 fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "The export runs on Fridays.\nThe import runs on Mondays.\n", { mode: 0o600 });
 const agentDir = path.join(home, ".exxperts", "agent");
@@ -222,6 +223,9 @@ try {
 	assert(created.status === 201 && room, `room created, got ${created.status}`);
 	const workspace = await json(`/api/persistent-agents/${encodeURIComponent(room)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, displayLabel: "Steer Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }) });
 	assert(workspace.status === 200, `workspace set, got ${workspace.status}`);
+	// A new room's commands start in Run without asking where the room's protection runs: this smoke chooses Ask before each command, as the chip does.
+	const askFirst = await putRunWithoutAsking(`http://127.0.0.1:${port}/api/persistent-agents/${encodeURIComponent(room)}/bash-settings`, false);
+	assert(askFirst.status === 200, `the room asks before each command, got ${askFirst.status}`);
 	const conversationId = "conv-steer";
 	const threadPath = `/api/persistent-agents/${encodeURIComponent(room)}/threads/${conversationId}`;
 	const model = { provider: "openai-compatible", model: "room-model" };
@@ -242,7 +246,12 @@ try {
 	const turnEnded = (mark: number) => has(mark, (frame) => frame.type === "event" && frame.event?.type === "agent_end");
 	const routed = (mark: number, id: string) => since(mark).find((frame) => (frame.type === "steer_waiting" || frame.type === "steer_cut" || frame.type === "steer_refused") && frame.id === id);
 	const steer = (id: string, text: string, extra: Record<string, unknown> = {}) => socket.send(JSON.stringify({ type: "steer", id, text, ...extra }));
-	const question = (mark: number) => since(mark).find((frame) => frame.type === "ui_request" && frame.kind === "confirm");
+	const question = (mark: number) => since(mark).find((frame) => frame.type === "ui_request" && frame.kind === "run");
+	// The command question's yes, a floor later, as a person reads first: a yes sooner is asked again.
+	const yes = async (id: string) => {
+		await new Promise((resolve) => setTimeout(resolve, ANSWER_FLOOR_MS + 50));
+		socket.send(JSON.stringify({ type: "ui_response", id, value: true }));
+	};
 	const roomIdle = async () => {
 		const deadline = Date.now() + 20_000;
 		for (;;) {
@@ -280,7 +289,7 @@ try {
 		const mark = frames.length;
 		socket.send(JSON.stringify({ type: "prompt", text: prompt }));
 		await waitUntil(() => !!question(mark), "the command asks first");
-		socket.send(JSON.stringify({ type: "ui_response", id: question(mark).id, value: true }));
+		await yes(question(mark).id);
 		await waitUntil(() => has(mark, (frame) => frame.type === "event" && frame.event?.type === "tool_execution_start"), "the step runs");
 		return mark;
 	};
@@ -464,7 +473,7 @@ try {
 		steer("s-waits", "Then tell me the time.");
 		await waitUntil(() => routed(mark, "s-waits")?.type === "steer_waiting", "the message waits");
 		// Nothing to wait on for something that must not happen: the next frames the room sends are checked instead.
-		socket.send(JSON.stringify({ type: "ui_response", id: question(mark).id, value: true }));
+		await yes(question(mark).id);
 		await waitUntil(() => turnEnded(mark), "the turn ended");
 		assert(!has(mark, (frame) => frame.type === "ui_request_closed"), "the question stayed open until the person answered it");
 		const next = calls[before + 1];
@@ -755,7 +764,7 @@ try {
 		const mark = frames.length;
 		socket.send(JSON.stringify({ type: "prompt", text: "Check the export line." }));
 		await waitUntil(() => !!question(mark), "the command asks first");
-		socket.send(JSON.stringify({ type: "ui_response", id: question(mark).id, value: true }));
+		await yes(question(mark).id);
 		await waitUntil(() => has(mark, (frame) => frame.type === "event" && frame.event?.type === "tool_execution_start"), "the step runs");
 		holdNextLeg();
 		steer("s-also", "Check the import line too.");
@@ -813,14 +822,14 @@ try {
 
 	// --- 15b. A reload during a step with two messages waiting: the window that steps back in is told both, on ready and on turn_reattach; once the room took them, a second window's ready names them as taken and nothing waiting.
 	await scene("15b", async () => {
-		// The step runs until the scene opens its gate, after both windows were told what waits.
-		const gate = path.join(tempRoot, "gate-15b");
+		// The step runs until the scene opens its gate, after both windows were told what waits. The gate sits in the room, where a boxed command can see it.
+		const gate = path.join(workspaceRoot, "gate-15b");
 		holdNextLeg();
 		legs = [{ tool: { name: "bash", args: { command: `until [ -e '${gate}' ]; do sleep 0.1; done` } } }, { held: true, lead: "The monthly check", text: " passed." }];
 		const mark = frames.length;
 		socket.send(JSON.stringify({ type: "prompt", text: "Run the monthly check." }));
 		await waitUntil(() => !!question(mark), "the command asks first");
-		socket.send(JSON.stringify({ type: "ui_response", id: question(mark).id, value: true }));
+		await yes(question(mark).id);
 		await waitUntil(() => has(mark, (frame) => frame.type === "event" && frame.event?.type === "tool_execution_start"), "the step runs");
 		const both = [{ id: "s-wait-1", text: "Only the failures." }, { id: "s-wait-2", text: "And keep it short." }];
 		for (const message of both) steer(message.id, message.text);
@@ -851,12 +860,12 @@ try {
 
 	// --- 15e. A second window opened beside the window that answers, which stays: the running answer is not the new window's, so its ready lists nothing waiting and no reattach follows; the answering window's messages still go in after the step.
 	await scene("15e", async () => {
-		const gate = path.join(tempRoot, "gate-15e");
+		const gate = path.join(workspaceRoot, "gate-15e");
 		legs = [{ tool: { name: "bash", args: { command: `until [ -e '${gate}' ]; do sleep 0.1; done` } } }, { text: "The weekly check passed." }];
 		const mark = frames.length;
 		socket.send(JSON.stringify({ type: "prompt", text: "Run the weekly check." }));
 		await waitUntil(() => !!question(mark), "the command asks first");
-		socket.send(JSON.stringify({ type: "ui_response", id: question(mark).id, value: true }));
+		await yes(question(mark).id);
 		await waitUntil(() => has(mark, (frame) => frame.type === "event" && frame.event?.type === "tool_execution_start"), "the step runs");
 		const both = [{ id: "s-beside-1", text: "Only the errors." }, { id: "s-beside-2", text: "In one line." }];
 		for (const message of both) steer(message.id, message.text);
@@ -941,7 +950,7 @@ try {
 		const mark = frames.length;
 		socket.send(JSON.stringify({ type: "prompt", text: asked }));
 		await waitUntil(() => !!question(mark), "the command asks first");
-		socket.send(JSON.stringify({ type: "ui_response", id: question(mark).id, value: true }));
+		await yes(question(mark).id);
 		await waitUntil(() => turnEnded(mark), "the model finished");
 		socket.send(JSON.stringify({ type: "stop_reveal", shown: 0 }));
 		socket.close();
@@ -974,11 +983,11 @@ try {
 	// --- Keyed turns (thread-items-by-id.ts): the page names its question, the server names what the turn makes, and a save is merged by id.
 	// Each scene runs in a conversation of its own; the page's saves are played by hand, under the ids the frames named.
 	const answeredAsks = new Set<string>();
-	const approveAsked = (mark: number) => {
+	const approveAsked = async (mark: number) => {
 		for (const frame of since(mark)) {
-			if (frame.type !== "ui_request" || frame.kind !== "confirm" || answeredAsks.has(frame.id)) continue;
+			if (frame.type !== "ui_request" || frame.kind !== "run" || answeredAsks.has(frame.id)) continue;
 			answeredAsks.add(frame.id);
-			socket.send(JSON.stringify({ type: "ui_response", id: frame.id, value: true }));
+			await yes(frame.id);
 		}
 	};
 	const keyedConversation = async (name: string): Promise<string> => {
@@ -1010,7 +1019,7 @@ try {
 		legs = turnLegs;
 		const mark = frames.length;
 		sendKeyed(key, text, extra);
-		await waitUntil(() => { approveAsked(mark); return turnEnded(mark); }, `the keyed turn ${key} ended`);
+		await waitUntil(() => { void approveAsked(mark); return turnEnded(mark); }, `the keyed turn ${key} ended`);
 		await roomIdle();
 		return mark;
 	};
@@ -1063,7 +1072,10 @@ try {
 		legs = [{ tool: { name: "bash", args: { command: "sleep 2" } } }, { text: "Done, the short way." }];
 		const mark = frames.length;
 		sendKeyed("kq2", "Run the slow check.");
-		await waitUntil(() => { approveAsked(mark); return has(mark, (frame) => frame.type === "event" && frame.event?.type === "tool_execution_start"); }, "the step runs");
+		// The step's start frame comes before its question, so the step runs only once the question is answered.
+		await waitUntil(() => !!question(mark), "the command asks first");
+		await approveAsked(mark);
+		await waitUntil(() => has(mark, (frame) => frame.type === "event" && frame.event?.type === "tool_execution_start"), "the step runs");
 		steer("ks2", "Keep it short.");
 		await waitUntil(() => turnEnded(mark), "the turn ended");
 		await roomIdle();
@@ -1081,7 +1093,7 @@ try {
 		legs = [bashLs, bashLs, { text: "Here is the list of files." }];
 		const mark = frames.length;
 		sendKeyed("kq3", "List the files twice.");
-		await waitUntil(() => { approveAsked(mark); return turnEnded(mark); }, "the model finished");
+		await waitUntil(() => { void approveAsked(mark); return turnEnded(mark); }, "the model finished");
 		// The page saved the first card done and the second still running, then the reveal stops at nothing and the window leaves.
 		await saveItems(pathname, [{ kind: "user", id: "kq3", text: "List the files twice.", ts: Date.now() }, { kind: "tool", id: "kq3-t1", name: "bash", args: { command: "ls" }, status: "done", result: "x" }, { kind: "tool", id: "kq3-t2", name: "bash", args: { command: "ls" }, status: "running" }]);
 		const answerId = namedIds(mark).filter((id) => /^kq3-a\d+$/.test(id)).at(-1);

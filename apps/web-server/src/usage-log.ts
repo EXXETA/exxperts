@@ -8,10 +8,13 @@
 import type { MemoryCallKind } from "./memory-call-cache.js";
 import fs from "node:fs";
 import { AuthStorage } from "@exxeta/exxperts-runtime";
+import { serverHooks } from "./server-hooks.js";
 import { productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
 
 export type UsageAuthType = "oauth" | "api_key";
 export type UsageKind = "chat" | "upkeep" | "scheduled" | "hivemind" | "cli" | "consult" | "task";
+
+export type UsageCall = Pick<UsageRow, "input" | "output" | "cacheRead">;
 
 export interface UsageRow {
 	ts: number;
@@ -35,12 +38,18 @@ export interface UsageRow {
 	tools?: string[];
 	/** Background-run id for runs billed via appendUsageOnce. Absent on older rows. */
 	runId?: string;
+	/** The model calls a scheduled row sums, each as its session message holds it, so the start-up import can match them. Absent on other rows and on older rows. */
+	calls?: UsageCall[];
 	/** Which Memory model call it was (memory-call-cache.ts), so cache settings can be compared. Absent on older rows. */
 	callKind?: MemoryCallKind;
+	/** On a shared server, who spent and their space, as opaque ids. Absent on the desktop and on older rows. */
+	person?: string;
+	space?: string;
 }
 
 const USAGE_DIR = productAppStateRoot();
 const USAGE_FILE = productAppStatePath("usage.jsonl");
+const NEWLINE = 0x0a;
 
 /** A call that moved no tokens and cost nothing. A failed or stopped one was no turn, so it writes no row. */
 export function usageMovedNothing(usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number }): boolean {
@@ -62,12 +71,42 @@ export function answerlessCallMovedNothing(message: AssistantCall): boolean {
 	return !!u && (message.stopReason === "error" || message.stopReason === "aborted" || emptyAnswer(message)) && usageMovedNothing({ input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite, cost: u.cost?.total });
 }
 
+/**
+ * What a model call says about whose it is: the person its usage row names, as
+ * our own id, from the same lookup appendUsage stamps the row with (or the `who`
+ * a call that names no room passes for its row). Nothing when no person is known,
+ * as on the desktop.
+ */
+export function modelCallMetadata(roomId: string, kind: UsageKind, who?: { person: string }): { user_id: string } | undefined {
+	const person = who ? who.person : serverHooks().usageOwner?.(roomId, kind)?.person;
+	return person ? { user_id: person } : undefined;
+}
+
 export function appendUsage(row: UsageRow, warn?: (message: string) => void): void {
+	const stamped = row.person ? row : { ...row, ...serverHooks().usageOwner?.(row.agent, row.kind) };
 	try {
 		fs.mkdirSync(USAGE_DIR, { recursive: true, mode: 0o700 });
-		fs.appendFileSync(USAGE_FILE, JSON.stringify(row) + "\n", { mode: 0o600 });
+		fs.appendFileSync(USAGE_FILE, JSON.stringify(stamped) + "\n", { mode: 0o600 });
 	} catch (e) {
 		warn?.(`failed to append usage row: ${(e as Error).message}`);
+	}
+}
+
+/** A kill mid-append leaves a line with no end, and the next row would join it and be lost with it. Runs at the start, before any row is written. */
+export function closeTornUsageLine(warn?: (message: string) => void): void {
+	try {
+		const { size } = fs.statSync(USAGE_FILE);
+		if (size === 0) return;
+		const fd = fs.openSync(USAGE_FILE, "r");
+		const last = Buffer.alloc(1);
+		try {
+			fs.readSync(fd, last, 0, 1, size - 1);
+		} finally {
+			fs.closeSync(fd);
+		}
+		if (last[0] !== NEWLINE) fs.appendFileSync(USAGE_FILE, "\n");
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "ENOENT") warn?.(`failed to close a torn usage line: ${(e as Error).message}`);
 	}
 }
 

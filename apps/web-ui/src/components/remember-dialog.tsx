@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useEscapeKey } from "./use-escape-key";
 import { confirmDialog } from "./confirm-dialog";
 import { useRemoteClientContext } from "../remote-client-context";
@@ -42,6 +42,11 @@ function checkpointEditsKey(proposal: CheckpointProposalResponse): string {
 function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, progress, onCancelGenerate, error, notice, onChooseModel, onSignIn, approvalLoading, approvalError, approvalResult, quickRequested, skipsPreview, quickBlockedReasons, consultRunning, taskRunning, pendingConsultHandoffCount, pendingTaskHandoffCount, approvedFields, onFieldsChange, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onMemorizeAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; progress: { read: number; of: number; wait?: ModelWait } | null; onCancelGenerate: () => void; error: string | null; notice: ModelNotice | null; onChooseModel: () => void; onSignIn: (provider: string | undefined) => void; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; skipsPreview: boolean; quickBlockedReasons: string[] | null; consultRunning: boolean; taskRunning: boolean; pendingConsultHandoffCount: number; pendingTaskHandoffCount: number; approvedFields: CheckpointApprovalEditFields; onFieldsChange: (fields: CheckpointApprovalEditFields) => void; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedFields: CheckpointApprovalEditFields) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onMemorizeAfterCheckpoint: () => void; onClose: () => void }) {
 	const roomFilled = roomFilledBy(approvalResult);
 	const [editing, setEditing] = useState(false);
+	const errorRef = useRef<HTMLDivElement>(null);
+	// Generate stays in sight in its pinned row, so a failure's sentence can land out of sight, under it.
+	useEffect(() => {
+		if (error) errorRef.current?.scrollIntoView({ block: "nearest" });
+	}, [error]);
 	// A read-only device may not send Cancel, Save or Discard: it closes the dialog, and the Remember goes on.
 	const readOnly = useRemoteClientContext().capability === "read-only";
 	// One pass or N parts, said before anything is generated. Asked once when
@@ -253,9 +258,9 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 							/>
 						</label>
 						{readEstimate && rememberEstimateSentence(readEstimate) && <p className="checkpoint-read-note">{rememberEstimateSentence(readEstimate)}</p>}
-						{error && (isRememberOutcome(error) ? <p className="checkpoint-read-note" role="status">{error}</p> : <div className="checkpoint-proposal-error" role="alert">{error}</div>)}
+						{error && (isRememberOutcome(error) ? <p ref={errorRef} className="checkpoint-read-note" role="status">{error}</p> : <div ref={errorRef} className="checkpoint-proposal-error" role="alert">{error}</div>)}
 						{honestyNoticesNode}
-						<div className="checkpoint-preview-actions">
+						<div className="checkpoint-preview-actions checkpoint-options-actions">
 							<button className="rs-btn" onClick={onClose}>Close</button>
 							{/* A Remember that did not finish can be let go without a new read. */}
 							{!readOnly && asksGenerateAgain(error) && <button className="rs-btn" onClick={onDiscard} title="Let this Remember go. Nothing is saved">Discard</button>}
@@ -269,7 +274,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 	);
 }
 
-const CHOOSE_WHAT_TO_KEEP = "Choose what to keep…";
+const CHOOSE_WHAT_TO_KEEP = "Choose what to keep";
 
 // The main half runs Remember; the arrow opens the options form straight away.
 // Both halves are off together, while Remember runs and before any message, and say why.

@@ -41,6 +41,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 import { providerErrorFields } from "../utils/provider-error-fields.js";
+import { withoutKey } from "../utils/without-key.js";
 
 /**
  * Check if conversation messages contain tool calls or tool results.
@@ -154,8 +155,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 		let rawText = "";
 		const sentCitations: SentCitation[] = [];
 
+		const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 		try {
-			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const compat = getCompat(model);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
@@ -491,6 +492,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
 			const unreadBody = (error as { unreadBody?: unknown })?.unreadBody;
 			if (unreadBody) output.errorMessage += `\n${JSON.stringify(unreadBody)}`;
+			output.errorMessage = withoutKey(output.errorMessage, apiKey, "[key removed]");
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -614,6 +616,11 @@ function buildParams(
 	if (compat.supportsUsageInStreaming !== false) {
 		(params as any).stream_options = { include_usage: true };
 	}
+
+	// Whose call it is, for a gateway that counts spend per person: the caller's own id, never a name,
+	// and only to a provider known to take the field.
+	const user = options?.metadata?.user_id;
+	if (compat.supportsUser && typeof user === "string" && user) params.user = user;
 
 	if (compat.supportsStore) {
 		params.store = false;
@@ -1201,6 +1208,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 
 	return {
 		supportsStore: !isNonStandard,
+		supportsUser: !isNonStandard,
 		supportsDeveloperRole: !isNonStandard,
 		supportsReasoningEffort: !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
 		supportsUsageInStreaming: true,
@@ -1244,6 +1252,8 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 
 	return {
 		supportsStore: model.compat.supportsStore ?? detected.supportsStore,
+		// A provider known to refuse `store` is not trusted with `user` either.
+		supportsUser: model.compat.supportsUser ?? (model.compat.supportsStore === false ? false : detected.supportsUser),
 		supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,

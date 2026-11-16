@@ -15,6 +15,13 @@
 @font-face {
 	font-family: "Sen";
 	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("/fonts/Sen-Medium.ttf") format("truetype");
+}
+@font-face {
+	font-family: "Sen";
+	font-style: normal;
 	font-weight: 700 800;
 	font-display: swap;
 	src: url("/fonts/Sen-Bold.ttf") format("truetype");
@@ -66,6 +73,9 @@
 	--exx-action-secondary-bg: transparent;
 	--exx-action-secondary-fg: var(--exx-text-soft);
 	--exx-action-secondary-border: var(--exx-border-soft);
+	/* Dark's red is a light coral, under white words at 3.1:1: a red fill takes a deeper red, 5.1:1. */
+	--exx-action-danger-bg: #d03030;
+	--exx-action-danger-fg: #ffffff;
 
 	/* Focus/active */
 	--exx-focus: #d9d2c6;
@@ -215,6 +225,8 @@
 	--exx-action-secondary-bg: transparent;
 	--exx-action-secondary-fg: var(--exx-text-soft);
 	--exx-action-secondary-border: var(--exx-border-soft);
+	--exx-action-danger-bg: var(--exx-danger-strong);
+	--exx-action-danger-fg: #ffffff;
 
 	--exx-focus: #111111;
 	--exx-active-bg: #111111;
@@ -327,6 +339,164 @@ strong, b { font-weight: 700; }
 :focus-visible {
 	outline: 2px solid var(--exx-focus);
 	outline-offset: 2px;
+}
+
+/* Buttons: the one family, and the only place a button's look is set.
+   Kinds: .rs-btn ordinary, + .rs-btn-primary main (ink), + .rs-btn-quiet,
+   + .rs-btn-danger red words, + .rs-btn-primary.rs-btn-danger red fill,
+   + .rs-btn-icon a square mark; .rs-btn-sm is the small size for cards,
+   rows and headers. A rule in another style file that names a family button
+   sets only where it sits (margin, flex, grid, order, position, width,
+   visibility, z-index): buttons-look-ui-smoke.ts holds that list and fails
+   any other property. Inline-block rather than flex, so a label too long
+   for its place ends in "…" instead of pushing the page wider. The edge is
+   transparent so forced colours can draw it. --exx-btn-h is the ordinary
+   button's height, page-wide so a pinned row of buttons can size its room.
+   --exx-btn-inset and --exx-btn-inset-sm are how far an ordinary and a small
+   button's words sit inside its box: a row that starts or ends a line with a
+   quiet or red-words button pulls that side out by it, so the words keep the
+   text edge and the hover fill hangs outside, but never further than the box
+   it sits on leaves its focus ring whole. --exx-quiet-fill is the quiet
+   button's fill when pointed at, shared with the model picker
+   (41-room-model.css), which draws the quiet look without the family. */
+:root {
+	--exx-btn-h: 32px;
+	--exx-btn-inset: 15px;
+	--exx-btn-inset-sm: 11px;
+	--exx-quiet-fill: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.rs-btn {
+	--btn-h: var(--exx-btn-h);
+	--btn-pad: calc(var(--exx-btn-inset) - 1px);
+	--btn-bg: color-mix(in srgb, var(--fg) 8%, transparent);
+	--btn-bg-hover: color-mix(in srgb, var(--fg) 12%, transparent);
+	--btn-bg-press: color-mix(in srgb, var(--fg) 16%, transparent);
+	--btn-fg: var(--fg);
+	--btn-fg-hover: var(--fg);
+	display: inline-block;
+	flex-shrink: 0;
+	box-sizing: border-box;
+	height: var(--btn-h);
+	max-width: 100%;
+	margin: 0;
+	padding: 0 var(--btn-pad);
+	overflow: hidden;
+	border: 1px solid transparent;
+	border-radius: var(--exx-radius-control);
+	background: var(--btn-bg);
+	color: var(--btn-fg);
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	font-weight: 500;
+	line-height: calc(var(--btn-h) - 2px);
+	letter-spacing: normal;
+	text-align: center;
+	text-decoration: none;
+	text-overflow: ellipsis;
+	text-transform: none;
+	white-space: nowrap;
+	vertical-align: middle;
+	cursor: pointer;
+	transition: background-color 120ms ease, color 120ms ease;
+}
+/* Inline, so an icon drawn as a block elsewhere (.ui-icon) stays on the
+   line of its words, its middle on theirs. */
+.rs-btn > svg {
+	display: inline-block;
+	margin-inline-end: 6px;
+	vertical-align: middle;
+}
+@media (hover: hover) {
+	.rs-btn:hover:not(:disabled) {
+		background: var(--btn-bg-hover);
+		color: var(--btn-fg-hover);
+	}
+}
+/* A button whose menu is open keeps the hover fill while the menu shows; a
+   disclosure (aria-expanded with no menu) does not. Before :active, so a
+   press still reads as one. */
+.rs-btn[aria-haspopup][aria-expanded="true"] {
+	background: var(--btn-bg-hover);
+	color: var(--btn-fg-hover);
+}
+.rs-btn:active:not(:disabled) {
+	background: var(--btn-bg-press);
+	color: var(--btn-fg-hover);
+}
+.rs-btn:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.rs-btn.rs-btn-primary {
+	--btn-bg: var(--exx-action-primary-bg);
+	--btn-bg-hover: color-mix(in srgb, var(--exx-action-primary-bg) 90%, var(--bg));
+	--btn-bg-press: color-mix(in srgb, var(--exx-action-primary-bg) 82%, var(--bg));
+	--btn-fg: var(--exx-action-primary-fg);
+	--btn-fg-hover: var(--exx-action-primary-fg);
+}
+.rs-btn.rs-btn-quiet {
+	--btn-bg: transparent;
+	--btn-bg-hover: var(--exx-quiet-fill);
+	--btn-bg-press: color-mix(in srgb, var(--fg) 12%, transparent);
+	--btn-fg: var(--fg-soft);
+	--btn-fg-hover: var(--fg);
+}
+.rs-btn.rs-btn-danger {
+	--btn-bg: transparent;
+	--btn-bg-hover: color-mix(in srgb, var(--error-text) 6%, transparent);
+	--btn-bg-press: color-mix(in srgb, var(--error-text) 8%, transparent);
+	--btn-fg: var(--error-text);
+	--btn-fg-hover: color-mix(in srgb, var(--error-text) 80%, var(--fg));
+}
+.rs-btn.rs-btn-primary.rs-btn-danger {
+	--btn-bg: var(--exx-action-danger-bg);
+	--btn-bg-hover: color-mix(in srgb, var(--exx-action-danger-bg) 88%, var(--exx-ink));
+	--btn-bg-press: color-mix(in srgb, var(--exx-action-danger-bg) 78%, var(--exx-ink));
+	--btn-fg: var(--exx-action-danger-fg);
+	--btn-fg-hover: var(--exx-action-danger-fg);
+}
+.rs-btn.rs-btn-icon {
+	--btn-bg: transparent;
+	--btn-bg-hover: color-mix(in srgb, var(--fg) 8%, transparent);
+	--btn-bg-press: color-mix(in srgb, var(--fg) 12%, transparent);
+	--btn-fg: var(--muted);
+	--btn-fg-hover: var(--fg);
+	/* A mark alone is centred by the box, not by the font's line. */
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--btn-h);
+	padding: 0;
+}
+.rs-btn.rs-btn-icon > svg {
+	margin: 0;
+}
+/* An icon that forgets or removes: a plain icon at rest; on hover, keyboard
+   focus and press its mark turns the danger red on a faint red wash. */
+.rs-btn.rs-btn-icon.rs-btn-danger {
+	--btn-bg-hover: color-mix(in srgb, var(--error-text) 6%, transparent);
+	--btn-bg-press: color-mix(in srgb, var(--error-text) 8%, transparent);
+	--btn-fg-hover: var(--error-text);
+}
+.rs-btn.rs-btn-icon.rs-btn-danger:focus-visible:not(:active) {
+	background: var(--btn-bg-hover);
+	color: var(--btn-fg-hover);
+}
+.rs-btn.rs-btn-sm {
+	--btn-h: 28px;
+	--btn-pad: calc(var(--exx-btn-inset-sm) - 1px);
+}
+/* A finger's size where nothing hovers or the page is a phone's width. */
+@media (hover: none), (max-width: 760px) {
+	:root {
+		--exx-btn-h: 44px;
+		--exx-btn-inset: 17px;
+		--exx-btn-inset-sm: 17px;
+	}
+	.rs-btn,
+	.rs-btn.rs-btn-sm {
+		--btn-h: var(--exx-btn-h);
+	}
 }
 
 .display { font-family: var(--exx-font-display); font-weight: 700; letter-spacing: -0.01em; }

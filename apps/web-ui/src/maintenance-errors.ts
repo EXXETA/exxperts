@@ -144,6 +144,8 @@ function formatMaintenanceDraftError(message: string): string {
 	if (isStaleMaintenanceMessage(message)) return "Memory changed while this was open. No memory was updated. Open Maintain again to work from the latest memory.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
+	// The room's refusal mid-turn already says what to do; memory-entries-store.ts words it.
+	if (/^This room is in the middle of a turn\./.test(message)) return message;
 	console.info(`[maintenance] ${message}`);
 	return "This step could not finish. No memory was updated. Try again.";
 }

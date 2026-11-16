@@ -1,4 +1,6 @@
 import { apiFetch } from "./api";
+import { CONNECTOR_REQUEST_LINES } from "../../web-server/src/connector-form";
+import type { ConnectorKey } from "../../web-server/src/connector-form";
 export interface McpConnectorAuthStatus {
 	mode: "oauth" | "bearer" | "none";
 	// Entry explicitly configures OAuth (custom client) — a login is expected
@@ -12,7 +14,33 @@ export interface McpConnectorAuthStatus {
 export interface McpConnectorToolsStatus {
 	count: number;
 	names: string[];
+	/** A tool's own title, by its name, when the connector gave one. */
+	titles: Record<string, string>;
 	cachedAt: number;
+}
+
+/** What the last connection check found. */
+export interface McpConnectorCheck {
+	at: number;
+	ok: boolean;
+	needsAuth?: boolean;
+	httpStatus?: number;
+	/** The server's own words, for Technical details. */
+	error?: string;
+	/** A Test on this page found the program can't start; the server keeps no check of it. */
+	startRefused?: ConnectorStartRefusal;
+}
+
+/** The room that can change files where a connector program runs from, so the program doesn't start. */
+export interface ConnectorStartRefusal {
+	roomId: string;
+	roomName: string;
+}
+
+/** A room that may use a connector. */
+export interface McpConnectorRoomUse {
+	id: string;
+	name: string;
 }
 
 export interface McpConnectorStatus {
@@ -23,6 +51,21 @@ export interface McpConnectorStatus {
 	source: { path: string; kind: string; importKind?: string; importFile?: string } | null;
 	auth: McpConnectorAuthStatus;
 	tools: McpConnectorToolsStatus | null;
+	/** The name the person typed, when it differs from the fixed name. */
+	displayName?: string;
+	/** A web connector added here, whose address can be changed here. */
+	editable: boolean;
+	/** Where its key is, as Change key sees it. */
+	key: ConnectorKey;
+	/** Whether a new address on another site leaves it whole. */
+	movesToAnotherSite: boolean;
+	/** Named in a file other apps read too; Remove deletes it there as well. */
+	inSharedFile?: true;
+	/** The rooms that may use it; null where the server does not say. */
+	usedIn: McpConnectorRoomUse[] | null;
+	lastCheck: McpConnectorCheck | null;
+	/** A program that would not start now, because this room can change files where it runs from. */
+	startRefused?: ConnectorStartRefusal;
 }
 
 export interface McpConfigSourceStatus {
@@ -39,6 +82,16 @@ export interface McpConnectorsStatusResponse {
 	totalServers: number;
 }
 
+/** A connector request the server refused, with its status: 404 says the connector no longer exists. */
+export class McpRequestError extends Error {
+	constructor(
+		message: string,
+		readonly status: number,
+	) {
+		super(message);
+	}
+}
+
 async function fetchJson<T>(input: string, init: RequestInit | undefined, fallbackError: string): Promise<T> {
 	const response = await apiFetch(input, init);
 	let payload: unknown = null;
@@ -49,13 +102,13 @@ async function fetchJson<T>(input: string, init: RequestInit | undefined, fallba
 	}
 	if (!response.ok) {
 		const error = (payload as { error?: unknown } | null)?.error;
-		throw new Error(typeof error === "string" && error.trim() ? error.trim() : fallbackError);
+		throw new McpRequestError(typeof error === "string" && error.trim() ? error.trim() : fallbackError, response.status);
 	}
 	return payload as T;
 }
 
 export function fetchMcpConnectorsStatus(): Promise<McpConnectorsStatusResponse> {
-	return fetchJson("/api/mcp/status", undefined, "Failed to load connector status.");
+	return fetchJson("/api/mcp/status", undefined, CONNECTOR_REQUEST_LINES.loadFailed);
 }
 
 export interface AddMcpServerRequest {
@@ -81,12 +134,23 @@ export function removeMcpServer(name: string): Promise<{ name: string; removedFr
 	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" }, "Failed to remove the connector.");
 }
 
-export function startMcpServerLogin(name: string): Promise<{ started: boolean; pending?: boolean }> {
-	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/login`, { method: "POST" }, "Failed to start the login.");
+export function changeMcpServerAddress(name: string, request: { url: string; key?: string }): Promise<{ name: string; sameSite: boolean }> {
+	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/address`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(request),
+	}, CONNECTOR_REQUEST_LINES.saveFailed);
 }
 
-export function fetchMcpServerLoginState(name: string): Promise<{ pending: boolean; error?: string }> {
-	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/login`, undefined, "Failed to check the login.");
+export function startMcpServerLogin(name: string): Promise<{ started: boolean; pending?: boolean }> {
+	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/login`, { method: "POST" }, CONNECTOR_REQUEST_LINES.signInStartFailed);
+}
+
+/** Why a sign-in failed: only "busy", "too-slow" and "other" may get past it on a second try. */
+export type McpLoginFailure = "needs-own-app" | "refused" | "busy" | "no-sign-in" | "too-slow" | "other";
+
+export function fetchMcpServerLoginState(name: string): Promise<{ pending: boolean; cause?: McpLoginFailure; detail?: string }> {
+	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/login`, undefined, CONNECTOR_REQUEST_LINES.signInCheckFailed);
 }
 
 export function cancelMcpServerLogin(name: string): Promise<{ cancelled: boolean }> {
@@ -94,7 +158,7 @@ export function cancelMcpServerLogin(name: string): Promise<{ cancelled: boolean
 }
 
 export function logoutMcpServer(name: string): Promise<{ ok: boolean }> {
-	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/logout`, { method: "POST" }, "Failed to clear the login.");
+	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/logout`, { method: "POST" }, CONNECTOR_REQUEST_LINES.disconnectFailed);
 }
 
 export interface McpServerTestResult {
@@ -105,6 +169,10 @@ export interface McpServerTestResult {
 	error?: string;
 	/** The status the address answered with, when the test learned it. */
 	httpStatus?: number;
+	/** The connector changed while it was checked: the result is not about it any more. */
+	superseded?: true;
+	/** The program did not start, because this room can change files where it runs from. */
+	startRefused?: ConnectorStartRefusal;
 }
 
 export function testMcpServer(name: string): Promise<McpServerTestResult> {

@@ -193,10 +193,10 @@ try {
 	assert(
 		JSON.stringify(roomModelKeys(roomModelStatus.body)) === JSON.stringify([
 			"anthropic/claude-opus-5-5",
-			"anthropic/claude-fable-5-1",
+			"anthropic/claude-fable-5-2",
 			"anthropic/claude-sonnet-5-5",
 			"anthropic/claude-haiku-5-5",
-			"anthropic/claude-fable-5",
+			"anthropic/claude-fable-5-1",
 			"anthropic/claude-opus-5",
 			"anthropic/claude-sonnet-5",
 		]),
@@ -205,10 +205,10 @@ try {
 	assert(
 		JSON.stringify(compactRoomModelLabels(roomModelStatus.body)) === JSON.stringify([
 			"Opus 5.5",
-			"Fable 5.1",
+			"Fable 5.2",
 			"Sonnet 5.5",
 			"Haiku 5.5",
-			"Fable 5",
+			"Fable 5.1",
 			"Opus 5",
 			"Sonnet 5",
 		]),

@@ -10,10 +10,14 @@ import { abortAllSpecialistTasks, runningSpecialistCount } from "./persistent-ro
 import { readPersistentRoomScheduleStore, parsePersistentRoomSchedule, computePersistentRoomScheduleDueOccurrence, writePersistentRoomScheduleStore } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 import type { PersistentAgentId } from "./persistent-agent-types.js";
-import { activePersistentRoomLock, type AgentJson, createPersistentAgentInstance, ensureDir, isPersistentAgentArchived, isValidPersistentAgentId, PERSISTENT_AGENTS_ROOT, persistentAgentActiveTurns, persistentRoomLock, writeFileAtomic } from "./persistent-agent-store.js";
+import { activePersistentRoomLock, type AgentJson, createPersistentAgentInstance, ensureDir, isPersistentAgentArchived, PERSISTENT_AGENTS_ROOT, persistentAgentActiveTurns, persistentRoomLock, writeFileAtomic } from "./persistent-agent-store.js";
 import { writePersistentAgentRuntimeState } from "./persistent-agent-threads.js";
+import { forgetPersistentRoomProtection } from "./persistent-room-protection.js";
 import { clearPersistentAgentUnseenLandedAnswer, hasPersistentAgentTurnInFlight } from "./persistent-agent-turns.js";
 import { assertPersistentAgentDisplayNameAvailable, collapseHumanWhitespace } from "./persistent-agent-create.js";
+import { type RoomViewer, roomIdsForViewer } from "./persistent-agent-status.js";
+import { settleRoom } from "./room-settle.js";
+import { serverHooks } from "./server-hooks.js";
 
 export interface PersistentAgentArchiveOptions {
 	confirmation: string;
@@ -118,6 +122,7 @@ function isMissing(error: unknown): boolean {
 }
 
 export function getPersistentAgentLifecycleCounts(agentIdRaw: string): { counts: PersistentAgentLifecycleCounts; complete: boolean } {
+	settleRoom(agentIdRaw);
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	if (!fs.existsSync(instance.rootDir)) {
 		const error = new Error(`persistent agent not found: ${instance.agentId}`);
@@ -172,29 +177,23 @@ export interface ArchivedPersistentAgentSummary {
 
 // The archived shadow of listPersistentAgents: everything that listing hides.
 // Rows carry the counts the Home section states, newest archive first.
-export function listArchivedPersistentAgents(): ArchivedPersistentAgentSummary[] {
+export function listArchivedPersistentAgents(viewer: RoomViewer): ArchivedPersistentAgentSummary[] {
 	const rows: ArchivedPersistentAgentSummary[] = [];
-	try {
-		if (!fs.existsSync(PERSISTENT_AGENTS_ROOT)) return rows;
-		for (const entry of fs.readdirSync(PERSISTENT_AGENTS_ROOT, { withFileTypes: true })) {
-			if (!entry.isDirectory() || !isValidPersistentAgentId(entry.name)) continue;
-			try {
-				const instance = createPersistentAgentInstance(entry.name);
-				const meta = instance.readAgentJson();
-				if (!meta || !isPersistentAgentArchived(meta)) continue;
-				rows.push({
-					id: instance.agentId,
-					...(typeof meta.displayName === "string" && meta.displayName ? { displayName: meta.displayName } : {}),
-					archivedAt: Number(meta.archivedAt),
-					...(typeof meta.archivedReason === "string" && meta.archivedReason ? { archivedReason: meta.archivedReason } : {}),
-					counts: getPersistentAgentLifecycleCounts(instance.agentId).counts,
-				});
-			} catch {
-				// one unreadable room must not hide the rest of the archive
-			}
+	for (const id of roomIdsForViewer(viewer)) {
+		try {
+			const instance = createPersistentAgentInstance(id);
+			const meta = instance.readAgentJson();
+			if (!meta || !isPersistentAgentArchived(meta)) continue;
+			rows.push({
+				id: instance.agentId,
+				...(typeof meta.displayName === "string" && meta.displayName ? { displayName: meta.displayName } : {}),
+				archivedAt: Number(meta.archivedAt),
+				...(typeof meta.archivedReason === "string" && meta.archivedReason ? { archivedReason: meta.archivedReason } : {}),
+				counts: getPersistentAgentLifecycleCounts(instance.agentId).counts,
+			});
+		} catch {
+			// one unreadable room must not hide the rest of the archive
 		}
-	} catch {
-		// an unscannable root lists as empty, matching listPersistentAgents
 	}
 	return rows.sort((a, b) => b.archivedAt - a.archivedAt);
 }
@@ -291,7 +290,7 @@ function reanchorPersistentRoomSchedulesOnRestore(agentId: PersistentAgentId, re
 	return { enabledSchedules, missedOnceSchedules };
 }
 
-export function restorePersistentAgent(agentIdRaw: string): PersistentAgentRestoreResult {
+export function restorePersistentAgent(agentIdRaw: string, options: { viewer?: RoomViewer } = {}): PersistentAgentRestoreResult {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	if (!fs.existsSync(instance.rootDir)) {
 		const error = new Error(`persistent agent not found: ${instance.agentId}`);
@@ -319,7 +318,7 @@ export function restorePersistentAgent(agentIdRaw: string): PersistentAgentResto
 	// on Home, exactly what the uniqueness rule exists to prevent.
 	if (typeof meta.displayName === "string") {
 		try {
-			assertPersistentAgentDisplayNameAvailable(meta.displayName, { excludeAgentId: instance.agentId });
+			assertPersistentAgentDisplayNameAvailable(meta.displayName, { excludeAgentId: instance.agentId, viewer: options.viewer });
 		} catch {
 			const error = new Error(`An active room is already named ${collapseHumanWhitespace(meta.displayName)}. Rename that room first, then restore this one.`);
 			(error as any).statusCode = 409;
@@ -459,6 +458,7 @@ export function purgePersistentAgent(agentIdRaw: string, options: PersistentAgen
 	} catch {
 		// an unreadable ledger leaves task folders to the store GC valve
 	}
+	const createdAt = instance.readAgentJson()?.createdAt; // inside the room dir too: the server hook below is told it
 
 	// The guards above are advisory without a lock of our own: a scheduler tick
 	// or a fresh connection could take the room between check and delete. The
@@ -494,12 +494,16 @@ export function purgePersistentAgent(agentIdRaw: string, options: PersistentAgen
 		try { persistentRoomLock.release(instance.agentId, purgeLockOwner); } catch {}
 		throw new Error(`persistent room directory could not be detached for deletion (${failureReason(error)})`);
 	}
-	try {
-		fs.rmSync(tombstone, { recursive: true, force: true });
-	} catch (error) {
-		// The room is already gone from every listing; what remains is invisible
-		// disk usage the boot sweep reclaims — reported, not hidden.
-		failed.push({ target: "room directory remainder", reason: failureReason(error) });
+	forgetPersistentRoomProtection(instance.agentId);
+	// A deletion the server hook could not note keeps the detached folder as its proof, which the next start notes before its boot sweep removes it.
+	if (serverHooks().deletionLanded?.({ kind: "room", roomId: instance.agentId, createdAt, at: new Date().toISOString() }) !== false) {
+		try {
+			fs.rmSync(tombstone, { recursive: true, force: true });
+		} catch (error) {
+			// The room is already gone from every listing; what remains is invisible
+			// disk usage the boot sweep reclaims: reported, not hidden.
+			failed.push({ target: "room directory remainder", reason: failureReason(error) });
+		}
 	}
 
 	// 2. The room's task folders in the global artifact store.

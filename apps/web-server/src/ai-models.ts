@@ -1,8 +1,9 @@
 import { ANTHROPIC_API_KEY_PROVIDER, ModelRegistry, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, AuthStorage } from "@exxeta/exxperts-runtime";
-import { listPersistentAgents } from "./persistent-agents.js";
+import { createPersistentAgentInstance, isPersistentAgentArchived, listPersistentAgents, type RoomViewer } from "./persistent-agents.js";
+import { listPersistentAgentIds } from "./persistent-agent-status.js";
 import { readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
-import { type RoomModelResolution, type RoomModelCatalog, type RoomModelNames, type RoomModelTask, type RoomModelUnavailableError, roomModelUnavailableError, providerSignsIn, memoryModelHoldsBudget, createRoomModelCatalog, resolveAiDefault, resolveRoomModel, readRoomModels, ROOM_MODEL_TASKS, parseModelLock } from "./room-models.js";
+import { type RoomModelResolution, type RoomModelCatalog, type RoomModelNames, type RoomModelTask, type RoomModelUnavailableError, roomModelUnavailableError, providerSignsIn, memoryModelHoldsBudget, createRoomModelCatalog, resolveAiDefault, resolveAiDefaults, resolveRoomModel, readRoomModels, ROOM_MODEL_TASKS, parseModelLock } from "./room-models.js";
 import { providerCredentialClause, credentialGoneWords, sharedCredentialState } from "./model-not-offered.js";
 import { isSharedServer } from "./server-hooks.js";
 import { type RoomEffortLevel, effectiveConversationEffortChoice, writeConversationEffortChoice, writePersistentRoomEffortChoice } from "./persistent-room-effort-settings.js";
@@ -39,6 +40,7 @@ const WEB_CHAT_PROVIDER_LABELS: Record<string, string> = {
 const WEB_CHAT_MODEL_LABELS: Record<string, Record<string, string>> = {
 	anthropic: {
 		"claude-opus-5-5": "Opus 5.5",
+		"claude-fable-5-2": "Fable 5.2",
 		"claude-fable-5-1": "Fable 5.1",
 		"claude-sonnet-5-5": "Sonnet 5.5",
 		"claude-haiku-5-5": "Haiku 5.5",
@@ -253,19 +255,42 @@ function memoryModelsTooSmall(catalog: RoomModelCatalog, budgets: Array<{ budget
 	}));
 }
 
-function roomModelsPayload(agentId: string, catalog = createRoomModelCatalog(), registry = catalog.registry): Record<RoomModelTask, RoomModelRowPayload> {
+/**
+ * A room's model rows. `aiDefaults` are the defaults this request already
+ * resolved (a room list resolves them once for all its rooms); without them
+ * they are resolved here.
+ */
+function roomModelsPayload(agentId: string, catalog = createRoomModelCatalog(), aiDefaults = resolveAiDefaults(catalog)): Record<RoomModelTask, RoomModelRowPayload> {
+	const registry = catalog.registry;
 	const tooSmall = memoryModelsTooSmall(catalog, [{ budgetTokens: readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens }]);
 	// The default each row goes back to when the room's own pick is cleared.
-	const fallback = (task: RoomModelTask) => { const resolved = resolveAiDefault(task, catalog); return roomModelLockPayload(resolved.chosen ?? resolved.effective, registry, catalog); };
+	const fallback = (task: RoomModelTask) => roomModelLockPayload(aiDefaults[task].chosen ?? aiDefaults[task].effective, registry, catalog);
 	return {
-		conversation: { ...roomModelRowPayload(resolveRoomModel(agentId, "conversation", catalog), "conversation", registry, catalog, "room"), default: fallback("conversation") },
-		memory: { ...roomModelRowPayload(resolveRoomModel(agentId, "memory", catalog), "memory", registry, catalog, "room"), tooSmall, default: fallback("memory") },
+		conversation: { ...roomModelRowPayload(resolveRoomModel(agentId, "conversation", catalog, {}, aiDefaults.conversation), "conversation", registry, catalog, "room"), default: fallback("conversation") },
+		memory: { ...roomModelRowPayload(resolveRoomModel(agentId, "memory", catalog, {}, aiDefaults.memory), "memory", registry, catalog, "room"), tooSmall, default: fallback("memory") },
 	};
 }
 
-function aiDefaultsPayload(catalog = createRoomModelCatalog(), registry = catalog.registry): Record<RoomModelTask, RoomModelRowPayload> {
+/**
+ * Every live room on the Memory default, with its memory budget: a default must
+ * hold them all, whoever asks. A room is named only when the viewer sees it, and
+ * those come first, so a blocking room the viewer sees is the one named. A room
+ * the viewer does not see is read from its agent.json, models file and settings
+ * only, never its status, since a status read writes.
+ */
+function memoryBudgetsOnDefault(viewer: RoomViewer): Array<{ budgetTokens: number; room?: string }> {
+	const seen = new Map(listPersistentAgents(viewer).map((room) => [room.id, room.displayName || room.id]));
+	const unseen = listPersistentAgentIds().filter((id) => !seen.has(id) && !isPersistentAgentArchived(createPersistentAgentInstance(id).readAgentJson()));
+	const budget = (id: string) => readPersistentRoomMaintenanceSettings(id).memoryBudgetTokens;
+	return [
+		...[...seen].filter(([id]) => !readRoomModels(id)?.memory).map(([id, room]) => ({ budgetTokens: budget(id), room })),
+		...unseen.filter((id) => !readRoomModels(id)?.memory).map((id) => ({ budgetTokens: budget(id) })),
+	];
+}
+
+function aiDefaultsPayload(viewer: RoomViewer, catalog = createRoomModelCatalog(), registry = catalog.registry): Record<RoomModelTask, RoomModelRowPayload> {
 	// A Memory default must hold the memory of every room on the default, as the save checks.
-	const onDefault = listPersistentAgents().filter((room) => !readRoomModels(room.id)?.memory).map((room) => ({ budgetTokens: readPersistentRoomMaintenanceSettings(room.id).memoryBudgetTokens, room: room.displayName || room.id }));
+	const onDefault = memoryBudgetsOnDefault(viewer);
 	return {
 		conversation: roomModelRowPayload(resolveAiDefault("conversation", catalog), "conversation", registry, catalog, "defaults"),
 		memory: { ...roomModelRowPayload(resolveAiDefault("memory", catalog), "memory", registry, catalog, "defaults"), tooSmall: memoryModelsTooSmall(catalog, onDefault) },
@@ -462,5 +487,5 @@ function memoryModelWindow(lock: PersistentAgentModelLock, registry: ModelRegist
 	}
 }
 
-export { aiDefaultsPayload, applyRoomEffortToSession, contextHealthForSession, effectiveDefaultMaxTokens, getWebChatModelRegistry, initialContextHealthForSession, memoryModelWindow, modelContextWindow, modelStatusPayload, parseRoomModelPatch, persistentAgentRoomCuratedModels, providerDisplayNameCache, recordConversationEffortChoice, effortOnModel, roomEffortStatusPayload, roomModelLockPayload, roomModelNames, roomModelRefusal, roomModelsPayload, webChatModelLabel, webChatProviderLabel };
+export { aiDefaultsPayload, memoryBudgetsOnDefault, applyRoomEffortToSession, contextHealthForSession, effectiveDefaultMaxTokens, getWebChatModelRegistry, initialContextHealthForSession, memoryModelWindow, modelContextWindow, modelStatusPayload, parseRoomModelPatch, persistentAgentRoomCuratedModels, providerDisplayNameCache, recordConversationEffortChoice, effortOnModel, roomEffortStatusPayload, roomModelLockPayload, roomModelNames, roomModelRefusal, roomModelsPayload, webChatModelLabel, webChatProviderLabel };
 export type { PersistentAgentAiProfileDiagnostic, PersistentAgentAiProfileSelectionStatus, ProfileModelDiagnostic, RegistryModel, WebChatModelOption };

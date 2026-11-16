@@ -3,9 +3,11 @@
 //
 // Patches against the exactly-pinned 2.10.0 sources. The cosmetic ones warn
 // instead of failing if a future version changes the surrounding code, so
-// installs never break; patches 6, 7 and 9 (a room's startup config read, the
-// sign-in binding, a shared server's connectors) fail the install instead,
-// because rooms, sign-ins and a shared server depend on them:
+// installs never break; patches 6, 7, 9, 10, 11, 12 and 13 (a room's startup
+// config read, the sign-in binding, a shared server's connectors, its connector
+// values, the AI library copy's sign-in test, the gate before a connector call
+// and a connector program's start) fail the install instead, because rooms,
+// sign-ins, a shared server and the room box depend on them:
 //
 // 1. Rebrand the OAuth callback pages. The adapter serves hard-coded
 //    Pi-branded pages from its OAuth loopback server with no customization
@@ -27,12 +29,23 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(root, "package.json"));
 
+// --adapter-dir <folder> patches that folder instead of the installed adapter,
+// so a test can run this script on a scratch copy.
+const adapterDirFlag = process.argv.indexOf("--adapter-dir");
 let adapterDir;
-try {
-	adapterDir = path.dirname(require.resolve("pi-mcp-adapter/package.json"));
-} catch {
-	console.warn("patch-mcp-adapter: pi-mcp-adapter not installed yet — skipping");
-	process.exit(0);
+if (adapterDirFlag !== -1) {
+	adapterDir = path.resolve(process.argv[adapterDirFlag + 1] ?? "");
+	if (!fs.existsSync(path.join(adapterDir, "package.json"))) {
+		console.error("patch-mcp-adapter: ERROR --adapter-dir names no adapter folder");
+		process.exit(1);
+	}
+} else {
+	try {
+		adapterDir = path.dirname(require.resolve("pi-mcp-adapter/package.json"));
+	} catch {
+		console.warn("patch-mcp-adapter: pi-mcp-adapter not installed yet: skipping");
+		process.exit(0);
+	}
 }
 const target = path.join(adapterDir, "mcp-callback-server.ts");
 
@@ -454,7 +467,7 @@ try {
 }
 
 // --- Patch 9: a shared server's connectors ---------------------------------
-// With EXXPERTS_MCP_SHARED_SERVER=1 (read at each call; any other value or
+// With EXXPERTS_SHARED_SERVER=1 (read at each call; any other value or
 // none changes nothing) connectors are reached by web address only, and none
 // signs in: one stored sign-in would serve every person given the connector.
 // A program entry is left out where every reader gets its config and refused
@@ -467,7 +480,12 @@ try {
 // apply together or not at all, and this one must apply: when it cannot, the
 // install fails.
 
-const SHARED_SERVER_IS_ON = 'process.env.EXXPERTS_MCP_SHARED_SERVER === "1"';
+const SHARED_SERVER_IS_ON = 'process.env.EXXPERTS_SHARED_SERVER === "1"';
+// The switch's earlier name, as an adapter patched before the rename holds it.
+// Such an adapter has neither the anchors nor the text above, so it would fail
+// the install as "not found once": its places are renamed first, and it then
+// reads as already patched. Kept whole so a search for the old name finds it.
+const SHARED_SERVER_WAS_ON = 'process.env.EXXPERTS_MCP_SHARED_SERVER === "1"';
 const sharedServerPatches = [
 	[
 		"config.ts",
@@ -538,6 +556,21 @@ const sharedServerPatches = [
 ];
 
 try {
+	const migrated = [];
+	let migratedPlaces = 0;
+	for (const [file] of sharedServerPatches) {
+		const filePath = path.join(adapterDir, file);
+		const source = fs.readFileSync(filePath, "utf-8");
+		const places = source.split(SHARED_SERVER_WAS_ON).length - 1;
+		if (places > 0) {
+			fs.writeFileSync(filePath, source.replaceAll(SHARED_SERVER_WAS_ON, () => SHARED_SERVER_IS_ON));
+			migrated.push(file);
+			migratedPlaces += places;
+		}
+	}
+	if (migratedPlaces > 0) {
+		console.log(`patch-mcp-adapter: shared-server switch renamed in ${migratedPlaces} places (${migrated.join(", ")}), patched before the rename`);
+	}
 	const files = sharedServerPatches.map(([file, replacements]) => {
 		const filePath = path.join(adapterDir, file);
 		return { file, filePath, replacements, source: fs.readFileSync(filePath, "utf-8") };
@@ -570,3 +603,228 @@ try {
 	console.error(`patch-mcp-adapter: ERROR shared-server connector patch failed (${e.message})`);
 	process.exitCode = 1;
 }
+
+// One patch that must apply: all its places or none, and when it cannot, the
+// install fails with one line. An anchor not found once, or a file patched in
+// some places only, is that failure. A file an earlier version of this script
+// patched reads the same way, so the line names both causes and the way out.
+function applyRequiredPatch(name, filePath, replacements, consequence, done) {
+	try {
+		const source = fs.readFileSync(filePath, "utf-8");
+		const patched = replacements.filter(([, to]) => source.includes(to));
+		if (patched.length === replacements.length) {
+			console.log(`patch-mcp-adapter: ${name} already patched`);
+			return;
+		}
+		const notFound = replacements.filter(([from, to]) => !source.includes(to) && source.split(from).length !== 2);
+		if (patched.length > 0 || notFound.length > 0) {
+			console.error(`patch-mcp-adapter: ERROR ${name} ${notFound.length > 0 ? "anchors not found once" : "partly patched"} in ${path.basename(filePath)} (the package changed, or an earlier version of this script patched it: run npm ci to install it afresh); ${consequence}`);
+			process.exitCode = 1;
+			return;
+		}
+		fs.writeFileSync(filePath, replacements.reduce((text, [from, to]) => text.replace(from, () => to), source));
+		console.log(`patch-mcp-adapter: ${done}`);
+	} catch (e) {
+		console.error(`patch-mcp-adapter: ERROR ${name} failed (${e.message})`);
+		process.exitCode = 1;
+	}
+}
+
+// --- Patch 10: a shared server takes a connector's values as typed -----------
+// With EXXPERTS_SHARED_SERVER=1 (read at each call; any other value or none
+// changes nothing) `${VAR}` and `$env:VAR` stay as written and bearerTokenEnv
+// gives no token: the admin's add stores such a value in a bearer token or a
+// header, and it would otherwise send a server setting to the connector's
+// address. A block of its own, so an adapter patched before it is not read as
+// partly patched by patch 9.
+applyRequiredPatch(
+	"patch 10 (a connector's values)",
+	path.join(adapterDir, "utils.ts"),
+	[
+		[
+			"export function interpolateEnvVars(value: string): string {\n  return value\n",
+			`// A shared server takes a connector's values as typed: no environment lookup.\nfunction sharedServerTakesConnectorValuesAsTyped(): boolean {\n  return ${SHARED_SERVER_IS_ON};\n}\n\nexport function interpolateEnvVars(value: string): string {\n  if (sharedServerTakesConnectorValuesAsTyped()) return value;\n  return value\n`,
+		],
+		[
+			"  return definition.bearerTokenEnv ? process.env[definition.bearerTokenEnv] : undefined;\n",
+			"  if (sharedServerTakesConnectorValuesAsTyped()) return undefined;\n  return definition.bearerTokenEnv ? process.env[definition.bearerTokenEnv] : undefined;\n",
+		],
+	],
+	"a shared server would send server settings to connectors",
+	"a shared server takes a connector's values as typed",
+);
+
+// --- Patch 11: no sign-in through the adapter's own AI library ----------------
+// MCP sampling calls the adapter's copy of @earendil-works/pi-ai, with its own
+// token test, so the runtime's reader misses it. With EXXPERTS_SHARED_SERVER=1
+// that test answers false, and a token-shaped key goes out as an ordinary key.
+// The copy exports no package.json, so require.resolve cannot find it: the
+// folders are walked up from the adapter, the way node looks. The root
+// package.json pins the copy's version, since a global install ignores the
+// lockfile; a bump rechecks this patch.
+function adapterCopyOfAi() {
+	for (let dir = adapterDir; ; dir = path.dirname(dir)) {
+		const candidate = path.join(dir, "node_modules", "@earendil-works", "pi-ai");
+		if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
+		if (path.dirname(dir) === dir) return null;
+	}
+}
+const aiCopy = adapterCopyOfAi();
+if (aiCopy === null) {
+	console.error("patch-mcp-adapter: ERROR patch 11 (the AI library copy's sign-in test) found no @earendil-works/pi-ai beside the adapter; a shared server would send a sign-in through MCP sampling");
+	process.exitCode = 1;
+} else {
+	applyRequiredPatch(
+		"patch 11 (the AI library copy's sign-in test)",
+		path.join(aiCopy, "dist", "providers", "anthropic.js"),
+		[
+			[
+				'function isOAuthToken(apiKey) {\n    return apiKey.includes("sk-ant-oat");\n}\n',
+				`// A shared server serves no subscription: a token-shaped key goes out as an ordinary key.\nfunction sharedServerSendsNoSignInToken() {\n    return typeof process !== "undefined" && ${SHARED_SERVER_IS_ON};\n}\nfunction isOAuthToken(apiKey) {\n    if (sharedServerSendsNoSignInToken()) return false;\n    return apiKey.includes("sk-ant-oat");\n}\n`,
+			],
+		],
+		"a shared server would send a sign-in through MCP sampling",
+		"a shared server sends no sign-in through the AI library copy",
+	);
+}
+
+// --- Patch 12: a room's gate stands right before every connector call --------
+// The adapter drops a tool's marks (read-only, destructive) from the saved tool
+// list, and that list is shared: a Test connection or another room can rewrite
+// it. So the marks are read from the connection itself, at the two places that
+// reach a connector, after it is connected and the tool is resolved. The room's
+// wrapper hands the gate in as the execute's fifth argument, which the adapter
+// never read; pi-package/extensions/mcp/room-scope.ts is the gate. A call waiting
+// on its card counts as in flight, so idling out does not close its connection.
+// Each registered tool says it has the gate: a room does not take one that
+// doesn't, so an install that skipped this script offers no connectors.
+const GATE_CONSEQUENCE = "a room's connector calls would run without asking";
+const gateCall = (indent, server, toolName, resourceUri, args) => [
+	`await beforeConnectorCall({`,
+	`  server: ${server},`,
+	`  toolName: ${toolName},`,
+	`  liveTool: connection.tools?.find((tool) => tool.name === ${toolName}),`,
+	`  resourceRead: Boolean(${resourceUri}),`,
+	`  args: ${args},`,
+	`});`,
+].map((line, at) => (at === 0 ? line : `${indent}${line}`)).join("\n");
+applyRequiredPatch(
+	"patch 12 (the gate in the mcp tool)",
+	path.join(adapterDir, "index.ts"),
+	[
+		[
+			"      execute: createDirectToolExecutor(() => state, () => initPromise, spec),\n",
+			"      execute: createDirectToolExecutor(() => state, () => initPromise, spec),\n      asksBeforeConnectorCalls: true,\n",
+		],
+		[
+			"      renderCall: renderMcpProxyToolCall,\n",
+			"      renderCall: renderMcpProxyToolCall,\n      asksBeforeConnectorCalls: true,\n",
+		],
+		[
+			"      }, _signal, _onUpdate, _ctx) {\n",
+			"      }, _signal, _onUpdate, beforeConnectorCall) {\n",
+		],
+		[
+			"          return executeCall(state, params.tool, parsedArgs, params.server, getPiTools);\n",
+			"          return executeCall(state, params.tool, parsedArgs, params.server, getPiTools, beforeConnectorCall);\n",
+		],
+	],
+	GATE_CONSEQUENCE,
+	"the mcp tool hands its calls to the room's gate",
+);
+applyRequiredPatch(
+	"patch 12 (the gate on a proxied call)",
+	path.join(adapterDir, "proxy-modes.ts"),
+	[
+		[
+			"  getPiTools?: () => ToolInfo[],\n): Promise<ProxyToolResult> {\n  let serverName: string | undefined = serverOverride;\n",
+			"  getPiTools?: () => ToolInfo[],\n  beforeConnectorCall?: (call: Record<string, unknown>) => Promise<ProxyToolResult | undefined>,\n): Promise<ProxyToolResult> {\n  let serverName: string | undefined = serverOverride;\n",
+		],
+		[
+			"    state.manager.incrementInFlight(serverName);\n\n    if (toolMeta.resourceUri) {\n",
+			`    state.manager.incrementInFlight(serverName);\n\n    const refused = ${gateCall("    ", "serverName", "toolMeta.originalName", "toolMeta.resourceUri", "args")}\n    if (refused) return refused;\n\n    if (toolMeta.resourceUri) {\n`,
+		],
+	],
+	GATE_CONSEQUENCE,
+	"a proxied connector call stops at the room's gate",
+);
+applyRequiredPatch(
+	"patch 12 (the gate on a direct tool)",
+	path.join(adapterDir, "direct-tools.ts"),
+	[
+		[
+			"  return async function execute(_toolCallId, params) {\n",
+			"  return async function execute(_toolCallId, params, _signal, _onUpdate, beforeConnectorCall) {\n",
+		],
+		[
+			"      state.manager.incrementInFlight(spec.serverName);\n\n      if (spec.resourceUri) {\n",
+			`      state.manager.incrementInFlight(spec.serverName);\n\n      const refused = ${gateCall("      ", "spec.serverName", "spec.originalName", "spec.resourceUri", "params")}\n      if (refused) return refused;\n\n      if (spec.resourceUri) {\n`,
+		],
+	],
+	GATE_CONSEQUENCE,
+	"a direct connector tool stops at the room's gate",
+);
+
+// --- Patch 13: a connector program's start ------------------------------------
+// A local connector program starts outside the room box. Two things change
+// where the adapter starts one. Its environment is a short list of what
+// programs need to run, plus the connector's own declared env: never the
+// app's token, a provider key or the app's own settings, unless the connector
+// names them. And right before the start, after the npx lookup, the adapter
+// asks the check apps/web-server/src/connector-start-check.ts puts on
+// globalThis, which refuses a program, package or working folder that a room
+// can change files in. A process that never put the check there (a script
+// that drives the adapter alone) starts the program as before. This one must
+// apply: when it cannot, the install fails.
+const CONNECTOR_ENVIRONMENT = [
+	// What the MCP library's own default passes, on each system.
+	"HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER",
+	"APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PROCESSOR_ARCHITECTURE", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERNAME", "USERPROFILE", "PROGRAMFILES",
+	// Language, temporary files and the clock.
+	"LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TMPDIR", "TMP", "TZ",
+	// Windows' own programs and file types, so a .cmd shim and npx start.
+	"COMSPEC", "PATHEXT", "WINDIR",
+	// A company network's proxy and certificates.
+	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+	// npm's cache folder, so npx runs from the folder the start check looked at.
+	"npm_config_cache", "NPM_CONFIG_CACHE",
+];
+applyRequiredPatch(
+	"patch 13 (a connector program's start)",
+	path.join(adapterDir, "server-manager.ts"),
+	[
+		[
+			"      transport = new StdioClientTransport({\n        command,\n        args,\n        env: resolveEnv(definition.env),\n        cwd: resolveConfigPath(definition.cwd),\n",
+			[
+				"      const env = resolveEnv(definition.env);",
+				"      const cwd = resolveConfigPath(definition.cwd);",
+				"      // A program a room can change files around doesn't start (scripts/patch-mcp-adapter.mjs, patch 13).",
+				"      const startCheck = (globalThis as { exxpertsConnectorStartCheck?: (start: Record<string, unknown>) => Promise<void> }).exxpertsConnectorStartCheck;",
+				"      await startCheck?.({ name, command, args, cwd, configuredCommand: definition.command, environment: interpolateEnvRecord(definition.env) });",
+				"      transport = new StdioClientTransport({",
+				"        command,",
+				"        args,",
+				"        env,",
+				"        cwd,",
+				"",
+			].join("\n"),
+		],
+		[
+			"function resolveEnv(env?: Record<string, string>): Record<string, string> {\n  // Copy process.env, filtering out undefined values\n  const resolved: Record<string, string> = {};\n  for (const [key, value] of Object.entries(process.env)) {\n    if (value !== undefined) {\n",
+			[
+				"// What a connector program gets from this process's environment: what programs",
+				"// need to run, never the app's token or a provider key (scripts/patch-mcp-adapter.mjs, patch 13).",
+				`const CONNECTOR_ENVIRONMENT = new Set(${JSON.stringify(CONNECTOR_ENVIRONMENT)});`,
+				"",
+				"function resolveEnv(env?: Record<string, string>): Record<string, string> {",
+				"  // Copy the listed names only; Windows reads names without case.",
+				"  const resolved: Record<string, string> = {};",
+				"  for (const [key, value] of Object.entries(process.env)) {",
+				'    if (value !== undefined && CONNECTOR_ENVIRONMENT.has(process.platform === "win32" ? key.toUpperCase() : key)) {',
+				"",
+			].join("\n"),
+		],
+	],
+	"a connector program would start with the app's token and keys, from folders a room can change",
+	"a connector program starts with a short environment, after the room folder check",
+);

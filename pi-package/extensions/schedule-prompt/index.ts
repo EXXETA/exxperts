@@ -230,8 +230,19 @@ export function writePersistentRoomScheduleStore(store: PersistentRoomScheduleSt
 	return normalized;
 }
 
-export function listPersistentRoomScheduleJobs(roomId: unknown): PersistentRoomScheduleJob[] {
-	return readPersistentRoomScheduleStore(roomId).jobs;
+/** The jobs as a person reads them: an interval job's nextRunAt is its next due time after now. */
+export function listPersistentRoomScheduleJobs(roomId: unknown, input: { now?: Date } = {}): PersistentRoomScheduleJob[] {
+	const now = normalizeNow(input.now);
+	return readPersistentRoomScheduleStore(roomId).jobs.map((job) => (job.type === "interval" ? { ...job, nextRunAt: upcomingIntervalRunAt(job, now) } : job));
+}
+
+// The store keeps an interval job's first due time, which the due scan counts every later one from.
+function upcomingIntervalRunAt(job: PersistentRoomScheduleJob, now: Date): string | null {
+	const anchor = parseIsoDate(job.nextRunAt);
+	const intervalMs = parseDuration(job.schedule);
+	if (!anchor || !intervalMs || now.getTime() < anchor.getTime()) return job.nextRunAt;
+	const passed = Math.floor((now.getTime() - anchor.getTime()) / intervalMs) + 1;
+	return new Date(anchor.getTime() + passed * intervalMs).toISOString();
 }
 
 export function summarizePersistentRoomScheduleJobs(jobs: PersistentRoomScheduleJob[]): PersistentRoomScheduleSummary {

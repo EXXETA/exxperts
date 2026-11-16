@@ -421,15 +421,17 @@ export function turnFailureOf(words: string, retried: boolean, provider: string,
  * call too large, a summary cut at the model's output limit, or the runtime's
  * own refusal) has no `failure`; any other cause is the chat's cause for it,
  * as after the runtime's tries. `words`: the provider's words for Details,
- * without the runtime's prefixes; none where the runtime said it.
+ * without the runtime's prefixes; none where the runtime said it. `log`: the
+ * log line's codes, read from those words (providerFailureLogFields).
  */
-export function compactionFailureOf(errorMessage: string, provider: string): { failure?: TurnFailure; words?: string; summaryCut: boolean } {
+export function compactionFailureOf(errorMessage: string, provider: string): { failure?: TurnFailure; words?: string; summaryCut: boolean; log?: ProviderFailureLogFields } {
 	const words = errorMessage.replace(/^(?:Context overflow recovery|Auto-compaction) failed: (?:(?:Turn prefix )?[Ss]ummarization failed: )?/, "");
 	const summaryCut = /\bhit the token cap\b/.test(words);
 	const cause = classifyModelFailure(failedMessageError(words), { provider }).cause;
-	if (summaryCut || cause === "other" || cause === "cancelled") return { summaryCut };
-	if (cause === "too-large") return { words, summaryCut };
-	return { failure: turnFailureOf(words, true, provider), words, summaryCut };
+	const log = providerFailureLogFields(failedMessageError(words), provider);
+	if (summaryCut || cause === "other" || cause === "cancelled") return { summaryCut, log };
+	if (cause === "too-large") return { words, summaryCut, log };
+	return { failure: turnFailureOf(words, true, provider), words, summaryCut, log };
 }
 
 /** Why the runtime is asking again, for the note it shows meanwhile; never "busy" for a spent quota. */

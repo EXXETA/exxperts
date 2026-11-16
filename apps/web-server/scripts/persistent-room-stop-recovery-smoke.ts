@@ -6,7 +6,8 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { ANSWER_FLOOR_MS } from "../src/room-box/card-text.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
 import { computeSkillFilesDigest, sha256, writeSkillProvenance } from "../src/skills-store.js";
 import { waitEvery } from "./smoke-wait.js";
 
@@ -408,16 +409,19 @@ try {
 	// --- 3. Stop while a command card waits for the person ------------------
 	const { STOPPED_BEFORE_ANSWER_SENTENCE } = await import("../src/turn-ended-by.js");
 	const room3 = await createSkillRoom("Stop Card Room");
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(tempHome, "workspace");
 	fs.mkdirSync(workspaceRoot, { recursive: true });
 	fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "notes\n");
 	const workspace = await requestJson(`/api/persistent-agents/${encodeURIComponent(room3)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, displayLabel: "Card Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }) });
 	assert(workspace.status === 200, `Full access with the terminal on, got ${workspace.status}: ${JSON.stringify(workspace.body).slice(0, 300)}`);
+	// A new room's commands start in Run without asking where the room's protection runs: this smoke chooses Ask before each command, as the chip does.
+	const askFirst = await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(room3)}/bash-settings`, false);
+	assert(askFirst.status === 200, `the room asks before each command, got ${askFirst.status}`);
 	const conv3 = `smokeconv_card_${Date.now().toString(36)}`;
 	await seedThread(room3, conv3);
 	ws3 = await WsHarness.connect(room3, conv3);
 	await ws3.waitFor((frame) => frame.type === "ready", "card-room ready frame");
-	const isCard = (frame: Frame) => frame.type === "ui_request" && frame.kind === "confirm";
+	const isCard = (frame: Frame) => frame.type === "ui_request" && frame.kind === "run";
 	const isTurnEnd = (frame: Frame) => frame.type === "event" && frame.event?.type === "agent_end";
 	ws3.send({ type: "prompt", text: `${CARD_REQUEST}, please. ${CARD_TURN_TOKEN}` });
 	const card = ws3.frames[await ws3.waitFor(isCard, "the command card", 0, 30_000)];
@@ -441,6 +445,8 @@ try {
 	ws3.send({ type: "prompt", text: `List them again, please. ${CARD_TURN_TOKEN}` });
 	const nextCard = ws3.frames[await ws3.waitFor(isCard, "the next turn's command card", framesAtNext, 30_000)];
 	assert(nextCard.id !== card.id, "the next turn asks with a card of its own");
+	// A floor later, as a person reads first: a yes sooner is asked again.
+	await new Promise((resolve) => setTimeout(resolve, ANSWER_FLOOR_MS + 50));
 	ws3.send({ type: "ui_response", id: nextCard.id, value: true });
 	const nextEnd = ws3.frames[await ws3.waitFor(isTurnEnd, "the next turn's end", framesAtNext, 30_000)];
 	assert(nextEnd.event.endedBy === undefined, `a turn that ran to its end carries no endedBy, got ${JSON.stringify(nextEnd.event.endedBy)}`);

@@ -1,11 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawn, spawnSync } from "node:child_process";
+import fs, { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerOAuthProvider } from "@exxeta/exxperts-ai/oauth";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { clearConfigValueCache } from "../src/core/resolve-config-value.js";
+import { SettingsManager } from "../src/core/settings-manager.js";
 
 describe("AuthStorage", () => {
 	let tempDir: string;
@@ -344,6 +346,184 @@ describe("AuthStorage", () => {
 
 			const secondTry = await authStorage.getApiKey(providerId);
 			expect(secondTry).toBe("Bearer refreshed-access-token");
+		});
+	});
+
+	describe("a lock its holder left", () => {
+		/** The pid of a process that has really ended. */
+		const deadPid = () => spawnSync(process.execPath, ["-e", ""]).pid;
+		const lockOf = (file: string) => `${file}.lock`;
+		const leaveLock = (file: string, owner: { pid: number; host?: string; run?: string }) =>
+			writeFileSync(lockOf(file), JSON.stringify({ host: hostname(), run: "an-earlier-run", note: "tmp-1-1-a", ...owner }));
+
+		function registerRefreshingProvider(): string {
+			const providerId = `test-left-lock-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					return { ...credentials, access: "refreshed-access-token", expires: Date.now() + 60_000 };
+				},
+				getApiKey: (credentials) => `Bearer ${credentials.access}`,
+			});
+			writeAuthJson({ [providerId]: { type: "oauth", refresh: "r", access: "old", expires: Date.now() - 10_000 } });
+			return providerId;
+		}
+
+		test("a dead owner's lock is cleared on the sync path, with no failed read", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			leaveLock(authJsonPath, { pid: deadPid() });
+
+			authStorage = AuthStorage.create(authJsonPath);
+
+			expect(authStorage.drainErrors()).toEqual([]);
+			expect(authStorage.get("anthropic")).toEqual({ type: "api_key", key: "sk-kept" });
+			expect(existsSync(lockOf(authJsonPath))).toBe(false);
+		});
+
+		test("a dead owner's lock is cleared on the async path, with no wait", async () => {
+			const providerId = registerRefreshingProvider();
+			authStorage = AuthStorage.create(authJsonPath);
+			leaveLock(authJsonPath, { pid: deadPid() });
+
+			const started = Date.now();
+			const key = await authStorage.getApiKey(providerId);
+
+			expect(key).toBe("Bearer refreshed-access-token");
+			expect(Date.now() - started).toBeLessThan(1_000);
+		});
+
+		test("this pid in another run is a dead owner: a container's server gets the same pid back", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			leaveLock(authJsonPath, { pid: process.pid });
+
+			authStorage = AuthStorage.create(authJsonPath);
+
+			expect(authStorage.drainErrors()).toEqual([]);
+			expect(authStorage.get("anthropic")).toBeDefined();
+		});
+
+		test("a live owner's lock is never taken", async () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+			try {
+				leaveLock(authJsonPath, { pid: holder.pid! });
+
+				authStorage = AuthStorage.create(authJsonPath);
+
+				expect(authStorage.drainErrors().map((error) => (error as NodeJS.ErrnoException).code)).toEqual(["ELOCKED"]);
+				expect(JSON.parse(readFileSync(lockOf(authJsonPath), "utf-8")).pid).toBe(holder.pid);
+			} finally {
+				holder.kill("SIGKILL");
+			}
+		});
+
+		test("a holder in this very run keeps its lock: a sync read beside its own refresh", async () => {
+			const providerId = `test-own-lock-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			let finish: () => void = () => {};
+			let refreshing: () => void = () => {};
+			const begun = new Promise<void>((resolve) => {
+				refreshing = resolve;
+			});
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					refreshing();
+					await new Promise<void>((resolve) => {
+						finish = resolve;
+					});
+					return { ...credentials, access: "refreshed-access-token", expires: Date.now() + 60_000 };
+				},
+				getApiKey: (credentials) => `Bearer ${credentials.access}`,
+			});
+			writeAuthJson({ [providerId]: { type: "oauth", refresh: "r", access: "old", expires: Date.now() - 10_000 } });
+			authStorage = AuthStorage.create(authJsonPath);
+			const refresh = authStorage.getApiKey(providerId);
+			await begun;
+
+			const beside = AuthStorage.create(authJsonPath);
+
+			expect(beside.drainErrors().map((error) => (error as NodeJS.ErrnoException).code)).toEqual(["ELOCKED"]);
+			finish();
+			expect(await refresh).toBe("Bearer refreshed-access-token");
+		});
+
+		test("another computer's lock waits for the stale rule, even with a pid that is dead here", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			leaveLock(authJsonPath, { pid: deadPid(), host: "another-computer" });
+
+			authStorage = AuthStorage.create(authJsonPath);
+			expect(authStorage.drainErrors().map((error) => (error as NodeJS.ErrnoException).code)).toEqual(["ELOCKED"]);
+
+			const longAgo = new Date(Date.now() - 60_000);
+			utimesSync(lockOf(authJsonPath), longAgo, longAgo);
+			authStorage = AuthStorage.create(authJsonPath);
+			expect(authStorage.drainErrors()).toEqual([]);
+			expect(authStorage.get("anthropic")).toBeDefined();
+		});
+
+		test("a folder an older version left names no owner, so it waits for the stale rule", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			mkdirSync(lockOf(authJsonPath));
+
+			authStorage = AuthStorage.create(authJsonPath);
+			expect(authStorage.drainErrors().map((error) => (error as NodeJS.ErrnoException).code)).toEqual(["ELOCKED"]);
+
+			const longAgo = new Date(Date.now() - 60_000);
+			utimesSync(lockOf(authJsonPath), longAgo, longAgo);
+			authStorage = AuthStorage.create(authJsonPath);
+			expect(authStorage.drainErrors()).toEqual([]);
+			expect(existsSync(lockOf(authJsonPath))).toBe(false);
+		});
+
+		test("while another clears a dead lock, a contender leaves it alone", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			leaveLock(authJsonPath, { pid: deadPid() });
+			mkdirSync(`${lockOf(authJsonPath)}.lock`);
+
+			authStorage = AuthStorage.create(authJsonPath);
+
+			expect(authStorage.drainErrors().map((error) => (error as NodeJS.ErrnoException).code)).toEqual(["ELOCKED"]);
+			expect(existsSync(lockOf(authJsonPath))).toBe(true);
+		});
+
+		test("on a disk with no hard links the lock is the plain folder, and works", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			vi.spyOn(fs, "linkSync").mockImplementation(() => {
+				throw Object.assign(new Error("no hard links here"), { code: "EPERM" });
+			});
+
+			authStorage = AuthStorage.create(authJsonPath);
+			authStorage.set("openai", { type: "api_key", key: "sk-new" });
+
+			expect(authStorage.drainErrors()).toEqual([]);
+			expect(JSON.parse(readFileSync(authJsonPath, "utf-8")).openai.key).toBe("sk-new");
+			expect(existsSync(lockOf(authJsonPath))).toBe(false);
+		});
+
+		test("the same for settings.json: what is on disk reads at once and a save lands", () => {
+			const settingsPath = join(tempDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ defaultThinkingLevel: "high" }));
+			leaveLock(settingsPath, { pid: deadPid() });
+
+			const settings = SettingsManager.create(tempDir, tempDir);
+
+			expect(settings.drainErrors()).toEqual([]);
+			expect(settings.getDefaultThinkingLevel()).toBe("high");
+
+			leaveLock(settingsPath, { pid: deadPid() });
+			settings.setDefaultThinkingLevel("low");
+			return settings.flush().then(() => {
+				expect(settings.drainErrors()).toEqual([]);
+				expect(JSON.parse(readFileSync(settingsPath, "utf-8")).defaultThinkingLevel).toBe("low");
+			});
 		});
 	});
 

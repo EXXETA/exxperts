@@ -4,7 +4,8 @@ import { estimateTokensFromChars, estimateTokens } from "./token-estimate.js";
 import path from "node:path";
 import { SessionManager } from "@exxeta/exxperts-runtime";
 import { persistentAgentModelLocksEqual } from "./persistent-agent-ai-profiles.js";
-import { resolvePersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
+import { persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, resolvePersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
+import { REPO_ROOT } from "./server-install-root.js";
 import { parsePersistentRoomInstructionsLayerFingerprint } from "./persistent-room-instructions-text.js";
 import type { PersistentAgentModelLock, PersistentAgentPiSessionJsonlThreadRuntime, PersistentAgentThreadRecord } from "./persistent-agent-types.js";
 import type { L1bSourceFingerprint } from "./persistent-agent-memory-types.js";
@@ -266,6 +267,14 @@ export function fingerprintPersistentAgentBootContextInstructions(bootContext: R
 	return layer ? parsePersistentRoomInstructionsLayerFingerprint(layer.content) : null;
 }
 
+/** What a room asks of every session header: nothing that ties the room's folder to this disk. The server gives a session its folder when it opens one. */
+export const ROOM_SESSION_HEADER = { portableHeader: true } as const;
+
+/** The folder the server gives this conversation, the same one a live connection opens it in. */
+export function persistentRoomConversationCwd(agentId: string, threadId: string): string {
+	return persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadId), REPO_ROOT);
+}
+
 export function createPersistentAgentPiSessionJsonlThreadRuntime(input: CreatePersistentAgentPiSessionJsonlThreadRuntimeInput): PersistentAgentPiSessionJsonlThreadRuntime {
 	const instance = createPersistentAgentInstance(input.agentId);
 	const threadId = safeRuntimeThreadId(input.threadId);
@@ -289,7 +298,7 @@ export function createPersistentAgentPiSessionJsonlThreadRuntime(input: CreatePe
 		wroteBootPromptSnapshot = true;
 
 		ensureDir(path.dirname(paths.sessionFilePath));
-		const sessionManager = SessionManager.open(paths.sessionFilePath, path.dirname(paths.sessionFilePath), input.cwd);
+		const sessionManager = SessionManager.open(paths.sessionFilePath, path.dirname(paths.sessionFilePath), input.cwd, ROOM_SESSION_HEADER);
 		sessionManager.ensurePersisted();
 		wroteSessionFile = true;
 
@@ -324,16 +333,16 @@ export function openPersistentAgentPiSessionManager(agentIdRaw: string, runtime:
 	if (!fs.existsSync(file)) throw new Error(`persistent-agent Pi session JSONL is missing: ${runtime.sessionFileRelPath}`);
 	const lines = fs.readFileSync(file, "utf-8").split(/\r?\n/).filter((line) => line.trim());
 	if (lines.length === 0) throw new Error("persistent-agent Pi session JSONL is empty");
+	// Only the header decides: a line a kill cut short is skipped when the session loads, so it never costs the next turn.
 	let header: any;
 	try {
-		const parsed = lines.map((line) => JSON.parse(line));
-		header = parsed[0];
+		header = JSON.parse(lines[0]);
 	} catch {
-		throw new Error("persistent-agent Pi session JSONL contains invalid JSON");
+		throw new Error("persistent-agent Pi session JSONL header is invalid");
 	}
 	if (header?.type !== "session" || typeof header.id !== "string") throw new Error("persistent-agent Pi session JSONL header is invalid");
 	if (header.id !== runtime.sessionId) throw new Error("persistent-agent Pi session id mismatch");
-	const sessionManager = SessionManager.open(file, path.dirname(file), cwd);
+	const sessionManager = SessionManager.open(file, path.dirname(file), cwd, ROOM_SESSION_HEADER);
 	if (sessionManager.getSessionId() !== runtime.sessionId) throw new Error("persistent-agent Pi session id mismatch after open");
 	return sessionManager;
 }

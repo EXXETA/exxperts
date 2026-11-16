@@ -8,7 +8,7 @@ backed by [pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter).
 - **stdio**: local servers spawned as subprocesses.
 - **HTTP**: remote servers over StreamableHTTP, with SSE fallback.
 - **OAuth**: servers requiring browser login (`bearer` tokens or full
-  OAuth flows). Log in from the connector's row under Settings,
+  OAuth flows). Connect from the connector's row under Settings,
   Connectors.
 
 ## Config
@@ -43,9 +43,15 @@ read; move server entries into one of the files above.
 In the app, the **Connectors** page (Settings, Connectors) shows the
 same merged server list (each server's transport, which config file it
 came from, its cached tools, and OAuth credential state) and manages it:
-add/remove servers (saved to the exxperts user config), test a
-connection, and run OAuth logins (the login opens a browser on this
-machine, since the server runs locally). Backed by `GET /api/mcp/status`
+add/remove servers (saved to the exxperts user config), change a custom
+web connector's address, check a connection, and run OAuth sign-ins (the
+sign-in opens a browser on this machine, since the server runs locally).
+The form's Name is free text: the server's key is made from it (lower case,
+spaces to dashes, `-2` when taken), so room access and the saved sign-in
+never move, and the name as typed is kept as `displayName` in the entry when
+it differs from that key. A new address on the same site keeps the sign-in,
+key and extra headers; another site drops them all and asks for the key
+again. Rooms keep their access either way. Backed by `GET /api/mcp/status`
 and the `/api/mcp/servers` routes. Because sessions read MCP config at
 session start, changes apply the next time a room is entered or resumed.
 
@@ -54,12 +60,12 @@ The page also includes a **directory** of verified connectors
 login, one-click OAuth servers (dynamic client registration verified),
 token-based servers (GitHub: paste an API token once), OAuth-app servers
 (HubSpot: create an app in the provider's developer settings, then the
-card opens the custom form with the Custom OAuth client fields prefilled),
+card opens the custom form with the Your own sign-in app fields prefilled),
 and guided entries for providers that require your own credentials.
 
 Servers that expect their key in a header of their own (for example
-`X-Api-Key`) are added under **Custom headers** in the add-connector form,
-instead of or next to the API token. The headers are sent with every
+`X-Api-Key`) are added under **Extra headers** in the add-connector form,
+instead of or next to the key. The headers are sent with every
 request. A header named Authorization, or with api key, token or secret
 as a word in its name (`X-Api-Key`, `X-Auth-Token`), is taken as the
 sign-in and switches off the automatic OAuth login for that connector. In a config file the same is a `headers` object on the server
@@ -82,10 +88,11 @@ Providers whose auth servers do not support dynamic client registration
 way) fail the one-click login with "does not support dynamic client
 registration". For those, create an app in the provider's developer
 settings with the redirect URL `http://localhost:19876/callback`, then
-add the connector with its credentials under **Custom OAuth client** in
+add the connector with its credentials under **Your own sign-in app** in
 the add-connector form. The same works by hand in a config file. Gmail,
-for example, needs your own Google Cloud OAuth client; once you have it,
-add it to a config file as:
+for example, needs your own Google Cloud OAuth client, with “Use this
+client for an AI-powered agent” selected on it; once you have it, add it
+to a config file as:
 
 ```json
 {
@@ -122,6 +129,32 @@ add it to a config file as:
   proxy; pinned entries are ignored harmlessly.
 - Existing outbound content-policy scanning still runs before MCP tool
   calls.
+- A tool runs without asking when the connector marks it read-only
+  (`readOnlyHint: true`, and not `destructiveHint: true`), when it is a
+  plain resource read, or when you allowed it for the room. Anything
+  else asks first, in the panel above the message box, and shows what
+  the room would send, with hidden characters written out. **Allow this
+  time** runs it once. At the computer, a web connector's tool that
+  isn't marked destructive also offers **Allow for this room**: the room
+  then uses that tool without asking, also in a scheduled task and when
+  you're away. It isn't offered on a phone, or for a connector that is a
+  program on this computer. Room settings, Connectors lists the tools
+  you allowed, each with Remove. A room on **Semi** or **Auto** gets the
+  question too: those modes are about commands and websites.
+- With nobody there to answer, as in a scheduled run, when the person
+  left, or when a view-only phone takes over, a tool you haven't allowed
+  for the room is refused, and a note stays in the conversation.
+- This goes by what each connector says about its own tools, and a
+  connector you added by hand counts the same as one from the directory.
+  A connector that marks nothing asks every time, unless you allowed
+  that tool for the room. The marks guard against a fooled model, not a
+  dishonest connector.
+- A connector's own app page, once opened, calls its tools outside the
+  room's card.
+- Connectors run outside a room's protection, with your rights
+  ([Folders, commands and protection](workspace-and-bash.md#what-protection-doesnt-cover)).
+  A local connector whose program, package or working folder sits where a
+  room can change files doesn't start.
 - MCP sampling (a server asking the model to complete text) stays
   disabled in headless sessions unless explicitly auto-approved in
   config.

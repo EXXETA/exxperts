@@ -40,6 +40,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
 import { closeBrowser } from "./smoke-close-context.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -206,7 +207,7 @@ await row("a command marks itself as run, but not when no shell was found to run
 
 // --- In the browser.
 /** Each room's own folder, so one room's report.md is never another's. */
-const workspaceOf = (room: string) => path.join(tempRoot, "workspaces", room.replace(/\W+/g, "-"));
+const workspaceOf = (room: string) => path.join(home, "workspaces", room.replace(/\W+/g, "-"));
 
 type Tool = { name: string; args: unknown };
 type Leg = { text?: string; tools?: Tool[]; held?: boolean; fail?: boolean; promptTokens?: number };
@@ -844,7 +845,7 @@ try {
 			await waitUntil(() => refusalHeld, "the refusal is on its way");
 			legs = [{ text: "One more thing, answered." }];
 			await composer(page).fill("One more thing.");
-			await composer(page).press("Enter");
+			await sendFromBox(page);
 			await page.locator(".bubble-row.user.queued").filter({ hasText: "One more thing." }).waitFor({ timeout: 5000 });
 			refusalHeld = false;
 			for (const deliver of heldFrames.splice(0)) deliver();

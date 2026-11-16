@@ -23,6 +23,7 @@ const emptyUsage: Usage = {
 
 const compat = {
 	supportsStore: true,
+	supportsUser: true,
 	supportsDeveloperRole: true,
 	supportsReasoningEffort: true,
 	supportsUsageInStreaming: true,

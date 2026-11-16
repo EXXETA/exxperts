@@ -1,11 +1,14 @@
 /* Desktop app (Electron shell) -------------------------------------- */
 /* macOS hidden title bar: one top row, the window buttons' (centre y 25 in
-   window points, so 50 tall), holds the window buttons and the sidebar
-   toggle, and beside the sidebar the room name with its actions and the right
-   pane's header, all centred on it. The row drags the window; its controls
+   window points, so 50 tall), holds the window buttons, the sidebar toggle
+   and the arrows, and beside the sidebar the room name with its actions and
+   the right pane's header, all centred on it. The row drags the window; its controls
    opt back out. The window buttons keep their place under page zoom, so the
    row is set in window points too, as the toggle's spot is
-   (35-sidebar-remote.css). The sidebar header doubles as the window drag
+   (35-sidebar-remote.css): the window's title bar overlay gives the row's
+   height in CSS pixels, and a fiftieth of it is one window point. Fullscreen
+   has no overlay, so there the page supplies the zoom (sidebar-collapse.tsx).
+   The sidebar header doubles as the window drag
    region (interactive children opt back out); the logo gets a row of its own
    under the strip, its left edge on the list text's (12px list padding + 1px
    border + 14px item padding), and the list follows. The list keeps out of
@@ -13,8 +16,9 @@
    token via the classes set in index.html; the browser app is untouched. */
 html.desktop-app-mac {
 	--sidebar-text-left: 27px;
-	--mac-row-centre: calc(25px / var(--window-zoom, 1));
-	--mac-row-height: calc(2 * var(--mac-row-centre));
+	--mac-row-height: env(titlebar-area-height, calc(50px / var(--window-zoom, 1)));
+	--mac-row-centre: calc(var(--mac-row-height) / 2);
+	--mac-point: calc(var(--mac-row-height) / 50);
 }
 html.desktop-app-mac .sidebar-header,
 html.desktop-app-mac .product-sidebar-header {
@@ -81,17 +85,17 @@ html.desktop-app-mac .topbar {
 	position: relative;
 	z-index: 21;
 	-webkit-app-region: drag;
-	/* The bar is as tall as its 30px actions, so they centre 15px under this
+	/* The bar is as tall as its 28px actions, so they centre 14px under this
 	   padding, on the row. Past about 167% zoom the row is shorter than the
 	   actions and they keep to the window's top. The bar covers the whole
 	   strip: under its bottom edge the strip would be the top layer, and a
 	   click on the chat there would drag the window. */
-	padding-top: max(0px, calc(var(--mac-row-centre) - 15px));
+	padding-top: max(0px, calc(var(--mac-row-centre) - 14px));
 	min-height: var(--mac-row-height);
 }
 /* The row stays one line: a long name ends in an ellipsis rather than
    wrapping or pushing the actions under it. The name's side is padded by
-   half of 30px less its 16.8px line (16px at a 1.05 line height), less the
+   half of 28px less its 16.8px line (16px at a 1.05 line height), less the
    1px its ink sits under its line's centre, so its ink centres where the
    actions do. */
 html.desktop-app-mac .topbar {
@@ -99,7 +103,7 @@ html.desktop-app-mac .topbar {
 	flex-wrap: nowrap;
 }
 html.desktop-app-mac .topbar .left {
-	padding-top: 5.6px;
+	padding-top: 4.6px;
 	flex: 1 1 auto;
 	flex-wrap: nowrap;
 	min-width: 0;
@@ -119,19 +123,19 @@ html.desktop-app-mac .topbar input {
 	-webkit-app-region: no-drag;
 }
 /* Collapsed sidebar: the chat column becomes the window's left edge, and the
-   window buttons and the sidebar toggle share the row with the room name.
-   The name starts on the reading column's edge, or 12px past the toggle's
-   28px when the column is so narrow that its edge lies left of that. At
-   phone width the home button sits beside the toggle (38-phone.css), so the
+   window buttons, the sidebar toggle and the arrows share the row with the
+   room name. The name starts on the reading column's edge, or 12px past the
+   arrows when the column is so narrow that its edge lies left of that. At
+   phone width the home button sits beside the arrows (38-phone.css), so the
    floor moves past it too. The browser's collapsed clearance for the
    floating toggle stays a separate :not(.desktop-app-mac) rule, in
    35-sidebar-remote.css. */
 html.desktop-app-mac.sidebar-collapsed .topbar {
-	padding-left: max(calc(var(--mac-toggle-left) + 40px), var(--topbar-column-edge));
+	padding-left: max(calc(var(--mac-row-buttons-end) + 12px), var(--topbar-column-edge));
 }
 @media (max-width: 760px) {
 	html.desktop-app-mac .app .topbar {
-		padding-left: calc(var(--mac-toggle-left) + 76px);
+		padding-left: calc(var(--mac-row-buttons-end) + 48px);
 	}
 }
 /* Maintain workspaces: Memorize and Review are full-page takeovers with no
@@ -141,14 +145,19 @@ html.desktop-app-mac.sidebar-collapsed .topbar {
    above the strip, bar drags, controls opt out. The content starts below the
    traffic lights (x 18-78, y 18-32 at 100%), as Home does, so the title keeps
    the content's left edge. The text starts at 52px (48px on the discussion
-   step), which clears the buttons down to about 67% zoom: Electron's 69.4% too. */
+   step), which clears the buttons down to about 67% zoom: Electron's 69.4% too.
+   Zoomed out, the arrows reach lower, and a long room name reaches them. */
 html.desktop-app-mac .absorb-workspace-header {
 	position: relative;
 	z-index: 21;
 	-webkit-app-region: drag;
 }
-html.desktop-app-mac .maintain-workspace .absorb-workspace-header { padding-top: 52px; }
-html.desktop-app-mac .maintain-workspace .absorb-workspace-header.compact { padding-top: 48px; }
+html.desktop-app-mac .maintain-workspace .absorb-workspace-header { padding-top: max(52px, calc(var(--mac-row-buttons-bottom) + 2px)); }
+html.desktop-app-mac .maintain-workspace .absorb-workspace-header.compact { padding-top: max(48px, calc(var(--mac-row-buttons-bottom) + 2px)); }
+/* The Windows app: a step with no sidebar beside it (Memorize's and Review's
+   discussion) starts its header 8px under the arrows, which keep the sidebar
+   button's line at the top left (35-sidebar-remote.css). */
+html.desktop-app:not(.desktop-app-mac):not(:has(.sidebar, .product-sidebar)) .maintain-workspace .absorb-workspace-header { padding-top: 44px; }
 html.desktop-app-mac .absorb-workspace-header a,
 html.desktop-app-mac .absorb-workspace-header button,
 html.desktop-app-mac .absorb-workspace-header input {
@@ -216,12 +225,6 @@ html.desktop-app-mac .artifact-viewer-head-right {
 	align-self: flex-start;
 	margin-top: calc(var(--mac-row-centre) - 14.5px);
 }
-/* The open-in-a-new-tab glyph (⧉) draws 1px above its line's centre, so
-   its button's content box starts 2px lower to put the glyph's ink on the
-   row with its neighbours. */
-html.desktop-app-mac .artifact-viewer-open-tab {
-	padding-top: 2px;
-}
 /* The preview's kicker line has more air above its letters than its title
    line has below, so their ink sits 1.75px above the block's centre: the
    block starts 3.5px lower to put it on the row. */
@@ -264,6 +267,13 @@ html.desktop-app-mac .skill-upload-overlay,
 html.desktop-app-mac .ai-profile-menu-backdrop,
 html.desktop-app-mac .settings-dialog-backdrop,
 html.desktop-app-mac .mem-fullscreen {
+	-webkit-app-region: no-drag;
+}
+/* The open drawer at phone width lies over these bars, and they come after
+   it in the page, so a bar that drags would take the clicks of the drawer's
+   sidebar button. No bar drags while it is open: the dim closes it along the
+   row too, and the window drags by the drawer's header under the row. */
+html.desktop-app-mac:has(.sidebar-drawer-backdrop) :is(.topbar, .absorb-workspace-header, .artifact-viewer-head, .preview-head, .attachments-panel .att-head) {
 	-webkit-app-region: no-drag;
 }
 

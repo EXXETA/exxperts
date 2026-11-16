@@ -4,7 +4,8 @@ import { canonicalModelName } from "../model-names";
 import type { PersistentAgentId, PersistentAgentStatus, WebChatModelOption } from "../types";
 import { shownRoomName } from "../../../web-server/src/room-name";
 import { sharedServerRole, useRemoteClientContext } from "../remote-client-context";
-import { GearIcon } from "./icons";
+import { ChevronDownIcon, GearIcon } from "./icons";
+import { ROOM_ARRANGE_MOVE_EARLIER, ROOM_ARRANGE_MOVE_LATER } from "../home-room-arrange";
 
 export type LauncherRoomThread = {
 	state: "live" | "standby";
@@ -62,12 +63,20 @@ export type PersistentAgentCardProps = {
 	purging?: boolean;
 	/**
 	 * The home screen is in arrange mode: the card keeps its Home look (the
-	 * same height and content, the model label included) and nothing inside
-	 * it can be pressed or reached: the gear and the actions row are inert,
-	 * hidden from assistive technology and dimmed, so a click while arranging
-	 * can never enter a room. The card is moved as a whole by the grid.
+	 * same height and content) and nothing of its own can be pressed or
+	 * reached: the gear and the actions row are inert, hidden from assistive
+	 * technology and dimmed, so a click while arranging can never enter a
+	 * room. The card is moved as a whole by the grid.
 	 */
 	arranging?: boolean;
+	/**
+	 * While arranging, the card's two arrows, in the model label's place: each
+	 * moves the room one place, null where it cannot (an end, a save in
+	 * flight). They sit outside the inert part, each with its name, and are
+	 * for a pointer or a finger: not Tab stops (the card is one, moved by the
+	 * arrow keys), and a press on them never starts a carry.
+	 */
+	arrangeArrows?: { onEarlier: (() => void) | null; onLater: (() => void) | null };
 };
 
 /** The words for a room state, on Home's card badge and Room settings' status pill. */
@@ -93,7 +102,7 @@ export function noModelSentence(role: "member" | "admin" | null): string {
 	return role === "member" ? "Ask your admin to add a model in Settings, AI setup." : role === "admin" ? "Add an API key or a gateway in Settings, AI setup." : "Sign in to an AI provider in Settings, AI setup.";
 }
 
-export function PersistentAgentCard({ status, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenModelSettings, providerLabels, offeredModels, backgroundReady = false, purging = false, arranging = false }: PersistentAgentCardProps) {
+export function PersistentAgentCard({ status, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenModelSettings, providerLabels, offeredModels, backgroundReady = false, purging = false, arranging = false, arrangeArrows }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	// React 18 knows no `inert` prop: the attribute is passed as a string.
 	const inertWhileArranging = arranging ? ({ inert: "", "aria-hidden": true } as HTMLAttributes<HTMLElement>) : {};
@@ -237,7 +246,7 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 								: backgroundReady
 									? <span className="persistent-agent-badge ready" title="A response finished after you left this room. Resume to read it.">Response ready</span>
 									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`} title={badgeLabel === "Memorize soon" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize when convenient; the room keeps working meanwhile.` : badgeLabel === "Memorize due" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize: once the room holds ${sessionBlockCap}, a new conversation needs Memorize first. Remember always saves.` : badgeLabel === "Memorize now" ? `This room holds ${rememberedSessions} remembered conversations, as many as it can. Memorize them from Maintain to start a new conversation.` : undefined}>{badgeLabel}</span>}
-						{status?.exists && onOpenSettings && <button {...inertWhileArranging} className="card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}><GearIcon size={15} /></button>}
+						{status?.exists && onOpenSettings && <button {...inertWhileArranging} className="rs-btn rs-btn-icon rs-btn-sm card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}><GearIcon size={15} /></button>}
 					</div>
 				</div>
 				{status && status.errors.length > 0 && <div className="persistent-agent-error-summary">This room needs attention before it can be used.</div>}
@@ -278,23 +287,23 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 				<div className="persistent-agent-actions" {...inertWhileArranging}>
 					<div className="persistent-agent-primary-actions">
 						{state === "missing" ? (
-							<button className="landing-action" disabled title="This room's files are missing on this machine">Unavailable</button>
+							<button className="rs-btn rs-btn-sm landing-action" disabled title="This room's files are missing on this machine">Unavailable</button>
 						) : hasStandbyThread ? (
-							<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : entryBlocked ? enterDisabledReason : "Continue the conversation you left"} disabled={!status || (lockedElsewhere && !canStepBackIn) || entryBlocked || purging} onClick={() => status && onResume(status)}>Resume</button>
+							<button className="rs-btn rs-btn-sm landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : entryBlocked ? enterDisabledReason : "Continue the conversation you left"} disabled={!status || (lockedElsewhere && !canStepBackIn) || entryBlocked || purging} onClick={() => status && onResume(status)}>Resume</button>
 						) : preparedBoundaryThread ? (
 							<button
-								className="landing-action"
+								className="rs-btn rs-btn-sm landing-action"
 								title={purging ? purgeNote : lockedElsewhere ? lockNote : entryBlocked ? enterDisabledReason : "Enter the room"}
 								disabled={!status || lockedElsewhere || entryBlocked || purging}
 								onClick={() => status && void onResume(status)}
 							>Enter</button>
 						) : (
-							<button className="landing-action" disabled={!canEnter || entering} title={lockedElsewhere ? lockNote : enterDisabledReason} onClick={enter}>{entering ? "Entering…" : "Enter"}</button>
+							<button className="rs-btn rs-btn-sm landing-action" disabled={!canEnter || entering} title={lockedElsewhere ? lockNote : enterDisabledReason} onClick={enter}>{entering ? "Entering…" : "Enter"}</button>
 						)}
 					</div>
 					<div className="persistent-agent-secondary-actions">
-						<button className="inline-action" disabled={!canMaintain} title={canMaintain ? `Memorize the remembered conversations, or tidy what ${label} knows.` : maintainDisabledReason} onClick={() => status && onMaintain({ agentId: status.id, displayName: label })}>Maintain</button>
-						{status && (status.errors.length > 0 || status.warnings.length > 0) && <button className="inline-action" title={expanded ? "Hide the details" : "Show what needs attention"} onClick={() => setExpanded((v) => !v)}>{expanded ? "Hide" : "Details"}</button>}
+						<button className="rs-btn rs-btn-quiet rs-btn-sm inline-action" disabled={!canMaintain} title={canMaintain ? `Memorize the remembered conversations, or tidy what ${label} knows.` : maintainDisabledReason} onClick={() => status && onMaintain({ agentId: status.id, displayName: label })}>Maintain</button>
+						{status && (status.errors.length > 0 || status.warnings.length > 0) && <button className="rs-btn rs-btn-quiet rs-btn-sm inline-action" title={expanded ? "Hide the details" : "Show what needs attention"} onClick={() => setExpanded((v) => !v)}>{expanded ? "Hide" : "Details"}</button>}
 					</div>
 					{state !== "missing" && cardModelNames && (
 						<div className="persistent-agent-model">
@@ -305,6 +314,13 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 						</div>
 					)}
 				</div>
+				{arrangeArrows && (
+					// The press stops here: the slot around the card would take it as the start of a carry.
+					<div className="room-arrange-arrows" onPointerDown={(event) => event.stopPropagation()}>
+						<button type="button" tabIndex={-1} className="rs-btn rs-btn-icon rs-btn-sm room-arrange-arrow is-earlier" aria-label={ROOM_ARRANGE_MOVE_EARLIER} title={ROOM_ARRANGE_MOVE_EARLIER} disabled={!arrangeArrows.onEarlier} onClick={arrangeArrows.onEarlier ?? undefined}><ChevronDownIcon /></button>
+						<button type="button" tabIndex={-1} className="rs-btn rs-btn-icon rs-btn-sm room-arrange-arrow is-later" aria-label={ROOM_ARRANGE_MOVE_LATER} title={ROOM_ARRANGE_MOVE_LATER} disabled={!arrangeArrows.onLater} onClick={arrangeArrows.onLater ?? undefined}><ChevronDownIcon /></button>
+					</div>
+				)}
 			</div>
 			{expanded && status && (
 				<div className="persistent-agent-details">

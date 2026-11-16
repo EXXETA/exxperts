@@ -14,12 +14,12 @@
 //   bubble sends every queued message now, as one; ⌘↵ in an empty box during
 //   a step sends the queued ones now;
 // - the button is Stop with an empty box and Send once text is typed; Stop
-//   and Esc put every queued message back into the box, in order, above what
-//   is typed there;
+//   and Esc put the queued messages that go where the box's message goes back
+//   into the box, in order, above what is typed there, and the rest stay held;
 // - the answer after a Stop can be stopped from its start, with Stop and with
 //   Esc, though the page's last read of the room still says it is stopping;
-// - a step that asked before the person typed is denied by their message, and
-//   its card says so first; one that asked while they typed is not;
+// - a command that asked before the person typed: their message counts as Not
+//   now, as the box says; one that asked while they typed is not;
 // - "@Room question" typed while the room answers waits, and goes to that room
 //   once the answer ends;
 // - a window reloaded into a running answer takes no message until the replay
@@ -42,13 +42,16 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer, putRunWithoutAsking } from "./smoke-server-process.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 import { closeBrowser } from "./smoke-close-context.js";
 import { STOP_CUT_ANSWER_SENTENCE } from "../src/turn-ended-by.js";
+import { SENDING_COUNTS_AS_NOT_NOW } from "../src/room-box/card-text.js";
+import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../src/room-approval-titles.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -66,6 +69,9 @@ const waitUntil = waitEvery(100, 20_000);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
+const { serverLaunchArgs } = createRequire(import.meta.url)(path.join(repoRoot, "bin", "lib", "server-entry.cjs")) as {
+	serverLaunchArgs: (root: string, options?: { tsxLoader?: boolean; env?: NodeJS.ProcessEnv }) => string[];
+};
 const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -74,7 +80,7 @@ const tempHome = path.join(tempRoot, "home");
 const agentsRoot = path.join(tempHome, ".exxperts", "app", "personalized-agents");
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const appDir = path.join(tempHome, ".exxperts", "app");
-const workspaceRoot = path.join(tempRoot, "workspace");
+const workspaceRoot = path.join(tempHome, "workspace");
 for (const dir of [agentsRoot, agentDir, workspaceRoot]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
@@ -87,11 +93,10 @@ const STOPPED_FOR_NEXT = "Stopped here for your message.";
 // The server stop's line under a cut answer: its first sentence, and the one the page leaves out above held messages.
 const STOP_CUT_FIRST = "exxperts stopped before this answer finished.";
 const SEND_AGAIN = "Send your message again if something is missing.";
-const DENIES_LINE = "Sending your message denies this step.";
 const HINTS = {
 	idle: `Ask ${ROOM}…`,
 	answering: "Queue a message, ⌘↵ sends now",
-	stepAsks: "Sending a message denies the step above",
+	runAsks: SENDING_COUNTS_AS_NOT_NOW,
 	disconnected: /^(Waiting for the connection…|Not connected, press Reconnect)$/,
 };
 
@@ -165,11 +170,17 @@ try {
 	const otherId = create("Other Room");
 
 	const startServer = async () => {
-		server = spawn("npx", ["tsx", "src/index.ts"], {
-			shell: process.platform === "win32",
+		const env = smokeHomeEnv(tempHome, { PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot, EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot }) as NodeJS.ProcessEnv;
+		delete env.EXXPERTS_SERVER_BUNDLE;
+		// The spawned process is the server itself, so a stop's SIGTERM reaches it
+		// alone: through npx and tsx's CLI the signal is relayed, and tsx's relay
+		// SIGKILLs a server that does not answer it within 30 ms, as a busy machine's
+		// server in the middle of its stop may not. Killed there, it never lands the
+		// cut answer's line or the messages it holds.
+		server = spawn(process.execPath, serverLaunchArgs(repoRoot, { tsxLoader: true, env }), {
 			...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 			cwd: webServerDir,
-			env: smokeHomeEnv(tempHome, { PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot, EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot }) as NodeJS.ProcessEnv,
+			env,
 		});
 		server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 		server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
@@ -183,6 +194,9 @@ try {
 		body: JSON.stringify({ root: workspaceRoot, displayLabel: "Edge Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }),
 	});
 	assert(workspace.ok, `the room's folder is set, got ${workspace.status}`);
+	// A new room's commands start in Run without asking where the room's protection runs: this smoke chooses Ask before each command, as the chip does.
+	const askFirst = await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(roomId)}/bash-settings`, false);
+	assert(askFirst.ok, `the room asks before each command, got ${askFirst.status}`);
 
 	browser = await chromium.launch();
 	const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, userAgent: MAC });
@@ -271,16 +285,14 @@ try {
 	const send = async (text: string) => {
 		const before = calls.length;
 		await composer.fill(text);
-		await waitUntil(() => sendButton.isEnabled(), "Send is enabled with the message typed");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(() => calls.slice(before).some((call) => call.userTexts.some((typed) => typed.includes(text))), `"${text}" reached the model`);
 	};
 	// Queues the typed message with Enter, once Send takes it, and waits until the server said where it waits.
 	const queue = async (text: string) => {
 		const count = await queued().count();
 		await composer.fill(text);
-		await waitUntil(() => sendButton.isEnabled(), `Send takes "${text}"`);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await queued().count()) === count + 1 && (await composer.inputValue()) === "", `"${text}" is queued and the box is empty`);
 		const sent = frames.find(({ out, frame }) => out && frame.type === "steer" && frame.text === text);
 		assert(sent, `"${text}" went to the server as a message for the running answer`);
@@ -311,8 +323,10 @@ try {
 	};
 	// The first model call whose newest user message carries these words.
 	const callReading = (text: string) => calls.findIndex((call) => (call.userTexts.at(-1) ?? "").includes(text));
-	const askCard = page.locator(".wk-ask");
-	const allow = askCard.locator(".wk-btn.primary");
+	// The room's command question, in the panel above the box; its answers once the panel's pause is over.
+	const runQuestion = page.locator(".ask-panel").filter({ hasText: PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE });
+	const runOnce = runQuestion.locator('.rs-btn-primary[data-awake="1"]');
+	const notNowAwake = runQuestion.locator('.ask-actions .rs-btn:not(.rs-btn-primary)[aria-disabled="false"]');
 
 	const scene = async (name: string, run: () => Promise<void>) => {
 		try {
@@ -329,6 +343,8 @@ try {
 		}
 		release();
 		await roomIdle().catch(() => {});
+		// A room a case left on the box's label would take the next case's message.
+		for (const off of await page.locator(".composer-asking-off").all()) await off.click().catch(() => {});
 		await composer.fill("").catch(() => {});
 	};
 
@@ -502,8 +518,8 @@ try {
 	await scene("a step: Enter queues messages for after it; ⌘↵ in the empty box sends the first now, the other stays queued", async () => {
 		legs = [{ tool: { name: "bash", args: { command: "sleep 20" } } }, { text: "Answer to the queued message." }, { text: "Answer to the second." }];
 		await send("Run the long check.");
-		await askCard.waitFor({ timeout: 15_000 });
-		await allow.click();
+		await runQuestion.waitFor({ timeout: 15_000 });
+		await runOnce.click();
 		await waitUntil(() => frames.some(({ out, frame }) => !out && frame.type === "event" && frame.event?.type === "tool_execution_start"), "the step runs");
 		await hintIs(HINTS.answering, "while a step runs");
 		await queue("Queued during the step.");
@@ -591,16 +607,14 @@ try {
 		}
 	});
 
-	await scene("a step that asked before the person typed: their message denies it, and its card says so first", async () => {
+	await scene("a command that asked before the person typed: their message counts as Not now, as the box says", async () => {
 		legs = [{ tool: { name: "bash", args: { command: "echo first" } } }, { text: "Did the other thing." }];
 		await send("Run the first echo.");
-		await askCard.waitFor({ timeout: 15_000 });
-		await hintIs(HINTS.stepAsks, "while a step asks");
-		assert((await page.getByText(DENIES_LINE).count()) === 0, "with an empty box the card does not say a message denies it");
+		await runQuestion.waitFor({ timeout: 15_000 });
+		await hintIs(HINTS.runAsks, "while the command asks");
 		await composer.fill("Do the other thing instead.");
-		await waitUntil(async () => (await page.getByText(DENIES_LINE).count()) === 1, `with text typed the card says "${DENIES_LINE}"`);
-		await composer.press("Enter");
-		await waitUntil(async () => (await askCard.count()) === 0, "the card no longer asks");
+		await sendFromBox(page);
+		await waitUntil(async () => (await runQuestion.count()) === 0, "the question no longer asks");
 		await waitUntil(() => shown("Did the other thing."), "the room answers the message");
 		const last = calls.at(-1)!;
 		assert(last.userTexts.at(-1)?.includes("Do the other thing instead.") && last.toolTexts.some((text) => /declined/i.test(text)), `the model reads the step as declined and the message, got ${JSON.stringify(last)}`);
@@ -613,11 +627,10 @@ try {
 		await waitUntil(() => shown("Checking first."), "the answer is being written");
 		await composer.fill("A note typed before it asked.");
 		release();
-		await askCard.waitFor({ timeout: 15_000 });
-		assert((await page.getByText(DENIES_LINE).count()) === 0, "a step that asked while the person typed is not denied by their message");
+		await runQuestion.waitFor({ timeout: 15_000 });
 		await queue("A note typed before it asked.");
-		assert((await askCard.count()) === 1, "the step still asks");
-		await allow.click();
+		assert((await runQuestion.count()) === 1, "the step still asks");
+		await runOnce.click();
 		await waitUntil(async () => (await taken("A note typed before it asked.").count()) === 1 && (await shown("Ran it, then read the note.")), "the step ran, then the room took the message");
 		const last = calls.at(-1)!;
 		assert(last.toolTexts.at(-1)?.includes("second"), `the step ran and was not declined, got ${JSON.stringify(last.toolTexts.at(-1))}`);
@@ -630,8 +643,9 @@ try {
 		await waitUntil(() => shown("Checking once more."), "the answer is being written");
 		await composer.fill("A note for after the step.");
 		release();
-		await askCard.waitFor({ timeout: 15_000 });
+		await runQuestion.waitFor({ timeout: 15_000 });
 		await queue("A note for after the step.");
+		await notNowAwake.waitFor();
 		await composer.press("Escape");
 		await waitUntil(async () => (await taken("A note for after the step.").count()) === 1 && (await shown("Denied, then read the note.")), "the step was denied, then the room took the message");
 		assert(!calls.some((call) => call.toolTexts.some((text) => text.trim() === "fourth")), "the denied step did not run");
@@ -646,12 +660,12 @@ try {
 		await waitUntil(() => shown("Checking again."), "the answer is being written");
 		await composer.fill("Queued while it asks.");
 		release();
-		await askCard.waitFor({ timeout: 15_000 });
+		await runQuestion.waitFor({ timeout: 15_000 });
 		await queue("Queued while it asks.");
 		await composer.press("Meta+Enter");
 		await waitUntil(async () => (await taken("Queued while it asks.").count()) === 1 && (await shown("Answered the queued one.")), "the queued message went now and is answered");
 		assert(!calls.some((call) => call.toolTexts.some((text) => text.trim() === "third")), "the step that asked did not run");
-		assert((await askCard.count()) === 0, "the step no longer asks");
+		assert((await runQuestion.count()) === 0, "the step no longer asks");
 	});
 
 	await scene("\"@Room question\" while the room answers waits, and goes to that room once the answer ends", async () => {
@@ -661,7 +675,7 @@ try {
 		await waitUntil(() => shown("Answering before the consult"), "the answer is being written");
 		const before = calls.length;
 		await composer.fill(`@${otherId} what do you think?`);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await queuedTexts()).some((text) => text.includes("what do you think?")), "the consult shows queued");
 		assert(!calls.slice(before).some((call) => call.userTexts.some((text) => text.includes("what do you think?"))), "the other room is not asked while the answer runs");
 		release();
@@ -681,7 +695,7 @@ try {
 		await send("Something to answer before a consult and a message.");
 		await waitUntil(() => shown("Answering before a consult and a message"), "the answer is being written");
 		await composer.fill(`@${otherId} consult asked first`);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await queuedTexts()).some((text) => text.includes("consult asked first")), "the consult shows queued");
 		await queue("Message after the consult.");
 		const mark = calls.length;
@@ -704,7 +718,7 @@ try {
 		await send("Something to answer before a consult held open.");
 		await waitUntil(() => shown("Answering before a consult held open"), "the answer is being written");
 		await composer.fill(`@${otherId} consult held open`);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await queuedTexts()).some((text) => text.includes("consult held open")), "the consult shows queued");
 		await queue("Sent during the consult.");
 		const mark = calls.length;
@@ -729,7 +743,7 @@ try {
 		await waitUntil(() => shown("Answering before two consults taken back"), "the answer is being written");
 		for (const words of ["consult edited", "consult removed"]) {
 			await composer.fill(`@${otherId} ${words}`);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => (await queuedTexts()).some((text) => text.includes(words)) && (await composer.inputValue()) === "", `"${words}" shows queued and the box is empty`);
 		}
 		await offered(queued().first(), { tools: ALL_TOOLS, keys: KEYS }, "the first consult, which the chord sends");
@@ -739,7 +753,8 @@ try {
 		await waitUntil(async () => (await queued().count()) === 1, "Remove takes it off");
 		const edited = queued().filter({ hasText: "consult edited" });
 		await useTool(edited, "Edit");
-		await waitUntil(async () => (await composer.inputValue()) === `@${otherId} consult edited` && (await queued().count()) === 0, "Edit puts it in the box");
+		await waitUntil(async () => (await composer.inputValue()) === "consult edited" && (await page.locator(".composer-asking-name").allInnerTexts()).join("|") === "Asking Other Room" && (await queued().count()) === 0, "Edit puts it in the box, the room on its label");
+		await page.locator(".composer-asking-off").click();
 		await composer.fill("");
 		release();
 		await roomIdle();
@@ -753,7 +768,7 @@ try {
 		await send("Something to answer before a consult with two behind.");
 		await waitUntil(() => shown("Answering before a consult with two behind"), "the answer is being written");
 		await composer.fill(`@${otherId} consult with two behind`);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await queuedTexts()).some((text) => text.includes("consult with two behind")) && (await composer.inputValue()) === "", "the consult shows queued and the box is empty");
 		await queue("Behind the consult, removed.");
 		await queue("Behind the consult, edited.");
@@ -781,15 +796,15 @@ try {
 		assert(!calls.some((call) => call.userTexts.some((text) => text.includes("Behind the consult"))), "the model never read the two taken back");
 	});
 
-	await scene("\"@Room question\" typed after a step asked denies the step, and the consult goes once the answer ends", async () => {
+	await scene("\"@Room question\" typed after a command asked counts as Not now, and the consult goes once the answer ends", async () => {
 		legs = [{ tool: { name: "bash", args: { command: "echo fourth" } } }, { text: "Fine, not run." }];
 		await send("Run the fourth echo.");
-		await askCard.waitFor({ timeout: 15_000 });
+		await runQuestion.waitFor({ timeout: 15_000 });
+		await hintIs(HINTS.runAsks, "while the command asks");
 		const before = calls.length;
 		await composer.fill(`@${otherId} a question instead`);
-		await waitUntil(async () => (await page.getByText(DENIES_LINE).count()) === 1, `the card says "${DENIES_LINE}"`);
-		await composer.press("Enter");
-		await waitUntil(async () => (await askCard.count()) === 0, "the step no longer asks");
+		await sendFromBox(page);
+		await waitUntil(async () => (await runQuestion.count()) === 0, "the step no longer asks");
 		const card = page.locator(".consult-card").first();
 		await waitUntil(async () => (await card.count()) > 0 && (await card.innerText()).includes("a question instead") && calls.length > before + 1, "the consult goes once the answer ended");
 		assert(!calls.some((call) => call.toolTexts.some((text) => text.trim() === "fourth")), "the denied step did not run");
@@ -805,7 +820,7 @@ try {
 		await waitUntil(() => shown("Answering before two consults"), "the answer is being written");
 		for (const question of ["first consult question", "second consult question"]) {
 			await composer.fill(`@${otherId} ${question}`);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => (await queuedTexts()).some((text) => text.includes(question)), `"${question}" shows queued`);
 		}
 		release();
@@ -844,7 +859,7 @@ try {
 		await waitUntil(() => shown("Answering before a reload"), "the answer is being written");
 		const question = `@${otherId} keep this question`;
 		await composer.fill(question);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await queuedTexts()).some((text) => text.includes("keep this question")), "the consult shows queued");
 		await page.reload();
 		await composer.waitFor({ timeout: 15_000 });
@@ -1049,7 +1064,7 @@ try {
 	await scene("the box never says Working", async () => {
 		const working = [...hintsSeen].filter((words) => /Working/i.test(words));
 		assert(working.length === 0, `no hint says Working, got ${JSON.stringify(working)}`);
-		assert(hintsSeen.has(HINTS.answering) && hintsSeen.has(HINTS.stepAsks) && hintsSeen.has(HINTS.idle), `each state's hint was seen: ${JSON.stringify([...hintsSeen])}`);
+		assert(hintsSeen.has(HINTS.answering) && hintsSeen.has(HINTS.runAsks) && hintsSeen.has(HINTS.idle), `each state's hint was seen: ${JSON.stringify([...hintsSeen])}`);
 	});
 
 	if (failed.length) throw new Error(`${failed.length} case(s) failed:\n- ${failed.join("\n- ")}`);

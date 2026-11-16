@@ -96,6 +96,14 @@ export function authedFetch(url: string | URL, init: AuthedFetchInit = {}): Prom
 	return fetch(url, { ...init, headers: { ...SMOKE_AUTH_HEADERS, ...init.headers } });
 }
 
+// A room's Run without asking, set as the room's chip sets it: read first,
+// then sent back with the protection that read named, which the server
+// requires. `url` is the room's bash-settings address.
+export async function putRunWithoutAsking(url: string, autoApprove: boolean): Promise<Response> {
+	const { protection } = (await (await authedFetch(url)).json()) as { protection?: unknown };
+	return authedFetch(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ autoApprove, protection }) });
+}
+
 // Wait until the smoke's server answers /healthz, asking every 150 ms. A
 // server that exits first fails at once; one still not ready fails with the
 // last error seen. The wait ends at a deadline in milliseconds, or after a

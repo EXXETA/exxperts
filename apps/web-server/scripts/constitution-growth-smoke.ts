@@ -158,15 +158,21 @@ try {
 	const current = fs.readFileSync(path.join(agentRoot, "L1a.md"), "utf-8");
 
 	const marker = parsePersistentAgentL1aMarker(current);
-	assert(marker.templateVersion === 4, `a scaffolded room should carry template v4 (got v${marker.templateVersion})`);
+	assert(marker.templateVersion === 5, `a scaffolded room should carry template v5 (got v${marker.templateVersion})`);
 	assert(parsePersistentAgentL1aMarker(V2_CONSTITUTION).templateVersion === 2, "the frozen baseline should be the version-2 wording");
 
 	// The growth has to be attributable: everything outside the Memory section
 	// must still read word for word as it did in 0.12.1, the version marker
-	// aside. Otherwise the number below measures a rename or a mode edit too.
+	// and the two Limits lines version 5 reworded aside (written by hand here).
+	// Otherwise the number below measures a rename or a mode edit too.
 	const before = splitConstitution(V2_CONSTITUTION);
 	const after = splitConstitution(current);
-	assert(after.head.replace("template_version=4", "template_version=2") === before.head, "everything above the Memory section must be unchanged from version 2");
+	const V5_LIMITS: Array<[string, string]> = [
+		["only when the user approves it in Memory, never silently.", "only through the product's approved memory workflows (checkpoint, absorb, prune) \u2014 never silently."],
+		["when the user approved nothing; ordinary chat becomes durable memory only that way.", "when no approved workflow ran; ordinary chat becomes durable memory only through those workflows."],
+	];
+	const headAsV2 = V5_LIMITS.reduce((head, [v5, v2]) => head.replace(v5, v2), after.head.replace("template_version=5", "template_version=2"));
+	assert(headAsV2 === before.head, "everything above the Memory section must be unchanged from version 2");
 	assert(after.tail === before.tail, "everything below the Memory section must be unchanged from version 2");
 
 	// The paragraphs version 2 shipped are field-tested wording: they come back
@@ -202,7 +208,7 @@ try {
 	const narrationGrowthChars = NARRATION_PARAGRAPH.length - v2Paragraphs.filter((part) => part.startsWith(V2_NARRATION_PARAGRAPH_START))[0].length;
 	const pointsGrowthChars = growthChars - RECONCILING_SENTENCE.length - 1 - narrationGrowthChars - NO_INTERNAL_IDS_SENTENCE.length - 1;
 	console.log(`constitution v2: ${V2_CONSTITUTION.length} chars, ~${estimateTokens(V2_CONSTITUTION)} estimated tokens (Memory section ${before.memory.length} chars)`);
-	console.log(`constitution v4: ${current.length} chars, ~${estimateTokens(current)} estimated tokens (Memory section ${after.memory.length} chars)`);
+	console.log(`constitution v5: ${current.length} chars, ~${estimateTokens(current)} estimated tokens (Memory section ${after.memory.length} chars)`);
 	console.log(`growth: +${growthChars} chars (bound ${MAX_GROWTH_CHARS}), of which the six points are +${pointsGrowthChars}, the reconciling sentence +${RECONCILING_SENTENCE.length + 1}, the do-not-narrate rewrite +${narrationGrowthChars} and the sentence on internal ids +${NO_INTERNAL_IDS_SENTENCE.length + 1}, ~+${growthTokens} estimated tokens`);
 	assert(growthChars <= MAX_GROWTH_CHARS, `the constitution grew by ${growthChars} characters, over the ${MAX_GROWTH_CHARS} the wording is allowed; tighten the wording rather than drop a point`);
 	assert(growthChars > 0, "version 3 should say more than version 2, not less");

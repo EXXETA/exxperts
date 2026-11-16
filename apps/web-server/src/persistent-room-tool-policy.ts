@@ -12,6 +12,9 @@ export const PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES = ["ls", "find", "gre
 export const PERSISTENT_ROOM_BOUNDED_WRITER_TOOL_NAMES = ["write", "edit"] as const;
 export const PERSISTENT_ROOM_LOCAL_FILES_NATIVE_TOOL_NAMES = ["read", "ls", "find", "grep", "write", "edit"] as const;
 export const PERSISTENT_ROOM_BASH_TOOL_NAME = "bash" as const;
+export const PERSISTENT_ROOM_OUTSIDE_TOOL_NAME = "run_outside_box" as const;
+export const PERSISTENT_ROOM_ASK_FOR_FOLDER_TOOL_NAME = "ask_for_folder" as const;
+export const PERSISTENT_ROOM_ASK_FOR_COMMANDS_TOOL_NAME = "ask_for_commands" as const;
 export const PERSISTENT_ROOM_WORKSPACE_TOOL_NAMES = [
 	...PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES,
 	...PERSISTENT_ROOM_BOUNDED_WRITER_TOOL_NAMES,
@@ -56,6 +59,7 @@ const PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAME_SET = new Set<string>(PERSISTENT_ROO
 const PERSISTENT_ROOM_BLOCKED_TOOL_NAMES = [
 	"read",
 	"bash",
+	"run_outside_box",
 	"edit",
 	"write",
 	"grep",
@@ -205,6 +209,17 @@ export function persistentRoomWorkspaceToolNamesForPolicy(policy: PersistentRoom
 	return [];
 }
 
+/**
+ * A room's file tools as the Folder pane has them: all six, or Can change files
+ * off (the four that read). Write or Edit off is Can change files off, a room
+ * without List, Find or Search gets them back, and a room without Read has no
+ * folder: null.
+ */
+export function persistentRoomFoldedToolSelection(toolNames: readonly string[]): PersistentRoomWorkspaceToolSelection | null {
+	if (!toolNames.includes("read")) return null;
+	return toolNames.includes("write") && toolNames.includes("edit") ? { kind: "standard" } : { kind: "custom", allowedToolNames: [...PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES] };
+}
+
 export function persistentRoomWorkspaceToolSelectionViewForPolicy(policy: PersistentRoomWorkspaceToolPolicyLike | null | undefined): { kind: "standard" | "custom"; allowedToolNames: string[] } {
 	const workspaceAccessMode = policy?.workspaceAccessMode === "localFiles" ? "localFiles" : "bounded";
 	if (policy?.toolSelection?.kind === "custom") return { kind: "custom", allowedToolNames: persistentRoomWorkspaceToolNamesForPolicy(policy) };
@@ -225,7 +240,7 @@ export function persistentRoomWorkspaceToolSelectionViewForPolicy(policy: Persis
  * routing, memory, KB, artifact, and MCP tools remain omitted unless a later
  * policy explicitly reintroduces them.
  */
-export function getPersistentRoomToolPolicy(agentId: string, input: { workspaceToolsEnabled?: boolean; readOnlyWorkspaceToolsEnabled?: boolean; workspaceToolNames?: readonly string[]; workspaceAccessMode?: PersistentRoomWorkspaceAccessModeLike; bashEnabled?: boolean; bashRuntimeAllowed?: boolean } = {}): PersistentRoomToolPolicy {
+export function getPersistentRoomToolPolicy(agentId: string, input: { workspaceToolsEnabled?: boolean; readOnlyWorkspaceToolsEnabled?: boolean; workspaceToolNames?: readonly string[]; workspaceAccessMode?: PersistentRoomWorkspaceAccessModeLike; bashEnabled?: boolean; bashRuntimeAllowed?: boolean; outsideToolOffered?: boolean; asks?: { folder: boolean; commands: boolean } } = {}): PersistentRoomToolPolicy {
 	const workspaceToolsEnabled = input.workspaceToolsEnabled === true || input.readOnlyWorkspaceToolsEnabled === true;
 	const workspaceAccessMode = input.workspaceAccessMode ?? "bounded";
 	const workspaceToolNames = workspaceToolsEnabled
@@ -233,7 +248,7 @@ export function getPersistentRoomToolPolicy(agentId: string, input: { workspaceT
 			? [...persistentRoomDefaultWorkspaceToolNamesForMode(workspaceAccessMode)]
 			: validSelectedWorkspaceToolNamesForModeOrEmpty(input.workspaceToolNames, workspaceAccessMode)
 		: [];
-	const bashToolNames = workspaceAccessMode === "localFiles" && input.bashEnabled === true && input.bashRuntimeAllowed === true ? [PERSISTENT_ROOM_BASH_TOOL_NAME] : [];
+	const bashToolNames = workspaceAccessMode === "localFiles" && input.bashEnabled === true && input.bashRuntimeAllowed === true ? [PERSISTENT_ROOM_BASH_TOOL_NAME, ...(input.outsideToolOffered === true ? [PERSISTENT_ROOM_OUTSIDE_TOOL_NAME] : [])] : [];
 	const allowedToolNames = [
 		...PERSISTENT_ROOM_WEB_RESEARCH_TOOL_NAMES,
 		...PERSISTENT_ROOM_SHELF_TOOL_NAMES,
@@ -241,6 +256,9 @@ export function getPersistentRoomToolPolicy(agentId: string, input: { workspaceT
 		...PERSISTENT_ROOM_MCP_TOOL_NAMES,
 		...workspaceToolNames,
 		...bashToolNames,
+		// A live turn at the computer: the room asks for a folder in any room, and for commands where they could come on.
+		...(input.asks?.folder ? [PERSISTENT_ROOM_ASK_FOR_FOLDER_TOOL_NAME] : []),
+		...(input.asks?.commands ? [PERSISTENT_ROOM_ASK_FOR_COMMANDS_TOOL_NAME] : []),
 	];
 	const allowedSet = new Set<string>(allowedToolNames);
 	return {

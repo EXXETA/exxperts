@@ -1,8 +1,8 @@
 // The release payload check: every third-party npm package in the app tree
 // must be a non-dev entry of the root package-lock.json with the same name
 // and version, so the release scan reads it and sbom-app.cdx.json lists it.
-// (The vendored Node and the patched pi-mcp-adapter bytes are outside any
-// lockfile, as before.) scripts/bundle-release.mjs runs it right after the
+// (The vendored Node, the patched pi-mcp-adapter bytes and the patched bytes of
+// its @earendil-works/pi-ai copy are outside any lockfile, as before.) scripts/bundle-release.mjs runs it right after the
 // install.
 //
 //   node scripts/payload-lock-check.mjs <appRoot> [--lock <package-lock.json>]

@@ -711,7 +711,9 @@ try {
 	const stopped24 = namedIn(ws24b.frames, mark24b).find((id) => /^kr24b-a\d+$/.test(id))!;
 	const pageStopped = `${"slow part 1. slow part 2.".slice(0, shown24)}\n\n_Stopped._`;
 	const before24 = (await getThread(room24, conv24)).items ?? [];
-	await putThread(room24, conv24, [...before24.filter((item: any) => item.id !== stopped24), { kind: "assistant", id: stopped24, text: pageStopped, stoppedAt: shown24, streaming: false }]);
+	// The turn still closes after agent_end, and a save refused meanwhile would prove nothing: the page saves later than this.
+	const saved24 = [...before24.filter((item: any) => item.id !== stopped24), { kind: "assistant", id: stopped24, text: pageStopped, stoppedAt: shown24, streaming: false }];
+	await waitUntil(async () => (await putThread(room24, conv24, saved24)).status === 200, "room24 the page's save is taken", 20_000);
 	await waitUntil(async () => ((await getThread(room24, conv24)).items ?? []).some((item: any) => item.id === stopped24 && item.landed === true), "room24 the stopped answer landed", 20_000);
 	const kept24 = ((await getThread(room24, conv24)).items ?? []).find((item: any) => item.id === stopped24);
 	assert(kept24.stoppedAt === shown24 && kept24.text === pageStopped, `room24 a Stop's copy keeps its cut and its note, got ${JSON.stringify(kept24)}`);

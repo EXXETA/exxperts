@@ -185,6 +185,7 @@ Smokes: `node scripts/run-smokes.mjs state-home-move` and `node scripts/run-smok
 | `~/.exxperts/app/openai-compatible-gateways.json` | Saved OpenAI-compatible gateways (name, base URL, approved models with image support and context window, plus the per-model prices and caching capability detection read), when configured | yes |
 | `~/.exxperts/app/openai-compatible-ai-profile.json` | First gateway's profile policy | yes |
 | `~/.exxperts/app/usage.jsonl` | The Wallet ledger: one line per turn with tokens and cost; gateway turns are booked at the gateway's published price, a turn from before a price was on file is estimated at today's rate and marked with an approximation sign, and a turn nobody can price shows "no price on file" | yes |
+| `~/.exxperts/app/usage-reconciled.json` | Which session files the Wallet ledger was last matched against, so a start reads only the ones that changed; safe to delete, the next start then reads them all | yes |
 | `~/.exxperts/app/agents/`, `~/.exxperts/app/skills/` | User-created agents/skills | yes |
 | `~/.exxperts/app/artifacts/` | Approved artifacts (created on first use) | yes |
 | `~/.exxperts/app/kb-vaults.json` | Knowledge-vault config (created on first use) | yes |

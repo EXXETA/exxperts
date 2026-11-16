@@ -120,18 +120,6 @@
 .ai-profile-foot-link:disabled { opacity: 0.5; }
 /* Row management menu: the one affordance every ready profile row shares. */
 .ai-profile-menu-anchor { position: relative; display: inline-flex; }
-.ai-profile-menu-btn {
-	background: none;
-	border: none;
-	padding: 2px 8px;
-	font-size: 17px;
-	line-height: 1;
-	letter-spacing: 0.08em;
-	color: var(--muted);
-	border-radius: var(--exx-radius-control);
-}
-.ai-profile-menu-btn:hover,
-.ai-profile-menu-btn[aria-expanded="true"] { color: var(--fg); background: var(--panel-2); }
 /* Backdrop and menu render in a portal on <body> (the anchor rows live
    inside scroll containers that would clip an in-place popover, and the
    settings modal sits at z-index 70), so both stack above every host. */
@@ -187,10 +175,43 @@
 	gap: 10px;
 }
 .add-provider-key-form input { flex: 1; }
+/* Copilot's sign-in form: the address's name above the field, its hint under it. */
+.copilot-address-label {
+	flex-basis: 100%;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--fg);
+}
+.copilot-signin-form .copilot-address-hint {
+	flex-basis: 100%;
+	margin: 0;
+}
+/* On a phone the address gets a line of its own, so all of it stays readable;
+   its hint and any error line stay right under it, then Cancel and Sign in at
+   the right. */
+@media (max-width: 760px) {
+	.copilot-signin-form input { flex-basis: 100%; }
+	.copilot-signin-form .copilot-address-hint,
+	.copilot-signin-form .add-provider-key-error { order: 1; }
+	.copilot-signin-form button { order: 2; }
+	.copilot-signin-form input + button { margin-left: auto; }
+}
 .add-provider-key-error {
 	flex-basis: 100%;
 	color: var(--danger);
 	font-size: 13px;
+	/* Below it: the form's 12px and the pane's 24px, so the card's end stays off
+	   the dialog's edge. Any more would slide the next row's button under the pointer. */
+	scroll-margin-block: 12px calc(36px + var(--phone-keyboard-lift, 0px));
+}
+/* A provider's note sits under the form: two lines more, so the card's end clears the edge there too. */
+.add-provider-row-group:has(.add-provider-key-note) .add-provider-key-error {
+	scroll-margin-bottom: calc(68px + var(--phone-keyboard-lift, 0px));
+}
+/* The phone keyboard covers the pane's bottom without shrinking it, so the
+   last row needs that much more room to scroll its sentence clear. */
+.settings-dialog-pane:has(.add-provider-key-error) {
+	padding-bottom: calc(24px + var(--phone-keyboard-lift, 0px));
 }
 .add-provider-row-key-form,
 .add-provider-instructions {
@@ -270,7 +291,9 @@
 	color: var(--fg);
 	font-size: 13.5px;
 }
-.configure-profile-remove { margin-left: auto; color: var(--danger, #d33); }
+/* Remove profile ends the row on its right edge (--exx-btn-inset-sm), as far
+   as the pane's padding (16 px at its narrowest) leaves its 4 px focus ring. */
+.configure-profile-remove { margin-left: auto; margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 16px - 4px)); }
 /* A gateway model row is one question and a set of facts: approve it, and
    here is what it can do. Images, reasoning and the context figure read as
    quiet badges; web search stays the row's one interactive tick because it can
@@ -308,7 +331,7 @@
 	cursor: default;
 }
 .gateway-model-bulk-label { color: var(--muted); }
-/* Mirrors .menu-appearance-seg at list scale. As two bare links the pair read as
+/* A joined pair, as the theme's switch is, at list scale. As two bare links the pair read as
    prose in the middle of a header, and "all on off" was one phrase nobody could
    see the seam in; bordered and joined, they read as the two buttons they are. */
 .gateway-model-bulk-seg {
@@ -332,26 +355,6 @@
 	color: var(--fg);
 	outline: none;
 }
-/* The header's two real actions, apply and use detected. Same secondary tokens
-   as .inline-action, without its uppercase display face: at this size the
-   toolbar has to stay quieter than the list it sits on. */
-.gateway-model-bulk-button {
-	background: var(--exx-action-secondary-bg);
-	border: 1px solid var(--exx-action-secondary-border);
-	border-radius: var(--exx-radius-sm);
-	color: var(--exx-action-secondary-fg);
-	font-size: var(--exx-font-size-xs);
-	padding: 3px 8px;
-	cursor: pointer;
-}
-.gateway-model-bulk-button:hover:not(:disabled),
-.gateway-model-bulk-button:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	border-color: var(--border);
-	color: var(--fg);
-	outline: none;
-}
-.gateway-model-bulk-button:disabled { opacity: 0.45; cursor: not-allowed; }
 /* Use detected acts on the whole list rather than on a column, and the gap to
    its right-hand seat says so. At the mobile widths the row wraps anyway, and
    auto margin on a wrapped line collapses to nothing, so it degrades with the
@@ -481,24 +484,6 @@
 	white-space: nowrap;
 	cursor: default;
 }
-/* The one way into a row's field editors: a small word, not a button, so fifty
-   rows do not become fifty toolbars. */
-.gateway-model-adjust {
-	background: transparent;
-	border: 0;
-	color: var(--fg-soft);
-	font-size: var(--exx-font-size-xs);
-	padding: 3px 6px;
-	cursor: pointer;
-	border-radius: var(--exx-radius-sm);
-}
-.gateway-model-adjust:hover,
-.gateway-model-adjust:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	color: var(--fg);
-	outline: none;
-}
-.gateway-model-adjust[aria-expanded="true"] { color: var(--fg); }
 /* The fold takes the row's full width on its own line, one editor per fact
    plus the detection note, so opening it never reflows the line above it. */
 .gateway-model-adjust-fold {

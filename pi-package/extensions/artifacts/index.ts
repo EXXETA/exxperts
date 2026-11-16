@@ -1723,7 +1723,10 @@ export async function renderHtmlToPreviewImage(html: string): Promise<{ pngBase6
 		const page = await browser.newPage({ viewport: { width: HTML_PREVIEW_SLIDE_W, height: HTML_PREVIEW_SLIDE_H }, deviceScaleFactor: 2, javaScriptEnabled: false });
 		await page.route("**/*", (route: any) => route.abort());
 		await page.setContent(html, { waitUntil: "load", timeout: HTML_PREVIEW_RENDER_TIMEOUT_MS });
-		const buf: Buffer = await page.screenshot({ type: "png" });
+		// A just-launched Chromium now and then refuses a capture of a page it has
+		// loaded ("Unable to capture screenshot"), and the card would lose its
+		// picture. The same page captures on a second try; a second refusal throws.
+		const buf: Buffer = await page.screenshot({ type: "png" }).catch(() => page.screenshot({ type: "png" }));
 		if (buf.byteLength > HTML_PREVIEW_MAX_IMAGE_BYTES) return null;
 		return { pngBase64: buf.toString("base64"), bytes: buf.byteLength };
 	} finally {

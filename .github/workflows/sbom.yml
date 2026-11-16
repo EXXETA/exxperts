@@ -1,10 +1,11 @@
 name: SBOM
 
 # Two supply-chain nets, complementing Dependabot's advisory matching:
-# - CycloneDX SBOMs for the app and the runtime, attached to every release
+# - CycloneDX SBOMs for the app, the runtime, the desktop shell and the
+#   document packages, attached to every release
 #   (and kept as run artifacts on scheduled/manual runs), so any scanner or
 #   audit can consume the full dependency inventory without cloning the repo.
-# - A weekly OSV scan over both lockfiles, which draws on a broader database
+# - A weekly OSV scan over every lockfile, which draws on a broader database
 #   than Dependabot (including malicious-package reports) and fails loudly.
 # Release-time SBOM attachment lives in release.yml (a release created with
 # the workflow token cannot fire this workflow's release trigger). This
@@ -33,12 +34,13 @@ jobs:
 
       - name: Generate SBOMs (CycloneDX)
         run: |
-          # All three SBOMs read the lockfiles directly: no installed tree is
+          # All four SBOMs read the lockfiles directly: no installed tree is
           # needed, so nothing platform-specific (mac-only optionals, runtime
           # workspace links) can make the inventory fail.
           npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file sbom-app.cdx.json
           cd runtime && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file ../sbom-runtime.cdx.json
           cd ../apps/desktop && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --output-format JSON --output-file ../../sbom-desktop.cdx.json
+          cd ../document-tools && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file ../../sbom-document-tools.cdx.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -47,6 +49,7 @@ jobs:
             sbom-app.cdx.json
             sbom-runtime.cdx.json
             sbom-desktop.cdx.json
+            sbom-document-tools.cdx.json
 
   osv-scan:
     permissions:
@@ -59,3 +62,4 @@ jobs:
         --lockfile=./package-lock.json
         --lockfile=./runtime/package-lock.json
         --lockfile=./apps/desktop/package-lock.json
+        --lockfile=./apps/document-tools/package-lock.json

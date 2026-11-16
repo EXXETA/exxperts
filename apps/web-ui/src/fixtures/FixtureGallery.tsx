@@ -116,7 +116,7 @@ function HomeFixtureScreen({ fixture, theme }: { fixture: HomeFixtureState; them
 								<h2>No active rooms yet.</h2>
 								<p>Create a room to keep memory, threads, and workspace context separate.</p>
 							</div>
-							<button className="landing-action" onClick={noop}>Create room</button>
+							<button className="rs-btn rs-btn-primary landing-action" onClick={noop}>Create room</button>
 						</article>
 					)}
 					{firstRoomStatus && roomCard(firstRoomStatus)}
@@ -166,7 +166,7 @@ function fixtureActionButtons(actions: InRoomChatActionItem[] | undefined) {
 		return (
 			<button
 				key={`${action.label}-${action.title ?? ""}-${index}`}
-				className={`icon-btn${iconOnly ? " icon-btn-square" : ""}`}
+				className={iconOnly ? "rs-btn rs-btn-icon rs-btn-sm" : "rs-btn rs-btn-sm"}
 				title={action.title}
 				aria-label={action.ariaLabel}
 				disabled={action.disabled}

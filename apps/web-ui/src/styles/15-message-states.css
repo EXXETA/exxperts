@@ -43,16 +43,11 @@
 	gap: 8px;
 	margin-top: 8px;
 }
-.failure-actions .rs-btn {
-	min-height: 0;
-	padding: 5px 12px;
-	font-size: 13px;
-}
 .failure-actions .rs-btn + .failure-details-toggle { margin-left: 8px; }
-/* A finger needs a 44px target: on a touch screen a failure line's buttons
-   grow to it, a folded line's Details too; with a mouse they keep their small look. */
+/* A finger needs a 44px target: on a touch screen a folded line's Details
+   grows to it, as the line's buttons do (01-base.css); with a mouse it keeps
+   its small look. */
 @media (hover: none) {
-	.failure-actions .rs-btn,
 	.failure-details-toggle { min-height: 44px; }
 }
 .failure-details-toggle {
@@ -176,22 +171,6 @@
 	color: var(--fg);
 	font-size: 12px;
 	font-weight: 600;
-}
-.connection-banner-action {
-	border: 1px solid var(--border);
-	background: transparent;
-	color: var(--fg);
-	border-radius: 999px;
-	padding: 2px 10px;
-	font: inherit;
-	cursor: pointer;
-}
-.connection-banner-action:hover,
-.connection-banner-action:focus-visible {
-	background: var(--fg);
-	border-color: var(--fg);
-	color: var(--bg);
-	outline: none;
 }
 
 /* A quiet line in the working dot's place, such as "Reconnecting…". */

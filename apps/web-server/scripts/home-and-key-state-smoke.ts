@@ -17,7 +17,7 @@
 //   replaced elsewhere (another window), the line goes when the person comes
 //   back to this window, with nothing reopened;
 // - every failure line's buttons (a folded line's Details too), and the
-//   buttons of the notices above the message box (Set workspace and Dismiss,
+//   buttons of the notices above the message box (Choose folder and Dismiss,
 //   a room stopped on a provider with no key), are at least 44 CSS px tall at
 //   390 px on a touch screen, and keep their desktop size with a mouse.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
+import { CHOOSE_FOLDER, DISMISS } from "../src/room-box/card-text.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -175,7 +176,7 @@ function readsOf(page: Page, pathname: string): { started: () => number; settled
 async function buttonsIn(row: ReturnType<Page["locator"]>): Promise<Array<{ text: string; height: number; minHeight: string; padding: string; fontSize: string }>> {
 	return row.locator("button").evaluateAll((els) => els.map((el) => {
 		const style = getComputedStyle(el);
-		return { text: (el.textContent ?? "").trim(), height: el.getBoundingClientRect().height, minHeight: style.minHeight, padding: style.padding, fontSize: style.fontSize };
+		return { text: (el.getAttribute("aria-label") ?? el.textContent ?? "").trim(), height: el.getBoundingClientRect().height, minHeight: style.minHeight, padding: style.padding, fontSize: style.fontSize };
 	}));
 }
 
@@ -362,10 +363,10 @@ try {
 					const small = buttons.filter((button) => button.height < 44);
 					assert(small.length === 0, `at ${label} every button of the ${entry.failure} line is at least 44 px tall, got ${JSON.stringify(small)}`);
 				} else {
-					// The desktop look as it was: the small buttons, their padding and type, and the toggle beside them.
+					// The desktop look: the buttons the family's small size (01-base.css), and the toggle beside them as it was.
 					const asBefore = (button: (typeof buttons)[number]) => button.text === "Show details"
 						? button.minHeight === "auto" && button.padding === "0px"
-						: button.minHeight === "0px" && button.padding === "5px 12px";
+						: Math.round(button.height) === 28 && button.padding === "0px 10px";
 					const changed = buttons.filter((button) => button.height >= 44 || button.fontSize !== "13px" || !asBefore(button));
 					assert(changed.length === 0, `at ${label} the ${entry.failure} line's buttons keep their size, got ${JSON.stringify(changed)}`);
 				}
@@ -384,8 +385,8 @@ try {
 		await touch.close();
 	});
 
-	// The rows of the notices above the message box: the workspace nudge (Set workspace, Dismiss) and a room stopped on its model.
-	await check("the room notices' buttons (Set workspace, a stopped room's) are at least 44 px tall at 390 px on a touch screen, and keep their size on the desktop", async () => {
+	// The rows of the notices above the message box: the no-folder line (Choose folder, Dismiss) and a room stopped on its model.
+	await check("the room notices' buttons (Choose folder, a stopped room's) are at least 44 px tall at 390 px on a touch screen, and keep their size on the desktop", async () => {
 		// A conversation left on a provider whose key is not saved: resuming it stops the room with the notice.
 		const stoppedRoom = newRoom("Stopped Room");
 		roomModels.writeRoomModels(stoppedRoom, { conversation: ON_KEY, memory: ON_KEY });
@@ -400,7 +401,7 @@ try {
 		seed.appendMessage({ role: "assistant", content: [{ type: "text", text: "Earlier answer." }], api: "openai-completions", provider: NO_KEY.provider, model: NO_KEY.model, usage, stopReason: "stop", timestamp: Date.now() } as any);
 		const touch = await launched.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 		const measured: string[] = [];
-		for (const [room, notice, expect] of [["Failure Room 1", ".room-workspace-nudge:not(.room-model-notice)", ["Set workspace", "Dismiss"]], ["Stopped Room", ".room-model-notice", ["Choose another model", "Add key"]]] as const) {
+		for (const [room, notice, expect] of [["Failure Room 1", ".room-workspace-nudge:not(.room-model-notice)", [CHOOSE_FOLDER, DISMISS]], ["Stopped Room", ".room-model-notice", ["Choose another model", "Add key"]]] as const) {
 			for (const [label, context] of [["390 px touch", touch], ["1280 px desktop", desktop]] as const) {
 				const page = await context.newPage();
 				await openHome(page);
@@ -413,8 +414,8 @@ try {
 					const small = buttons.filter((button) => button.height < 44);
 					assert(small.length === 0, `at ${label} every button of ${room}'s notice is at least 44 px tall, got ${JSON.stringify(small)}`);
 				} else {
-					// As on main: the shared button's 32 px floor, and the quiet Dismiss with none.
-					const changed = buttons.filter((button) => button.height >= 44 || button.minHeight !== (button.text === "Dismiss" ? "auto" : "32px"));
+					// The family's small button, 28 px, the Dismiss cross a 28 px square.
+					const changed = buttons.filter((button) => button.height >= 44 || Math.round(button.height) !== 28);
 					assert(changed.length === 0, `at ${label} ${room}'s notice keeps its buttons' size, got ${JSON.stringify(changed)}`);
 				}
 				measured.push(`${room} ${label}: ${buttons.map((button) => `${button.text} ${Math.round(button.height)} (${button.minHeight}, ${button.padding}, ${button.fontSize})`).join(", ")}`);

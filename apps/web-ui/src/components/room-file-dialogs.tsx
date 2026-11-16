@@ -88,7 +88,7 @@ function SaveAsDialog({ shelfName, onSave, onCancel }: { shelfName: string; onSa
 				/>
 				<div className="checkpoint-preview-actions">
 					<button className="rs-btn" onClick={onCancel}>Cancel</button>
-					<button className="rs-btn rs-btn-primary" disabled={!draft.trim()} onClick={commit}>Choose folder…</button>
+					<button className="rs-btn rs-btn-primary" disabled={!draft.trim()} onClick={commit}>Choose folder</button>
 				</div>
 			</section>
 		</div>

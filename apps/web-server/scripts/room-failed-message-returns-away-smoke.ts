@@ -32,6 +32,7 @@ import path from "node:path";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN } from "./smoke-server-process.js";
 import { closeContext } from "./smoke-close-context.js";
 import { assert, closeFailureRoom, MODEL_NAME, openFailureRoom, requestUserTexts, TURN_RUNNING_LINE, waitUntil } from "./room-failed-message-returns-setup.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 const { page, ctx, composer, agentId, agentDir, agentsRoot, tempRoot, tempHome, repoRoot, port, baseUrl, retryWaits, startServer, killServer, stopServer, sendToPage, gap, continueAnswer, holdAnswers, open, stepOut, errorTexts, causes, bubbles, status, settled, send, ask, inBox, isReturned, retryNotes, stillBusyReturned } = await openFailureRoom();
 try {
@@ -130,7 +131,7 @@ try {
 	await page.locator(".composer-staged-card:not(.uploading)", { hasText: "while-running.txt" }).waitFor({ timeout: 5000 });
 	const withFileBefore = requestUserTexts.length;
 	const answersBeforeFile = await page.getByText("Answer from claude-haiku-5-5.").count();
-	await composer.press("Enter");
+	await sendFromBox(page);
 	await waitUntil(() => requestUserTexts.slice(withFileBefore).some((texts) => texts.at(-1)?.includes("Refused while running, with a file.") ?? false), "the message is sent again with its file", 15000);
 	await settled();
 	await waitUntil(async () => (await page.getByText("Answer from claude-haiku-5-5.").count()) > answersBeforeFile, "the message sent again with its file is answered");
@@ -159,7 +160,7 @@ try {
 	await page.locator(".composer-staged-card:not(.uploading)", { hasText: staleName }).waitFor({ timeout: 5000 });
 	await page.unroute(/\/api\/persistent-agents\/[^/]+\/files(\?|$)/);
 	const staleBefore = requestUserTexts.length;
-	await composer.press("Enter");
+	await sendFromBox(page);
 	await waitUntil(() => requestUserTexts.slice(staleBefore).some((texts) => texts.at(-1)?.includes("Refused while running, dropped and sent.") ?? false), "the message is sent again with its file", 15000);
 	await settled();
 	await page.locator('button.send-btn[aria-label="Send"]').waitFor({ timeout: 10000 });
@@ -256,7 +257,10 @@ try {
 	// A refused key: the key notice says it, and no red line beside it.
 	const linesBeforeKey = (await errorTexts()).length;
 	await send("Key refused, please.");
-	await isReturned("Key refused, please.", "a message whose key was refused");
+	// The key's own failure puts the message in the box at once; the bubble goes with the server's hand-back, after the turn has ended.
+	await inBox("Key refused, please.", "a message whose key was refused");
+	await waitUntil(async () => (await bubbles("Key refused, please.")) === 0, "a message whose key was refused: its bubble is gone", 15000);
+	assert((await composer.inputValue()) === "Key refused, please.", `a message whose key was refused: the message is still in the box once its bubble is gone, got ${JSON.stringify(await composer.inputValue())}`);
 	await settled();
 	await page.waitForTimeout(500);
 	assert((await errorTexts()).length === linesBeforeKey, `no red line beside the key notice, got ${JSON.stringify((await errorTexts()).slice(linesBeforeKey))}`);
@@ -330,7 +334,7 @@ try {
 			}
 			assert(stripped >= 1, "the run before the update has no mark in its session file");
 		}
-		const sentWithPrefix = requestUserTexts.some((texts) => texts.some((text) => text.includes(scheduledPrompt) && text.includes("Background scheduled execution does not have Bash")));
+		const sentWithPrefix = requestUserTexts.some((texts) => texts.some((text) => text.includes(scheduledPrompt) && text.includes("A scheduled run can't run commands")));
 		assert(sentWithPrefix === bash, `the scheduled prompt carries the Bash prefix only with Bash on (Bash ${bash ? "on" : "off"}: ${sentWithPrefix})`);
 		await open();
 		await page.waitForTimeout(1500);
@@ -433,7 +437,7 @@ try {
 		await page.locator(".composer-staged-card:not(.uploading)").waitFor({ timeout: 15000 });
 		const before = requestUserTexts.length;
 		await composer.fill(text);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(() => requestUserTexts.slice(before).some((texts) => texts.some((typed) => typed.includes(fileName))), `the message with ${fileName} reached the model`);
 		await settled();
 		await waitUntil(async () => (await errorTexts()).at(-1) === goneAbove, `the message with its file stays above, got ${JSON.stringify((await errorTexts()).at(-1))}`, 10000);

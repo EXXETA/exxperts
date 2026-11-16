@@ -38,6 +38,8 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { sendFromBox } from "./smoke-wait.js";
+import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../src/room-approval-titles.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -301,7 +303,7 @@ try {
 	fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: { [KEY_PROVIDER]: { baseUrl: endpointUrl } } }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ [KEY_PROVIDER]: { type: "api_key", key: "synthetic-anthropic-key" } }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false, baseDelayMs: 1000, provider: { maxRetries: 0 } } }, null, 2), { mode: 0o600 });
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(tempHome, "workspace");
 	fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
 	const agents = await import("../src/persistent-agents.js");
 	const roomId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Thinking Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
@@ -387,7 +389,7 @@ try {
 			thought2 = hold();
 			answer = hold();
 			await composer.fill(text);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => !(await idle()), `"${text}" is being answered`);
 		};
 		const answered = async () => {
@@ -421,12 +423,14 @@ try {
 			}
 			return { text: "", into: 0 };
 		});
-		// Allow the card's ask until `until` holds.
+		// The room's command question, in the panel above the box; its Run once once the panel's pause is over.
+		const runQuestion = page.locator(".ask-panel").filter({ hasText: PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE });
+		const runOnce = runQuestion.locator('.rs-btn-primary[data-awake="1"]');
+		// Run each command the room asks about until `until` holds.
 		const allowAll = async (until: () => Promise<boolean>, label: string) => {
-			const allow = page.locator(".wk-ask .wk-btn.primary").last();
 			await waitUntil(async () => {
 				if (await until()) return true;
-				if (await allow.count()) await allow.click().catch(() => {});
+				if (await runOnce.count()) await runOnce.click().catch(() => {});
 				return false;
 			}, label, 30_000);
 		};
@@ -575,10 +579,9 @@ try {
 		// Thinking after a step: a row of the work card.
 		await scene("card", async () => {
 			await ask("Please run a step, then think about it.");
-			const allow = page.locator(".wk-ask .wk-btn.primary").last();
 			const rowHead = page.locator('.wk-card .wk-row[data-s="running"] button.wk-open').last();
-			await waitUntil(async () => (await allow.count()) > 0 || (await rowHead.count()) > 0, "the step asks or the thinking starts", 15_000);
-			if (await allow.count()) await allow.click();
+			await waitUntil(async () => (await runOnce.count()) > 0 || (await rowHead.count()) > 0, "the step asks or the thinking starts", 15_000);
+			if (await runOnce.count()) await runOnce.click();
 			await rowHead.waitFor({ timeout: 15_000 });
 			// A while of thinking, its words arriving all along: none of them may show.
 			await page.waitForTimeout(1200);
@@ -617,7 +620,7 @@ try {
 			await head.waitFor({ timeout: 10_000 });
 			await head.click();
 			thought.release();
-			await allowAll(async () => (await page.locator(".wk-card .wk-row").count()) >= 7 && (await page.locator(".wk-ask").count()) === 0 && endpointState.open > 0, "the seven steps ran");
+			await allowAll(async () => (await page.locator(".wk-card .wk-row").count()) >= 7 && (await runQuestion.count()) === 0 && endpointState.open > 0, "the seven steps ran");
 			const capButton = turn.locator(".wk-card .wk-more");
 			await waitUntil(async () => (await capButton.count()) > 0, "the cap folds the earlier rows", 3000).catch(() => {});
 			const more = squash(await capButton.last().innerText().catch(() => ""));
@@ -649,8 +652,10 @@ try {
 			await waitUntil(async () => same(await passageOf(".wk-card .wk-out-thought")), "the row shows the passage", 3000).catch(() => {});
 			const after = await passageOf(".wk-card .wk-out-thought");
 			expect(same(after), `an open thought that becomes a card's row keeps the passage the person read (${JSON.stringify(before)} then ${JSON.stringify(after)})`);
-			const allow = page.locator(".wk-ask .wk-btn.primary").last();
-			if (await allow.count()) await allow.click();
+			if (await runQuestion.count()) {
+				await runOnce.waitFor({ timeout: 5000 });
+				await runOnce.click();
+			}
 		});
 
 		// A NUL in a provider's thinking is a character of the thought, not a break between two.
@@ -722,7 +727,7 @@ try {
 			}, { steps, rows, question });
 			const inOrder = (o: Awaited<ReturnType<typeof order>>) => o.first >= 0 && o.steps.length > 0 && o.first < o.steps[0] && o.second > o.steps[0] && o.second < o.thought && (o.steps.length < 2 || o.second < o.steps[1]);
 			await ask(question);
-			await allowAll(async () => (await page.locator(".wk-ask .wk-btn.primary").count()) === 0 && (await textOf(".messages")).includes("Next part.") && endpointState.open > 0, "the second stretch thinks");
+			await allowAll(async () => (await runQuestion.count()) === 0 && (await textOf(".messages")).includes("Next part.") && endpointState.open > 0, "the second stretch thinks");
 			await waitUntil(async () => inOrder(await order()), "each note sits above its step and thinking", 3000).catch(() => {});
 			const live = await order();
 			expect(inOrder(live), `${look}, while the second stretch thinks: each note above its own step and thinking (${JSON.stringify(live)})`);

@@ -59,11 +59,25 @@ function readContext(body: unknown): RemoteClientContext {
 	};
 }
 
-// Set once, and for good. "other": the server says another person is signed in than the one this page was
+// Set once, and for good. "other": a read says another person is signed in than the one this page was
 // opened for. "unknown": the page's first read failed, so it never knew who it was opened for, and the
-// first identity that arrives cannot be taken for the same person.
-export type PersonChange = "other" | "unknown";
+// first identity that arrives cannot be taken for the same person. A refusal: the server refused a request
+// and said this page ends, with its own words for the person, or none (apiFetch).
+export type PersonChange = "other" | "unknown" | { readonly refusal: string | null };
 let personChange: PersonChange | null = null;
+
+// What the cover says for each ending; a refusal says the server's own words.
+const PAGE_ENDED_LINES = {
+	other: "You can't use this page any more: a different account is now signed in to exxperts in this browser.",
+	unknown: "This page could not tell who is signed in. Reload to carry on.",
+	refusedWithoutWords: "You can't use this page any more. Reload to see what you can do next.",
+} as const;
+
+/** The cover's line for an ended page. */
+export function pageEndedLine(change: PersonChange): string {
+	if (typeof change === "string") return PAGE_ENDED_LINES[change];
+	return change.refusal ?? PAGE_ENDED_LINES.refusedWithoutWords;
+}
 
 function setKnown(next: RemoteClientContext): void {
 	known = next;
@@ -75,8 +89,8 @@ function setKnown(next: RemoteClientContext): void {
 // How long a read may take before it counts as unanswered: a stalled one must not hold every later retry behind it.
 const READ_DEADLINE_MS = 10_000;
 
-// null when no usable answer came; a 401 has already sent the page to sign-in, and the server's refusal of the person
-// this page names has already ended it (apiFetch).
+// null when no usable answer came; a 401 has already sent the page to sign-in, and a refusal that ends the page has
+// already ended it (apiFetch).
 async function readAnswer(): Promise<RemoteClientContext | null> {
 	try {
 		const res = await apiFetch("/api/remote/client-context", { signal: AbortSignal.timeout(READ_DEADLINE_MS) });
@@ -86,7 +100,7 @@ async function readAnswer(): Promise<RemoteClientContext | null> {
 	}
 }
 
-/** Whether this page can no longer be taken for the person it was opened for. */
+/** Whether this page has ended: it can no longer be taken for the person it was opened for, or the server ended it. */
 export function personHasChanged(): boolean {
 	return personChange !== null;
 }
@@ -99,10 +113,10 @@ export function usePersonChanged(): PersonChange | null {
 	);
 }
 
-/** For apiFetch: the server refused the person this page names, so another person is signed in now. */
-export function endPageForAnotherPerson(): void {
-	// Requests already in flight may all come back refused: the page ends once.
-	if (!personChange) endPage("other");
+/** For apiFetch: the server refused a request and said this page ends, with these words for the person, or none. */
+export function endPageRefused(refusal: string | null): void {
+	// Requests already in flight may all come back refused: the page ends once, with the first refusal's words.
+	if (!personChange) endPage({ refusal });
 }
 
 function endPage(kind: PersonChange): "person changed" {
@@ -164,7 +178,9 @@ async function readOnce(): Promise<RefreshResult> {
 	if (!cached) { await fetchRemoteClientContext(); return answered ? "answered" : "no answer"; }
 	await cached;
 	const next = await readAnswer();
-	if (!next) return personChange ? "person changed" : "no answer";
+	// The page may have ended while this answer's body was still arriving: it is not taken, and the ending stays.
+	if (personChange) return "person changed";
+	if (!next) return "no answer";
 	answered = true;
 	const first = known?.person ?? null;
 	if (first && next.person && first.id !== next.person.id) return endPage("other");
@@ -189,6 +205,15 @@ export function pagePersonId(): string | null {
 export function pagePersonProtocols(): string[] | undefined {
 	const person = pagePersonId();
 	return person === null ? undefined : ["exxperts", `exxperts-person.${person}`];
+}
+
+/**
+ * Whether this page may be on a shared server: it knows it is, or its first read never answered, so it took itself
+ * for this computer without knowing. Before that first read ends, no. A page that may be asks client-context before
+ * it rebuilds a dropped connection, so a refused person ends the page instead of retrying for good.
+ */
+export function mayBeOnSharedServer(): boolean {
+	return known !== null && (known.sharedServer || !answered);
 }
 
 /** The probe's answer once it has come; null before, for code outside a component. */

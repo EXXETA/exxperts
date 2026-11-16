@@ -28,15 +28,6 @@
 	word-break: break-word;
 }
 .preview-close {
-	background: var(--fg);
-	color: var(--bg);
-	border: 1px solid var(--fg);
-	border-radius: 999px;
-	width: 30px;
-	height: 30px;
-	padding: 0;
-	display: grid;
-	place-items: center;
 	flex: none;
 }
 .preview-body {

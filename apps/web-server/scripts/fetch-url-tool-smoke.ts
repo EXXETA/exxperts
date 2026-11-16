@@ -2,7 +2,9 @@
 // SSRF guard (internal/private/reserved hosts and non-http schemes must be
 // refused), the optional host allowlist, and the disable kill-switch. Network
 // egress is deliberately NOT exercised so the test is deterministic offline.
-const factory = (await import("../../../pi-package/extensions/fetch_url/index.js")).default;
+// A redirect to another host is followed only with the web reader's mark on
+// the call's input; a field the model could write does nothing.
+const { default: factory, FOLLOWS_OTHER_HOSTS } = await import("../../../pi-package/extensions/fetch_url/index.js");
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -79,6 +81,7 @@ delete process.env.EXXETA_FETCH_URL_DISABLED;
 			res.on("close", () => clearInterval(timer));
 			return;
 		}
+		if (req.url === "/elsewhere") { res.writeHead(302, { location: `http://localhost:${port}/notes.txt` }); res.end(); return; }
 		if (req.url === "/missing.json") { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "not found; use /v2/notes" })); return; }
 		if (req.url === "/long-404") { res.writeHead(404, { "content-type": "text/plain" }); res.end("gone ".repeat(4_000)); return; }
 		if (req.url === "/broken") { res.writeHead(500, { "content-type": "text/html" }); res.end("<html><head><title>Server Error</title></head><body><h1>Server Error</h1><p>Something broke on our side, please try again later.</p></body></html>"); return; }
@@ -102,6 +105,13 @@ delete process.env.EXXETA_FETCH_URL_DISABLED;
 		assert(stepPlainLine(toolText(missing)) === "The site answered 404 Not Found.", `the card shows only the plain line, got ${stepPlainLine(toolText(missing))}`);
 		const fine = await local.execute("smoke", { url: `http://127.0.0.1:${port}/notes.txt` });
 		assert(fine?.isError !== true && toolText(fine).includes("five minutes"), `a page that answers is read, got ${toolText(fine)}`);
+		const elsewhere = `http://127.0.0.1:${port}/elsewhere`;
+		const unmarked = await local.execute("smoke", { url: elsewhere });
+		assert(unmarked?.isError === true && toolText(unmarked).includes(`http://localhost:${port}/notes.txt`) && toolText(unmarked).includes("was not opened"), `without the mark another host is handed back, got ${toolText(unmarked)}`);
+		const written = await local.execute("smoke", { url: elsewhere, followsOtherHosts: true, "exxperts.fetch_url.followsOtherHosts": true });
+		assert(written?.isError === true && toolText(written).includes("was not opened"), `a field the model writes does not follow, got ${toolText(written)}`);
+		const marked = await local.execute("smoke", { url: elsewhere, [FOLLOWS_OTHER_HOSTS]: true });
+		assert(marked?.isError !== true && toolText(marked).includes("five minutes") && toolText(marked).includes(`Source: [http://localhost:${port}/notes.txt]`), `with the mark another host is followed, got ${toolText(marked)}`);
 		const endsWithin = (result: Promise<any>, ms: number) => {
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			return Promise.race([result, new Promise((resolve) => { timer = setTimeout(() => resolve("still reading"), ms); })]).finally(() => clearTimeout(timer));

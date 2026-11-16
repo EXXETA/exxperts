@@ -48,6 +48,7 @@ import { chromium, type Page, type Route, type WebSocketRoute } from "playwright
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 import { PendingRemovals } from "../../web-ui/src/room-thread-items.js";
 import { persistentRoomSettingsNotAppliedFrame } from "../src/persistent-room-workspace-policy.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -476,7 +477,7 @@ try {
 		const type = async (page: Page, text: string) => {
 			const composer = page.locator("textarea").first();
 			await composer.fill(text);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => (await page.locator(".bubble-row.user").filter({ hasText: text }).count()) > 0, `"${text}" is sent`);
 		};
 		const sendGated = async (page: Page, text: string) => {
@@ -978,7 +979,7 @@ try {
 			const { page } = room;
 			const composer = page.locator("textarea").first();
 			await composer.fill(`@${rooms["Asked Room"]} ${question}`);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			const add = page.getByRole("button", { name: "Add to this conversation" });
 			await add.first().waitFor({ timeout: 30_000 });
 			await add.first().click();

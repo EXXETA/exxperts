@@ -1,14 +1,16 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
-import { resolvePersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
+import type { FastifyRequest } from "fastify";
+import { readPersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
 import { resolveShelfFilePath } from "./persistent-room-shelf.js";
 import { listTaskLedgerRecords, appendTaskLedgerExport } from "./persistent-room-task-ledger.js";
 import { SAFE_SEGMENT, validateArtifactPath } from "../../../pi-package/extensions/artifacts/index.js";
 import { app } from "./server-app.js";
 import { ARTIFACT_SECURITY_HEADERS } from "./request-checks.js";
 import { PLAIN_TEXT_PREVIEW_EXTENSIONS } from "./plain-text-preview.js";
+import { serverHooks } from "./server-hooks.js";
+import { roomIdOfTask } from "./task-room-lookup.js";
 
 // Servable artifact types. .md is served as text/plain deliberately so markdown
 // source renders inert in a tab rather than as HTML. Named explicitly rather
@@ -33,35 +35,16 @@ function artifactContentType(extension: string): string | null {
 	return null;
 }
 
-// The room that owns a task, resolved by probing each room's ledger for the
-// record file (rooms are few; this is a handful of existence checks). Shelf
-// continuity (files core slice) needs it because the artifact routes are
-// task-scoped while migrated/absorbed files live under the owning room.
-function findRoomIdForTask(taskId: string): string | null {
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(PERSISTENT_AGENTS_ROOT, { withFileTypes: true });
-	} catch {
-		return null;
-	}
-	for (const entry of entries) {
-		if (!entry.isDirectory() || !/^[a-zA-Z0-9_-]{1,160}$/.test(entry.name)) continue;
-		try {
-			if (fs.existsSync(path.join(PERSISTENT_AGENTS_ROOT, entry.name, "runtime", "task-ledger", `${taskId}.json`))) return entry.name;
-		} catch {
-			// keep probing
-		}
-	}
-	return null;
-}
-
 // A task's shelf file, served/exported through the task-scoped routes below:
 // membership of `files/<name>` in THIS task's ledger record is the
 // authorization, and the bytes come from the owning room's shelf. Returns null
-// (route falls through to 404) for anything that is not exactly that.
-function resolveTaskShelfFile(taskId: string, name: string): { roomId: string; absolutePath: string; stat: fs.Stats; extension: string } | null {
+// (route falls through to 404) for anything that is not exactly that. The
+// owning room is the edition's answer for this request (server-hooks.ts,
+// taskRoomOf), else roomIdOfTask's.
+async function resolveTaskShelfFile(req: FastifyRequest, taskId: string, name: string): Promise<{ roomId: string; absolutePath: string; stat: fs.Stats; extension: string } | null> {
 	if (!name || name.includes("/") || name.startsWith(".")) return null;
-	const roomId = findRoomIdForTask(taskId);
+	const { taskRoomOf } = serverHooks();
+	const roomId = await (taskRoomOf ? taskRoomOf(req, taskId) : roomIdOfTask(taskId));
 	if (!roomId) return null;
 	let record;
 	try {
@@ -97,27 +80,31 @@ app.get("/api/artifacts/:taskId/*", async (req, reply) => {
 	if (rest.split("/").some((segment) => segment.startsWith("."))) return reply.code(404).send({ error: "Artifact not found." });
 	// Store path first (pre-absorb tasks and in-flight runs), then the shelf
 	// (files core slice: migrated/absorbed rows carry files/<name> paths but keep
-	// their task-scoped URLs, so the client's URL derivation never changes).
+	// their task-scoped URLs, so the client's URL derivation never changes). An
+	// edition that answers taskRoomOf skips the store: the store is one folder
+	// per server, and only the shelf belongs to the room it answered.
 	let servePath: string | null = null;
 	let serveName = "";
 	let serveExtension = "";
 	let stat: fs.Stats | null = null;
-	try {
-		const target = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
-		// lstat, not stat: a symlink under the task folder must not be followed
-		// out of the store, so refuse anything that is not a real regular file.
-		const lstat = fs.lstatSync(target.fullPath);
-		if (lstat.isFile()) {
-			servePath = target.fullPath;
-			serveName = path.basename(target.relativePath);
-			serveExtension = target.extension;
-			stat = lstat;
+	if (!serverHooks().taskRoomOf) {
+		try {
+			const target = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
+			// lstat, not stat: a symlink under the task folder must not be followed
+			// out of the store, so refuse anything that is not a real regular file.
+			const lstat = fs.lstatSync(target.fullPath);
+			if (lstat.isFile()) {
+				servePath = target.fullPath;
+				serveName = path.basename(target.relativePath);
+				serveExtension = target.extension;
+				stat = lstat;
+			}
+		} catch {
+			// fall through to the shelf
 		}
-	} catch {
-		// fall through to the shelf
 	}
 	if (!servePath || !stat) {
-		const shelf = resolveTaskShelfFile(taskId, rest);
+		const shelf = await resolveTaskShelfFile(req, taskId, rest);
 		if (!shelf) return reply.code(404).send({ error: "Artifact not found." });
 		servePath = shelf.absolutePath;
 		serveName = rest;
@@ -322,10 +309,9 @@ async function writeReplacingNoLink(destPath: string, bytes: Buffer, newFileMode
 app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	const taskId = String((req.params as any).taskId ?? "");
 	if (!SAFE_SEGMENT.test(taskId)) return reply.code(404).send({ error: "Artifact not found." });
-	const body = (req.body ?? {}) as { relativePath?: unknown; roomId?: unknown; conversationId?: unknown; overwrite?: unknown; rename?: unknown };
+	const body = (req.body ?? {}) as { relativePath?: unknown; roomId?: unknown; overwrite?: unknown; rename?: unknown };
 	const relativePath = String(body.relativePath ?? "");
 	const roomId = String(body.roomId ?? "").trim();
-	const conversationId = String(body.conversationId ?? "").trim();
 	if (!roomId) return reply.code(400).send({ error: "roomId is required." });
 	// Collision resolutions (assets contract §5): both must be EXPLICIT client
 	// choices from the three-button flow — never defaults, never combined.
@@ -341,7 +327,7 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	let sourceBasename: string;
 	let sourceStat: fs.Stats;
 	if (relativePath.startsWith("files/")) {
-		const shelf = resolveTaskShelfFile(taskId, relativePath.slice("files/".length));
+		const shelf = await resolveTaskShelfFile(req, taskId, relativePath.slice("files/".length));
 		if (!shelf || shelf.roomId !== roomId) return reply.code(404).send({ error: "Artifact not found." });
 		sourceFullPath = shelf.absolutePath;
 		sourceBasename = path.basename(shelf.absolutePath);
@@ -372,17 +358,13 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	}
 	if (sourceStat.size > 40_000_000) return reply.code(413).send({ error: "Artifact is too large to export." });
 
-	// Resolve the room's THREAD-EFFECTIVE workspace policy when the UI names the
-	// conversation (thread override → room default, same resolution the room's
-	// own tools use), falling back to the room default for calls without one.
-	// Both readers validate the id shapes (throw on malformed) and return null
-	// when the room does not exist or has no workspace configured — every
-	// failure surfaces as the same 400 below.
+	// The room's folder: every conversation exports into its room's. The reader
+	// validates the room id's shape (throws on malformed) and returns null when
+	// the room does not exist or has no folder: every failure surfaces as the
+	// same 400 below.
 	let workspaceRoot: string | null = null;
 	try {
-		const policy = conversationId
-			? resolvePersistentRoomCapabilityPolicy(roomId, conversationId).policy
-			: readPersistentRoomDefaultCapabilityPolicy(roomId);
+		const policy = readPersistentRoomDefaultCapabilityPolicy(roomId);
 		const rootGrant = policy?.roots?.[0];
 		if (rootGrant) {
 			// Prefer the realpath grant; fall back to the stored path. Resolving the

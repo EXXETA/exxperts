@@ -146,7 +146,7 @@ try {
 	const homeRoot = path.join(tmp, "home");
 	const exxetaStateRoot = path.join(homeRoot, ".exxperts", "app");
 	const persistentAgentsRoot = path.join(exxetaStateRoot, "personalized-agents");
-	const workspaceRoot = path.join(tmp, "workspace");
+	const workspaceRoot = path.join(homeRoot, "workspace");
 	const outsideRoot = path.join(tmp, "outside");
 	for (const dir of [repoRoot, exxetaStateRoot, persistentAgentsRoot, workspaceRoot, outsideRoot]) fs.mkdirSync(dir, { recursive: true });
 
@@ -156,6 +156,9 @@ try {
 	fs.writeFileSync(path.join(workspaceRoot, "pixel.png"), Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
 	fs.mkdirSync(path.join(workspaceRoot, "node_modules"), { recursive: true });
 	writeWorkbook(path.join(workspaceRoot, "node_modules", "vendored.xlsx"));
+	// The app's own data stays closed; node_modules reads like any folder.
+	fs.mkdirSync(path.join(workspaceRoot, ".exxeta"), { recursive: true });
+	writeWorkbook(path.join(workspaceRoot, ".exxeta", "vendored.xlsx"));
 	const outsideWorkbookPath = path.join(outsideRoot, "outside.xlsx");
 	writeWorkbook(outsideWorkbookPath);
 	const homeWorkbookPath = path.join(homeRoot, "home.xlsx");
@@ -223,7 +226,8 @@ try {
 	fs.writeFileSync(path.join(workspaceRoot, "contract.docx"), await minimalDocx());
 	fs.writeFileSync(path.join(workspaceRoot, "scanned.pdf"), blankPdf());
 	fs.writeFileSync(path.join(workspaceRoot, "huge.pdf"), Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.alloc(SHELF_READ_MAX_FILE_BYTES)]));
-	fs.writeFileSync(path.join(workspaceRoot, "node_modules", "vendored.pdf"), pdfWithPages(["deny-listed document"]));
+	fs.writeFileSync(path.join(workspaceRoot, "node_modules", "vendored.pdf"), pdfWithPages(["vendored document"]));
+	fs.writeFileSync(path.join(workspaceRoot, ".exxeta", "vendored.pdf"), pdfWithPages(["deny-listed document"]));
 
 	const pdfResult = await executeResult(tools, "read", { path: "report.pdf" }, tmp);
 	const pdfOutput = toolOutput(pdfResult);
@@ -261,7 +265,8 @@ try {
 	} catch (error) {
 		assert(error instanceof PersistentRoomWorkspaceToolError && error.code === "file_too_large", "oversized pdf should reject as file_too_large");
 	}
-	await expectReject(() => execute(tools, "read", { path: "node_modules/vendored.pdf" }, tmp), tmp, "deny-listed pdf path");
+	await expectReject(() => execute(tools, "read", { path: ".exxeta/vendored.pdf" }, tmp), tmp, "deny-listed pdf path");
+	assert((await execute(tools, "read", { path: "node_modules/vendored.pdf" }, tmp)).includes("vendored document"), "a pdf in node_modules reads");
 
 	const imageResult = await executeResult(tools, "read", { path: "pixel.png" }, tmp);
 	const imageBlocks = (imageResult?.content ?? []).filter((part: any) => part?.type === "image");
@@ -271,10 +276,11 @@ try {
 	assert(toolOutput(imageResult).includes("Read image file [image/"), "image read should include a text note");
 	assert(imageResult.details?.path === "pixel.png", "image details should include workspace-relative path only");
 
-	await expectReject(() => execute(tools, "read", { path: path.join(workspaceRoot, "sales.xlsx") }, tmp), tmp, "absolute spreadsheet path");
+	assert((await execute(tools, "read", { path: path.join(workspaceRoot, "sales.xlsx") }, tmp)).includes("Selected sheet: Sales"), "an absolute path inside the room's folder reads");
 	await expectReject(() => execute(tools, "read", { path: "~/home.xlsx" }, tmp), tmp, "home spreadsheet path");
 	await expectReject(() => execute(tools, "read", { path: "../outside/outside.xlsx" }, tmp), tmp, "parent traversal spreadsheet path");
-	await expectReject(() => execute(tools, "read", { path: "node_modules/vendored.xlsx" }, tmp), tmp, "deny-listed spreadsheet path");
+	await expectReject(() => execute(tools, "read", { path: ".exxeta/vendored.xlsx" }, tmp), tmp, "deny-listed spreadsheet path");
+	assert((await execute(tools, "read", { path: "node_modules/vendored.xlsx" }, tmp)).includes("Selected sheet: Sales"), "a workbook in node_modules reads");
 	await expectReject(() => execute(tools, "read", { path: "sales.xlsx", sheet: 99 }, tmp), tmp, "missing numeric sheet");
 	await expectReject(() => execute(tools, "read", { path: "sales.xlsx", sheet: "Missing" }, tmp), tmp, "missing named sheet");
 	if (fs.existsSync(path.join(workspaceRoot, "outside-link.xlsx"))) {

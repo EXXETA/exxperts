@@ -80,7 +80,7 @@ When enough has piled up, the room's card says it is time to sort what you saved
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/readme/rooms-dark.webp">
-    <img src=".github/readme/rooms-light.webp" alt="Home with six rooms: Contract review, Customer interviews, Japan trip, Product launch, Thesis on urban heat and Weekly report. Each shows when its memory was last saved, how many conversations are waiting, and its model and way in: a Claude API key, a ChatGPT plan, a Claude sign-in, a company gateway or GitHub Copilot." width="860">
+    <img src=".github/readme/rooms-light.webp" alt="Home with six rooms: Contract review, Customer interviews, Japan trip, Product launch, Thesis on urban heat and Weekly report. Each shows when its memory was last saved, how many conversations are still to memorize, and its model and way in: a Claude API key, a ChatGPT plan, a Claude sign-in, a company gateway or GitHub Copilot." width="860">
   </picture>
 </p>
 
@@ -123,7 +123,7 @@ Compared with a `CLAUDE.md` or rules file you keep by hand, a room drafts each u
 ## What a room can do
 
 - **Search the web** through your AI plan's own search, DuckDuckGo, or a search engine you run yourself, and read the pages it finds.
-- **Work in a folder you choose.** *Full access* works with files like you do; *Bounded* keeps the room inside that folder. Either way, the room's file tools refuse common secret and key files, saved logins and the app's own data. Commands are off until you turn them on in Full access; the room then asks before each one, unless you tell it to run without asking.
+- **Work in a folder you choose.** Its file tools stay in that folder and the folders you allow. On a Mac and on Windows 11 its commands do too, held there by the computer itself, and they reach a website only after you say yes, unless you put the room on Auto, where public websites need no yes. There a new room's commands start on, running without asking. [Folders, commands and protection](docs/workspace-and-bash.md).
 - **Draw charts, diagrams and formulas** right in its answer, and write files such as notes, tables and web pages into a folder you choose.
 - **Use your tools.** Connect GitHub, Notion, Linear, Atlassian, Google Drive, Gmail, Microsoft 365 and more, or any MCP server, and switch each one on per room.
 - **Learn skills.** Import skills from GitHub, including Anthropic's. A skill that changes waits for your review before a room uses it again.
@@ -133,7 +133,7 @@ Compared with a `CLAUDE.md` or rules file you keep by hand, a room drafts each u
 <summary>And three more</summary>
 
 - **Ask your rooms** answers one question from the memory of all your rooms, or the ones you pick, and names the room each fact came from.
-- **Remote access** opens your rooms on your phone over your own private Tailscale network. It is off until you turn it on.
+- **Remote access** opens your rooms on your own phone, over a private network you set up yourself. It is off until you turn it on. On a company computer, leave it off unless your IT team allows it.
 - **The Wallet** shows what each room and model spends, measured on your computer.
 
 </details>
@@ -159,17 +159,19 @@ Local model servers such as Ollama or LM Studio offer the same kind of address a
 **Sent out, only to do the work:**
 
 - **To the AI provider you chose:** the conversation, the room's instructions and memory, and the files it reads. This happens with every answer, when you press Remember, and when the room sorts or tidies its memory.
-- **To a search engine and the sites it finds:** search terms go to your AI plan's own search, DuckDuckGo or a search engine you run, and the room opens the pages it needs. Search is on at first. To turn it off, choose **Off** in **Settings, Web search** and untick **Provider search where available**; a gateway model still searches while web search is ticked for it in **Settings, AI setup**. Rooms can still open links you give them.
+- **To a search engine and the sites it finds:** search terms go to your AI plan's own search, DuckDuckGo or a search engine you run, and the room opens the pages it needs. Search is on at first. To turn it off, choose **Off** in **Settings, Web search** and untick **Provider search where available**; a gateway model still searches while web search is ticked for it in **Settings, AI setup**. Rooms can still open links you give them, search results, pages on sites you named or already allowed in that answer, and the sites listed for the room, and ask before opening any other address, unless the room is on Auto, where they open any public address.
+- **To sites you allow for a room, and from a room on Auto to any public website:** whatever its commands and its web reader send there, which can be anything they can read, such as the files in the room's folders. Where protection is off or not available, and for a command run outside the room, commands can reach any site.
 - **To a connector's server:** when you add a connector or sign in to it, and when a room that has it switched on uses it.
 - **To GitHub:** the desktop app checks for a new version at launch and every six hours. An update downloads only when you choose **Install and restart**.
 
 <details>
 <summary><b>For IT and security teams</b></summary>
 
-- **Local only.** The app's server listens only on this computer (127.0.0.1) and every request needs a sign-in token. Remote access, off by default, adds the person's own paired devices over their Tailscale network. [SECURITY.md](SECURITY.md) has the threat model.
+- **Local only.** The app's server listens only on this computer (127.0.0.1) and every request needs a sign-in token. Remote access, off by default, adds the person's own paired devices over a private tunnel they set up themselves. It is meant for a personal computer; on a company computer, company policy decides. [SECURITY.md](SECURITY.md) has the threat model.
 - **Sign-ins and keys.** AI sign-ins and API keys are kept in `~/.exxperts/agent/auth.json`, connector sign-ins in `~/.exxperts/agent/mcp-oauth/`, and connector tokens in `~/.exxperts/agent/mcp.json`; none are in the system keychain. On Mac and Linux only the person's account can read `auth.json` (file mode 600); on Windows it has the user folder's permissions.
-- **Off by default:** running commands, saving memory without the previews, and remote access. Connectors and skills are switched on per room.
-- **Files.** Even with Full access, the room's file tools refuse a built-in list of secret files and folders, such as `.env` files, keys, `.ssh`, cloud logins and shell startup files, and the app's own data. Commands, when turned on, run only after the person approves each one, unless they switch that room to run them without asking.
+- **Off by default:** saving memory without the previews, and remote access. Connectors and skills are switched on per room.
+- **Files.** The room's file tools work only in the room's folder and the folders the person allows, and refuse a built-in list of secret files and folders, such as `.env` files, keys, `.ssh`, cloud logins and shell startup files, and the app's own data.
+- **Commands.** On a Mac, and on Windows 11 where Windows makes its sandbox available (x64, build 26100 or later; on build 26200, 26200.9278 or later), a room's commands run inside the operating system's sandbox: they change files only in the room's folders, can't read the person's other files or keys, and reach a website only after the person's yes, unless the person puts the room on Auto, where public websites need no yes and sites on the person's own network stay closed. The app calls this the room's protection. A new room with a folder starts with commands on, running without asking, inside it. Only the person can turn protection off for a room, at the computer, after a confirm; then each command asks first. Where protection isn't available, such as on Linux or Windows 10, commands start off; once turned on, each one asks first unless the person chooses to run them without asking. [What it doesn't cover](docs/workspace-and-bash.md#what-protection-doesnt-cover).
 - **Every other connection**, besides the list above:
   - Each saved gateway is asked for its model list and prices at start, once a day, and when a model is not found.
   - Sign-ins are refreshed with Anthropic, OpenAI or GitHub as needed. GitHub also serves Copilot's model list, the skills someone browses or imports, and ripgrep when a terminal install has none (the desktop app ships its own).
@@ -213,7 +215,7 @@ If it misbehaves, `exxperts doctor` checks the terminal install and prints the f
 
 - Ready-made builds for macOS on Apple silicon, Windows x64 and Linux x64. On other systems the same line builds from source, which needs Git and Node.js 20.6 or newer.
 - The app and the terminal install share the same rooms and memory in `~/.exxperts`, and one of them runs at a time.
-- Running commands in rooms on Windows needs Git for Windows. The [Quickstart](docs/quickstart.md) has the Windows notes and the steps by hand.
+- On Windows 11, protected commands in rooms need nothing else. Commands without protection, and commands run outside the room, need Git for Windows. The [Quickstart](docs/quickstart.md) has the Windows notes and the steps by hand.
 
 </details>
 
@@ -225,7 +227,7 @@ If it misbehaves, `exxperts doctor` checks the terminal install and prints the f
 ## Docs and help
 
 - **Start:** [Quickstart](docs/quickstart.md) · [Connect your AI](docs/provider-setup.md) · [How exxperts works](docs/how-exxperts-works.md)
-- **Use:** [Memory](docs/memory.md) · [Files and commands](docs/workspace-and-bash.md) · [Connectors](docs/mcp.md) · [Web search](docs/web-search.md) · [Wallet](docs/wallet.md)
+- **Use:** [Memory](docs/memory.md) · [Folders, commands and protection](docs/workspace-and-bash.md) · [Connectors](docs/mcp.md) · [Web search](docs/web-search.md) · [Wallet](docs/wallet.md)
 - **Trust:** [Security](SECURITY.md) · [What's new](CHANGELOG.md) · [All docs](docs/README.md)
 
 Stuck? Run **Health Check** in the desktop app, or `exxperts doctor` on a terminal install, and open an [issue](https://github.com/EXXETA/exxperts/issues) with what it says.
@@ -238,4 +240,4 @@ If exxperts is useful to you, a star helps others find it. To hear about new ver
 
 ## License and credits
 
-[Apache 2.0](LICENSE), free for personal and commercial use. exxperts is designed and built by **Borja Odriozola Schick** ([@borcho23](https://github.com/borcho23)) and **Fernando Pastor Alonso** ([@ferpastoralonso](https://github.com/ferpastoralonso)) at [Exxeta](https://exxeta.com). It is built on [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner; the bundled runtime under `runtime/` is derived from Pi (MIT), with its license in [`runtime/LICENSE`](runtime/LICENSE) and the fork described in [`runtime/NOTICE.md`](runtime/NOTICE.md). Connector logos come from [Simple Icons](https://simpleicons.org) (CC0) and belong to their owners.
+[Apache 2.0](LICENSE), free for personal and commercial use. exxperts is designed and built by **Borja Odriozola Schick** ([@borcho23](https://github.com/borcho23)) and **Fernando Pastor Alonso** ([@ferpastoralonso](https://github.com/ferpastoralonso)) at [Exxeta](https://exxeta.com). Its engine, the part that talks to the AI models and runs each answer's steps, is our modified copy of [Pi](https://github.com/earendil-works/pi) by Mario Zechner (MIT). It is bundled under `runtime/`, with Pi's license in [`runtime/LICENSE`](runtime/LICENSE) and the version our copy started from in [`runtime/NOTICE.md`](runtime/NOTICE.md). Connector logos come from [Simple Icons](https://simpleicons.org) (CC0) and belong to their owners.

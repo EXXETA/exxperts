@@ -40,7 +40,11 @@ import { AuthStorage } from "@exxeta/exxperts-runtime";
 import { migrateBuiltInAiProfiles } from "./built-in-ai-profile-migration.js";
 import { PERSISTENT_AGENTS_ROOT, sweepPersistentAgentPurgeTombstones, listPersistentAgents, countPersistentAgentTurnsInFlight } from "./persistent-agents.js";
 import { readPersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
-import { migratePersistentRoomBashAutoApproveDefaults } from "./persistent-room-bash-settings.js";
+import { loadPersistentRoomProtection } from "./persistent-room-protection.js";
+import { actedWindowsBoxState, noteWindowsBoxState, roomBoxSettled, windowsBoxChecks } from "./room-box/box-available.js";
+import { windowsStartAnswer } from "./room-box/windows/start-check.js";
+import { listPersistentAgentIds } from "./persistent-agent-status.js";
+import { claimPersistentRoomBashAutoApproveDefaults } from "./persistent-room-bash-settings.js";
 import { migrateRoomModels } from "./room-models-migration.js";
 import { healShelfMaintenanceAtBoot } from "./persistent-room-shelf.js";
 import { migrateTaskArtifactsToShelves } from "./persistent-room-shelf-migration.js";
@@ -61,6 +65,10 @@ import { importHistoricalSessionUsage } from "./usage-import.js";
 import { updateSearxngOnBoot } from "./searxng-setup.js";
 import { isSharedServer, serverHooks } from "./server-hooks.js";
 import { installServerStop } from "./server-stop.js";
+
+// A gateway key the server's start provides reaches every key reader from memory, before any boot step reads one.
+const startGateway = serverHooks().startGateway?.();
+if (startGateway) AuthStorage.setProcessKey(startGateway.providerId, startGateway.key);
 
 ensureProductAppUserDirs();
 
@@ -108,11 +116,32 @@ try {
 	app.log.warn({ err: (e as Error).message }, "purge tombstone boot sweep failed");
 }
 
+// Each room's protection is read once, here: from now on only the app's own
+// control changes it. A room whose file can't be read is protected. A shared
+// server boxes no room, so its rooms' files never count.
+try {
+	if (!isSharedServer()) loadPersistentRoomProtection(listPersistentAgentIds());
+} catch (error) {
+	app.log.warn({ err: error }, "room protection was not read; every room is protected until the next start");
+}
+
+// A person's own Windows PC checks once whether its box can run; binds and new
+// rooms wait for the answer (roomBoxSettled), up to its 20 s. Never on a Mac or
+// a shared server.
+if (windowsBoxChecks()) {
+	void windowsStartAnswer().then((answer) => {
+		noteWindowsBoxState(answer.state);
+		// Acting as Windows, the state is the acted one and the reason says there is no box.
+		const state = actedWindowsBoxState() ?? answer.state;
+		app.log[state === "on" ? "info" : "warn"]({ state, ...(answer.state === "on" ? {} : { reason: answer.reason }) }, "the Windows box's check at start");
+	});
+}
+
 // Boot settle: a save a crash left half done is finished, or dropped when it
 // never reached its commit point, in every room before anything reads it
 // (memory-commit.ts). Reading a room's status settles it.
 try {
-	listPersistentAgents();
+	listPersistentAgents("every room");
 } catch (e) {
 	app.log.warn({ err: (e as Error).message }, "boot settle of pending saves failed");
 }
@@ -207,16 +236,28 @@ app.addHook("onClose", async () => stopBackgroundLoops());
 
 // Rooms that had bash before the approval card ran commands without asking;
 // the one-time grant preserves that. A failed sweep only means rooms ask.
+// It is given in each room's protection, so on Windows it waits for the check;
+// its rooms are picked now, before a request can turn a room's commands on.
+const bashApprovalSweepFailed = (error: unknown) => app.log.warn({ err: error }, "bash auto-approve upgrade sweep failed; affected rooms will ask per command");
+let bashApprovalGrant: ReturnType<typeof claimPersistentRoomBashAutoApproveDefaults> = null;
 try {
-	const bashApprovalMigration = migratePersistentRoomBashAutoApproveDefaults(
-		listPersistentAgents().map((agent) => ({ id: agent.id, bashEnabled: readPersistentRoomDefaultCapabilityPolicy(agent.id)?.bashEnabled === true })),
+	bashApprovalGrant = claimPersistentRoomBashAutoApproveDefaults(
+		listPersistentAgents("every room").map((agent) => ({ id: agent.id, bashEnabled: readPersistentRoomDefaultCapabilityPolicy(agent.id)?.bashEnabled === true })),
 	);
-	if (bashApprovalMigration.migrated.length > 0) {
-		app.log.info({ rooms: bashApprovalMigration.migrated }, "bash auto-approve preserved for rooms predating the approval card");
-	}
 } catch (error) {
-	app.log.warn({ err: error }, "bash auto-approve upgrade sweep failed; affected rooms will ask per command");
+	bashApprovalSweepFailed(error);
 }
+void roomBoxSettled().then(() => {
+	if (!bashApprovalGrant) return;
+	try {
+		const bashApprovalMigration = bashApprovalGrant();
+		if (bashApprovalMigration.migrated.length > 0) {
+			app.log.info({ rooms: bashApprovalMigration.migrated }, "bash auto-approve preserved for rooms predating the approval card");
+		}
+	} catch (error) {
+		bashApprovalSweepFailed(error);
+	}
+});
 
 const schedulerPreflightLoopOptions = resolvePersistentRoomSchedulePreflightLoopOptionsFromEnv(process.env, app.log);
 

@@ -33,8 +33,9 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, putRunWithoutAsking } from "./smoke-server-process.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
+import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../src/room-approval-titles.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -174,11 +175,14 @@ try {
 	const picked = await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/models`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversation: ON_KEY }) });
 	assert(picked.ok, `the room picks the key's model, got ${picked.status}`);
 	// Full access with the terminal on, so the room asks before it runs a command.
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(tempHome, "workspace");
 	fs.mkdirSync(workspaceRoot, { recursive: true });
 	fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "notes\n");
 	const workspace = await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/workspace-default`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ root: workspaceRoot, displayLabel: "Stop Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }) });
 	assert(workspace.ok, `the room gets full access with the terminal on, got ${workspace.status}`);
+	// A new room's commands start in Run without asking where the room's protection runs: this smoke chooses Ask before each command, as the chip does.
+	const askFirst = await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/bash-settings`, false);
+	assert(askFirst.ok, `the room asks before each command, got ${askFirst.status}`);
 
 	const browser = await chromium.launch();
 	try {
@@ -240,7 +244,7 @@ try {
 
 		// An answer that ends whole while the server stops, with a card open: the server's notice comes first, the answer ends in the wait, then the close.
 		await composer.fill("A long answer, please.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(() => deltasSent >= 2, "the answer has begun");
 		pageSocket?.send(JSON.stringify(card("card-before-stop")));
 		await page.locator(".wk-ask .wk-btn.primary").last().waitFor({ timeout: 5000 });
@@ -298,11 +302,13 @@ try {
 
 		// The person's Stop with the room's own command card open: the card says so, with no buttons, and the answer ends.
 		const sendButton = page.locator('button[title="Send"]').first();
-		const commandCard = page.locator(".wk-ask").filter({ hasText: "ls" }).last();
+		// The room's command question, in the panel above the box; its Run once once the panel's pause is over.
+		const runPanel = page.locator(".ask-panel").filter({ hasText: PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE });
+		const runOnce = runPanel.locator('.rs-btn-primary[data-awake="1"]');
 		const stoppedCards = page.locator(".wk-row").filter({ hasText: STOPPED_LINE }).filter({ hasNotText: "deck" });
 		await composer.fill(`List the files, please. ${CARD_TOKEN}`);
-		await composer.press("Enter");
-		await commandCard.locator(".wk-btn.primary").waitFor({ timeout: 20000 });
+		await sendFromBox(page);
+		await runPanel.waitFor({ timeout: 20000 });
 		await page.locator("button.stop-btn").click();
 		await waitUntil(async () => (await stoppedCards.count()) === 1, "the card says the person pressed Stop before answering", 10_000).catch(() => {});
 		expect((await stoppedCards.count()) === 1, `Stop with a command card open: the card does not say "${STOPPED_LINE}", it shows ${JSON.stringify(await page.locator(".wk-row").last().innerText())}`);
@@ -320,12 +326,12 @@ try {
 		expect((await stopNotes()) === 0, `after a reload, under a card that says "${STOPPED_LINE}" the turn also says "${STOP_NOTE}"`);
 		// The next turn asks again, and its yes runs the command.
 		await composer.fill(`List them again, please. ${CARD_TOKEN}`);
-		await composer.press("Enter");
-		const askedAgain = await page.locator(".wk-ask .wk-btn.primary").last().waitFor({ timeout: 20000 }).then(() => true, () => false);
+		await sendFromBox(page);
+		const askedAgain = await runOnce.waitFor({ timeout: 20000 }).then(() => true, () => false);
 		expect(askedAgain, "the next turn's command card offers no buttons");
 		if (askedAgain) {
 			const answersBefore = await cardAnswers();
-			await page.locator(".wk-ask .wk-btn.primary").last().click();
+			await runOnce.click();
 			await waitUntil(async () => (await cardAnswers()) === answersBefore + 1, "the next turn's answer", 20_000).catch(() => {});
 			expect((await cardAnswers()) === answersBefore + 1, `the next turn's approved command did not lead to exactly one answer: ${answersBefore} before the yes, ${await cardAnswers()} after`);
 		}
@@ -334,13 +340,13 @@ try {
 		// The answer above can still be revealing, and Enter sends nothing until its turn ends.
 		await page.locator("button.stop-btn").waitFor({ state: "detached", timeout: 10000 });
 		await composer.fill(`List them a third time, please. ${CARD_TOKEN}`);
-		await composer.press("Enter");
-		await page.locator(".wk-ask .wk-btn.primary").last().waitFor({ timeout: 20000 });
+		await sendFromBox(page);
+		await runOnce.waitFor({ timeout: 20000 });
 		const approvedBeforeLateClick = await approvedLines();
 		socket.holdCardClosed = true;
 		await page.locator("button.stop-btn").click();
 		await waitUntil(() => socket.heldCardClosed.length > 0, "the server's word that Stop closed the card", 10_000);
-		await page.locator(".wk-ask .wk-btn.primary").last().click();
+		await runOnce.click();
 		socket.holdCardClosed = false;
 		for (const frame of socket.heldCardClosed.splice(0)) pageSocket?.send(frame);
 		await waitUntil(async () => (await stoppedCards.count()) === 2, "the late-clicked card says Stop answered it", 5000).catch(() => {});
@@ -350,20 +356,20 @@ try {
 		// The next turn after a Stop, with no reload between: its card waits and Stop can stop it.
 		await page.locator("button.stop-btn").waitFor({ state: "detached", timeout: 10000 });
 		await composer.fill(`List them once more, please. ${CARD_TOKEN}`);
-		await composer.press("Enter");
-		await page.locator(".wk-ask .wk-btn.primary").last().waitFor({ timeout: 20000 });
+		await sendFromBox(page);
+		await runOnce.waitFor({ timeout: 20000 });
 		await waitUntil(async () => (await page.locator("button.stop-btn").isEnabled()) && (await composer.getAttribute("placeholder")) !== STOPPING_PLACEHOLDER, "the next turn's Stop can be pressed", 5000).catch(() => {});
 		expect(await page.locator("button.stop-btn").isEnabled(), "after a Stop, the next turn's Stop stays disabled while its card waits");
 		expect((await composer.getAttribute("placeholder")) !== STOPPING_PLACEHOLDER, "after a Stop, the next turn's box still says the answer is stopping");
 		const answersBeforeLastYes = await cardAnswers();
-		await page.locator(".wk-ask .wk-btn.primary").last().click();
+		await runOnce.click();
 		await waitUntil(async () => (await cardAnswers()) === answersBeforeLastYes + 1, "the last turn's answer", 20_000).catch(() => {});
 		expect((await cardAnswers()) === answersBeforeLastYes + 1, `after a Stop with no reload, the next turn's approved command did not lead to exactly one answer: ${answersBeforeLastYes} before the yes, ${await cardAnswers()} after`);
 		// A Stop while the answer streams, with no card: the turn says Stop ended it.
 		await page.locator("button.stop-btn").waitFor({ state: "detached", timeout: 10000 });
 		const deltasBeforeSlow = deltasSent;
 		await composer.fill(`A slow answer, please. ${SLOW_TOKEN}`);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(() => deltasSent >= deltasBeforeSlow + 2, "the slow answer streams", 20_000);
 		await page.locator("button.stop-btn").click();
 		await page.locator("button.stop-btn").waitFor({ state: "detached", timeout: 10000 });

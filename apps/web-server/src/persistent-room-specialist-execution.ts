@@ -45,6 +45,7 @@ import { createHeadlessUiContext } from "./persistent-room-background-execution.
 import { callCacheRetention } from "./memory-call-cache.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
 import { serverHooks } from "./server-hooks.js";
+import { modelCallMetadata } from "./usage-log.js";
 
 type RuntimeModel = NonNullable<CreateAgentSessionOptions["model"]>;
 
@@ -244,6 +245,8 @@ export interface SpecialistWorkerInput<TModelLock extends { provider: string; mo
 	onEvent?: (event: unknown) => void;
 	signal?: AbortSignal;
 	workerLabel?: string;
+	/** The room that asked for the task: its calls name the person that room's task rows name. */
+	roomId?: string;
 }
 
 export interface SpecialistWorkerArtifact {
@@ -470,6 +473,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 		modelRegistry: registry,
 		model,
 		cacheRetention: callCacheRetention("specialist", model),
+		metadata: input.roomId === undefined ? undefined : modelCallMetadata(input.roomId, "task"),
 		tools: plan.toolNames,
 		customTools: [],
 		rawSystemPrompt: plan.systemPrompt,

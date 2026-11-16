@@ -4,10 +4,11 @@ import { agentSkillsDir, writeSkillProvenance, sha256, localSkillProvenance, rea
 import { scanInvisibleUnicode } from "./skills-import.js";
 import { getCheckout, removeCheckout, parseSkillFrontmatter as parseFrontmatter, installCheckoutCleanup, resolveRepoSource, fetchRepoCheckout, isMissingToolMessage, registerCheckout, scanRepoSkills, readRepoCandidate, vendorRepoSkill, resolveFeaturedSources, loadFeaturedSource } from "./skills-repo-fetch.js";
 import { app } from "./server-app.js";
-import { buildSkillCandidateFromUpload, buildUserSkillMarkdown, getUserSkillFile, librarySkillView, listSkills, MAX_SKILL_UPLOAD_BYTES, resolveExecutableSkillFiles, skillExistsAnySource, skillRoomsByName, slugifySkillId, validateSkillWritePayload } from "./skills-library.js";
+import { viewerOf } from "./persistent-agent-status.js";
+import { buildSkillCandidateFromUpload, buildUserSkillMarkdown, frontmatterFlagTrue, getUserSkillFile, librarySkillView, listSkills, MAX_SKILL_UPLOAD_BYTES, resolveExecutableSkillFiles, skillExistsAnySource, skillRoomsByName, slugifySkillId, validateSkillWritePayload } from "./skills-library.js";
 
 app.get("/api/skills", async (req) => {
-	const roomsByName = skillRoomsByName(req);
+	const roomsByName = skillRoomsByName(await viewerOf(req), req);
 	return listSkills().map((skill) => librarySkillView(skill, roomsByName));
 });
 
@@ -19,7 +20,7 @@ app.get("/api/skills/:id", async (req, reply) => {
 	// candidate carries. Its files are the ones a room can be allowed to run, so a
 	// skill that can never run files (see resolveExecutableSkillFiles) lists none.
 	const files = resolveExecutableSkillFiles(skill.name)?.files ?? [];
-	return reply.send({ ...librarySkillView(skill, skillRoomsByName(req), files), scanFindings: scanInvisibleUnicode(`${skill.body}\n${skill.description ?? ""}`).findings, bundledScripts: files });
+	return reply.send({ ...librarySkillView(skill, skillRoomsByName(await viewerOf(req), req), files), scanFindings: scanInvisibleUnicode(`${skill.body}\n${skill.description ?? ""}`).findings, bundledScripts: files });
 });
 
 app.post("/api/skills/upload", { bodyLimit: 12 * 1024 * 1024 }, async (req, reply) => {
@@ -49,7 +50,7 @@ app.post("/api/skills/accept", async (req, reply) => {
 	const license = typeof raw.license === "string" && raw.license.trim() ? raw.license.trim() : null;
 	const skillDir = path.join(agentSkillsDir(), value.id);
 	fs.mkdirSync(skillDir, { recursive: true, mode: 0o700 });
-	const acceptedManifest = buildUserSkillMarkdown(value);
+	const acceptedManifest = buildUserSkillMarkdown({ ...value, disableModelInvocation: raw.disableModelInvocation === true });
 	fs.writeFileSync(path.join(skillDir, "SKILL.md"), acceptedManifest, { mode: 0o600, flag: "wx" });
 	// A zip upload retained its bundled files under a checkout token (see
 	// buildSkillCandidateFromUpload): vendor them beside the accepted SKILL.md
@@ -90,7 +91,7 @@ app.post("/api/skills/accept", async (req, reply) => {
 	// AFTER the bundled files so the stamped files digest covers them.
 	writeSkillProvenance(skillDir, { source, importedAt: new Date().toISOString(), license, sha256: sha256(acceptedManifest) });
 	const created = listSkills().find((skill) => skill.name === value.id);
-	const payload = created ? librarySkillView(created, skillRoomsByName(req)) : { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: { source, license, importedAt: new Date().toISOString() }, license };
+	const payload = created ? librarySkillView(created, skillRoomsByName(await viewerOf(req), req)) : { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: { source, license, importedAt: new Date().toISOString() }, license };
 	return reply.code(201).send({ ...payload, bundledCopied });
 });
 
@@ -109,7 +110,7 @@ app.post("/api/skills", async (req, reply) => {
 	// whole SKILL.md, so a later description/body edit forces re-review.
 	writeSkillProvenance(skillDir, localSkillProvenance(markdown));
 	const created = listSkills().find((skill) => skill.name === value.id);
-	return reply.code(201).send(created ? librarySkillView(created, skillRoomsByName(req)) : { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: { source: "local", license: null, importedAt: new Date().toISOString() }, license: null });
+	return reply.code(201).send(created ? librarySkillView(created, skillRoomsByName(await viewerOf(req), req)) : { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: { source: "local", license: null, importedAt: new Date().toISOString() }, license: null });
 });
 
 app.put("/api/skills/:id", async (req, reply) => {
@@ -119,11 +120,12 @@ app.put("/api/skills/:id", async (req, reply) => {
 	// Grandfather the stored description: a body-only edit of a pre-existing skill whose
 	// description already exceeds ≤1024 must not be blocked by that rule (spec fix). The
 	// limit is still enforced the moment the description actually changes.
-	const storedDescription = (parseFrontmatter(fs.readFileSync(file, "utf-8")).fm.description || "").trim();
-	const validation = validateSkillWritePayload(req.body ?? {}, id, { grandfatheredDescription: storedDescription });
+	const stored = parseFrontmatter(fs.readFileSync(file, "utf-8")).fm;
+	const validation = validateSkillWritePayload(req.body ?? {}, id, { grandfatheredDescription: (stored.description || "").trim() });
 	if (!validation.ok) return reply.code(validation.code).send({ error: validation.error });
 	const value = validation.value;
-	const editedManifest = buildUserSkillMarkdown(value);
+	// The mark is the author's: an edit keeps what the stored file says, whatever the body sends.
+	const editedManifest = buildUserSkillMarkdown({ ...value, disableModelInvocation: frontmatterFlagTrue(stored["disable-model-invocation"]) });
 	fs.writeFileSync(file, editedManifest, { mode: 0o600, flag: "w" });
 	// Refresh the sha256 over the whole SKILL.md — a description-only edit must
 	// trip re-review just like a body edit. Origin (source/license/importedAt)
@@ -131,7 +133,7 @@ app.put("/api/skills/:id", async (req, reply) => {
 	const existingProvenance = readSkillProvenance(path.dirname(file));
 	writeSkillProvenance(path.dirname(file), existingProvenance ? { ...existingProvenance, sha256: sha256(editedManifest) } : localSkillProvenance(editedManifest));
 	const updated = listSkills().find((skill) => skill.name === id);
-	return reply.send(updated ? librarySkillView(updated, skillRoomsByName(req)) : { name: id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: null, license: null });
+	return reply.send(updated ? librarySkillView(updated, skillRoomsByName(await viewerOf(req), req)) : { name: id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: null, license: null });
 });
 
 app.delete("/api/skills/:id", async (req, reply) => {
@@ -232,7 +234,7 @@ app.post("/api/skills/repo/import", async (req, reply) => {
 	const provenance: SkillProvenance = { source: checkout.source, importedAt: new Date().toISOString(), license: vendored.license, sha256: sha256(vendoredManifest) };
 	writeSkillProvenance(skillDir, provenance);
 	const created = listSkills().find((s) => s.name === candidate.name) ?? listSkills().find((s) => s.name === id) ?? null;
-	return reply.code(201).send({ skill: created ? librarySkillView(created, skillRoomsByName(req)) : null, provenance, bundledCopied: vendored.bundledCopied });
+	return reply.code(201).send({ skill: created ? librarySkillView(created, skillRoomsByName(await viewerOf(req), req)) : null, provenance, bundledCopied: vendored.bundledCopied });
 });
 
 app.get("/api/skills/featured", async () => {

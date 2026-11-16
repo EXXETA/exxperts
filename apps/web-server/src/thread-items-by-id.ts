@@ -18,7 +18,8 @@
  * Pure: no file and no clock is read here.
  */
 import { normaliseAssistantText } from "../../web-ui/src/assistant-stream.js";
-import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE, handOffApprovalSubject } from "./room-approval-titles.js";
+import { SITE_ALLOW_ROOM } from "./room-box/card-text.js";
+import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE, connectorApprovalSubject, handOffApprovalSubject } from "./room-approval-titles.js";
 
 export type ThreadItem = Record<string, unknown>;
 
@@ -88,7 +89,7 @@ export const isLanded = (item: unknown): boolean => !!item && typeof item === "o
 export const isAnswerPartId = (id: string): boolean => ANSWER_PART.test(id);
 
 /** Whether an item belongs to the keyed turn `key`: its question or anything the server named for it. */
-function ofTurn(item: unknown, key: string): boolean {
+export function ofTurn(item: unknown, key: string): boolean {
 	const id = idOf(item);
 	return id === key || keyOfId(id) === key;
 }
@@ -203,18 +204,36 @@ function insertNear(items: ThreadItem[], item: ThreadItem, afterId: string | und
 	items.push(item);
 }
 
-/** The note a declined question leaves in the conversation; one note per wording. */
-export function declinedQuestionNoteText(question: string): string {
+/**
+ * The note a connector call nobody could approve leaves, by what its card
+ * asked to use ("Delete project in Asana"). `wayOn`: the question offered
+ * Allow for this room, so the note names it; the page's row for that step
+ * says the first sentence alone.
+ */
+export function connectorAwayNote(use: string, wayOn = false): string {
+	const note = `${use} wasn't used because nobody was there to allow it.`;
+	return wayOn ? `${note} To let this room use it when you're away, choose ${SITE_ALLOW_ROOM} at your computer the next time it asks.` : note;
+}
+
+/** The note a declined question leaves in the conversation; one note per wording. `wayOn`: a connector question that offered Allow for this room. */
+export function declinedQuestionNoteText(question: string, wayOn = false): string {
 	const title = String(question ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
 	if (title === PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE) return "While you were away, the room asked to run a command. It did not run, because nobody was there to approve it.";
 	if (handOffApprovalSubject(title) !== null) return "While you were away, the room asked to hand work to a specialist. It did not, because nobody was there to approve it.";
+	const connectorUse = connectorApprovalSubject(title);
+	if (connectorUse !== null) return connectorAwayNote(connectorUse, wayOn);
 	if (!title) return "While you were away, a question came up and was answered with a safe default.";
 	return `While you were away, a question came up and was answered with a safe default: ${title}`;
 }
 
-/** The notes the cards in `items` stand for: a question whose card was kept already says on that card that it ended (Approval.tsx). */
+/**
+ * The notes the cards in `items` stand for: a question whose card was kept
+ * already says on that card that it ended (Approval.tsx). A connector's card
+ * stands for none: it says only that nobody answered, and the note says that
+ * nothing was done.
+ */
 export function notesOfKeptCards(items: readonly unknown[]): Set<string> {
-	return new Set(items.filter((item: any) => item?.kind === "approval" && !item.done).map((item: any) => declinedQuestionNoteText(String(item.title ?? ""))));
+	return new Set(items.filter((item: any) => item?.kind === "approval" && !item.done && connectorApprovalSubject(String(item.title ?? "")) === null).map((item: any) => declinedQuestionNoteText(String(item.title ?? ""))));
 }
 
 /**
@@ -266,8 +285,12 @@ function firstItemPlace(items: ThreadItem[], place: TurnPlace): { afterId?: stri
 		return undefined;
 	};
 	const anchor = place.startAnchorId && items.some((item) => idOf(item) === place.startAnchorId) ? place.startAnchorId : undefined;
-	if (place.continued) return { afterId: anchor ?? lastOfEarlier(), beforeId: firstOfLater() };
-	return { afterId: lastOfEarlier() ?? anchor, beforeId: firstOfLater() };
+	const earlierEnd = lastOfEarlier();
+	if (place.continued) return { afterId: anchor ?? earlierEnd, beforeId: firstOfLater() };
+	// The later of the two: the turns before may have landed more after the message came, and items
+	// without a key (a line the page added) may sit after their last one.
+	const indexOf = (id: string | undefined) => (id === undefined ? -1 : items.findIndex((item) => idOf(item) === id));
+	return { afterId: indexOf(anchor) > indexOf(earlierEnd) ? anchor : earlierEnd ?? anchor, beforeId: firstOfLater() };
 }
 
 /**

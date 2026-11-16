@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
+import { pollWhileShown } from "../visible-poll";
 import {
 	allRoomsFactsLine,
 	allRoomsNotesShown,
@@ -488,9 +489,8 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 				.then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad status"))))
 				.then((d) => { if (!cancelled) { setData(Array.isArray(d?.rooms) ? { ...d, rooms: d.rooms.map(withShownName) } : d); setLoadError(false); } })
 				.catch(() => { if (!cancelled) setLoadError(true); });
-		load();
-		const id = setInterval(load, 8000);
-		return () => { cancelled = true; clearInterval(id); };
+		const stop = pollWhileShown(load, 8000);
+		return () => { cancelled = true; stop(); };
 	}, []);
 
 	// Fetch the selected room's detail (topics + waiting conversations).
@@ -590,7 +590,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 							<div className="dash-section-label">Ask your rooms</div>
 							<div className="dash-toggles">
 								{askMode === "ask" && messages.length > 0 && (
-									<button type="button" className="mem-close" onClick={() => { setMessages([]); setAskError(null); }}>New chat</button>
+									<button type="button" className="rs-btn rs-btn-sm mem-close" onClick={() => { setMessages([]); setAskError(null); }}>New chat</button>
 								)}
 								<div className="range-toggle" role="group" aria-label="Query mode">
 									<button type="button" className={askMode === "ask" ? "active" : ""} aria-pressed={askMode === "ask"} title="Ask a question — the AI answers from memory" onClick={() => setAskMode("ask")}>Ask</button>
@@ -641,7 +641,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 								) : (
 									<input className="mem-search-input" type="search" placeholder="Find exact text across every room…" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} />
 								)}
-								<button type="button" className="mem-search-btn" onClick={() => (askMode === "ask" ? runAsk() : runSearch())} disabled={askMode === "ask" && asking}>
+								<button type="button" className="rs-btn rs-btn-primary mem-search-btn" onClick={() => (askMode === "ask" ? runAsk() : runSearch())} disabled={askMode === "ask" && asking}>
 									{askMode === "ask" ? (asking ? "Thinking…" : messages.length ? "Send" : "Ask") : "Find"}
 								</button>
 							</div>
@@ -731,7 +731,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 									{data.rooms.filter((r) => r.needsAbsorb).map((r) => {
 										const blocked = maintainBlocked?.(r.id) ?? null;
 										return (
-											<button key={r.id} type="button" className="mem-review-btn" disabled={!!blocked} title={blocked ?? `Turn ${r.displayName}'s remembered conversations into notes`} onClick={() => onMaintain({ agentId: r.id, displayName: r.displayName })}>
+											<button key={r.id} type="button" className="rs-btn rs-btn-sm mem-review-btn" disabled={!!blocked} title={blocked ?? `Turn ${r.displayName}'s remembered conversations into notes`} onClick={() => onMaintain({ agentId: r.id, displayName: r.displayName })}>
 												{r.displayName}: memorize →
 											</button>
 										);
@@ -789,19 +789,19 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 												{/* This page is the cross-room view; editing a note belongs to
 												    the room, so the link hands the person over to its pane. */}
 												{onOpenMemorySettings && (
-													<button type="button" className="mem-review-btn" title="Open this room's memory settings, where you can read, edit, restore and undo" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>
+													<button type="button" className="rs-btn rs-btn-sm mem-review-btn" title="Open this room's memory settings, where you can read, edit, restore and undo" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>
 														{OPEN_IN_ROOM_SETTINGS_LABEL} →
 													</button>
 												)}
 												{onMaintain && (() => {
 													const blocked = maintainBlocked?.(detail.id) ?? null;
 													return (
-														<button type="button" className="mem-review-btn" disabled={!!blocked} title={blocked ?? "Open Maintain to turn this room's waiting conversations into notes, or to tidy the notes it has. You approve changes before they are saved."} onClick={() => onMaintain({ agentId: detail.id, displayName: detail.displayName })}>
+														<button type="button" className="rs-btn rs-btn-sm mem-review-btn" disabled={!!blocked} title={blocked ?? "Open Maintain to turn this room's waiting conversations into notes, or to tidy the notes it has. You approve changes before they are saved."} onClick={() => onMaintain({ agentId: detail.id, displayName: detail.displayName })}>
 															Maintain →
 														</button>
 													);
 												})()}
-												<button type="button" className="mem-close" onClick={() => setSelected(null)}>Close ×</button>
+												<button type="button" className="rs-btn rs-btn-sm mem-close" onClick={() => setSelected(null)}>Close ×</button>
 											</div>
 										</div>
 										<div className="mem-detail-full"><MemoryFullBar room={detail} /></div>
@@ -809,7 +809,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 										{asOf !== null && (
 											<div className="mem-tt-banner mem-tt-banner-global">
 												<span>{snap?.state === "error" ? ASOF_ERROR : !past ? ASOF_READING : asOfSentence(asOf, past.boundaryTs)}</span>
-												<button type="button" className="mem-close" onClick={leaveAsOf}>{BACK_TO_TODAY_LABEL}</button>
+												<button type="button" className="rs-btn rs-btn-sm mem-close" onClick={leaveAsOf}>{BACK_TO_TODAY_LABEL}</button>
 											</div>
 										)}
 
@@ -846,7 +846,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 												<div className="dash-section-head" style={{ marginBottom: 0 }}>
 													<div className="chart-head mem-head-row"><h2>{TOPICS_PANEL_TITLE}</h2>{asOf !== null && <span className="mem-asof">{asOfChip(asOf)}</span>}</div>
 													<div className="mem-panel-actions">
-														<button type="button" className="mem-close" title="Read everything this room carries into a conversation" onClick={openFullMemory}>Full memory →</button>
+														<button type="button" className="rs-btn rs-btn-sm mem-close" title="Read everything this room carries into a conversation" onClick={openFullMemory}>Full memory →</button>
 													</div>
 												</div>
 												<div className="sub" style={{ marginBottom: 6 }}>{TOPICS_PANEL_SUB}</div>
@@ -897,8 +897,8 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 															<div className="dash-section-head" style={{ marginBottom: 0 }}>
 																<div className="chart-head mem-head-row"><h2>{title}</h2>{asOf !== null && <span className="mem-asof">{asOfChip(asOf)}</span>}</div>
 																<div className="mem-panel-actions">
-																	<button type="button" className="mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
-																	{back && <button type="button" className="mem-close" onClick={() => { panelReq.current++; setPanel(null); }}>Back ×</button>}
+																	<button type="button" className="rs-btn rs-btn-sm mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
+																	{back && <button type="button" className="rs-btn rs-btn-sm mem-close" onClick={() => { panelReq.current++; setPanel(null); }}>Back ×</button>}
 																</div>
 															</div>
 															<div className="sub" style={{ marginBottom: 6 }}>{caption}</div>
@@ -955,7 +955,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 																			);
 																		})}
 																		{!trAll && data.items.length > shown.length && (
-																			<button type="button" className="mem-hist-more" onClick={() => setTrAll(true)}>Show all {data.items.length} items</button>
+																			<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm mem-hist-more" onClick={() => setTrAll(true)}>Show all {data.items.length} items</button>
 																		)}
 																		{data.itemsTotal > data.items.length && (
 																			<div className="mem-tr-note">Showing the first {data.items.length} of {data.itemsTotal} stored items.</div>
@@ -991,7 +991,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 															<div className="dash-section-head" style={{ marginBottom: 0 }}>
 																<div className="chart-head mem-head-row"><h2>{WAITING_PANEL_TITLE}</h2></div>
 																<div className="mem-panel-actions">
-																	<button type="button" className="mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
+																	<button type="button" className="rs-btn rs-btn-sm mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
 																</div>
 															</div>
 															<div className="sub" style={{ marginBottom: 6 }}>{WAITING_PANEL_SUB}</div>
@@ -1099,7 +1099,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 														<div className="chart-head"><h2>History</h2></div>
 														{onOpenMemorySettings && (
 															<div className="mem-panel-actions">
-																<button type="button" className="mem-close" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>{OPEN_IN_ROOM_SETTINGS_LABEL} →</button>
+																<button type="button" className="rs-btn rs-btn-sm mem-close" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>{OPEN_IN_ROOM_SETTINGS_LABEL} →</button>
 															</div>
 														)}
 													</div>
@@ -1114,13 +1114,13 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 																<span className="mem-hist-what">{row.words}</span>
 																{row.undone && <span className="mem-hist-undone">Undone</span>}
 																{row.diffable && (
-																	<MemoryChangeFold roomId={detail.id} row={row} quiet="mem-close" open={changeOpen === `${detail.id}:${row.key}`} onToggle={() => setChangeOpen((open) => (open === `${detail.id}:${row.key}` ? null : `${detail.id}:${row.key}`))} />
+																	<MemoryChangeFold roomId={detail.id} row={row} quiet="rs-btn rs-btn-sm mem-close" open={changeOpen === `${detail.id}:${row.key}`} onToggle={() => setChangeOpen((open) => (open === `${detail.id}:${row.key}` ? null : `${detail.id}:${row.key}`))} />
 																)}
 															</div>
 														</div>
 													))}
 													{rows.length > 10 && (
-														<button type="button" className="mem-hist-more" onClick={() => setHistAll((v) => !v)}>
+														<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm mem-hist-more" onClick={() => setHistAll((v) => !v)}>
 															{histAll ? "Show fewer" : `Show all ${rows.length}`}
 														</button>
 													)}

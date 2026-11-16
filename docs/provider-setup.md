@@ -43,7 +43,7 @@ A room never switches models on its own. If a row's model can no longer run (its
 
 ### Switching the open conversation
 
-A conversation keeps the model it started on. The Conversation row is the default for new conversations; the open conversation changes its own model under the message box (on a phone, under the room's name at the top). Click the model's name, then the name again in the panel, and pick another model. **Choose another model** in the chat opens the same panel.
+A conversation keeps the model it started on until you pick another under the message box (on a phone, under the room's name at the top). Click the model's name, then the name again in the panel, and pick another model. **Choose another model** in the chat opens the same panel.
 
 - The conversation continues on the new model, and a line "Continued on" with the model's name marks where it switched. Two switches with nothing said between them leave one line, the last. The first answer after a switch reads the whole conversation again.
 - A model picked while the room answers shows at once and takes over from the next answer: Send waits until the switch has gone through.
@@ -51,7 +51,7 @@ A conversation keeps the model it started on. The Conversation row is the defaul
 - A model too small even for a new conversation of this room is greyed and marked **Too small**; hover it for why.
 - The switch is refused while the room is remembering or a scheduled task holds the room, with a line that says so.
 
-Switching changes only the open conversation: the Conversation row stays the model new conversations start on. A conversation with no messages yet simply follows a new pick at its first message, unless it was switched: then it keeps the model it was switched to.
+A model picked in the chat also becomes the room's Conversation model: Room settings shows it, and new conversations and the room's scheduled tasks start on it. The Memory row doesn't change. A conversation with no messages yet simply follows a new pick at its first message, unless it was switched: then it keeps the model it was switched to.
 
 ### Effort
 
@@ -256,10 +256,10 @@ Current `anthropic` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `anthropic/claude-opus-5-5`, `anthropic/claude-fable-5-1`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5` |
+| Persistent-room conversation | `anthropic/claude-opus-5-5`, `anthropic/claude-fable-5-2`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-fable-5-1`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5` |
 | Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; recommended: `anthropic/claude-opus-5-5` |
 
-`claude-opus-5-5` is the default/recommended model. The list puts the default first, then follows Anthropic's order (Fable, Opus, Sonnet, Haiku), current models before the previous ones. Claude Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6 and Haiku 4.5 are no longer on the list: a conversation started on one of them keeps answering, and a new conversation in a room set on one asks for another model.
+`claude-opus-5-5` is the default/recommended model. The list puts the default first, then follows Anthropic's order (Fable, Opus, Sonnet, Haiku), current models before the previous ones. Claude Fable 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6 and Haiku 4.5 are no longer on the list: a conversation started on one of them keeps answering, and a new conversation in a room set on one asks for another model.
 
 The room list of these two providers is fixed by the release. Each room picks its Conversation and Memory models from it in Room settings, Model. A conversation keeps the model it started on even after a list change; new conversations start on the room's Conversation row.
 

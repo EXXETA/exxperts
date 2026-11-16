@@ -421,7 +421,7 @@ export function StateProfileSection() {
 									</>
 								) : payload.home.canMove ? (
 									<button className="rs-btn" type="button" disabled={moveBusy} onClick={() => void pickMoveTarget()}>
-										{moveBusy ? "Choosing…" : "Move…"}
+										{moveBusy ? "Choosing…" : "Move"}
 									</button>
 								) : null}
 							</div>

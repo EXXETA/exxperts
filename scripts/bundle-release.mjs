@@ -23,6 +23,7 @@
 //   exxperts            POSIX sh shim (exxperts.cmd on win-x64)
 //   app/                the installed npm package tree (fully dereferenced)
 //   vendor/node/        pinned Node runtime, trimmed to the node binary + LICENSE
+//   vendor/document-tools/  the document packages, one file each, with licences
 //
 // The launcher chain is relocatable: bin/exxperts.cjs resolves the app root
 // relative to itself, spawns all children via process.execPath, and resolves
@@ -361,6 +362,9 @@ stripInternalPaths(appDir);
 
 // Vendored Node runtime, verified against the pinned checksum.
 await stageVendoredNode();
+
+// The document packages, beside the Node (scripts/bundle-document-tools.mjs).
+run(process.execPath, [path.join(root, "scripts", "bundle-document-tools.mjs"), "--out", path.join(stagingTop, "vendor", "document-tools")]);
 
 // Launcher shims. Minimal on purpose: resolve their own directory, then hand
 // off to the vendored node with app/bin/exxperts.cjs. Everything else

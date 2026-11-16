@@ -2,7 +2,7 @@
 // server and one synthetic provider: Review as a whole (a busy first read says
 // its wait on Review's screen, then the tidy, its card and the saved screen,
 // which says the open conversation keeps the memory it started with);
-// Back during a Memorize or Review discussion asks Leave, Keep discussing
+// Back during a Memorize or Review discussion, by the mac app's arrow too, asks Leave, Keep discussing
 // stays, Leave goes, and the discussion is back on the next open; the
 // Memorize card's block for notes the one-time sort placed, with Move, and the
 // same open-conversation line on its saved screen; Return Home from an
@@ -37,9 +37,10 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
+const MAC_APP = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 ExxpertsDesktop/0.14.3";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -356,6 +357,36 @@ try {
 		assert(await transcript.getByText("Noted: the renewal notes stay short.").count() === 1, "the discussion comes back whole on the next open");
 		console.log("  ok  Back during Review's discussion asks Leave; Keep discussing stays; Leave goes; the discussion comes back");
 
+		// The same refused move by the mac app's arrow: the arrow does nothing beyond Maintain's own question, and both arrows stay true.
+		{
+			const mac: Page = await (await browser.newContext({ viewport: { width: 1280, height: 900 }, userAgent: MAC_APP })).newPage();
+			await mac.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+			await mac.waitForLoadState("networkidle");
+			if (await mac.locator(".whats-new-close").count()) await mac.locator(".whats-new-close").click();
+			await mac.locator(".persistent-agent-card").filter({ hasText: "Review Room" }).getByRole("button", { name: "Maintain", exact: true }).click();
+			await mac.locator(".maintain-action").filter({ hasText: "Review" }).first().click();
+			const discussion = mac.locator('[aria-label="Discussion transcript"]');
+			await discussion.getByText("Keep the renewal notes short.").waitFor({ timeout: 20_000 });
+			const shownAt = await mac.evaluate(() => window.location.hash);
+			const arrow = (name: string) => mac.locator(".history-arrows").getByRole("button", { name, exact: true });
+			const arrowsState = async () => [await arrow("Back").isEnabled(), await arrow("Forward").isEnabled()].join();
+			const stateBefore = await arrowsState();
+			assert(stateBefore === "true,false", `in Maintain, Back can go and Forward cannot, got ${stateBefore}`);
+			const leave = mac.getByRole("dialog", { name: "Leave Review?" });
+			await arrow("Back").click();
+			await leave.waitFor({ timeout: 10_000 });
+			await leave.getByRole("button", { name: "Keep discussing" }).click();
+			await leave.waitFor({ state: "detached", timeout: 10_000 });
+			await waitUntil(async () => (await mac.evaluate(() => window.location.hash)) === shownAt && (await arrowsState()) === stateBefore, `a refused Back leaves the address and both arrows as they were, got ${await arrowsState()}`, 5_000);
+			assert(await discussion.getByText("Keep the renewal notes short.").count() === 1, "a refused Back stays in the discussion");
+			await arrow("Back").click();
+			await leave.waitFor({ timeout: 10_000 });
+			await leave.getByRole("button", { name: "Leave", exact: true }).click();
+			await waitUntil(async () => (await discussion.count()) === 0, "Leave goes");
+			await mac.context().close();
+			console.log("  ok  a Back refused by Maintain leaves the screen, the address and both arrows true");
+		}
+
 		// 3. The tidy from the discussion, its card, Save and the saved screen.
 		await review.getByRole("button", { name: "Continue →" }).click();
 		const saveTidy = review.getByRole("button", { name: /^Save (to memory|over the budget)$/ });
@@ -447,12 +478,12 @@ try {
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15_000 });
 		await page.waitForTimeout(800);
 		await composer.fill("We moved the launch to May.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from claude-fake.").waitFor({ timeout: 20_000 });
 		await page.waitForTimeout(800);
 		const closedId = await page.evaluate(async (id) => (await (await fetch(`/api/persistent-agents/${encodeURIComponent(id)}/status`)).json()).activeThread?.threadId as string, savedRoom.agentId);
 		const dialog = page.getByRole("dialog", { name: "Remember this conversation" });
-		await page.getByRole("button", { name: "Choose what to keep…" }).click();
+		await page.getByRole("button", { name: "Choose what to keep" }).click();
 		await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 		await dialog.getByRole("button", { name: "Save to memory" }).click({ timeout: 20_000 });
 		await dialog.getByText("Memory updated").waitFor({ timeout: 15_000 });

@@ -28,7 +28,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -137,10 +137,9 @@ async function roomShows(browser: Browser, expected: Expected): Promise<void> {
 		await page.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: "Resume" }).click();
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await page.waitForTimeout(800);
 		const sent = `A question, status ${caseKey(expected)} please.`;
 		await composer.fill(sent);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		const newest = async () => (await page.locator(".failure-line:not(.is-folded) .system-line-text").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim()).at(-1) ?? "";
 		const banner = page.locator(".room-model-notice");
 		const shown = async () => expected.notice ? (await banner.count()) > 0 && /is signed out/.test(await banner.innerText()) : (await newest()).startsWith(expected.cause!);

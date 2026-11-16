@@ -8,11 +8,11 @@ import { persistentAgentModelLocksEqual } from "./persistent-agent-ai-profiles.j
 import { writeCommitIntent, clearCommitIntent, registerCommitSettler } from "./memory-commit.js";
 import { type CheckpointTranscriptSourceMetadata, type PersistentAgentModelLock, type PersistentAgentPiSessionJsonlThreadRuntime, type PersistentAgentThreadRecord, REQUIRED_L1B_SECTIONS } from "./persistent-agent-types.js";
 import type { CheckpointApprovalAcceptedRequest, CheckpointApprovalResponse, CheckpointEventRecord, L1bEventStateMetrics, L1bSourceFingerprint, PersistentAgentCheckpointRuntimeBoundary } from "./persistent-agent-memory-types.js";
-import { type AgentJson, agentRootRelativePath, assertPersistentAgentThreadNotInFlight, checkpointEventRecordPath, createPersistentAgentInstance, ensureDir, getPersistentAgentRuntimeState, normalizePersistentAgentRootRelativePath, normalizeRuntimeModel, persistentAgentConflictError, type PersistentAgentInstance, requestBodyModelLock, safeRuntimeThreadId, shortRandomId, slugTimestamp, writeCheckpointEventRecord, writeFileAtomic } from "./persistent-agent-store.js";
+import { type AgentJson, agentRootRelativePath, assertPersistentAgentThreadNotInFlight, checkpointEventRecordPath, createPersistentAgentInstance, ensureDir, getPersistentAgentRuntimeState, normalizePersistentAgentRootRelativePath, normalizeRuntimeModel, persistentAgentConflictError, type PersistentAgentInstance, readJson, requestBodyModelLock, safeRuntimeThreadId, shortRandomId, slugTimestamp, writeCheckpointEventRecord, writeFileAtomic } from "./persistent-agent-store.js";
 import { closePersistentAgentThreadForCheckpoint, getPersistentAgentThread, normalizeL1bSourceFingerprint, normalizePersistentAgentRuntimeString, normalizeSha256Hex, writePersistentAgentThread } from "./persistent-agent-threads.js";
 import { rememberGenerationKey, rememberGenerations } from "./persistent-agent-turns.js";
 import { appendRecentContextEntry, approvedRecentContextFrom, extractMarkdownSections, isCheckpointDensity, l1bStateMetrics, proposedRecentContextEventMetrics, recentContextEntryEventMetrics, stableRecentContextEntry, updateChronosForCheckpoint, validateApprovedRecentContextDraft } from "./persistent-agent-memory-files.js";
-import { createPersistentAgentPiSessionJsonlThreadRuntime, modelSwitchLineItem, openPersistentAgentPiSessionManager } from "./persistent-agent-conversation-model.js";
+import { createPersistentAgentPiSessionJsonlThreadRuntime, modelSwitchLineItem, openPersistentAgentPiSessionManager, persistentRoomConversationCwd } from "./persistent-agent-conversation-model.js";
 import { assertPersistentAgentAcceptsCheckpoint, getPersistentAgentStatus } from "./persistent-agent-status.js";
 import { buildPersistentAgentCheckpointTranscriptSource } from "./persistent-agent-transcript.js";
 
@@ -255,7 +255,6 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 		freshThreadId,
 		freshModel: normalizeRuntimeModel(options.freshModel) ?? oldThread.model,
 		...(options.freshContinuation ? { freshContinuation: options.freshContinuation } : {}),
-		runtimeCwd,
 		approvedAt: now.toISOString(),
 		leafId: proposalSource.runtimeKind === "pi-session-jsonl" ? proposalSource.leafId ?? null : null,
 		archivedL1bRelPath: agentRootRelativePath(instance, archivedL1bPath),
@@ -281,13 +280,13 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 	// drop this save mid-flight. Keep it synchronous, or take the lock in the
 	// settle.
 	writeCommitIntent(root, "remember", intent);
-	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
+	writeFileAtomic(archivedL1bPath, currentL1b);
 	let updatedL1b = appendRecentContextEntry(currentL1b, stableEntry);
 	updatedL1b = updateChronosForCheckpoint(updatedL1b, checkpointId, sessionId, now);
 	writeFileAtomic(l1bPath, updatedL1b);
 
 	// The conversation was just checked against the proposal, so its leaf is the proposal's.
-	const finished = finishRememberCommit(instance, intent, { leafChecked: true });
+	const finished = finishRememberCommit(instance, intent, { leafChecked: true, runtimeCwd });
 	clearCommitIntent(root, "remember");
 	if (!finished.runtimeBoundary || !finished.freshThread) throw new Error("the remembered conversation could not be closed");
 	if (finished.freshThread.runtime.kind !== "pi-session-jsonl") throw new Error("fresh post-checkpoint runtime must be Pi-backed");
@@ -308,7 +307,7 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 	};
 }
 
-/** A Remember save in flight: ids, times and counts, never the conversation's words. */
+/** A Remember save in flight: ids, times and counts, never the conversation's words. One an older version left also holds `runtimeCwd`, which nothing reads. */
 interface RememberCommitIntent {
 	checkpointId: string;
 	sessionId: string;
@@ -318,7 +317,6 @@ interface RememberCommitIntent {
 	freshModel: PersistentAgentModelLock;
 	/** Written into the fresh thread in its one creating write, so a crash recovery makes the same thread. */
 	freshContinuation?: RememberFreshContinuation;
-	runtimeCwd: string;
 	approvedAt: string;
 	/** The conversation's last entry when its proposal was read; null for a runtime without one. */
 	leafId: string | null;
@@ -344,7 +342,7 @@ interface RememberCommitIntent {
  * leaf, gets its event record, and stays open: its later turns are
  * remembered next time.
  */
-function finishRememberCommit(instance: PersistentAgentInstance, intent: RememberCommitIntent, options: { leafChecked: boolean }): {
+function finishRememberCommit(instance: PersistentAgentInstance, intent: RememberCommitIntent, options: { leafChecked: boolean; runtimeCwd: string }): {
 	runtimeBoundary?: PersistentAgentCheckpointRuntimeBoundary;
 	freshThread?: PersistentAgentThreadRecord;
 	eventRecordPath: string;
@@ -375,7 +373,7 @@ function finishRememberCommit(instance: PersistentAgentInstance, intent: Remembe
 				...(continuation?.kind === "continued" ? { modelChosen: true as const } : {}),
 				...(existingFresh ? {} : { items: continuation ? [continuation.kind === "continued" ? modelSwitchLineItem(continuation.line, at) : { kind: "system", id: `continue_on_${at.toString(36)}`, text: continuation.line, level: "info" }] : [] }),
 			}, {
-				createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: intent.freshThreadId, model, cwd: intent.runtimeCwd }),
+				createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: intent.freshThreadId, model, cwd: options.runtimeCwd }),
 				// Approval never invokes a model: the fresh thread inherits the old
 				// thread's lock, which may belong to a profile that is no longer
 				// active. The approved memory must still land; prompting and resume
@@ -408,7 +406,8 @@ function finishRememberCommit(instance: PersistentAgentInstance, intent: Remembe
 	const l1bPath = instance.l1bCurrentPath(meta);
 	const resultMetrics = l1bStateMetrics(renderMemoryContext(fs.readFileSync(l1bPath, "utf-8")));
 	const eventRecordPath = checkpointEventRecordPath(instance, intent.checkpointId);
-	if (!fs.existsSync(eventRecordPath)) {
+	// A record a kill cut short before this write was atomic reads as none, and is written whole.
+	if (!readJson(eventRecordPath)) {
 		const eventRecord: CheckpointEventRecord = {
 			schemaVersion: 1,
 			operation: "checkpoint",
@@ -481,7 +480,7 @@ function checkpointEventRuntimeBoundary(boundary: PersistentAgentCheckpointRunti
 function conversationLeafMoved(agentId: string, thread: PersistentAgentThreadRecord, intent: RememberCommitIntent): boolean {
 	if (thread.runtime.kind !== "pi-session-jsonl" || intent.leafId === null) return false;
 	try {
-		return openPersistentAgentPiSessionManager(agentId, thread.runtime, intent.runtimeCwd).getLeafId() !== intent.leafId;
+		return openPersistentAgentPiSessionManager(agentId, thread.runtime, persistentRoomConversationCwd(agentId, thread.threadId)).getLeafId() !== intent.leafId;
 	} catch {
 		return false;
 	}
@@ -538,7 +537,7 @@ function settleRememberCommit(agentId: string, roomDir: string, intent: Remember
 	const l1bPath = meta ? instance.l1bCurrentPath(meta) : path.join(roomDir, "L1b", "current.md");
 	const l1b = fs.existsSync(l1bPath) ? fs.readFileSync(l1bPath, "utf-8") : "";
 	if (l1b.includes(`checkpoint_id=${intent.checkpointId}`)) {
-		finishRememberCommit(instance, intent, { leafChecked: false });
+		finishRememberCommit(instance, intent, { leafChecked: false, runtimeCwd: persistentRoomConversationCwd(instance.agentId, intent.freshThreadId) });
 	} else {
 		fs.rmSync(path.join(roomDir, intent.archivedL1bRelPath), { force: true });
 	}

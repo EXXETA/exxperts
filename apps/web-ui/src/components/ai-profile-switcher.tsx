@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useEscapeKey } from "./use-escape-key";
 import { PaneHeader, GroupHeader } from "./pane-header";
 import { useRemoteClientContext, aiSetupLocked, SHARED_SERVER_ADMIN_LINE, NEW_ADMIN_HINT } from "../remote-client-context";
-import { useProviderLogin, ApiKeyForm, AddProviderPanel, ConfigureProfileModal, GatewayConfigModal, GatewayApproveModelsModal } from "./add-provider-panel";
+import { useProviderLogin, ApiKeyForm, CopilotSignInForm, COPILOT_PROVIDER_ID, AddProviderPanel, ConfigureProfileModal, GatewayConfigModal, GatewayApproveModelsModal } from "./add-provider-panel";
 import { AiDefaultsGroup } from "./ai-defaults-group";
 import { fetchJson, withoutServiceLine } from "../api";
 import { modelTooltipName, distinctModelNames } from "../model-names";
@@ -83,7 +83,7 @@ function AiProfileModelsDetail({ profile, keySaved }: { profile: PersistentAgent
  *  menu hangs right-aligned under its anchor and flips above it when the
  *  viewport bottom would cut it; a ResizeObserver re-measures when the
  *  contents swap (the remove-confirm is taller than the item list). */
-function AiProfileRowMenu({ anchorRef, onDismiss, children }: { anchorRef: React.RefObject<HTMLElement | null>; onDismiss: () => void; children: ReactNode }) {
+export function AiProfileRowMenu({ anchorRef, onDismiss, children }: { anchorRef: React.RefObject<HTMLElement | null>; onDismiss: () => void; children: ReactNode }) {
 	const menuRef = useRef<HTMLSpanElement>(null);
 	const [pos, setPos] = useState<{ top: number | undefined; bottom: number | undefined; left: number } | null>(null);
 	useLayoutEffect(() => {
@@ -168,6 +168,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 	const menuAnchorRef = useRef<HTMLElement | null>(null);
 	const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 	const [removing, setRemoving] = useState(false);
+	// The row whose form is open: its key form, or Copilot's sign-in form.
 	const [keyProfileId, setKeyProfileId] = useState<string | null>(null);
 	// A re-read can take the admin's role away while a form is open: nothing stays open to be typed into.
 	useEffect(() => {
@@ -209,7 +210,8 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 	// (URL + device-code instructions + 2s polling live in useProviderLogin).
 	// API-key providers (OpenAI-compatible gateways, custom providers) get an
 	// inline key form instead.
-	const login = useProviderLogin(() => {
+	const login = useProviderLogin((providerId, ok) => {
+		if (ok && providerId === COPILOT_PROVIDER_ID) setKeyProfileId((id) => opensCopilotForm(id) ? null : id);
 		onRefresh();
 		onRefreshAuth();
 		onSignedIn?.();
@@ -238,8 +240,22 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 			setKeyProfileId(keyProfileId === profile.id ? null : profile.id);
 			return;
 		}
+		// Copilot's form asks first for an optional company address.
+		if (profile.provider.id === COPILOT_PROVIDER_ID) {
+			login.setError(null);
+			setKeyProfileId(profile.id);
+			return;
+		}
+		// Copilot's form shows the sign-in's error line, so it closes when another starts.
+		setKeyProfileId((id) => opensCopilotForm(id) ? null : id);
 		await login.signIn(profile.provider.id);
 	}
+
+	function opensCopilotForm(profileId: string | null): boolean {
+		return status?.profiles.find((profile) => profile.id === profileId)?.provider.id === COPILOT_PROVIDER_ID;
+	}
+	// The form's error line stands in for the one below the list while the form is on screen.
+	const loginError = opensCopilotForm(keyProfileId) ? null : login.error;
 
 	async function saveApiKey(profile: PersistentAgentAiProfileStatus, key: string) {
 		setError(null);
@@ -345,7 +361,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 								const sublineWarn = !signingIn && profile.provider.configured && (!profile.ready || keyRefused);
 								const modelsOpen = modelsOpenId === profile.id;
 								return (
-									<div key={profile.id} data-provider-id={profile.provider.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}${keyProfileId === profile.id ? " key-open" : ""}`}>
+									<div key={profile.id} data-provider-id={profile.provider.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}${keyProfileId === profile.id && !signingIn ? " key-open" : ""}`}>
 										<div className={`ai-profile-row${profile.ready && !keyRefused ? "" : " notready"}`}>
 											<span className="ai-profile-main">
 												<span className="ai-profile-text">
@@ -365,7 +381,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 													</button>
 												)}
 												{signingIn ? (
-													<button className="ai-profile-foot-link" onClick={() => void login.cancel()} title="Stop this sign-in attempt">Cancel</button>
+													<button className="rs-btn rs-btn-quiet rs-btn-sm" onClick={() => void login.cancel()} title="Stop this sign-in attempt">Cancel</button>
 												) : (
 													<>
 														{/* The key row carries its own Cancel now, for every row rather
@@ -385,7 +401,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 														    items that need a credential gate themselves below. */}
 													{!remoteSetupLocked && <span className="ai-profile-menu-anchor">
 														<button
-															className="ai-profile-menu-btn"
+															className="rs-btn rs-btn-icon ai-profile-menu-btn"
 															aria-haspopup="menu"
 															aria-expanded={menuOpenId === profile.id}
 															aria-label={`Manage ${profile.label}`}
@@ -446,9 +462,11 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 										{signingIn && login.instructions && (
 											<div className="add-provider-instructions ai-profile-signin-instructions">{login.instructions}</div>
 										)}
-										{keyProfileId === profile.id && (
+										{keyProfileId === profile.id && (profile.provider.id === COPILOT_PROVIDER_ID ? (
+											<CopilotSignInForm className="ai-profile-key-form" login={login} onCancel={() => { login.setError(null); setKeyProfileId(null); }} />
+										) : (
 											<ApiKeyForm className="ai-profile-key-form" providerName={profile.label} onSave={(key) => saveApiKey(profile, key)} onCancel={() => setKeyProfileId(null)} />
-										)}
+										))}
 										{modelsOpen && <AiProfileModelsDetail profile={profile} keySaved={signedInWithOAuth === false} />}
 									</div>
 								);
@@ -488,8 +506,8 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 			)}
 			{status?.state.message && <p className="cli-note">{status.state.message}</p>}
 			{status?.customProfiles?.errors?.map((message) => <p key={message} className="cli-note">{message}</p>)}
-			{(error ?? login.error) && <div className="checkpoint-proposal-error" role="alert">{error ?? login.error}</div>}
-			{keyNotice && !(error ?? login.error) && <p className="settings-help" role="status">{keyNotice}</p>}
+			{(error ?? loginError) && <div className="checkpoint-proposal-error" role="alert">{error ?? loginError}</div>}
+			{keyNotice && !(error ?? loginError) && <p className="settings-help" role="status">{keyNotice}</p>}
 			{editProfile && (
 				<ConfigureProfileModal
 					providerId={editProfile.provider.id}

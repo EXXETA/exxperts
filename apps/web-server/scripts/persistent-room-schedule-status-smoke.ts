@@ -165,6 +165,45 @@ try {
 	const listedRoom = listed.body.find((room: any) => room.id === agentId);
 	assert(listedRoom?.scheduleSummary?.totalCount === 3, "room list should include schedule summary");
 
+	// A one-off that ran shows its own run after 60 newer runs of another task push it out of the newest 50.
+	const { createBackgroundRun } = await import("../src/background-runs.js");
+	// A page component (.tsx): loaded at run time, as the server build compiles scripts without JSX.
+	const { findRelevantRunForJob, latestRunsBySchedule, shownNextDueAt }: any = await import(new URL("../../web-ui/src/components/RoomScheduledTasksSection.tsx", import.meta.url).href);
+	const historyRoomId = await createRoom("Schedule History Room");
+	const minutes = (from: string | Date, count: number) => new Date(new Date(from).getTime() + count * 60_000);
+	const ranRun = (jobId: string, dueAt: string | Date) => createBackgroundRun({
+		kind: "scheduled-prompt",
+		scope: { kind: "persistent-room", roomId: historyRoomId },
+		source: { schedulerJobId: jobId, trigger: "schedule-due", dueAt: new Date(dueAt).toISOString() },
+		status: "succeeded",
+		reason: "completed",
+		now: new Date(dueAt),
+	});
+	const oneOff = addPersistentRoomScheduleJob(historyRoomId, { name: "one-off", type: "once", schedule: "+10m", prompt: "Run once.", now });
+	const busy = addPersistentRoomScheduleJob(historyRoomId, { name: "busy", type: "interval", schedule: "1m", prompt: "Run often.", now });
+	const oneOffRun = ranRun(oneOff.id, String(oneOff.nextRunAt));
+	for (let count = 1; count <= 60; count += 1) ranRun(busy.id, minutes(String(oneOff.nextRunAt), count));
+	const history = await requestJson(`/api/persistent-agents/${encodeURIComponent(historyRoomId)}/background-runs?limit=50`);
+	assert(history.status === 200 && !history.body.runs.some((run: any) => run.runId === oneOffRun.runId), "the one-off's run is past the newest 50");
+	const historyJobs = (await requestJson(`/api/persistent-agents/${encodeURIComponent(historyRoomId)}/schedules`)).body.jobs;
+	const oneOffRow = findRelevantRunForJob(historyJobs.find((job: any) => job.id === oneOff.id), latestRunsBySchedule(history.body));
+	assert(oneOffRow?.runId === oneOffRun.runId && oneOffRow.status === "succeeded", `the one-off's row shows its own run, got ${JSON.stringify(oneOffRow)}`);
+	assert(shownNextDueAt(historyJobs.find((job: any) => job.id === oneOff.id), oneOffRow) === null, "a one-off that ran shows no Next due");
+
+	// An interval task's Next due after seven runs is its next real time, not its first.
+	const hourlyCreatedAt = new Date(Date.now() - 7.5 * 60 * 60_000);
+	const hourly = addPersistentRoomScheduleJob(historyRoomId, { name: "hourly", type: "interval", schedule: "1h", prompt: "Run hourly.", now: hourlyCreatedAt });
+	for (let hour = 0; hour < 7; hour += 1) ranRun(hourly.id, minutes(String(hourly.nextRunAt), hour * 60));
+	const hourlyListed = (await requestJson(`/api/persistent-agents/${encodeURIComponent(historyRoomId)}/schedules`)).body.jobs.find((job: any) => job.id === hourly.id);
+	const nextReal = minutes(String(hourly.nextRunAt), 7 * 60);
+	assert(nextReal.getTime() > Date.now() && hourlyListed?.nextRunAt === nextReal.toISOString(), `after seven runs, Next due is ${nextReal.toISOString()}, got ${hourlyListed?.nextRunAt}`);
+	assert(shownNextDueAt(hourlyListed, null) === nextReal.toISOString(), `an enabled interval task shows its Next due, got ${shownNextDueAt(hourlyListed, null)}`);
+	// Switched off, the same kind of task shows no Next due.
+	const switchedOff = await requestJson(`/api/persistent-agents/${encodeURIComponent(historyRoomId)}/schedules/${encodeURIComponent(busy.id)}`, { method: "PATCH", body: JSON.stringify({ enabled: false }) });
+	assert(switchedOff.status === 200, `switching a task off should succeed, got ${switchedOff.status}: ${JSON.stringify(switchedOff.body)}`);
+	const busyListed = (await requestJson(`/api/persistent-agents/${encodeURIComponent(historyRoomId)}/schedules`)).body.jobs.find((job: any) => job.id === busy.id);
+	assert(busyListed?.enabled === false && shownNextDueAt(busyListed, null) === null, `a switched-off task shows no Next due, got ${shownNextDueAt(busyListed, null)}`);
+
 	const missing = await requestJson("/api/persistent-agents/not-a-real-room/schedules");
 	assert(missing.status === 404, `missing room schedules should return 404, got ${missing.status}: ${JSON.stringify(missing.body)}`);
 	const invalid = await requestJson("/api/persistent-agents/Uppercase/schedules");

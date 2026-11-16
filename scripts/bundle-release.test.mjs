@@ -11,6 +11,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 
 import { findPrunedTypeScriptImports, pruneNodeModules } from "./bundle-release-prune.mjs";
+import "./bundle-document-tools.test.mjs";
 
 const tempDirs = [];
 after(() => {

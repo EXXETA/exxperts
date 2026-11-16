@@ -27,6 +27,7 @@ const { ThinkingRow, ThinkingCardRow }: any = await import(new URL("../../web-ui
 const workCard: any = await import(new URL("../../web-ui/src/components/work-card.tsx", import.meta.url).href);
 const { ThoughtWords }: any = await import(new URL("../../web-ui/src/components/thought-words.tsx", import.meta.url).href);
 const store: any = await import(new URL("../../web-ui/src/thinking-text-store.ts", import.meta.url).href);
+const workLook: any = await import(new URL("../../web-ui/src/work-look.ts", import.meta.url).href);
 
 const NOTES = "The config holds a capacity of 20 and a refill of 5 per second.";
 let n = 0;
@@ -47,19 +48,27 @@ try {
 	assert(words(done) === "Thought for 12 s" && closedButton(done) && !done.includes(NOTES) && !done.includes("wk-sweep"), `done: Thought for 12 s, a closed button, got ${done}`);
 	assert(words(row({ ms: 600 }, NOTES)) === "Thought briefly", "under a second with words: Thought briefly");
 	assert(words(row({ ms: 65_000 }, NOTES)) === "Thought for 1 min 5 s", "a minute and more");
+	// The thought's time rounds as a card's head does, so the two never disagree: tenths under ten seconds, then whole seconds.
+	for (const [ms, said] of [[1_000, "1.0 s"], [1_500, "1.5 s"], [1_700, "1.7 s"], [2_000, "2.0 s"], [9_400, "9.4 s"], [12_000, "12 s"], [59_600, "1 min 0 s"], [60_000, "1 min 0 s"], [125_000, "2 min 5 s"]] as const) {
+		assert(words(row({ ms }, NOTES)) === `Thought for ${said}`, `${ms} ms: Thought for ${said}, got ${words(row({ ms }, NOTES))}`);
+		assert(workLook.durationText(ms) === said, `${ms} ms: the head says ${said} too, got ${workLook.durationText(ms)}`);
+	}
+	// A short block with no words has no "Thought briefly" to fall back on: it says its time, and never "0.0 s".
+	assert(words(row({ ms: 300 }, "")) === "Thought for 0.3 s", `a wordless block of 300 ms, got ${words(row({ ms: 300 }, ""))}`);
+	assert(words(row({ ms: 0 }, "")) === "Thought for &lt;0.1 s", `a wordless block of no time, got ${words(row({ ms: 0 }, ""))}`);
 	for (const [label, item, text] of [["live, no words", {}, ""], ["done, no words", { ms: 8_000 }, " "], ["redacted", { ms: 8_000, redacted: true }, "[Reasoning redacted]"]] as const) {
 		for (const component of [ThinkingRow, ThinkingCardRow]) {
 			const html = row(item, text, component);
 			assert(!html.includes("<button") && !html.includes("Reasoning redacted"), `${label}: the label alone, not a button, got ${html}`);
 		}
 	}
-	assert(words(row({ ms: 8_000, redacted: true }, "[Reasoning redacted]")) === "Thought for 8 s", "a redacted block still says how long it thought");
+	assert(words(row({ ms: 8_000, redacted: true }, "[Reasoning redacted]")) === "Thought for 8.0 s", "a redacted block still says how long it thought");
 
 	// A card's row: the same words and the same rule for what opens.
 	const cardLive = row({}, NOTES, ThinkingCardRow);
 	assert(words(cardLive) === "Thinking" && cardLive.includes("wk-sweep") && closedButton(cardLive) && !cardLive.includes(NOTES), `a card's row, live: Thinking, closed, got ${cardLive}`);
 	const cardDone = row({ ms: 7_000 }, NOTES, ThinkingCardRow);
-	assert(words(cardDone) === "Thought for 7 s" && closedButton(cardDone) && cardDone.includes('data-s="done"'), `a card's row, done: Thought for 7 s, got ${cardDone}`);
+	assert(words(cardDone) === "Thought for 7.0 s" && closedButton(cardDone) && cardDone.includes('data-s="done"'), `a card's row, done: Thought for 7.0 s, got ${cardDone}`);
 
 	// Thinking with nothing shown between is one row: the times added up, each thought in order, live while the last one is.
 	const thoughtsOf = (items: Record<string, unknown>[]): { words: string; live: boolean }[] => JSON.parse(renderToStaticMarkup(createElement(() => JSON.stringify(store.useThoughtWords(items)))).replace(/&quot;/g, '"'));

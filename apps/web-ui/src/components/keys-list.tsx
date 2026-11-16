@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useSyncExternalStore } from "react";
+import { historyKeyWords } from "../history-arrows";
 import { chordHeld, chordWords, isMacPlatform, isTouchScreen } from "../platform";
 
 /**
@@ -13,12 +14,14 @@ type KeyRow = { what: string; keys: string[]; or?: boolean };
 function keySections(): Array<{ heading: string; rows: KeyRow[] }> {
 	const enter = isMacPlatform() ? "↵" : "Enter";
 	const sendNow = isMacPlatform() ? "⌘↵" : "Ctrl+Enter";
+	const historyKeys = historyKeyWords();
 	return [
 		{
 			heading: "General",
 			rows: [
 				{ what: "Shortcuts (this list)", keys: [chordWords("/")] },
 				{ what: "Settings", keys: [chordWords(",")] },
+				...(historyKeys ? [{ what: "Back, Forward", keys: historyKeys }] : []),
 			],
 		},
 		{
@@ -30,6 +33,8 @@ function keySections(): Array<{ heading: string; rows: KeyRow[] }> {
 				{ what: "Stop the answer", keys: ["Esc"] },
 				{ what: "Allow a waiting step", keys: [enter] },
 				{ what: "Deny a waiting step", keys: ["Esc"] },
+				{ what: "The room's question: Allow this time or Run once, with the box empty", keys: [sendNow] },
+				{ what: "The room's question: Not now", keys: ["Esc"] },
 				{ what: "Open or close a card or a row you reached with Tab", keys: [enter, "Space"], or: true },
 				{ what: "This room's settings", keys: [chordWords(",", true)] },
 				{ what: "Diagram viewer: zoom in, zoom out, actual size, fit, close", keys: ["+", "−", "0", "F", "Esc"] },
@@ -169,7 +174,7 @@ export function KeysList() {
 			<div ref={dialogRef} className="help-modal keys-list" role="dialog" aria-modal="true" aria-label="Shortcuts" onClick={(event) => event.stopPropagation()}>
 				<div className="help-head">
 					<h2>Shortcuts</h2>
-					<button ref={closeRef} className="icon-btn" onClick={() => setShown(false)} aria-label="Close">✕</button>
+					<button ref={closeRef} className="rs-btn rs-btn-icon" onClick={() => setShown(false)} aria-label="Close">✕</button>
 				</div>
 				<table className="keys-list-table">
 					{/* One row group per section; its heading cell names the rows under it for a screen reader. */}

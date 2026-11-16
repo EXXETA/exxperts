@@ -108,6 +108,9 @@ try {
 	assert(!fs.existsSync(defaultPath), "missing room default should not create default sidecar");
 	assert(!fs.existsSync(sentinelSidecarPath), "missing room default must not create room_default thread sidecar");
 
+	// Where commands stay inside the room, a Mac, a new room starts with them on, and its first folder takes that.
+	const startsOn = ((process.env.EXXPERTS_TEST_INTROSPECTION === "1" ? process.env.EXXPERTS_TEST_SHELL_PLATFORM : undefined) ?? process.platform) === "darwin";
+	assert(fs.existsSync(path.join(agentRoot, "runtime", "commands-start-on.json")) === startsOn, `a new room ${startsOn ? "should" : "should not"} keep that its commands start on`);
 	const putDefault = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
 		body: JSON.stringify({ root: workspaceRoot, displayLabel: "Smoke Workspace", mode: "read-only" }),
@@ -119,7 +122,7 @@ try {
 	assert(putDefault.body?.policy?.workspaceAccessMode === "localFiles", "PUT without explicit mode should default new room workspace to Local files");
 	assert(putDefault.body?.policy?.pathAccess === "local-files", "Local files default should expose local-files path access");
 	assert(putDefault.body?.policy?.nativePiFilesystemToolsEnabled === true, "Local files default should expose native Pi filesystem tools");
-	assert(putDefault.body?.policy?.bashEnabled === false, "Local files default should keep bash disabled");
+	assert(putDefault.body?.policy?.bashEnabled === startsOn, `a new room's first Local files folder should have commands ${startsOn ? "on" : "off"}`);
 	assert(putDefault.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep,write,edit", "Local files default should expose fixed W5 tool set");
 	assertNoPathLeak(putDefault.body, "PUT default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 	assert(fs.existsSync(defaultPath), "PUT should write runtime/workspace-default.json");
@@ -154,13 +157,11 @@ try {
 
 	const enableBashNoRoot = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
-		body: JSON.stringify({ workspaceAccessMode: "localFiles", mode: "read-only", toolSelection: { kind: "custom", allowedToolNames: [] }, bashEnabled: true }),
+		body: JSON.stringify({ workspaceAccessMode: "localFiles", mode: "read-only", toolSelection: { kind: "standard" }, bashEnabled: true }),
 	});
 	assert(enableBashNoRoot.status === 200, `PUT no-root bash enable should succeed, got ${enableBashNoRoot.status}: ${JSON.stringify(enableBashNoRoot.body)}`);
 	assert(enableBashNoRoot.body?.policy?.workspaceAccessMode === "localFiles", "bash enable update should preserve Local files mode");
-	assert(enableBashNoRoot.body?.policy?.allowedToolNames?.length === 0, "bash enable update should allow ordinary Local files tools to be all off");
 	assert(enableBashNoRoot.body?.policy?.bashEnabled === true, "bash enable update should expose explicit bash enabled");
-	assert(enableBashNoRoot.body?.policy?.writeEnabled === false, "bash without writer tools must not report write capability — bash reach is its own flag");
 	assertNoPathLeak(enableBashNoRoot.body, "PUT no-root bash enable", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot], workspaceRoot);
 
 	const invalidLocalFilesToolSelection = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
@@ -198,11 +199,13 @@ try {
 	assert(readOnlySelection.status === 200, `PUT read-only selection should succeed, got ${readOnlySelection.status}: ${JSON.stringify(readOnlySelection.body)}`);
 	assert(readOnlySelection.body?.policy?.writeEnabled === false, "a selection without writer tools must report writeEnabled false");
 	assert(readOnlySelection.body?.policy?.modes?.write === false, "modes.write mirrors the derived writer presence");
+	const readOnlyRead = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`);
+	assert(readOnlyRead.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep" && readOnlyRead.body?.policy?.writeEnabled === false, "a read-only room reads back as Can change files off");
+	await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "PUT", body: JSON.stringify({ toolSelection: { kind: "standard" } }) });
 
 	// Live workspace defaults: a mutation applies to the RUNNING conversation
-	// from its next message. A thread sidecar that merely mirrors the current
-	// default (the old snapshot regime pinned every thread this way) is
-	// released by the mutation; a deliberate per-conversation override stays.
+	// from its next message. A conversation's own file, which only older
+	// versions wrote, never decides, and the mutation keeps it on disk.
 	// How the thread then resolves is persistent-room-workspace-live-default-smoke's.
 	const legacyThreadId = "legacy_active_workspace_default";
 	writePersistentAgentThread(agentId, legacyThreadId, {
@@ -225,17 +228,17 @@ try {
 		body: JSON.stringify({ root: changedWorkspaceRoot, displayLabel: "Changed Workspace", workspaceAccessMode: "bounded", mode: "read-only", bashEnabled: true }),
 	});
 	assert(changedDefault.status === 200, `PUT changed default should succeed with a message-bearing active thread, got ${changedDefault.status}: ${JSON.stringify(changedDefault.body)}`);
-	assert(changedDefault.body?.policy?.workspaceAccessMode === "bounded", "explicit changed default should save bounded workspace mode");
-	assert(changedDefault.body?.policy?.pathAccess === "workspace-only", "explicit bounded default should expose workspace-only path access");
 	assert(changedDefault.body?.policy?.bashEnabled === false, "explicit bounded default should force bash disabled even when requested");
+	const changedRead = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`);
+	assert(changedRead.body?.policy?.workspaceAccessMode === "localFiles" && changedRead.body?.policy?.bashEnabled === false, "a Bounded room reads back as the one access, its commands off");
 	assert(changedDefault.body?.policy?.writeEnabled === true, "the standard bounded bundle includes writer tools, so writeEnabled derives true");
 	assert(Array.isArray(changedDefault.body?.warnings) && changedDefault.body.warnings.length === 0, "live default change should report no warnings");
-	assert(!fs.existsSync(legacySidecarPath), "changing the default should release the active thread's mirror sidecar so the thread follows the live default");
+	assert(fs.existsSync(legacySidecarPath), "a conversation's own file is kept: it never decides, so nothing releases it");
 	const changedDefaultJson = fs.readFileSync(defaultPath, "utf-8");
 	assert(changedDefaultJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "room default should be updated to changed workspace root");
 	assertNoPathLeak(changedDefault.body, "PUT changed default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot], changedWorkspaceRoot);
-	// A deliberate per-conversation override (differing content) survives the
-	// next default change.
+	// A conversation's own file with other settings survives the next default
+	// change too.
 	const overrideRaw = { ...currentDefaultRaw, policyId: "prcp_deliberate_override_fixture", conversationId: legacyThreadId, bashEnabled: false, workspaceAccessMode: "bounded", toolSelection: { kind: "custom", allowedToolNames: ["ls", "read"] }, allowedToolNames: ["ls", "read"] };
 	fs.writeFileSync(legacySidecarPath, JSON.stringify(overrideRaw, null, 2) + "\n");
 	const changedAgain = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
@@ -269,6 +272,14 @@ try {
 	assert(invalidRoomRoot.status === 400, `room root should reject, got ${invalidRoomRoot.status}`);
 	assert(invalidRoomRoot.body?.code === "forbidden_root", `room root should reject as forbidden_root, got ${JSON.stringify(invalidRoomRoot.body)}`);
 	assertNoPathLeak(invalidRoomRoot.body, "invalid room root", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+
+	// Clear keeps Commands: the next folder, sent without them, has them as they were.
+	const commandsOn = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "PUT", body: JSON.stringify({ toolSelection: { kind: "standard" }, bashEnabled: true }) });
+	assert(commandsOn.status === 200 && commandsOn.body?.policy?.bashEnabled === true, `commands on before Clear, got ${JSON.stringify(commandsOn.body?.policy?.bashEnabled)}`);
+	const clearedKeeping = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "DELETE" });
+	assert(clearedKeeping.status === 200 && clearedKeeping.body?.deleted === true, "Clear should succeed");
+	const nextFolder = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: changedWorkspaceRoot, toolSelection: { kind: "standard" } }) });
+	assert(nextFolder.status === 200 && nextFolder.body?.policy?.bashEnabled === true, `the folder after Clear keeps commands on, got ${JSON.stringify(nextFolder.body)}`);
 
 	const deleted = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "DELETE" });
 	assert(deleted.status === 200, `DELETE default should succeed, got ${deleted.status}`);

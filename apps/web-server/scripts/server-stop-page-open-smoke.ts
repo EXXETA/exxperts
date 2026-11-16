@@ -21,7 +21,7 @@ import { chromium } from "playwright";
 import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { STOP_CUT_ANSWER_SENTENCE } from "../src/turn-ended-by.js";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -207,7 +207,7 @@ try {
 		await open();
 		const composer = page.locator("textarea").first();
 		await composer.fill(MESSAGE);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText(FIRST_WORDS).first().waitFor({ timeout: 20000 });
 		await waitUntil(() => deltasSent >= 6, "the answer streams");
 		const status = await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/status`)).json();

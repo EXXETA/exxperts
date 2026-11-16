@@ -25,10 +25,12 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
+import { BOX_FAULT_SENTENCE } from "../src/room-box/card-text.js";
 import { STOP_QUESTIONS_SENTENCE } from "../src/server-stop.js";
 import { STOPPED_BEFORE_ANSWER_SENTENCE } from "../src/turn-ended-by.js";
 import { readPageStyles } from "./page-styles.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -46,6 +48,7 @@ const { createElement } = pageRequire("react");
 const { renderToStaticMarkup } = pageRequire("react-dom/server");
 // Page components (.tsx): loaded at run time, as the server build compiles scripts without JSX.
 const message: any = await import(new URL("../../web-ui/src/components/Message.tsx", import.meta.url).href);
+const { SKILLS_FOLDER_COMMANDS_OFF_LINE } = await import("../../web-ui/src/step-lines.js");
 const approval: any = await import(new URL("../../web-ui/src/components/Approval.tsx", import.meta.url).href);
 const workCard: any = await import(new URL("../../web-ui/src/components/work-card.tsx", import.meta.url).href);
 
@@ -164,7 +167,7 @@ await check("a hand-off's step names the specialist in readable words, from one 
 await check("a running command says how long it has run", () => {
 	assert(message.runningForText(2_000) === "" && message.runningForText(7_400) === "7 s" && message.runningForText(65_000) === "1 min 5 s", `the elapsed words, got ${[2_000, 7_400, 65_000].map((ms) => message.runningForText?.(ms)).join(" | ")}`);
 	const source = fs.readFileSync(new URL("../../web-ui/src/components/Message.tsx", import.meta.url), "utf8");
-	assert(/item\.status === "running" && item\.name === "bash" && <RunningFor since=\{item\.startedAt\} \/>/.test(source), "a running command's card shows the time");
+	assert(/item\.status === "running" && isCommandStep\(item\.name\) && <RunningFor since=\{item\.startedAt\} \/>/.test(source), "a running command's card shows the time");
 });
 
 await check("a specialist's notes keep their single line breaks", () => {
@@ -175,7 +178,7 @@ await check("a specialist's notes keep their single line breaks", () => {
 await check("the approval questions have one source", async () => {
 	const titles = await import("../src/room-approval-titles.js");
 	assert(titles.handOffApprovalSubject("Have a specialist create an SVG chart?") === "an SVG chart" && titles.handOffApprovalSubject("Run this command?") === null, "an old hand-off question is read in one place");
-	for (const file of ["../src/thread-items-by-id.ts", "../../web-ui/src/components/Approval.tsx", "../src/persistent-room-bash-approval.ts"]) {
+	for (const file of ["../src/thread-items-by-id.ts", "../../web-ui/src/components/Approval.tsx", "../src/web-ui-context.ts"]) {
 		const source = fs.readFileSync(new URL(file, import.meta.url), "utf8");
 		assert(source.includes("room-approval-titles") && !/[`/^]Have a specialist create/.test(source) && !source.includes('"Run this command?"'), `${file} takes the questions from room-approval-titles.ts`);
 	}
@@ -343,7 +346,7 @@ await check("a refusal is calm and reads apart from a failure", () => {
 		["a secret key", { name: "read", args: { path: "~/.ssh/id_rsa" }, result: "Content policy blocked tool 'read': blocked SSH private-key access. Do not try this file or value again another way; other files you are allowed to use are fine. Explain the constraint to the user and ask for a safe alternative." }, "Blocked: an SSH private key"],
 		["a secret file or the app's own data", { name: "write", args: { path: "server.key" }, result: "server.key looks like a secret file or the app's own data, so rooms don't open it, even with Full access. Tell the person; they can open it themselves." }, "Blocked: a secret file or the app's own data"],
 		["a file rooms may only read", { name: "edit", args: { path: ".npmrc" }, result: ".npmrc can be read but not changed by rooms, because changing it can run code later. Tell the person." }, "Read only: rooms can read this file but not change it"],
-		["the skills folder with Bash off", { name: "read", args: { path: "/Users/a/.exxperts/skills/weekly/SKILL.md" }, result: "/Users/a/.exxperts/skills/weekly/SKILL.md is in the person's own skills folder, which opens to this room only while its terminal (Bash) is on. Tell the person." }, "Opens to this room only with Bash on (Room settings, Workspace, Edit workspace)"],
+		["the skills folder with Bash off", { name: "read", args: { path: "/Users/a/.exxperts/skills/weekly/SKILL.md" }, result: "/Users/a/.exxperts/skills/weekly/SKILL.md is in the person's own skills folder, which opens to this room only while its terminal (Bash) is on. Tell the person." }, SKILLS_FOLDER_COMMANDS_OFF_LINE],
 		["a path outside the room's folder", { name: "read", args: { path: "/etc/hosts" }, result: "Path is outside the selected workspace." }, "That is outside this room's folder."],
 		["the skills folder in a run in the background", { name: "read", args: { path: "/Users/a/.exxperts/skills/weekly/SKILL.md" }, result: "/Users/a/.exxperts/skills/weekly/SKILL.md is in the person's own skills folder, which a background run can't open. Tell the person." }, "A run in the background can't open the skills folder."],
 		["a skills folder file rooms never change", { name: "edit", args: { path: "/Users/a/.exxperts/skills/weekly/.skill-source.json" }, result: "/Users/a/.exxperts/skills/weekly/.skill-source.json is in the person's own skills folder: rooms can read it only while Bash is on, and never change it. Tell the person." }, "Read only: rooms never change this file."],
@@ -480,7 +483,7 @@ await check("a formatted .md read wraps a long word inside its box, so the conve
 	assert(measured.every((m) => m.preWraps && m.tableScrolls), `a long code line wraps inside the box and a wide table scrolls inside its own frame, got ${JSON.stringify(measured)}`);
 });
 
-await check("an old hand-off card's off line shows in full on a phone, beside a row that keeps its one line", async () => {
+await check("an old hand-off card's off line shows in full on a phone, beside a row that keeps its one line on a desktop and wraps whole on a phone", async () => {
 	const { chromium } = await import("playwright");
 	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
 	if (!executable || !fs.existsSync(executable)) {
@@ -492,7 +495,7 @@ await check("an old hand-off card's off line shows in full on a phone, beside a 
 	// Opened, as the person sees it after a click on the card's head.
 	const opened = (items: unknown[]) => markup(items as Record<string, unknown>[]).replace('data-open="0"', 'data-open="1"');
 	const browser = await chromium.launch();
-	const measured: Array<{ width: number; off: { cut: boolean; text: string }; other: { lines: number } }> = [];
+	const measured: Array<{ width: number; off: { cut: boolean; text: string }; other: { lines: number; cut: boolean } }> = [];
 	try {
 		for (const width of [1280, 390]) {
 			const page = await browser.newPage({ viewport: { width, height: 800 } });
@@ -502,7 +505,7 @@ await check("an old hand-off card's off line shows in full on a phone, beside a 
 				const offText = [...first.querySelectorAll(".wk-tx")].at(-1) as HTMLElement;
 				const otherText = [...second.querySelectorAll(".wk-tx")].at(-1) as HTMLElement;
 				const otherLine = parseFloat(getComputedStyle(otherText).lineHeight) || 20;
-				return { off: { cut: offText.scrollWidth > offText.clientWidth, text: offText.textContent ?? "" }, other: { lines: Math.round(otherText.getBoundingClientRect().height / otherLine) } };
+				return { off: { cut: offText.scrollWidth > offText.clientWidth, text: offText.textContent ?? "" }, other: { lines: Math.round(otherText.getBoundingClientRect().height / otherLine), cut: otherText.scrollWidth > otherText.clientWidth } };
 			})) });
 			await page.close();
 		}
@@ -511,7 +514,7 @@ await check("an old hand-off card's off line shows in full on a phone, beside a 
 	}
 	const titles = await import("../src/room-approval-titles.js");
 	assert(measured.every((m) => !m.off.cut && m.off.text === titles.SPECIALISTS_OFF_SENTENCE), `the off line is never cut, got ${JSON.stringify(measured)}`);
-	assert(measured.every((m) => m.other.lines === 1), `another question's row keeps its one line, got ${JSON.stringify(measured)}`);
+	assert(measured.every((m) => (m.width === 1280 ? m.other.lines === 1 : m.other.lines > 1 && !m.other.cut)), `another question's row keeps its one line on a desktop and wraps whole on a phone, got ${JSON.stringify(measured)}`);
 });
 
 // Opening one is a click: thinking-open-smoke and memory-recall-chip-smoke open one in a room.
@@ -529,6 +532,27 @@ await check("a finished card of one step says its step's sentence once and opens
 	// One that failed says so on its head, with the failed mark, and opens the same way.
 	const failed = card([toolItem("o6", { name: "bash", status: "error", args: { command: "npm test" }, result: "exit 1: 3 tests failed" })], { endTs: 3_000 });
 	assert(rows(failed) === 0 && label(failed) === "Couldn't run npm test" && failed.includes("wk-bad") && !failed.includes("wk-ok") && failed.includes("wk-caret"), `one failed command: its own sentence, the failed mark, no row, got ${failed}`);
+	// A box that failed says so with no click: what to do is the whole point, and the result would only say it twice.
+	const faultStep = (id: string) => toolItem(id, { name: "bash", status: "error", args: { command: "echo hello" }, result: BOX_FAULT_SENTENCE });
+	const fault = card([faultStep("o9")], { endTs: 3_000 });
+	assert(fault.includes('data-open="1"') && fault.includes(`<div class="wk-line">${BOX_FAULT_SENTENCE}</div>`) && fault.split(BOX_FAULT_SENTENCE).length === 2 && fault.includes("echo hello"), `a box fault shows its sentence once, unopened, got ${fault}`);
+	const faultAmong = card([toolItem("o10", { name: "read", status: "done", args: { path: "a.ts" }, result: "x" }), faultStep("o11")], { endTs: 3_000 });
+	assert(faultAmong.includes('data-open="1"') && faultAmong.split(BOX_FAULT_SENTENCE).length === 2, `among other steps too, got ${faultAmong}`);
+	const readStep = (id: string) => toolItem(id, { name: "read", status: "done", args: { path: "a.ts" }, result: "x" });
+	const faultFirst = card([faultStep("o12"), ...["a", "b", "c", "d", "e", "f", "g"].map((id) => readStep(`o13${id}`))], { endTs: 3_000 });
+	assert(faultFirst.includes("1 earlier step") && faultFirst.split(BOX_FAULT_SENTENCE).length === 2, `ordinary steps after it don't fold it behind the earlier steps, got ${faultFirst}`);
+	const turnOver = (foldId: string) => decode(renderToStaticMarkup(createElement(workCard.TurnCard, { foldId, steps: [{ kind: "step", item: readStep("o14") }, { kind: "step", item: faultStep("o15") }], ms: 1_000 }, "the turn's cards")));
+	assert(turnOver("worked:fault").includes('class="wk-card wk-turn" data-open="1"') && turnOver("worked:fault").includes("the turn's cards"), `a turn of several stretches stays open over a fault, got ${turnOver("worked:fault")}`);
+	const ordinaryTurn = decode(renderToStaticMarkup(createElement(workCard.TurnCard, { foldId: "worked:plain", steps: [{ kind: "step", item: readStep("o16") }], ms: 1_000 }, "the turn's cards")));
+	assert(ordinaryTurn.includes('class="wk-card wk-turn" data-open="0"'), `a turn with no fault still folds, got ${ordinaryTurn}`);
+	// Only the tool's own failure is a fault: anything else that reads the same keeps what it showed.
+	const quoted = `${BOX_FAULT_SENTENCE}\nthe rest of the notes`;
+	const readQuote = card([toolItem("o17", { name: "read", status: "done", args: { path: "notes.txt" }, result: quoted })], { endTs: 3_000 });
+	assert(readQuote.includes('data-open="0"') && readQuote.includes("wk-caret") && !readQuote.includes("wk-line"), `a file that quotes the sentence is no fault, and still opens to what it read, got ${readQuote}`);
+	const printed = card([toolItem("o18", { name: "bash", status: "error", args: { command: "cat notes.txt; exit 1" }, result: quoted }), readStep("o19")], { endTs: 3_000 });
+	assert(printed.includes('data-open="0"'), `a failed command that printed it is no fault, got ${printed}`);
+	const printedOpen = card([toolItem("o20", { name: "bash", status: "error", args: { command: "cat notes.txt; exit 1" }, result: quoted })], { endTs: 3_000 });
+	assert(!printedOpen.includes("wk-line"), `nor does it get the fault's line, got ${printedOpen}`);
 	// Its neighbours keep their rows: two steps; one that did not run, whose row says why; one still running.
 	const two = cardRows(card([toolItem("o4", { name: "bash", status: "done", args: { command: "ls" }, result: "a" }), toolItem("o5", { name: "read", status: "done", args: { path: "a.ts" }, result: "x" })], { endTs: 3_000 }));
 	assert(two.length === 2, `two steps: two rows as before, got ${JSON.stringify(two)}`);
@@ -567,7 +591,7 @@ await check("a chained command is named by itself, in code, wherever its step sh
 });
 
 // One command waiting for the person, its question as the room's server asks it (`asked`: the server's text, when it differs).
-const askingItems = (command: string, asked = command) => [toolItem("q1", { name: "bash", status: "running", args: { command } }), { kind: "approval", id: "a1", requestId: "r1", uiKind: "confirm", title: "Run this command?", message: `Runs in: /work\nYou can auto-approve bash for this room in Room settings, Folder.\n\n─── Command (written by the room's model; the app has not verified it) ───\n${asked}` }];
+const askingItems = (command: string, asked = command) => [toolItem("q1", { name: "bash", status: "running", args: { command } }), { kind: "approval", id: "a1", requestId: "r1", uiKind: "confirm", title: "Run this command?", message: `Runs in: /work\n\n─── Command (written by the room's model; the app has not verified it) ───\n${asked}` }];
 const asking = (command: string, asked = command) => card(askingItems(command, asked), { live: true });
 
 await check("the question before a chained command: one line is its title whole; a script or a clipped command keeps a one-line title over the server's text", () => {
@@ -743,7 +767,7 @@ async function onLivePage(body: (draw: (element: unknown) => Promise<HTMLElement
 }
 
 const thoughtItem = (id: string, ts: number, ms: number) => ({ kind: "thinking", id, ts, ms });
-const stretch = (items: Record<string, unknown>[]) => createElement(workCard.WorkStretch, { items, live: false, endTs: 9_000, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined });
+const stretch = (items: Record<string, unknown>[], endTs = 9_000) => createElement(workCard.WorkStretch, { items, live: false, endTs, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined });
 // An opened card's rows, its thoughts' boxes and its step's output, in the order the page shows them.
 const shownRows = (container: HTMLElement) => [...container.querySelectorAll(".wk-in .wk-row, .wk-in .wk-line, .wk-in .wk-out")].map((el) => {
 	const words = (el.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -770,7 +794,16 @@ await check("thought and one step that worked: the step's sentence and check on 
 	assert(!done.querySelector(".wk-out"), `closed: its output is not drawn yet, got ${done.innerHTML}`);
 	const rows = await openCard(act, done);
 	// Opened, its rows carry the marks, as a card of several steps' do.
-	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row done: Read notes.txt", "output: first line"]) && headOf(done).mark === "none", `opened with one click: the thought's row, then the read's row already open to its output, got ${JSON.stringify(rows)} / ${JSON.stringify(headOf(done))}`);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", "row done: Read notes.txt", "output: first line"]) && headOf(done).mark === "none", `opened with one click: the thought's row, then the read's row already open to its output, got ${JSON.stringify(rows)} / ${JSON.stringify(headOf(done))}`);
+}));
+
+await check("a thought that fills its card: its row and the card's head say the same time, in tenths, in whole seconds and in minutes", () => onLivePage(async (draw, act) => {
+	for (const [ms, said] of [[1_700, "1.7 s"], [2_000, "2.0 s"], [12_000, "12 s"], [59_600, "1 min 0 s"], [65_000, "1 min 5 s"]] as const) {
+		const card = await draw(stretch([thoughtItem(`t-same-${ms}`, 1_000, ms), toolItem(`t-same-run-${ms}`, { name: "read", status: "done", args: { path: "notes.txt" }, result: "first line", startedAt: 1_000 + ms, endedAt: 1_000 + ms })], 1_000 + ms));
+		const head = card.querySelector(".wk-head .wk-time")?.textContent;
+		const rows = await openCard(act, card);
+		assert(head === said && rows[0] === `row done: Thought for ${said}`, `${ms} ms: the head and the thought's row both say ${said}, got ${head} and ${rows[0]}`);
+	}
 }));
 
 await check("thought and one failed step: its own sentence and failed mark on the head, one click to the thought, the step's failed row, why it failed and the output", () => onLivePage(async (draw, act) => {
@@ -778,26 +811,26 @@ await check("thought and one failed step: its own sentence and failed mark on th
 	const failed = await draw(stretch([thoughtItem("t2-think", 1_000, 2_000), toolItem("t2-read", { name: "read", status: "error", args: { path: "missing.txt" }, result: missing, startedAt: 3_000, endedAt: 3_300 })]));
 	assert(JSON.stringify(headOf(failed)) === JSON.stringify({ label: "Couldn't read missing.txt", button: true, mark: "failed", open: false }), `closed: its own sentence and the failed mark, not "1 failed", got ${JSON.stringify(headOf(failed))}`);
 	const rows = await openCard(act, failed);
-	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row failed: Couldn't read missing.txt", "line: There is no file called missing.txt.", `output: ${missing}`]) && failed.querySelector('.wk-row[data-s="failed"] .wk-bad'), `opened: the thought's row, the failed row with its mark, why it failed, the output, got ${JSON.stringify(rows)}`);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", "row failed: Couldn't read missing.txt", "line: There is no file called missing.txt.", `output: ${missing}`]) && failed.querySelector('.wk-row[data-s="failed"] .wk-bad'), `opened: the thought's row, the failed row with its mark, why it failed, the output, got ${JSON.stringify(rows)}`);
 	// A failure with no known cause: its command and what came back.
 	const command = await draw(stretch([thoughtItem("t2-think-run", 1_000, 2_000), toolItem("t2-run", { name: "bash", status: "error", args: { command: "npm test" }, result: "exit 1: 3 tests failed", startedAt: 3_000, endedAt: 4_000 })]));
 	assert(headOf(command).label === "Couldn't run npm test" && headOf(command).mark === "failed", `a failed command, closed: its own sentence, got ${JSON.stringify(headOf(command))}`);
 	const commandRows = await openCard(act, command);
-	assert(JSON.stringify(commandRows) === JSON.stringify(["row done: Thought for 2 s", "row failed: Couldn't run npm test", "output: npm testexit 1: 3 tests failed"]), `a failed command, opened: the thought's row, the failed row and the output, got ${JSON.stringify(commandRows)}`);
+	assert(JSON.stringify(commandRows) === JSON.stringify(["row done: Thought for 2.0 s", "row failed: Couldn't run npm test", "output: npm testexit 1: 3 tests failed"]), `a failed command, opened: the thought's row, the failed row and the output, got ${JSON.stringify(commandRows)}`);
 }));
 
 await check("think, step, think again: the step's sentence on the head, opened the rows in the order they happened", () => onLivePage(async (draw, act) => {
 	const again = await draw(stretch([thoughtItem("t3-think", 1_000, 2_000), toolItem("t3-run", { name: "bash", status: "done", args: { command: "npm test" }, result: "12 passed", startedAt: 3_000, endedAt: 4_000 }), thoughtItem("t3-again", 5_000, 1_000)]));
 	assert(headOf(again).label === "Ran npm test", `closed: the command's sentence, got ${JSON.stringify(headOf(again))}`);
 	const rows = await openCard(act, again);
-	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row done: Ran npm test", "output: npm test12 passed", "row done: Thought for 1 s"]), `opened: thought, the command's row open to its output, thought, got ${JSON.stringify(rows)}`);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", "row done: Ran npm test", "output: npm test12 passed", "row done: Thought for 1.0 s"]), `opened: thought, the command's row open to its output, thought, got ${JSON.stringify(rows)}`);
 }));
 
 await check("thought and one step with nothing to show: the card still opens, so the thought stays in reach", () => onLivePage(async (draw, act) => {
 	const bare = await draw(stretch([thoughtItem("t4-think", 1_000, 2_000), toolItem("t4-search", { name: "web_search", status: "done", args: { query: "node lts release" } })]));
 	assert(headOf(bare).label === "Searched the web for node lts release" && headOf(bare).button, `closed: the search's sentence, and it opens, got ${JSON.stringify(headOf(bare))}`);
 	const rows = await openCard(act, bare);
-	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2 s", "row done: Searched the web for node lts release"]) && headOf(bare).open, `opened: the thought's row and the search's, got ${JSON.stringify(rows)}`);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", "row done: Searched the web for node lts release"]) && headOf(bare).open, `opened: the thought's row and the search's, got ${JSON.stringify(rows)}`);
 }));
 
 await check("thought and a step that did not run, still runs, or two steps: the rows as before", () => onLivePage(async (draw, act) => {
@@ -814,7 +847,130 @@ await check("thought and a step that did not run, still runs, or two steps: the 
 	assert(twoRows.length === 3 && twoRows[1].startsWith("row done: Listed the folder") && twoRows[2].startsWith("row done: Read a.ts") && headOf(two).label === "Listed a folder, read a file", `two steps: as before, got ${JSON.stringify(twoRows)} / ${JSON.stringify(headOf(two))}`);
 }));
 
-await check("at phone width a folded card's sentence takes a second line; a short one, and a folded turn, keep a card's height", async () => {
+// A connector call that asked first (mcp/room-scope.ts), as the room saves it, and its card.
+const connectorStep = (id: string, item: Record<string, unknown>) => toolItem(id, { name: "mcp", args: { tool: "asana_delete_project", args: "{\"project\":\"Q3\"}" }, startedAt: 3_000, endedAt: 3_400, ...item });
+const connectorCard = (id: string, ask: Record<string, unknown>) => ({ kind: "approval", id, requestId: id, uiKind: "confirm", title: "Use Delete project in Asana?", message: "This may change or delete something in Asana.", ...ask });
+const connectorDeclined = { status: "error", result: "You declined this, so nothing changed in Asana. Don't try it again unless the person asks.", details: { mode: "call", error: "connector_call_declined", server: "asana", use: "Delete project in Asana" } };
+const connectorUnanswered = (why: string) => ({ status: "error", result: `${why} Nothing was sent to Asana. Leave this undone and say so.`, details: { mode: "call", error: "connector_call_unanswered", server: "asana", use: "Delete project in Asana" } });
+const LEFT_THE_ROOM = "The user left the room while this response was being written, so interactive questions cannot be answered right now.";
+const SCHEDULED = "scheduled background room work cannot answer interactive UI requests.";
+const look: any = await import(new URL("../../web-ui/src/work-look.ts", import.meta.url).href);
+const { connectorAwayNote, declinedQuestionNoteText } = await import("../src/thread-items-by-id.js");
+
+await check("a connector step the person declined, or nobody was there to approve, folds to not run, never failed, and opened says so in the decided words", () => onLivePage(async (draw, act) => {
+	const declined = await draw(stretch([connectorStep("k1", connectorDeclined), connectorCard("k1-ask", { done: "No" })]));
+	assert(JSON.stringify(headOf(declined)) === JSON.stringify({ label: "1 step not run", button: true, mark: "none", open: false }), `a No folds to not run, with no failed mark, got ${JSON.stringify(headOf(declined))}`);
+	const declinedRows = await openCard(act, declined);
+	assert(JSON.stringify(declinedRows) === JSON.stringify(["row denied: You declined this, so nothing changed in Asana."]) && !declined.querySelector(".wk-bad") && !declined.textContent?.includes("Don't try it again"), `opened, the decline's own sentence, once, and nothing the model was told, got ${JSON.stringify(declinedRows)}`);
+	const away = declinedQuestionNoteText("Use Delete project in Asana?");
+	for (const [why, label] of [[LEFT_THE_ROOM, "the person left"], [SCHEDULED, "a scheduled run"]]) {
+		const refused = await draw(stretch([connectorStep(`k2-${label}`, connectorUnanswered(why))]));
+		assert(headOf(refused).label === "1 step not run" && headOf(refused).mark === "none", `${label}: folds to not run, got ${JSON.stringify(headOf(refused))}`);
+		const rows = await openCard(act, refused);
+		assert(JSON.stringify(rows) === JSON.stringify([`row denied: ${away}`]) && !refused.querySelector(".wk-bad"), `${label}: opened, the refusal's sentence, got ${JSON.stringify(rows)}`);
+	}
+	// The row names the step as its card did, kept by the gate; an older step without it rebuilds the words.
+	for (const [tool, server, connector, use] of [["atlassian_createJiraIssue", "atlassian", "Atlassian", "Create Jira Issue in Atlassian"], ["notion_notion-create-pages", "notion", "Notion", "Notion create pages in Notion"]]) {
+		const named = await draw(stretch([connectorStep(`k5-${server}`, { ...connectorUnanswered(LEFT_THE_ROOM), result: `${LEFT_THE_ROOM} Nothing was sent to ${connector}. Leave this undone and say so.`, args: { tool }, details: { mode: "call", error: "connector_call_unanswered", server, use } })]));
+		const rows = await openCard(act, named);
+		assert(JSON.stringify(rows) === JSON.stringify([`row denied: ${connectorAwayNote(use)}`]), `${server}: the card's own words for the tool, got ${JSON.stringify(rows)}`);
+	}
+	const older = await draw(stretch([connectorStep("k6", { ...connectorUnanswered(LEFT_THE_ROOM), details: { mode: "call", error: "connector_call_unanswered", server: "asana" } })]));
+	assert(JSON.stringify(await openCard(act, older)) === JSON.stringify([`row denied: ${away}`]), "a step saved before the gate kept its card's words: rebuilt from the tool's name");
+	// Stop answered the card: stopped, not the away words.
+	const stopped = await draw(stretch([connectorStep("k3", connectorUnanswered(STOPPED_BEFORE_ANSWER_SENTENCE))]));
+	const stoppedRows = await openCard(act, stopped);
+	assert(stoppedRows.length >= 1 && stoppedRows[0].startsWith("row stopped:") && !stopped.textContent?.includes("While you were away"), `a card Stop answered reads stopped, got ${JSON.stringify(stoppedRows)}`);
+	// The page's fold of a turn reads the same, where its check enters.
+	const step = (item: Record<string, unknown>) => ({ item: connectorStep("k4", item) });
+	assert(look.foldedWords([step(connectorDeclined)]) === "1 step not run" && look.stepState(step(connectorDeclined).item, undefined) === "denied", `a No, on a folded turn: not run, got ${look.foldedWords([step(connectorDeclined)])}`);
+	assert(look.foldedWords([step(connectorUnanswered(SCHEDULED))]) === "1 step not run" && look.stepState(step(connectorUnanswered(LEFT_THE_ROOM)).item, undefined) === "denied", `a card nobody answered, on a folded turn: not run, got ${look.foldedWords([step(connectorUnanswered(SCHEDULED))])}`);
+}));
+
+await check("a connector that ran and failed still reads failed, in red, and a declined command reads as before", () => onLivePage(async (draw, act) => {
+	const broke = { status: "error", result: "MCP error -32603: Internal error", details: { mode: "call", error: "tool_error" } };
+	assert(look.foldedWords([{ item: connectorStep("f1", broke) }]) === "1 failed" && look.stepState(connectorStep("f1", broke), undefined) === "failed", `a connector error is a failure, got ${look.foldedWords([{ item: connectorStep("f1", broke) }])}`);
+	const failed = await draw(stretch([thoughtItem("f2-think", 1_000, 2_000), connectorStep("f2", broke), toolItem("f2-read", { name: "read", status: "done", args: { path: "a.ts" }, result: "x" })]));
+	assert(headOf(failed).label === "Read a file · 1 failed" && headOf(failed).mark === "failed", `beside another step: "1 failed" with the failed mark, got ${JSON.stringify(headOf(failed))}`);
+	const allowedThenFailed = await draw(stretch([connectorStep("f3", broke), connectorCard("f3-ask", { done: "Yes" })]));
+	assert(JSON.stringify(headOf(allowedThenFailed)) === JSON.stringify({ label: "Couldn't use Delete project in Asana", button: true, mark: "failed", open: false }), `allowed, then failed: its own sentence with the failed mark, got ${JSON.stringify(headOf(allowedThenFailed))}`);
+	const command = await draw(stretch([toolItem("f4", { name: "bash", status: "error", args: { command: "rm notes.txt" }, result: "The user declined this command. Do not run it or retry variants of it unless the user asks." }), toolItem("f4-ls", { name: "ls", status: "done", args: { path: "." }, result: "a" })]));
+	const commandRows = await openCard(act, command);
+	assert(commandRows[0].startsWith("row denied: Not run · you said no") && commandRows.length === 2, `a declined command's row as before, got ${JSON.stringify(commandRows)}`);
+}));
+
+await check("a connector step and the card it asked fold to the step's own line, in the card's words", () => onLivePage(async (draw, act) => {
+	const allowed = await draw(stretch([connectorStep("a1", { status: "done", result: "{\"deleted\":\"Q3\"}", details: { mode: "call", server: "asana", tool: "delete_project" } }), connectorCard("a1-ask", { done: "Yes" })]));
+	assert(JSON.stringify(headOf(allowed)) === JSON.stringify({ label: "Used Delete project in Asana", button: true, mark: "check", open: false }), `the step's own line, not "Used a connector", got ${JSON.stringify(headOf(allowed))}`);
+	const rows = await openCard(act, allowed);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Used Delete project in Asana", "output: {\"deleted\":\"Q3\"}", "row done: Allowed · Use Delete project in Asana?"]), `opened, the step's row open to what came back, and the person's yes, got ${JSON.stringify(rows)}`);
+	// A reply that worked keeps what it says, even in a No's words.
+	const sameWords = await draw(stretch([connectorStep("a3", { status: "done", result: connectorDeclined.result, details: { mode: "call", server: "asana", tool: "delete_project" } }), connectorCard("a3-ask", { done: "Yes" })]));
+	const sameRows = await openCard(act, sameWords);
+	assert(JSON.stringify(sameRows) === JSON.stringify(["row done: Used Delete project in Asana", `output: ${connectorDeclined.result}`, "row done: Allowed · Use Delete project in Asana?"]), `a reply that worked shows what came back, got ${JSON.stringify(sameRows)}`);
+	// The question in the panel: each of its three answers, as the server's closing frame names it, on the first reply and sent again after a reconnect.
+	const { answeredLabel }: any = await import(new URL("../../web-ui/src/components/box-ask-rows.tsx", import.meta.url).href);
+	const panelCard = (id: string, taken: string) => ({ kind: "approval", id, requestId: id, uiKind: "connector", title: "Use Delete project in Asana?", connector: "Asana", sent: "{}", cut: 0, lasting: true, done: answeredLabel({ uiKind: "connector" } as any, taken) });
+	for (const [taken, row] of [["once", "row done: Allowed · Use Delete project in Asana?"], ["room", "row done: Allowed for this room · Use Delete project in Asana?"]] as const) {
+		const answered = await draw(stretch([connectorStep(`p-${taken}`, { status: "done", result: "ok", details: { mode: "call", server: "asana", tool: "delete_project" } }), panelCard(`p-${taken}-ask`, taken)]));
+		const answeredRows = await openCard(act, answered);
+		assert(JSON.stringify(answeredRows) === JSON.stringify(["row done: Used Delete project in Asana", "output: ok", row]), `${taken}: the step's row and the answer's own, got ${JSON.stringify(answeredRows)}`);
+	}
+	const notNow = await draw(stretch([connectorStep("p-decline", connectorDeclined), panelCard("p-decline-ask", "decline")]));
+	const notNowRows = await openCard(act, notNow);
+	assert(JSON.stringify(notNowRows) === JSON.stringify(["row denied: You declined this, so nothing changed in Asana."]), `Not now: the step's row says the no once, got ${JSON.stringify(notNowRows)}`);
+	// Without its card, the step keeps the words it has.
+	const bare = await draw(stretch([connectorStep("a2", { status: "done", result: "ok", details: { mode: "call", server: "asana", tool: "delete_project" } })]));
+	assert(headOf(bare).label === "Used asana_delete_project in asana", `no card: the step's own words, got ${JSON.stringify(headOf(bare))}`);
+}));
+
+await check("a card kept after nobody answered it, alone on its card: Not answered, with the not-run icon in line, no tick", () => onLivePage(async (draw) => {
+	const kept = await draw(stretch([connectorCard("n1", { unanswered: true })]));
+	const head = kept.querySelector(".wk-head");
+	assert(headOf(kept).label === "Not answered · Use Delete project in Asana?" && !headOf(kept).button && headOf(kept).mark === "none", `the head says what came of it, with nothing to open, got ${JSON.stringify(headOf(kept))}`);
+	assert(head?.querySelector(".wk-lead .wk-stack") && !kept.querySelector(".wk-ok") && !kept.textContent?.includes("Worked"), `the not-run icon holds the icons' place, and no tick, got ${head?.innerHTML}`);
+	const ban = head?.querySelector(".wk-lead svg")?.innerHTML;
+	const banRow = (await draw(stretch([connectorStep("n2", connectorDeclined), toolItem("n2-ls", { name: "ls", status: "done", args: { path: "." }, result: "a" })]))).querySelector('.wk-row[data-s="denied"] .wk-row-ic svg')?.innerHTML;
+	assert(ban && ban === banRow, `it is the not-run icon a row uses, got ${ban} / ${banRow}`);
+}));
+
+await check("at 390 px an opened card's rows wrap whole, so the action and the connector's name are never cut; on a desktop a short row keeps its one line", async () => {
+	const { chromium } = await import("playwright");
+	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
+	if (!executable || !fs.existsSync(executable)) {
+		console.log("  (Chromium not installed: this section is skipped)");
+		return;
+	}
+	const broke = { status: "error", result: "MCP error -32603: Internal error", details: { mode: "call", error: "tool_error" } };
+	const longName = { ...broke, args: { tool: "asana_delete_project_and_archive_its_tasks", server: "asana" } };
+	const items = [connectorStep("w1", longName), connectorStep("w2", connectorUnanswered(LEFT_THE_ROOM)), toolItem("w3", { name: "ls", status: "done", args: { path: "." }, result: "a" })];
+	const opened = markup(items, { endTs: 9_000 }).replace('data-open="0"', 'data-open="1"');
+	const browser = await chromium.launch();
+	const measured: Array<{ width: number; rows: Array<{ text: string; cut: boolean; lines: number; iconOff: number; line: number }> }> = [];
+	try {
+		for (const width of [1280, 390]) {
+			const page = await browser.newPage({ viewport: { width, height: 800 } });
+			await page.setContent(`<!doctype html><html data-theme="light"><head><style>${readPageStyles()}</style></head><body><div class="messages">${opened}</div></body></html>`);
+			// A plain string: the compiler's helpers for named functions do not exist in the page.
+			// iconOff: how far the icon's middle sits below the middle of the words' first line.
+			measured.push({ width, rows: await page.evaluate(`[...document.querySelectorAll(".wk-row .wk-tx")].map((text) => {
+				const line = parseFloat(getComputedStyle(text).lineHeight) || 20;
+				const box = text.getBoundingClientRect();
+				const icon = text.closest(".wk-row").querySelector(".wk-row-ic svg").getBoundingClientRect();
+				return { text: text.textContent, cut: text.scrollWidth > text.clientWidth + 1, lines: Math.round(box.height / line), iconOff: icon.top + icon.height / 2 - (box.top + line / 2), line };
+			})`) });
+			await page.close();
+		}
+	} finally {
+		await browser.close();
+	}
+	const [desk, phone] = measured;
+	assert(phone.rows.length === 3 && phone.rows.every((row) => !row.cut) && phone.rows[0].text === "Couldn't use asana_delete_project_and_archive_its_tasks in asana" && phone.rows[0].lines > 1 && phone.rows[1].lines > 1, `at 390 px every row shows whole, the long ones on more lines, got ${JSON.stringify(phone)}`);
+	assert(desk.rows[0].lines === 1 && desk.rows[2].lines === 1 && desk.rows.every((row) => !row.cut), `on a desktop a short row keeps its one line, got ${JSON.stringify(desk)}`);
+	assert([...desk.rows, ...phone.rows].every((row) => Math.abs(row.iconOff) <= 1.5), `each row's icon sits by its words' first line, got ${JSON.stringify(measured)}`);
+});
+
+await check("at phone width a folded card's sentence takes a second line; a short one, and a folded turn, keep a card's height; a head with nothing beside its words gives them the whole line", async () => {
 	const { chromium } = await import("playwright");
 	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
 	if (!executable || !fs.existsSync(executable)) {
@@ -827,6 +983,7 @@ await check("at phone width a folded card's sentence takes a second line; a shor
 	const short = card([toolItem("p5", { name: "bash", status: "done", args: { command: "npm test" }, result: "ok" })], { endTs: Date.now() });
 	const endless = card([toolItem("p6", { name: "web_search", status: "done", args: { query: "node lts release ".repeat(8).trim() } })], { endTs: Date.now() });
 	const turn = decode(renderToStaticMarkup(createElement(workCard.TurnCard, { foldId: "worked:p", steps: three.map((item) => ({ kind: "step", item })), ms: 6_300 })));
+	const kept = card([connectorCard("p7", { unanswered: true })]);
 	const fontsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web-ui/public/fonts");
 	const browser = await chromium.launch();
 	try {
@@ -836,16 +993,18 @@ await check("at phone width a folded card's sentence takes a second line; a shor
 			await page.route("http://cards.test/**", (route) => {
 				const url = new URL(route.request().url());
 				if (url.pathname.startsWith("/fonts/")) return route.fulfill({ body: fs.readFileSync(path.join(fontsDir, path.basename(url.pathname))) });
-				return route.fulfill({ contentType: "text/html", body: `<!doctype html><html data-theme="light"><head><meta charset="utf-8"><style>${readPageStyles()}</style></head><body><div class="messages">${[search, steps, short, endless].map((html, n) => `<div id="c${n}">${html}</div>`).join("")}<div id="c4">${turn}</div></div></body></html>` });
+				return route.fulfill({ contentType: "text/html", body: `<!doctype html><html data-theme="light"><head><meta charset="utf-8"><style>${readPageStyles()}</style></head><body><div class="messages">${[search, steps, short, endless].map((html, n) => `<div id="c${n}">${html}</div>`).join("")}<div id="c4">${turn}</div><div id="c5">${kept}</div></div></body></html>` });
 			});
 			await page.goto("http://cards.test/");
 			await page.evaluate("document.fonts.ready.then(() => Promise.all([...document.fonts].map((font) => font.load())))");
 			// A plain string: the compiler's helpers for named functions do not exist in the page.
-			const got: Array<{ words: string; whole: boolean; lines: number; cut: boolean; height: number; border: string }> = await page.evaluate(`[0, 1, 2, 3, 4].map((n) => {
+			const got: Array<{ words: string; whole: boolean; lines: number; cut: boolean; height: number; border: string; spare: number }> = await page.evaluate(`[0, 1, 2, 3, 4, 5].map((n) => {
 				const card = document.querySelector("#c" + n + " .wk-card");
-				const label = card.querySelector(".wk-head .wk-lbl");
+				const head = card.querySelector(".wk-head");
+				const label = head.querySelector(".wk-lbl");
 				const line = parseFloat(getComputedStyle(label).lineHeight);
-				return { words: label.textContent, whole: label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1, lines: Math.round(label.getBoundingClientRect().height / line), cut: label.scrollHeight > label.clientHeight + 1, height: card.querySelector(".wk-head").getBoundingClientRect().height, border: getComputedStyle(card).borderTopWidth + " " + getComputedStyle(card).borderTopStyle };
+				const spare = head.getBoundingClientRect().right - parseFloat(getComputedStyle(head).paddingRight) - head.querySelector(".wk-label").getBoundingClientRect().right;
+				return { words: label.textContent, whole: label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1, lines: Math.round(label.getBoundingClientRect().height / line), cut: label.scrollHeight > label.clientHeight + 1, height: head.getBoundingClientRect().height, border: getComputedStyle(card).borderTopWidth + " " + getComputedStyle(card).borderTopStyle, spare };
 			})`);
 			await page.close();
 			return got;
@@ -855,6 +1014,8 @@ await check("at phone width a folded card's sentence takes a second line; a shor
 		assert(phone[2].lines === 1 && Math.abs(phone[2].height - desk[2].height) < 0.05, `a short sentence stays one line, its card as tall as on a desktop, got ${JSON.stringify([phone[2], desk[2]])}`);
 		assert(phone[3].lines === 2 && phone[3].cut, `a sentence longer than two lines is cut after the second, got ${JSON.stringify(phone[3])}`);
 		assert(desk.every((card) => card.lines === 1), `on a desktop every folded sentence is one line, got ${JSON.stringify(desk)}`);
+		// A head with no time, mark or arrow keeps no empty place for them: its words reach the card's edge. A head with a time keeps both places.
+		assert(phone[5].words === "Not answered · Use Delete project in Asana?" && Math.abs(phone[5].spare) < 0.5 && phone[2].spare > 20, `the kept card's words use the places an empty mark and arrow would take, got ${JSON.stringify([phone[5], phone[2]])}`);
 		// A folded turn is the same card as a folded stretch: its border and its height.
 		for (const [at, cards] of [[390, phone], [1280, desk]] as const) {
 			assert(cards[4].border === cards[1].border && cards[4].border.endsWith("solid") && Math.abs(cards[4].height - cards[1].height) < 0.05, `at ${at} px a folded turn has a folded stretch's border and height, got ${JSON.stringify([cards[4], cards[1]])}`);
@@ -930,7 +1091,7 @@ await check("a running command counts on from when it began, after a reload too"
 	const agentDir = path.join(home, ".exxperts", "agent");
 	const appDir = path.join(home, ".exxperts", "app");
 	const agentsRoot = path.join(appDir, "personalized-agents");
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(home, "workspace");
 	for (const dir of [agentDir, agentsRoot, workspaceRoot]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 	// The model runs one long command, then answers once its result is back.
 	const gateway = http.createServer((req, res) => {
@@ -992,7 +1153,7 @@ await check("a running command counts on from when it began, after a reload too"
 		const roomId = String(room.body?.agent?.id ?? "");
 		const folder = await api(`/api/persistent-agents/${encodeURIComponent(roomId)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, workspaceAccessMode: "localFiles", bashEnabled: true }) });
 		assert(folder.status === 200, `the room gets a folder with Bash on, got ${folder.status}`);
-		assert((await api(`/api/persistent-agents/${encodeURIComponent(roomId)}/bash-settings`, { method: "PUT", body: JSON.stringify({ autoApprove: true }) })).status === 200, "commands run without asking");
+		assert((await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(roomId)}/bash-settings`, true)).status === 200, "commands run without asking");
 		const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 		const enter = async () => {
 			await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
@@ -1002,13 +1163,10 @@ await check("a running command counts on from when it began, after a reload too"
 			await page.locator('button[title="Send"], .stop-btn').first().waitFor({ timeout: 15_000 });
 			await page.waitForTimeout(800);
 		};
-		// Enter sends only while Send is enabled, and Send waits for the room's connection: entering a room can replace
-		// its socket at once, and Send shows before the new one is up.
 		const sendInRoom = async (on: typeof page, text: string) => {
 			const box = on.locator("textarea").first();
 			await box.fill(text);
-			await until(() => on.getByRole("button", { name: "Send", exact: true }).isEnabled(), "Send is enabled with the message typed");
-			await box.press("Enter");
+			await sendFromBox(on);
 		};
 		const seconds = async () => {
 			const text = (await page.locator('.wk-row[data-s="running"] .wk-meta').first().textContent().catch(() => null)) ?? "";
@@ -1028,7 +1186,7 @@ await check("a running command counts on from when it began, after a reload too"
 		// A browser whose clock runs 130 s ahead of the server's, as on a shared server: a command that just began counts from 0 s.
 		const skewedRoom = await api("/api/persistent-agents", { method: "POST", body: JSON.stringify({ displayName: "Skewed Clock Desk", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
 		const skewedId = String(skewedRoom.body?.agent?.id ?? "");
-		assert(skewedRoom.status === 201 && (await api(`/api/persistent-agents/${encodeURIComponent(skewedId)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, workspaceAccessMode: "localFiles", bashEnabled: true }) })).status === 200 && (await api(`/api/persistent-agents/${encodeURIComponent(skewedId)}/bash-settings`, { method: "PUT", body: JSON.stringify({ autoApprove: true }) })).status === 200, "a second room with Bash on, commands run without asking");
+		assert(skewedRoom.status === 201 && (await api(`/api/persistent-agents/${encodeURIComponent(skewedId)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, workspaceAccessMode: "localFiles", bashEnabled: true }) })).status === 200 && (await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(skewedId)}/bash-settings`, true)).status === 200, "a second room with Bash on, commands run without asking");
 		const skewed = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 		await skewed.addInitScript(() => { const real = Date.now.bind(Date); Date.now = () => real() + 130_000; });
 		await skewed.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);

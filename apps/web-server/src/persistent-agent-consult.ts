@@ -5,6 +5,7 @@ import { fingerprintL1bSource, type PersistentAgentId } from "./persistent-agent
 import type { CheckpointModelWindow, L1bSourceFingerprint } from "./persistent-agent-memory-types.js";
 import { createPersistentAgentInstance, PERSISTENT_AGENTS_ROOT, validatePersistentAgentId } from "./persistent-agent-store.js";
 import { persistentAgentPlatformKernel } from "./persistent-agent-constitution.js";
+import { settleRoom } from "./room-settle.js";
 import { checkpointPromptTokenBudget, persistentAgentBootInstructionsParts } from "./persistent-agent-boot.js";
 import { maintenanceDiagnosticsRecorder, refuseTruncatedWorkerOutput } from "./persistent-agent-maintenance-worker.js";
 
@@ -98,6 +99,7 @@ export async function buildConsultAnswer(raw: any, model: ConsultModelLock, gene
 		fromRoomDisplayName = String(fromMeta.displayName ?? "").trim() || fromRoomId;
 	}
 
+	settleRoom(targetAgentId);
 	const instance = createPersistentAgentInstance(targetAgentId);
 	const meta = instance.readAgentJson();
 	if (!meta) throw new Error("agent.json is missing or invalid JSON");

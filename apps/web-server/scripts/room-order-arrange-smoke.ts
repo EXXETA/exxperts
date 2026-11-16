@@ -1,7 +1,8 @@
 // The arrangement made in arrange mode (home-room-arrange.ts), held to its
 // rules on its own: moves at both ends, what counts as a move, a room gone
-// meanwhile, and the leave question. Plain module, no browser.
-const { createRoomArrangement, confirmLeavingArrangement, moveByKey, ROOM_ARRANGE_LEAVE_QUESTION } = await import("../../web-ui/src/home-room-arrange.js");
+// meanwhile. Plain module, no browser; arranging in the page is
+// room-order-arrange-ui-smoke.ts.
+const { createRoomArrangement, moveByKey } = await import("../../web-ui/src/home-room-arrange.js");
 export {}; // a module, so the top-level await above is allowed
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -89,18 +90,6 @@ const ids = (a: { ids: () => string[] }): string => a.ids().join(",");
 	assert(ids(reallyMoved) === "b,a,d" && reallyMoved.dirty(), "a move among the rooms that remain is still something to save");
 	assert(ids(a.retain(new Set())) === "" && a.retain(new Set()).count() === 0, "every room gone: empty, and still an arrangement");
 	assert(ids(a) === "a,b,c,d", "retain never changes the arrangement it was asked on");
-}
-
-// --- The leave question: asked once, only with something to save, and its answer decides ---
-{
-	const asked: string[] = [];
-	const times = (): number => asked.length;
-	const yes = (q: string): boolean => { asked.push(q); return true; };
-	const no = (q: string): boolean => { asked.push(q); return false; };
-	assert(confirmLeavingArrangement(false, yes) === true && confirmLeavingArrangement(false, no) === true && times() === 0, "with nothing to save, leaving just leaves: no question");
-	assert(confirmLeavingArrangement(true, yes) === true && times() === 1 && asked[0] === ROOM_ARRANGE_LEAVE_QUESTION, "with moves, the question is asked once");
-	assert(confirmLeavingArrangement(true, no) === false && times() === 2, "and a no keeps the user where they are");
-	assert(/not saved/.test(ROOM_ARRANGE_LEAVE_QUESTION) && /\?$/.test(ROOM_ARRANGE_LEAVE_QUESTION) && !/\b(there is|remains|still)\b/i.test(ROOM_ARRANGE_LEAVE_QUESTION), "the question says what is at stake and asks");
 }
 
 console.log("room-order-arrange smoke: ok");

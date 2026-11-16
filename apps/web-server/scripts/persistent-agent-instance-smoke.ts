@@ -28,6 +28,7 @@ const {
 	openPersistentAgentPiSessionManager,
 	readPersistentAgentBootPromptSnapshot,
 	writePersistentAgentThread,
+	createPersistentAgentFromScaffoldInput,
 } = await import("../src/persistent-agents.js");
 
 const agentId = "instance-smoke-room";
@@ -195,7 +196,7 @@ try {
 	fs.unlinkSync(alphaThreadPath);
 	const statusWithMissingActiveThread = getPersistentAgentStatus(alphaAgentId);
 	assert(statusWithMissingActiveThread.activeThread === null, "status should not fail and should report null activeThread when active thread file is missing");
-	const listedAlpha = listPersistentAgents().find((agent: any) => agent.id === alphaAgentId);
+	const listedAlpha = listPersistentAgents("every room").find((agent: any) => agent.id === alphaAgentId);
 	assert(listedAlpha?.activeThread === null, "listing should not fail and should report null activeThread when active thread file is missing");
 
 	const piThreadId = "thread_alpha_pi_001";
@@ -244,10 +245,35 @@ try {
 	fs.writeFileSync(piBootSnapshotFile, bootSnapshot, { mode: 0o600 });
 
 	const piSessionBackup = fs.readFileSync(piSessionFile, "utf-8");
+	const piEntryCount = openPersistentAgentPiSessionManager(alphaAgentId, piRuntime, tempAgentsRoot).getEntries().length;
 	fs.rmSync(piSessionFile, { force: true });
 	assertThrows(() => openPersistentAgentPiSessionManager(alphaAgentId, piRuntime, tempAgentsRoot), "JSONL is missing", "missing Pi JSONL should fail clearly");
-	fs.writeFileSync(piSessionFile, `${piSessionBackup}not json\n`, { mode: 0o600 });
-	assertThrows(() => openPersistentAgentPiSessionManager(alphaAgentId, piRuntime, tempAgentsRoot), "invalid JSON", "bad Pi JSONL should fail clearly");
+	// A create nobody heard back from gets its room back; one with no mark, as on a shared server, finds the name taken.
+	const cutCreate = { displayName: "Cut Create Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" };
+	const cutRoom = createPersistentAgentFromScaffoldInput(cutCreate, { untilAnswered: true }).agent.id;
+	assert(createPersistentAgentFromScaffoldInput(cutCreate, { untilAnswered: true }).agent.id === cutRoom, "the same create sent again gets the room back");
+	const unmarkedCreate = { ...cutCreate, displayName: "Unmarked Create Room" };
+	createPersistentAgentFromScaffoldInput(unmarkedCreate);
+	assertThrows(() => createPersistentAgentFromScaffoldInput(unmarkedCreate, { untilAnswered: true }), "already exists", "a room with no mark is never handed back");
+
+	// A build folder another server is still writing stays; one a kill left long ago goes.
+	const freshBuild = path.join(tempAgentsRoot, ".being-built-fresh-room");
+	const oldBuild = path.join(tempAgentsRoot, ".being-built-old-room");
+	for (const folder of [freshBuild, oldBuild]) fs.mkdirSync(folder);
+	const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+	fs.utimesSync(oldBuild, longAgo, longAgo);
+	createPersistentAgentFromScaffoldInput({ ...cutCreate, displayName: "After A Build Room" });
+	assert(fs.existsSync(freshBuild), "a build in progress is left alone");
+	assert(!fs.existsSync(oldBuild), "a build a kill left is dropped");
+	fs.rmSync(freshBuild, { recursive: true });
+
+	// A kill cuts the last line short. Opening closes that line and it stays in the file, so every later open passes it too.
+	fs.writeFileSync(piSessionFile, `${piSessionBackup}{"type":"mess`, { mode: 0o600 });
+	for (const open of ["first", "second"]) {
+		assert(openPersistentAgentPiSessionManager(alphaAgentId, piRuntime, tempAgentsRoot).getEntries().length === piEntryCount, `the ${open} open after a torn last line should keep every whole entry`);
+	}
+	fs.writeFileSync(piSessionFile, `not json\n${piSessionBackup}`, { mode: 0o600 });
+	assertThrows(() => openPersistentAgentPiSessionManager(alphaAgentId, piRuntime, tempAgentsRoot), "header is invalid", "a broken Pi JSONL header should fail clearly");
 	fs.writeFileSync(piSessionFile, piSessionBackup, { mode: 0o600 });
 
 	const piThreadJson = JSON.parse(fs.readFileSync(path.join(alphaRoot, "runtime", "threads", `${piThreadId}.json`), "utf-8"));

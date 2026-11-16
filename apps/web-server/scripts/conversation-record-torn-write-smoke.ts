@@ -28,12 +28,20 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 const agents = await import("../src/persistent-agents.js");
 const model = { provider: "openai-compatible", model: "room-model", label: "Room Model" };
 const realWriteFileSync = fs.writeFileSync;
+const realOpenSync = fs.openSync;
 
-// The next write to a conversation record stops half way and throws.
+// The next write to a conversation record stops half way and throws. The safe
+// write writes through a file handle, so the handle is what names the record.
 function tearNextRecordWrite(): { hit(): boolean } {
 	let fired = false;
+	const recordHandles = new Set<number>();
+	(fs as any).openSync = (file: any, ...rest: any[]) => {
+		const handle = (realOpenSync as any)(file, ...rest);
+		if (/[\\/]threads[\\/][^\\/]+\.json/.test(String(file))) recordHandles.add(handle);
+		return handle;
+	};
 	(fs as any).writeFileSync = (file: any, data: any, ...rest: any[]) => {
-		if (!fired && /[\\/]threads[\\/][^\\/]+\.json/.test(String(file)) && typeof data === "string") {
+		if (!fired && recordHandles.has(file) && typeof data === "string") {
 			fired = true;
 			(realWriteFileSync as any)(file, data.slice(0, Math.floor(data.length / 2)), ...rest);
 			throw new Error("injected: the disk filled half way");
@@ -52,6 +60,7 @@ function cutOff(label: string, write: () => unknown): void {
 		threw = true;
 	} finally {
 		(fs as any).writeFileSync = realWriteFileSync;
+		(fs as any).openSync = realOpenSync;
 	}
 	assert(tear.hit() && threw, `${label}: the write was cut off`);
 }
@@ -80,5 +89,6 @@ try {
 	console.log("conversation-record-torn-write smoke: ok");
 } finally {
 	(fs as any).writeFileSync = realWriteFileSync;
+	(fs as any).openSync = realOpenSync;
 	fs.rmSync(tempHome, { recursive: true, force: true });
 }

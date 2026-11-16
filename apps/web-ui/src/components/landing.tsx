@@ -2,13 +2,14 @@ import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { shownRoomName } from "../../../web-server/src/room-name";
 import { CreateRoomPanel } from "./create-room-panel";
 import { Help, useFirstRunGuide } from "./Help";
-import { CloseIcon } from "./icons";
+import { CloseIcon, PlusIcon } from "./icons";
 import { useEscapeKey } from "./use-escape-key";
 import { PersistentAgentCard, noModelSentence } from "./launcher-room-card";
 import { ROOM_SORT_MIN_ROOMS, RoomSortControl, ROOM_ARRANGE_HINT_ID } from "./RoomSortControl";
 import type { HomeRoomOrderView } from "../home-room-order";
+import type { HomeRoomOrderFailedSave } from "../use-home-room-order";
 import { type RoomOrderChoice, orderRooms, type RoomOrderMode } from "../../../web-server/src/room-order";
-import { type RoomArrangement, createRoomArrangement, moveByKey, confirmLeavingArrangement } from "../home-room-arrange";
+import { type RoomArrangement, createRoomArrangement, moveByKey } from "../home-room-arrange";
 import { type CardDrag, createCardDrag, type CardDragView, type Rect, type SlotLayout, ROOM_LONG_PRESS_MS } from "../home-room-drag";
 import { arrangeSlots, slotRestBox, useArrangeEdgeScroll, useRoomArrangeMotion } from "../use-room-arrange-motion";
 import { type ThemeMode, type AppearancePreference, ProductSidebar } from "./product-shell";
@@ -22,7 +23,53 @@ import { fetchArchivedPersistentRooms, restorePersistentRoom, purgePersistentRoo
 import type { MaintainTarget, PersistentAgentThread } from "../room-thread-items";
 import { homeAiProfileStatus } from "./ai-profile-switcher";
 
-export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, serviceBack }: { roomOrder: HomeRoomOrderView; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; /** Told whenever arrange mode has unsaved moves or stops having them, and false when the screen goes; the app asks the leave question at its own exits. */ onArrangingChange: (dirty: boolean) => void; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; /** Counts the page's reconnects after an outage. */ serviceBack: number }) {
+/** Where cards stand side by side, the New room tile alone in its row is as
+ * tall as the room card before it (04-home-shell.css reads --row-card-h);
+ * beside cards the row sizes it, and in one column (a phone) every card is
+ * alone, so it keeps its own height there. Read whenever the grid or one of its
+ * cards changes size; `children` changes when the grid's cards are drawn anew
+ * or in another order (a room added or gone, a new sort, arranging, the tile
+ * shown), which resizes nothing, so they are read and watched again. */
+function useNewRoomTileHeight(gridRef: React.RefObject<HTMLElement | null>, children: string): void {
+	useEffect(() => {
+		const grid = gridRef.current;
+		if (!grid) return;
+		const fit = () => {
+			const tile = grid.querySelector<HTMLElement>(":scope > .add-room-card");
+			const card = tile?.previousElementSibling;
+			if (!tile) return;
+			const [tileBox, cardBox] = [tile.getBoundingClientRect(), card?.getBoundingClientRect()];
+			if (cardBox && tileBox.top >= cardBox.bottom && tileBox.left !== cardBox.left) tile.style.setProperty("--row-card-h", `${cardBox.height}px`);
+			else tile.style.removeProperty("--row-card-h");
+		};
+		const observer = new ResizeObserver(fit);
+		for (const element of [grid, ...grid.children]) observer.observe(element);
+		return () => observer.disconnect();
+	}, [gridRef, children]);
+}
+
+/**
+ * Whether the grid lays its cards out in one column while arranging (the
+ * cards' arrows then point up and down). Read from the grid as laid out:
+ * its width, its gap (tighter in a short window) and its columns' least width
+ * all decide it, so no width breakpoint can. Read again whenever the grid
+ * changes size, which a change in its number of columns always does.
+ */
+function useOneColumn(gridRef: React.RefObject<HTMLElement | null>, arranging: boolean): boolean {
+	const [oneColumn, setOneColumn] = useState(false);
+	useLayoutEffect(() => {
+		const grid = gridRef.current;
+		if (!arranging || !grid) return;
+		const read = () => setOneColumn(getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).length === 1);
+		read();
+		const observer = new ResizeObserver(read);
+		observer.observe(grid);
+		return () => observer.disconnect();
+	}, [gridRef, arranging]);
+	return oneColumn;
+}
+
+export function Landing({ roomOrder, roomOrderFailedSave, onChooseRoomOrder, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, serviceBack }: { roomOrder: HomeRoomOrderView; roomOrderFailedSave: HomeRoomOrderFailedSave | null; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; /** Counts the page's reconnects after an outage. */ serviceBack: number }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -55,29 +102,31 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 	// immutable); this screen holds it as ONE piece of state that dies with
 	// the screen. While arranging the grid is drawn from the arrangement, not
 	// from the saved order: the cards are the set at entry, minus rooms gone
-	// meanwhile (retain, below). Save is one choice handed to the controller
-	// (mode custom + the ids); Cancel and Escape drop the arrangement, and
-	// nothing is written. Moves, Cancel and Escape are not taken while a save
-	// is in flight: what was sent is what closes, and a write already sent
-	// cannot be cancelled.
+	// meanwhile (retain, below). The order is kept once, when the person
+	// finishes: Done, or leaving Home, each ONE choice handed to the
+	// controller (mode custom + the ids). Escape drops the arrangement and
+	// nothing is written. Moves and Escape are not taken while a save is in
+	// flight: what was sent is what closes, and a write already sent cannot
+	// be cancelled.
 	const [arrangement, setArrangement] = useState<RoomArrangement | null>(null);
 	const [announcement, setAnnouncement] = useState("");
 	const arranging = arrangement !== null;
-	const arrangeDirty = arrangement?.dirty() ?? false;
-	const onArrangingChangeRef = useRef(onArrangingChange);
-	onArrangingChangeRef.current = onArrangingChange;
-	useEffect(() => { onArrangingChangeRef.current(arrangeDirty); }, [arrangeDirty]);
-	useEffect(() => () => onArrangingChangeRef.current(false), []);
 	useEffect(() => {
 		if (!arrangement) return;
 		const kept = arrangement.retain(new Set(persistentAgentStatuses.map((status) => status.id)));
 		if (kept !== arrangement) setArrangement(kept);
 	}, [arrangement, persistentAgentStatuses]);
-	// The live region is emptied whenever arrange mode closes (Cancel, Escape,
-	// a Save that landed): a sentence identical to the last one announced is
+	// The live region is emptied whenever arrange mode closes (Escape, a Done
+	// that landed): a sentence identical to the last one announced is
 	// not a change to the DOM and would be read by nobody, and the same
 	// position can come round again in a later arrange session.
-	const startArranging = (): void => setArrangement(createRoomArrangement(orderedRoomStatuses.map((status) => status.id)));
+	// Whether this arranging's Done failed: its line, "try again", is about
+	// that Done only, never about a failure remembered from before Arrange.
+	const [doneFailed, setDoneFailed] = useState(false);
+	const startArranging = (): void => {
+		setDoneFailed(false);
+		setArrangement(createRoomArrangement(orderedRoomStatuses.map((status) => status.id)));
+	};
 	const cancelArranging = (): void => { if (!roomOrder.saving) { setAnnouncement(""); setArrangement(null); } };
 	// Registered once for the whole arrange session, never re-registered: the
 	// Escape stack is in enabling order, so an entry pushed again after a
@@ -85,12 +134,40 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 	// guide, Settings) and take the Escape meant for it. While saving the
 	// handler itself does nothing.
 	useEscapeKey(cancelArranging, arranging);
-	async function saveArrangement(): Promise<void> {
+	// What finishing keeps, the same for Done and for leaving Home: the
+	// arrangement, when there is something to keep. Moves made; Custom not
+	// saved yet (chosen the first time, which opened arranging); or a failed
+	// save remembered, which may have landed with other moves. Otherwise
+	// nothing is sent.
+	const arrangementToKeep = (): RoomOrderChoice | null => arrangement && (arrangement.dirty() || roomOrder.order?.mode !== "custom" || roomOrderFailedSave !== null) ? { mode: "custom", customOrder: arrangement.ids() } : null;
+	async function finishArranging(): Promise<void> {
 		if (!arrangement || roomOrder.saving) return;
-		if (await onChooseRoomOrder({ mode: "custom", customOrder: arrangement.ids() })) { setAnnouncement(""); setArrangement(null); }
+		setDoneFailed(false);
+		const keep = arrangementToKeep();
+		if (keep && !(await onChooseRoomOrder(keep))) {
+			setDoneFailed(true);
+			return;
+		}
+		setAnnouncement("");
+		setArrangement(null);
 	}
+	// Every way out of Home while arranging (the sidebar, Back and Forward,
+	// any change of address, a finished answer's Open) keeps the order, and
+	// asks nothing: this screen closing is the ONE place, so no way out is
+	// missed. A layout effect's cleanup runs before the app's passive one that
+	// tells the controller Home was left (use-home-room-order.ts), so the
+	// choice reaches it while it still holds the order; the controller lets
+	// the save finish after Home is gone and says a failure on the next
+	// arrival. Closing the browser tab or quitting the app unmounts nothing,
+	// so the moves go without a word.
+	const keepOnLeaveRef = useRef<() => void>(() => {});
+	keepOnLeaveRef.current = () => {
+		const keep = arrangementToKeep();
+		if (keep) void onChooseRoomOrder(keep);
+	};
+	useLayoutEffect(() => () => keepOnLeaveRef.current(), []);
 	// Custom with nothing arranged yet opens arrange mode on the order on
-	// screen and writes nothing: Save is the first write, and a Cancel leaves
+	// screen and writes nothing: Done is the first write, and Escape leaves
 	// the saved mode as it was. With an arrangement saved, Custom is a choice
 	// like any other.
 	const chooseMode = (mode: RoomOrderMode): Promise<boolean> => {
@@ -124,6 +201,15 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 		setArrangement(next);
 		announceMoved(status, next);
 	};
+	// A card's arrows, for a click or a tap: the moves the arrow keys make, with
+	// the same announcement. The focus is left where it is.
+	const moveByArrow = (status: PersistentAgentStatus, which: "earlier" | "later"): void => {
+		if (!arrangement || roomOrder.saving || cardDrag.activeId() !== null) return;
+		const next = which === "earlier" ? arrangement.moveEarlier(status.id) : arrangement.moveLater(status.id);
+		if (next === arrangement) return;
+		setArrangement(next);
+		announceMoved(status, next);
+	};
 	useLayoutEffect(() => {
 		const pending = pendingFocusRef.current;
 		if (!pending) return;
@@ -133,7 +219,6 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 		slot?.scrollIntoView({ block: "nearest" }); // a card moved off screen (End) is brought into view
 	}, [arrangement]);
 	const statusById = new Map(persistentAgentStatuses.map((status) => [status.id, status]));
-	const leaveGuarded = (leave: () => void) => (): void => { if (confirmLeavingArrangement(arrangeDirty)) leave(); };
 	// Dragging a card (slice 4). The gesture is home-room-drag.ts;
 	// this screen feeds it the pointer events of the card's slot (the wrapper
 	// around the card, whose own controls are inert while arranging) and the
@@ -154,7 +239,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 	// so it sits above arrange mode's and leaves the stack with the drag. A
 	// gesture the browser takes away (pointercancel, a lost capture) puts the
 	// card back too, as does the card's room vanishing or arrange mode closing
-	// under it (Escape, Enter on the focused Cancel, a save landing), for a
+	// under it (Escape, a save landing), for a
 	// press not yet held as well, whose handle unmounts with its release still
 	// to come; left in the module, the next session's first move would lift
 	// the card pressed before. Another pointer changes nothing while one
@@ -269,6 +354,8 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 	// and waits to know that before it draws New room, so no box comes and goes.
 	const aiKnown = modelStatus !== null || aiProfileSelection !== null;
 	const newRoomShown = gridDrawn && (roomStatuses.length > 0 || (aiKnown && emptyHome !== "connect-first"));
+	const oneColumn = useOneColumn(gridRef, arranging);
+	useNewRoomTileHeight(gridRef, `${(arrangedStatuses ?? orderedRoomStatuses).map((status) => status.id).join(" ")}:${arranging}:${newRoomShown}`);
 	const firstRunGuide = useFirstRunGuide();
 	const providerLabels = Object.fromEntries((modelStatus?.providers ?? []).map((provider) => [provider.id, provider.label]));
 	const offeredModels = (modelStatus?.providers ?? []).flatMap((provider) => [...provider.conversation, ...provider.memory]);
@@ -283,7 +370,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={leaveGuarded(onOpenDashboard)} onMemory={leaveGuarded(onOpenMemory)} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="home" />
+			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={onOpenDashboard} onMemory={onOpenMemory} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="home" />
 			<div className="landing home-page">
 			<section className="landing-hero">
 				<div className={`landing-hero-head${arranging ? " is-arranging" : ""}`}>
@@ -293,7 +380,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 					</div>
 					<div className="landing-hero-actions">
 						{roomOrder.order && !sharedServer && (arranging || roomStatuses.length >= ROOM_SORT_MIN_ROOMS) && (
-							<RoomSortControl order={roomOrder.order} saving={roomOrder.saving} saveError={roomOrder.saveError} onChoose={chooseMode} onArrange={startArranging} arranging={arrangement ? { onSave: () => void saveArrangement(), onCancel: cancelArranging } : null} />
+							<RoomSortControl order={roomOrder.order} saving={roomOrder.saving} failedSave={roomOrderFailedSave} onChoose={chooseMode} onArrange={startArranging} arranging={arrangement ? { onDone: () => void finishArranging(), doneFailed } : null} />
 						)}
 						<div className="room-arrange-live" role="status" aria-live="polite">{announcement}</div>
 					</div>
@@ -302,7 +389,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 					<div className="home-connect-card">
 						<h2>Connect an AI to get started</h2>
 						<p>{connectLine}</p>
-						{aiSetupRole !== "member" && <button type="button" className={`landing-action${aiSetupReadOnly ? " secondary" : ""}`} onClick={() => onOpenSettings("ai-setup")}>{aiSetupReadOnly ? "See AI setup" : "Connect AI"}</button>}
+						{aiSetupRole !== "member" && <button type="button" className={`rs-btn${aiSetupReadOnly ? "" : " rs-btn-primary"} landing-action`} onClick={() => onOpenSettings("ai-setup")}>{aiSetupReadOnly ? "See AI setup" : "Connect AI"}</button>}
 					</div>
 				)}
 				{showSetupPill && (
@@ -315,9 +402,9 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 					: <div className="home-resume-error" role="alert">{persistentResumeError}</div>
 				)}
 			</section>
-			<section ref={gridRef} className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}${arranging ? " is-arranging" : ""}`} aria-label="Rooms">
+			<section ref={gridRef} className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}${arranging ? " is-arranging" : ""}${arranging && oneColumn ? " is-one-column" : ""}`} aria-label="Rooms">
 				{(arrangedStatuses ?? orderedRoomStatuses).map((status, index, list) => {
-					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} offeredModels={offeredModels} />;
+					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} offeredModels={offeredModels} arrangeArrows={arrangedStatuses ? { onEarlier: index > 0 && !roomOrder.saving ? () => moveByArrow(status, "earlier") : null, onLater: index < list.length - 1 && !roomOrder.saving ? () => moveByArrow(status, "later") : null } : undefined} />;
 					if (!arrangedStatuses) return card;
 					const held = dragView?.id === status.id;
 					return (
@@ -327,7 +414,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 							data-arrange-slot={status.id}
 							style={{ order: previewOrder(status.id) }}
 							tabIndex={0}
-							role="button"
+							role="group"
 							aria-roledescription="movable room"
 							aria-label={`${arrangeName(status)}, position ${index + 1} of ${list.length}`}
 							aria-describedby={ROOM_ARRANGE_HINT_ID}
@@ -345,7 +432,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 				})}
 				{newRoomShown && (
 					<button type="button" className={`landing-card add-room-card${emptyHome === "create-first" ? " is-primary" : ""}`} disabled={arranging} onClick={() => setCreateOpen(true)} aria-label="Create a new room" aria-describedby={aiReadiness === "no-model" ? "add-room-hint" : undefined}>
-						<span className="add-room-plus" aria-hidden="true">+</span>
+						<span className="add-room-plus" aria-hidden="true"><PlusIcon size={18} /></span>
 						<span className="add-room-label">New room</span>
 						{aiReadiness === "no-model" && <span className="add-room-hint" id="add-room-hint">{aiSetupRole === "member" ? "Ask your admin for a model first" : "Connect an AI first"}</span>}
 					</button>
@@ -363,7 +450,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 									<h2>Create a room</h2>
 								</div>
 							</div>
-							<button className="settings-dialog-close" onClick={() => setCreateOpen(false)} aria-label="Close"><CloseIcon size={16} /></button>
+							<button className="rs-btn rs-btn-icon settings-dialog-close" onClick={() => setCreateOpen(false)} aria-label="Close"><CloseIcon size={16} /></button>
 						</div>
 						<div className="room-settings-body">
 							<CreateRoomPanel onCreate={onCreatePersistentAgent} initialOpen variant="section" onCreated={openCreatedRoom} onCancel={() => setCreateOpen(false)} />
@@ -479,7 +566,7 @@ function ArchivedRoomsSection({ activeRoomCount, serviceBack, onRestored }: { ac
 			<section className="archived-rooms" aria-label="Archived rooms">
 				<div className="archived-rooms-note" role="alert">
 					Archived rooms could not be loaded.{" "}
-					<button type="button" className="rs-quiet archived-rooms-retry" onClick={() => setRetryNonce((n) => n + 1)}>Try again</button>
+					<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet archived-rooms-retry" onClick={() => setRetryNonce((n) => n + 1)}>Try again</button>
 				</div>
 			</section>
 		);
@@ -514,7 +601,7 @@ function ArchivedRoomsSection({ activeRoomCount, serviceBack, onRestored }: { ac
 								)}
 							</div>
 							<div className="archived-room-actions">
-								{armedId === room.id && <button type="button" className="rs-quiet" disabled={busy?.id === room.id} onClick={() => setArmedId(null)} title="Cancel — keep this room archived">Keep it</button>}
+								{armedId === room.id && <button type="button" className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" disabled={busy?.id === room.id} onClick={() => setArmedId(null)} title="Cancel: keep this room archived">Keep it</button>}
 								<button type="button" className="rs-btn" disabled={busy?.id === room.id} title="Bring this room back to Home" onClick={() => void restoreRoom(room)}>
 									{busy?.id === room.id && busy.action === "restore" ? "Restoring…" : "Restore"}
 								</button>

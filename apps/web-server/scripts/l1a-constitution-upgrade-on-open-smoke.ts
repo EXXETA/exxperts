@@ -11,7 +11,7 @@
 // gate that wanted an idle runtime would refuse all of this.
 //
 // Four rooms, one real server, one synthetic gateway, one turn each:
-//   1. a room frozen at template v2, its thread selected and active, is at v4
+//   1. a room frozen at template v2, its thread selected and active, is at v5
 //      after its first open, its durable memory and everything else it already
 //      had untouched (the archive, the event record, the words and a second
 //      run that changes nothing are the shared upgrade's, proved in
@@ -381,8 +381,8 @@ try {
 	assert(firstAnswer.includes(ANSWER), `the room should open and answer, got ${JSON.stringify(firstAnswer.slice(0, 200))}`);
 
 	const v3L1a = readText(l1aPath);
-	assert(parsePersistentAgentL1aMarker(v3L1a).templateVersion === 4, `the opened room should carry template v4, got ${JSON.stringify(parsePersistentAgentL1aMarker(v3L1a))}`);
-	pass("a room frozen at template v2 is at v4 after its first open");
+	assert(parsePersistentAgentL1aMarker(v3L1a).templateVersion === 5, `the opened room should carry template v5, got ${JSON.stringify(parsePersistentAgentL1aMarker(v3L1a))}`);
+	pass("a room frozen at template v2 is at v5 after its first open");
 
 	// Everything the room already had is as it was, the constitution and the
 	// stamp on agent.json aside. The open's own bookkeeping under runtime/ (which
@@ -434,7 +434,7 @@ try {
 	finishPersistentAgentTurn(midTurnRoom.roomId, midTurnThreadId, { turnId: midTurnId, terminalReason: "completed" });
 	const midTurnAnswer = await openRoomAndAsk(midTurnRoom.roomId, `midturnopen_${Date.now().toString(36)}`);
 	assert(midTurnAnswer.includes(ANSWER), `the room the upgrade was refused on should open and answer, got ${JSON.stringify(midTurnAnswer.slice(0, 200))}`);
-	assert(parsePersistentAgentL1aMarker(readText(midTurnL1aPath)).templateVersion === 4, "the room catches up at a later open");
+	assert(parsePersistentAgentL1aMarker(readText(midTurnL1aPath)).templateVersion === 5, "the room catches up at a later open");
 	assert(listFiles(path.join(midTurnRoom.root, "L1a-archive")).length === 1, "the later open archives the old constitution once");
 	assert(listFiles(path.join(midTurnRoom.root, "events/constitution-upgrade")).length === 1, "the later open writes one event record");
 	pass("the room catches up at its next open, once the turn is done");

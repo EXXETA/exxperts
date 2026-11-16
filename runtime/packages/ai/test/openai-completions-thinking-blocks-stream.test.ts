@@ -7,6 +7,7 @@ import type { AssistantMessageEvent, Context, Model, OpenAICompletionsCompat } f
 
 const compat = {
 	supportsStore: true,
+	supportsUser: true,
 	supportsDeveloperRole: true,
 	supportsReasoningEffort: true,
 	supportsUsageInStreaming: true,

@@ -1,14 +1,14 @@
 // Two lines of what the model is told, as the model really receives them
 // (synthetic gateway, real server, a real scheduled run). Pins:
-//   1. a room that can write files, by a write tool or by Bash, is told not to
-//      replace a file silently; a room that cannot write is not told;
+//   1. a room that can write files, by a write tool or by a command, is told not
+//      to replace a file silently; a room that cannot write is not told;
 //   2. a scheduled run is told no one can answer, in a room of any kind, and
 //      where it can write it gets the replace line without its "ask"; a live
 //      conversation is never told it is a scheduled run, not even right after
 //      one, in the conversation that run left behind.
 import fs from "node:fs";
 import path from "node:path";
-import { assert, copiesIn, MODEL, openRoom, personsNewest, requestJson, requests, RoomSocket, startRoomStateServer, stopRoomStateServer, tempHome, waitUntil } from "./room-state-setup.js";
+import { agentsRoot, assert, copiesIn, MODEL, openRoom, personsNewest, requestJson, requests, RoomSocket, startRoomStateServer, stopRoomStateServer, tempHome, waitUntil } from "./room-state-setup.js";
 
 const LIVE_REPLACE = "Before you write a file, look: if a file with that name exists, the user did not ask to change it and you did not make it for them, ask, or write under a new name and say so. Changing or recreating a file the user asked to change, or one you made for them, needs no question.";
 const SCHEDULED_REPLACE = "Never replace an existing file unless the task names that file: look first, and if it exists, write under a new name and say so.";
@@ -21,19 +21,25 @@ type Folder = { access: "bounded" | "localFiles"; bash?: boolean; tools?: string
 async function setFolder(roomId: string, folder: Folder): Promise<void> {
 	const root = path.join(tempHome, `folder-${roomId}`);
 	fs.mkdirSync(root, { recursive: true });
+	// A room made before commands started on, so commands stand as each row sets them.
+	fs.rmSync(path.join(agentsRoot, roomId, "runtime", "commands-start-on.json"), { force: true });
 	const saved = await requestJson(`/api/persistent-agents/${roomId}/workspace-default`, { method: "PUT", body: JSON.stringify({ root, workspaceAccessMode: folder.access, bashEnabled: folder.bash === true, ...(folder.tools ? { toolSelection: { kind: "custom", allowedToolNames: folder.tools } } : {}) }) });
 	assert(saved.status === 200, `the folder should save, got ${saved.status}: ${JSON.stringify(saved.body).slice(0, 300)}`);
 }
 
 /** The copy a person's first message sends. */
 async function liveCopy(name: string, folder?: Folder): Promise<string> {
+	return (await liveRoomCopy(name, folder)).copy;
+}
+
+async function liveRoomCopy(name: string, folder?: Folder): Promise<{ copy: string; roomId: string }> {
 	const { roomId, conversationId } = await openRoom(name, folder && ((id) => setFolder(id, folder)));
 	const room = await RoomSocket.connect(roomId, conversationId);
 	const [request] = await room.prompt("Hello.");
 	await room.close();
 	const [copy] = copiesIn(request);
 	assert(copy, "the first message carries a room-state copy");
-	return copy;
+	return { copy, roomId };
 }
 
 /** A one-time job's run, through the schedule a person saves: the copy it sends and the conversation it leaves. */
@@ -58,15 +64,14 @@ async function scheduledCopy(name: string, folder?: Folder): Promise<{ copy: str
 }
 
 const WRITERS: [string, Folder][] = [
-	["Bounded", { access: "bounded" }],
-	["Full access", { access: "localFiles" }],
-	["Full access with Bash", { access: "localFiles", bash: true }],
-	["Full access, Bash but no write tools", { access: "localFiles", bash: true, tools: READ_TOOLS }],
+	["an older Bounded room", { access: "bounded" }],
+	["Can change files on", { access: "localFiles" }],
+	["Can change files and Commands on", { access: "localFiles", bash: true }],
 ];
 const NON_WRITERS: [string, Folder | undefined][] = [
 	["no folder", undefined],
-	["Bounded, read only", { access: "bounded", tools: READ_TOOLS }],
-	["Full access, read only", { access: "localFiles", tools: READ_TOOLS }],
+	["an older Bounded room, read only", { access: "bounded", tools: READ_TOOLS }],
+	["Can change files off", { access: "localFiles", tools: READ_TOOLS }],
 ];
 
 let error: unknown;
@@ -87,6 +92,19 @@ try {
 		const copy = await liveCopy(`Reader ${label}`, folder);
 		assert(!copy.includes(LIVE_REPLACE) && !copy.includes(SCHEDULED_REPLACE), `${label}: a room that cannot write is not told, got:\n${copy}`);
 		console.log(`  ok ${label}: a live room that cannot write is not told`);
+	}
+
+	// Commands on with Can change files off: a command runs, and is told, wherever protection
+	// runs or the person turned it off; on a computer with no protection it doesn't run at all.
+	const commandsOnly = await liveRoomCopy("Commands but Can change files off", { access: "localFiles", bash: true, tools: READ_TOOLS });
+	const protection = (await requestJson(`/api/persistent-agents/${commandsOnly.roomId}/workspace-default`)).body?.protection;
+	assert(protection?.state === "on" || protection?.state === "off", `the room's protection reads, got ${JSON.stringify(protection)}`);
+	if (protection.state === "off" && protection.cause === "computer") {
+		assert(!commandsOnly.copy.includes(LIVE_REPLACE) && commandsOnly.copy.includes("- Commands: off"), `Commands on, Can change files off, no protection on this computer: commands don't run and the room is not told, got:\n${commandsOnly.copy}`);
+		console.log("  ok Commands on, Can change files off, no protection on this computer: commands don't run, not told");
+	} else {
+		assert(commandsOnly.copy.includes(LIVE_REPLACE) && commandsOnly.copy.includes("- Commands: on"), `Commands on, Can change files off, with protection: the room is told, got:\n${commandsOnly.copy}`);
+		console.log("  ok Commands on, Can change files off, with protection: a command runs, told");
 	}
 
 	const written = await scheduledCopy("Scheduled Writer", { access: "localFiles", bash: true });

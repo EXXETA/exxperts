@@ -8,6 +8,7 @@ const {
 	persistentRoomCapabilityPolicyView,
 	persistentRoomWorkspacePolicyPath,
 	readPersistentRoomCapabilityPolicy,
+	readPersistentRoomDefaultCapabilityPolicy,
 	persistentRoomRuntimeCwdForEffectiveWorkspacePolicy,
 	resolvePersistentRoomEffectiveWorkspacePolicy,
 	writePersistentRoomDefaultCapabilityPolicy,
@@ -146,10 +147,14 @@ try {
 	}
 	expectReject(() => normalizePersistentRoomWorkspaceToolSelectionInput({ kind: "custom", allowedToolNames: ["read", "read"] }, { workspaceAccessMode: "localFiles" }), "duplicate Full access tool");
 
-	const invalidStored = { ...standard, toolSelection: { kind: "custom" as const, allowedToolNames: ["bash"] } };
-	writePersistentRoomCapabilityPolicy(invalidStored, { persistentAgentsRoot });
-	assert(readPersistentRoomCapabilityPolicy(agentId, "tool_selection_thread", { persistentAgentsRoot }) === null, "invalid stored explicit custom selection should fail safe and not broaden tools");
+	// The room's own file, as the room's reader reads it: an invalid custom list gives no folder, never more tools.
+	const validDefault = createPersistentRoomDefaultCapabilityPolicy({ ...baseInput, displayLabel: "Workspace" });
+	writePersistentRoomDefaultCapabilityPolicy(validDefault, { persistentAgentsRoot });
+	assert(readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot }) !== null, "a valid stored room setting reads back");
+	writePersistentRoomDefaultCapabilityPolicy({ ...validDefault, toolSelection: { kind: "custom" as const, allowedToolNames: ["bash"] } }, { persistentAgentsRoot });
+	assert(readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot }) === null, "invalid stored explicit custom selection should fail safe and not broaden tools");
 
+	// A room's own tool list maps on every read. Without Read it has no folder.
 	const defaultCustom = createPersistentRoomDefaultCapabilityPolicy({
 		...baseInput,
 		root: workspaceB,
@@ -157,16 +162,16 @@ try {
 		toolSelection: { kind: "custom", allowedToolNames: ["ls", "read_spreadsheet"] },
 	});
 	writePersistentRoomDefaultCapabilityPolicy(defaultCustom, { persistentAgentsRoot });
-	// Live defaults: a fresh thread resolves the room default directly — the
-	// custom selection carries through with no mirror sidecar written.
+	assert(resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot }).source === "none", "a room whose own list has no Read has no folder");
+	// With Read and without Write and Edit: Can change files off, with List, Find and Search back.
+	writePersistentRoomDefaultCapabilityPolicy(createPersistentRoomDefaultCapabilityPolicy({ ...baseInput, root: workspaceB, displayLabel: "Workspace B", toolSelection: { kind: "custom", allowedToolNames: ["ls", "read"] } }), { persistentAgentsRoot });
 	const liveDefault = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
 	assert(liveDefault.source === "room-default", "fresh thread should resolve the live room default");
-	assert(liveDefault.workspaceAccessMode === "bounded", "live default effective policy should preserve bounded workspace access mode");
-	assert(liveDefault.allowedToolNames.join(",") === "ls", "live default effective tools should preserve custom subset minus retired names");
+	assert(liveDefault.workspaceAccessMode === "localFiles", "a Bounded room reads as the one access");
+	assert(liveDefault.allowedToolNames.join(",") === "read,ls,find,grep", "a room's own list reads as Can change files off, with List, Find and Search back");
 	const sidecarPath = persistentRoomWorkspacePolicyPath(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
 	assert(!fs.existsSync(sidecarPath), "resolving the live default must not write a thread sidecar");
-	// A deliberate per-conversation policy round-trips the custom marker through
-	// its sidecar and wins over the room default.
+	// A conversation's own policy, which only older versions wrote, is kept on disk and gives way to the room's.
 	const threadCustom = createPersistentRoomCapabilityPolicy({
 		...baseInput,
 		conversationId: "snapshot_custom_tools",
@@ -179,20 +184,19 @@ try {
 	assert(sidecar.workspaceAccessMode === "bounded", "thread sidecar should store bounded workspace access mode");
 	assert(sidecar.toolSelection?.kind === "custom", "thread sidecar should store custom selection marker");
 	assert(sidecar.toolSelection?.allowedToolNames?.join(",") === "ls", "thread sidecar should store the migrated custom selected tools");
-	const readSidecar = readPersistentRoomCapabilityPolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
-	assert(readSidecar?.toolSelection?.kind === "custom", "stored sidecar should round-trip custom marker");
+	assert(readPersistentRoomCapabilityPolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot }) === null, "a conversation's own policy is not read");
 
 	const effective = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
-	assert(effective.source === "thread", "deliberate thread policy should win over the room default");
-	const toolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: effective.workspaceToolsEnabled, workspaceToolNames: effective.allowedToolNames });
-	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effective, repoRoot) === fs.realpathSync.native(workspaceB), "bounded room session cwd should be the workspace root realpath, not the repo root");
+	assert(effective.source === "room-default", "a conversation's own policy gives way to the room's");
+	const toolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: effective.workspaceToolsEnabled, workspaceToolNames: effective.allowedToolNames, workspaceAccessMode: effective.workspaceAccessMode });
+	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effective, repoRoot) === fs.realpathSync.native(workspaceB), "room session cwd should be the workspace root realpath, not the repo root");
 	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(null, repoRoot) === repoRoot, "room without a workspace grant keeps the fallback cwd");
 
 	assert(toolPolicy.allowedToolNames.includes("web_search"), "persistent-room tool policy should retain web_search");
-	assert(toolPolicy.allowedToolNames.includes("ls"), "persistent-room tool policy should include selected custom workspace tools");
-	assert(!toolPolicy.allowedToolNames.includes("find") && !toolPolicy.allowedToolNames.includes("read") && !toolPolicy.allowedToolNames.includes("write"), "persistent-room tool policy should not broaden to unselected workspace tools");
-	assert(toolPolicy.blockedToolNames.includes("bash") && toolPolicy.blockedToolNames.includes("grep") && toolPolicy.blockedToolNames.includes("write") && toolPolicy.blockedToolNames.includes("edit"), "persistent-room tool policy should keep unselected filesystem tools blocked");
-	assertBlockedDisjoint(toolPolicy, "custom bounded tool policy");
+	assert(["read", "ls", "find", "grep"].every((name) => toolPolicy.allowedToolNames.includes(name)), "persistent-room tool policy should include the reading tools");
+	assert(!toolPolicy.allowedToolNames.includes("write") && !toolPolicy.allowedToolNames.includes("edit"), "persistent-room tool policy should not broaden to the writing tools");
+	assert(toolPolicy.blockedToolNames.includes("bash") && toolPolicy.blockedToolNames.includes("write") && toolPolicy.blockedToolNames.includes("edit"), "persistent-room tool policy should keep unselected filesystem tools blocked");
+	assertBlockedDisjoint(toolPolicy, "custom tool policy");
 
 	// The room's read of its own archived notes is default-on everywhere, and it
 	// is the ONE memory tool the memory_* family block lets through: an allowed

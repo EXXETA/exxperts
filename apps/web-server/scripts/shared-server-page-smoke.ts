@@ -11,13 +11,28 @@
 // tell the admin there with no button, and on this computer to check the
 // gateway, with AI setup's button. With
 // sharedServer false every control is there as today. Who is signed in shows
-// in the sidebar's footer with the server's sign-out link (when it sends one),
+// in the sidebar's footer, with Sign out and the line on what it ends when the
+// server sends its sign-out link: Sign out posts the server's sign-out and
+// follows the link only on its confirmed answer; a refused, failed or stalled
+// one follows nothing and offers Try again and this browser's sign-out alone,
+// even when the page's own closed connection meets a 401 meanwhile.
+// The signed-out line's Sign in again goes to that link too, else to "/".
 // the admin alone can change the AI setup (never sign a provider in or out),
 // a different person on a later read reloads the page, and a room on a shared
 // server keeps trying past two minutes. On a shared server the page names the
-// person it was opened for on every request and on its socket, and the
-// server's refusal of that person (409 person_changed) ends the page; Home's
-// dropped socket asks client-context before each rebuild there.
+// person it was opened for on every request and on its socket, and a 403 or a
+// 409 whose JSON says endsPage: true ends the page with that answer's words,
+// or a fallback line when it has none; Home's dropped socket asks
+// client-context before each rebuild there. The answers here are stand-ins for
+// the server's (a refused person, a switched-off one): their words and codes
+// are the smoke's own. The ending comes also when the first read failed, and a
+// request answered after it reaches no caller; the same answers without the
+// field, and the field on a 401, a 500 or a 503, end nothing (rows X1 to X6,
+// X3a, X3b).
+// The Wallet's
+// address shows one sentence there and never reads usage, even before the
+// probe answers or when it fails; on this computer the Wallet waits for an
+// answer, then reads.
 // The probe is intercepted in the page, so one ordinary server serves both.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -27,6 +42,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContext, type Page, type Route, type WebSocketRoute } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import { closeBrowser, closeContext } from "./smoke-close-context.js";
+import { CAN_CHANGE_FILES, CHANGE_FOLDER, COMMANDS, STOP_USING_FOLDER } from "../src/room-box/card-text.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-shared-server-page-"));
 process.env.HOME = tempHome;
@@ -51,6 +67,14 @@ const NO_FOLDER_LINE = "On a shared server, rooms don't use a folder.";
 const LOST_LINE = "exxperts lost its connection. Restarting the app usually fixes this.";
 const LOST_SHARED_LINE = "exxperts lost its connection to the server. It usually comes back by itself within a minute. If it doesn't, reload the page.";
 const SIGNED_OUT_LINE = "You were signed out. Sign in again to carry on.";
+// Sign out, its scope line, and the line with its two choices when the sign-out fails.
+const SIGN_OUT_ROW = "Sign out This signs you out on every device.";
+const SIGN_OUT_FAILED_ROW = "Your other devices may still be signed in. Try again Sign out of this browser only";
+// The page's own wait for the sign-out's answer (SIGN_OUT_WAIT_MS in product-shell.tsx).
+const SIGN_OUT_WAIT_MS = 10_000;
+const SIGN_OUT_REFUSED = { error: "exxperts could not sign you out on your other devices, so try again.", code: "sign_out_failed" };
+// The edge's answer to every request of a session a stored sign-out ends.
+const SESSION_SIGNED_OUT = { error: "You were signed out.", code: "session_signed_out" };
 const ADMIN_HINT = "Just made an admin? Sign out and in again to get the admin's controls.";
 const PILL_SHARED = "This room lost its connection. It keeps trying by itself.";
 const PILL_DESKTOP_FAILED = "This room lost its connection. Use Reconnect to try again, or restart the app if it keeps happening.";
@@ -105,10 +129,23 @@ const MEMBER: Person = { id: "11111111-1111-4111-8111-111111111111", name: "<i>S
 const ADMIN: Person = { id: "22222222-2222-4222-8222-222222222222", name: "Sample Admin", admin: true };
 const OTHER: Person = { id: "33333333-3333-4333-8333-333333333333", name: "Sample Other", admin: false };
 const ORDER_NOT_LOADED = "The saved order could not be loaded";
+const WALLET_HELD_BACK = "The Wallet isn't available on this server yet.";
+const walletLine = async (page: Page) => (await page.locator(".dashboard-page .landing-hero p").innerText()).trim();
+const USAGE_READ = "GET /api/usage";
 const BOUNDARY_LINE = "Something went wrong on this page. Reloading usually fixes it.";
 const REFUSAL = { error: "Refused by the shared server smoke.", code: "smoke_refused" };
-// The edge's answer to a request whose page names a person no longer signed in.
-const PERSON_CHANGED = { error: "Another person is signed in on this server now.", code: "person_changed" };
+// Stand-ins for the server's answers that end the page: a request whose page names a person no longer signed in, and
+// a switched-off person. The cover says each answer's own words; one without words gets the fallback line.
+const ANOTHER_PERSON = { error: "Another person is signed in on this server now.", code: "smoke_another_person", endsPage: true };
+const SWITCHED_OFF = { error: "The smoke's server has ended your access.", code: "smoke_access_ended", endsPage: true };
+const ENDED_FALLBACK_LINE = "You can't use this page any more. Reload to see what you can do next.";
+// The cover's own lines: a read finds another person, and a page that never knew its person.
+const OTHER_PERSON_LINE = "You can't use this page any more: a different account is now signed in to exxperts in this browser.";
+const UNKNOWN_PERSON_LINE = "This page could not tell who is signed in. Reload to carry on.";
+// The stand-in for the server's answer when it cannot read the mark, and its refusal page for a switched-off page load.
+const SWITCHED_OFF_UNCHECKED = { error: "exxperts could not check whether your access is switched on, so try again in a moment.", code: "switched_off_unchecked" };
+const SWITCHED_OFF_PAGE = `<!doctype html><title>exxperts</title><p class="smoke-refusal-page">${SWITCHED_OFF.error}</p>`;
+const SWITCHED_OFF_CLOSE = { code: 4403, reason: SWITCHED_OFF.code };
 const PAGE_PERSON_HEADER = "x-exxperts-page-person";
 const PAGE_PERSON_PROTOCOLS = (person: Person) => ["exxperts", `exxperts-person.${person.id}`];
 // Every route a shared server refuses that the page can call, which it must
@@ -185,18 +222,24 @@ async function api(method: string, url: string, body?: unknown): Promise<any> {
 	return text ? JSON.parse(text) : null;
 }
 
-// --- apiFetch with no browser: the page's person joins the caller's own headers in every form, and the server's 409s ---
+// --- apiFetch with no browser: the page's person joins the caller's own headers in every form, and the answers that end the page ---
 {
 	const realFetch = globalThis.fetch;
 	let reloads = 0;
 	const reloaded = () => reloads;
+	const toSignIn: string[] = [];
 	const sent: Request[] = [];
-	let answer = (): Response => Response.json({});
-	// The page's reload, counted; fetch builds the request the browser would send, from the same arguments.
-	Object.assign(globalThis, { location: { reload: () => { reloads += 1; } } });
+	let answer = (_request: Request): Response | Promise<Response> => Response.json({});
+	// The page's reload and its way to sign in, counted; fetch builds the request the browser would send, from the same arguments.
+	const stored = new Map<string, string>();
+	Object.assign(globalThis, {
+		location: { reload: () => { reloads += 1; }, assign: (to: string) => { toSignIn.push(to); } },
+		sessionStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } },
+	});
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-		sent.push(new Request(input instanceof Request ? input : new URL(String(input), "http://page.test"), init));
-		return answer();
+		const request = new Request(input instanceof Request ? input : new URL(String(input), "http://page.test"), init);
+		sent.push(request);
+		return answer(request);
 	}) as typeof fetch;
 	try {
 		const api = await import("../../web-ui/src/api.js");
@@ -224,17 +267,62 @@ async function api(method: string, url: string, body?: unknown): Promise<any> {
 		const conflict = await api.fetchJson("/api/b").then(() => null, (error: unknown) => error);
 		assert(conflict instanceof api.ApiRequestError && conflict.status === 409 && conflict.code === "room_busy" && conflict.message === "This room is busy.", `apiFetch: another 409 did not reach its caller as the server's answer: ${String(conflict)}`);
 		assert(!clientContext.personHasChanged() && reloaded() === 0, "apiFetch: another 409 ended the page");
-		answer = () => Response.json(PERSON_CHANGED, { status: 409 });
+		// The field ends the page, never a code or words: a 403 and a 409 without it, or with it other than true, and the
+		// field on any other status reach their caller as the server's answer.
+		const { endsPage: _field, ...withoutField } = ANOTHER_PERSON;
+		const endingNothing: Array<[string, number, unknown]> = [
+			["a 403 without the field", 403, withoutField],
+			["a 409 without the field", 409, withoutField],
+			["a 403 whose field is the string \"true\"", 403, { ...withoutField, endsPage: "true" }],
+			["a 409 whose field is 1", 409, { ...withoutField, endsPage: 1 }],
+			["a 401 with the field", 401, ANOTHER_PERSON],
+			["a 500 with the field", 500, ANOTHER_PERSON],
+			["a 503 with the field", 503, ANOTHER_PERSON],
+		];
+		for (const [what, status, body] of endingNothing) {
+			answer = () => Response.json(body, { status });
+			const res = await api.apiFetch("/api/f");
+			assert(res.status === status && JSON.stringify(await res.json()) === JSON.stringify(body), `apiFetch: ${what} did not reach its caller as the server's answer`);
+			assert(!clientContext.personHasChanged() && reloaded() === 0, `apiFetch: ${what} ended the page`);
+		}
+		// The 401 sent the page to sign in, as any 401 does: forgotten, so the rows below start clean.
+		assert(toSignIn.length === 1, `apiFetch: the 401 with the field did not send the page to sign in (${JSON.stringify(toSignIn)})`);
+		toSignIn.length = 0;
+		stored.clear();
+		pass("apiFetch: a 403 and a 409 without endsPage, or with it other than true, and endsPage on a 401, a 500 and a 503 reach their caller and end nothing");
+		// X3a: two requests out when the page ends, answered after it: a 200 and a 401.
+		const held = new Map<string, (late: Response) => void>();
+		answer = (request) => new Promise<Response>((resolve) => { held.set(new URL(request.url).pathname, resolve); });
+		const lateOk = api.apiFetch("/api/late-ok").then(() => "answered", () => "thrown");
+		const late401 = api.apiFetch("/api/late-401").then(() => "answered", () => "thrown");
+		await until(() => held.size === 2, "X3a: the two late requests were not sent");
+		// X3b: a client-context read whose answer began before the ending and whose body ends after it, naming another person.
+		let endBody = () => {};
+		const body = new ReadableStream<Uint8Array>({ start: (stream) => { endBody = () => { stream.enqueue(new TextEncoder().encode(JSON.stringify({ remote: false, capability: "full", sharedServer: true, person: OTHER }))); stream.close(); }; } });
+		const lateRead = clientContext.refreshRemoteClientContext();
+		await until(() => held.has("/api/remote/client-context"), "X3b: the read was not sent");
+		held.get("/api/remote/client-context")?.(new Response(body, { headers: { "content-type": "application/json" } }));
+		held.delete("/api/remote/client-context");
+		answer = () => Response.json(ANOTHER_PERSON, { status: 409 });
 		const refused = await Promise.allSettled([api.apiFetch("/api/c"), api.apiFetch("/api/d")]);
-		assert(refused.every((result) => result.status === "rejected"), "apiFetch: a 409 person_changed came back to its caller as an answer");
-		assert(clientContext.personHasChanged() && reloaded() === 1, `apiFetch: two 409 person_changed did not end the page once (${reloaded()} reloads)`);
+		assert(refused.every((result) => result.status === "rejected"), "apiFetch: a 409 with endsPage came back to its caller as an answer");
+		assert(clientContext.personHasChanged() && reloaded() === 1, `apiFetch: two 409s with endsPage did not end the page once (${reloaded()} reloads)`);
+		held.get("/api/late-ok")?.(Response.json({ ok: true }));
+		held.get("/api/late-401")?.(Response.json(SESSION_SIGNED_OUT, { status: 401 }));
+		assert(await lateOk === "thrown", "X3a: a request sent before the page ended, answered 200 after, reached its caller");
+		assert(await late401 === "thrown" && toSignIn.length === 0, `X3a: a request sent before the page ended, answered 401 after, reached its caller or sent the page to sign in (${JSON.stringify(toSignIn)})`);
+		endBody();
+		const lateResult = await lateRead;
+		assert(lateResult === "person changed" && reloaded() === 1, `X3b: a read whose body ended after the page ended was taken (${lateResult}, ${reloaded()} reloads)`);
+		pass("X3a, X3b apiFetch: on a changed person's page, a request sent before the ending and answered after (200, 401) throws and sends the page nowhere, and a read whose body ends after the ending is not taken");
 		const before = sent.length;
 		await api.apiFetch("/api/e").catch(() => {});
 		assert(sent.length === before, "apiFetch: a request was sent after the page ended");
-		pass("apiFetch: another 409 reaches its caller as today; 409 person_changed ends the page once and nothing is sent after it");
+		pass("apiFetch: another 409 reaches its caller; a 409 with endsPage ends the page once and nothing is sent after it");
 	} finally {
 		globalThis.fetch = realFetch;
 		Reflect.deleteProperty(globalThis, "location");
+		Reflect.deleteProperty(globalThis, "sessionStorage");
 	}
 }
 
@@ -254,6 +342,33 @@ async function api(method: string, url: string, body?: unknown): Promise<any> {
 type ProbeAnswer = { person?: Person; signOut?: string; remote?: boolean; refuse?: boolean; fail: boolean; stall: boolean; holdNext: boolean; holding: boolean; released: number; release: (fail?: boolean) => void };
 type Opened = { context: BrowserContext; page: Page; asked: string[]; probe: ProbeAnswer; reads: () => number; pending: () => number };
 
+/**
+ * How the server's sign-out answers in the page, and the sign-out links the page followed. "hold" answers on release();
+ * "lost" writes the record (recorded()) and never answers; "signed-out" is the edge's refusal once a record ends the session.
+ */
+type SignOutRoute = { mode: "answer" | "refuse" | "network" | "stall" | "hold" | "lost" | "signed-out"; posts: number; release: () => void; followed: string[]; recorded?: () => void };
+
+async function routeSignOut(context: BrowserContext, signOut: SignOutRoute): Promise<void> {
+	await context.route("**/api/session/sign-out", async (route) => {
+		if (route.request().method() !== "POST") return route.continue();
+		signOut.posts += 1;
+		if (signOut.mode === "lost") signOut.recorded?.();
+		// Never answered: the page's own deadline has to end it.
+		if (signOut.mode === "stall" || signOut.mode === "lost") return;
+		if (signOut.mode === "signed-out") return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(SESSION_SIGNED_OUT) });
+		if (signOut.mode === "network") return route.abort();
+		if (signOut.mode === "refuse") return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify(SIGN_OUT_REFUSED) });
+		if (signOut.mode === "hold") await new Promise<void>((resolve) => { signOut.release = resolve; });
+		return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }) });
+	});
+	// The gate's sign-out, followed: kept by path and query, and answered with a blank page.
+	await context.route("**/oauth2/sign_out?**", (route) => {
+		const url = new URL(route.request().url());
+		signOut.followed.push(`${url.pathname}${url.search}`);
+		return route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Signed out</title>" });
+	});
+}
+
 /** A signed-in page whose client-context probe answers sharedServer, and the person and sign-out link, as given. */
 async function openApp(browser: Browser, sharedServer: boolean, prepare?: (context: BrowserContext) => Promise<unknown>, who: { person?: Person; signOut?: string; remote?: boolean; fail?: boolean } = {}): Promise<Opened> {
 	const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -263,7 +378,7 @@ async function openApp(browser: Browser, sharedServer: boolean, prepare?: (conte
 		// Never answered: the page's own deadline has to end it.
 		if (probe.stall) return;
 		// The edge refuses the person the page names.
-		if (probe.refuse) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify(PERSON_CHANGED) });
+		if (probe.refuse) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify(ANOTHER_PERSON) });
 		// The next question: its answer is fixed now (who is signed in at this moment) but sent only when released,
 		// or it fails then: an answer or a failure that comes late, once the page has moved on.
 		if (probe.holdNext) {
@@ -349,6 +464,18 @@ async function settled(opened: Pick<Opened, "page" | "pending">): Promise<void> 
 	await opened.page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
+/** A first load of the Wallet's address, from a blank page, with the first read of client-context held: `asked` starts empty here. */
+async function firstLoadOfWalletHeld(opened: Opened): Promise<void> {
+	const { page, probe, asked } = opened;
+	await page.goto("about:blank");
+	probe.holdNext = true;
+	asked.length = 0;
+	await page.goto(`${baseUrl}/#/dashboard`);
+	await until(() => probe.holding, "the Wallet's address: the page did not ask client-context on its first load");
+	await page.locator(".dashboard").waitFor({ timeout: 10000 });
+	await settled(besideHeld(opened));
+}
+
 /** The rooms' names in the order Home draws their cards. */
 async function cardOrder(page: Page): Promise<string[]> {
 	const texts = await page.locator(".persistent-agent-card").allInnerTexts();
@@ -356,7 +483,8 @@ async function cardOrder(page: Page): Promise<string[]> {
 }
 
 async function openSettings(page: Page): Promise<void> {
-	await page.locator(".product-sidebar-footer button").first().click();
+	// The gear by its class: on a shared server Sign out comes before it in the footer.
+	await page.locator(".product-sidebar-footer .sidebar-config-gear").click();
 	await page.locator(".sidebar-config-menu button, .sidebar-config-menu a").filter({ hasText: /Settings/ }).first().click();
 	await page.waitForSelector(".settings-overlay", { timeout: 10000 });
 }
@@ -393,13 +521,55 @@ async function holdReload(page: Page): Promise<void> {
 	page.on("dialog", (dialog) => void dialog.dismiss());
 }
 
+// The server in front of a switched-off person, once refusing() holds: every API request 403 with endsPage, the
+// page load its refusal page. Registered after openApp's own routes, so it answers first.
+async function routeSwitchedOff(context: BrowserContext, refusing: () => boolean): Promise<void> {
+	await context.route("**/api/**", (route) => refusing()
+		? route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify(SWITCHED_OFF) })
+		: route.fallback());
+	await context.route((url) => url.pathname === "/", (route) => refusing() && route.request().isNavigationRequest()
+		? route.fulfill({ status: 403, contentType: "text/html", body: SWITCHED_OFF_PAGE })
+		: route.fallback());
+}
+
+/** The reload held by a prompt on unsaved work, and each try to leave the page counted by its prompt. */
+async function countHeldReloads(page: Page): Promise<() => number> {
+	let tries = 0;
+	await page.evaluate(() => window.addEventListener("beforeunload", (event) => { event.preventDefault(); event.returnValue = ""; }));
+	page.on("dialog", (dialog) => {
+		if (dialog.type() === "beforeunload") tries += 1;
+		void dialog.dismiss();
+	});
+	return () => tries;
+}
+
+/** The cover for an ended page: its line word for word, its one button Reload with the focus, nothing else. */
+async function assertEndedCover(page: Page, row: string, line: string, timeoutMs = 15000): Promise<void> {
+	const cover = page.locator(".person-changed-cover");
+	await until(async () => (await cover.count()) === 1, `${row}: the page did not end with the cover`, timeoutMs);
+	const seen = await cover.evaluate((node) => ({
+		text: node.querySelector("p")?.textContent ?? "",
+		buttons: Array.from(node.querySelectorAll("button")).map((button) => button.textContent),
+		focused: document.activeElement?.textContent ?? "",
+		inCover: !!document.activeElement?.closest(".person-changed-cover"),
+	}));
+	assert(seen.text === line, `${row}: the cover does not say ${JSON.stringify(line)} word for word: ${JSON.stringify(seen.text)}`);
+	assert(seen.buttons.length === 1 && seen.buttons[0] === "Reload" && seen.inCover && seen.focused === "Reload", `${row}: the cover's button is not Reload with the focus: ${JSON.stringify(seen)}`);
+	assert((await page.getByText(/lost its connection/).count()) === 0, `${row}: a lost-connection line shows`);
+}
+
+/** The cover for a switched-off person: the refusal's words. */
+function assertSwitchedOffCover(page: Page, row: string, timeoutMs = 15000): Promise<void> {
+	return assertEndedCover(page, row, SWITCHED_OFF.error, timeoutMs);
+}
+
 /** Into a room from Home, and back to Home from a room, without reloading the page. In a room means its socket said ready. */
 async function openRoomFromHome(page: Page, name: string): Promise<void> {
 	const readies = roomReadyOf.get(page);
 	assert(readies, "a page not opened by openApp has no ready count");
 	const before = readies();
 	await page.locator(".persistent-agent-card").filter({ hasText: name }).locator(".persistent-agent-primary-actions .landing-action").first().click();
-	await page.locator('button.icon-btn[aria-label="Room settings"]').waitFor({ timeout: 15000 });
+	await page.locator(".topbar-actions").getByRole("button", { name: "Room settings", exact: true }).waitFor({ timeout: 15000 });
 	await until(() => readies() > before, `${name}: the room's live connection did not say ready`);
 }
 
@@ -409,7 +579,7 @@ async function leaveRoomToHome(page: Page): Promise<void> {
 }
 
 async function openRoomWorkspace(page: Page): Promise<void> {
-	await page.locator('button.icon-btn[aria-label="Room settings"]').click();
+	await page.locator(".topbar-actions").getByRole("button", { name: "Room settings", exact: true }).click();
 	await page.locator(".settings-dialog-nav button").filter({ hasText: "Folder" }).first().click();
 	await page.locator(".room-workspace-section").waitFor({ timeout: 10000 });
 	await settledPage(page);
@@ -431,7 +601,7 @@ async function countText(page: Page, scope: string, text: string): Promise<numbe
  * after which every connection is closed at once: the server is still there,
  * but the page cannot reach it live, as when a sign-in runs out.
  */
-async function openWithDroppableConnection(browser: Browser, sharedServer: boolean, signedOut: boolean, setUp?: (context: BrowserContext) => Promise<unknown>): Promise<{ opened: Opened; drop: () => void; isLive: () => boolean }> {
+async function openWithDroppableConnection(browser: Browser, sharedServer: boolean, signedOut: boolean, setUp?: (context: BrowserContext) => Promise<unknown>, who?: { person?: Person; signOut?: string }): Promise<{ opened: Opened; drop: () => void; isLive: () => boolean }> {
 	let dropped = false;
 	const live: WebSocketRoute[] = [];
 	const opened = await openApp(browser, sharedServer, async (context) => {
@@ -450,7 +620,7 @@ async function openWithDroppableConnection(browser: Browser, sharedServer: boole
 					? route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Not signed in.", code: "auth_required" }) })
 					: route.continue());
 		}
-	});
+	}, who);
 	return {
 		opened,
 		isLive: () => live.length > 0,
@@ -481,7 +651,7 @@ try {
 	await api("PUT", "/api/settings/room-order", { mode: "name-desc" });
 	// A room with a folder and commands on: its chip, Edit and Clear.
 	await api("PUT", `/api/persistent-agents/${encodeURIComponent(ids["Bash Room"])}/workspace-default`, { root: workspaceRoot, displayLabel: "Bash Room Folder", workspaceAccessMode: "localFiles", bashEnabled: true });
-	// A file on Alpha Room's shelf: its viewer offers Save….
+	// A file on Alpha Room's shelf: its viewer offers Save.
 	await api("POST", `/api/persistent-agents/${encodeURIComponent(ids["Alpha Room"])}/files`, { filename: SHELF_FILE, contentBase64: Buffer.from("shared server smoke\n").toString("base64") });
 
 	const browser = await chromium.launch();
@@ -501,8 +671,8 @@ try {
 			if (sharedServer) {
 				const cover = page.locator(".person-changed-cover");
 				await cover.waitFor({ timeout: 15000 });
-				const words = await cover.innerText();
-				assert(!/Someone else/.test(words), `shared: the page claims another person when it may be the same one: ${JSON.stringify(words)}`);
+				const words = await cover.locator("p").innerText();
+				assert(words === UNKNOWN_PERSON_LINE, `shared: the page does not say it could not tell who is signed in: ${JSON.stringify(words)}`);
 				assert((await page.locator(".product-sidebar-footer .signed-in-as").count()) === 0, "shared: the page adopted whoever is signed in now");
 				pass("shared: a failed first read and a later answer with a person: the page is ended (Reload held), not adopted, and its words do not say another person");
 			} else {
@@ -542,10 +712,10 @@ try {
 			await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 			probe.release();
 			// A reconnect that went on from the first answer would read the thread before the fresh read ends the page.
-			await page.locator(".person-changed-cover").waitFor({ timeout: 15000 });
+			await assertEndedCover(page, "held read", OTHER_PERSON_LINE);
 			await settled(opened);
 			assert(threadRequests.length === 0, `held read: the reconnect went on from the first person's answer and read or saved a room as the second: ${threadRequests.join(", ")}`);
-			pass("shared: a read held across the second person's sign-in: the refresh takes a fresh read, the page ends, and no thread is read or saved");
+			pass("shared: a read held across the second person's sign-in: the refresh takes a fresh read, the page ends with the other-person line, and no thread is read or saved");
 			await closeContext(context);
 		}
 
@@ -618,17 +788,16 @@ try {
 		{
 			const { context, page, asked } = await openApp(browser, true, undefined, { person: MEMBER, signOut: SIGN_OUT_LINK });
 			const footer = page.locator(".product-sidebar-footer .signed-in-as");
-			assert((await footer.innerText()).replace(/\s+/g, " ").trim() === "Signed in as <i>Sample</i> Member Sign out", `shared Home: the footer does not read as the member signed in, got ${JSON.stringify(await footer.innerText())}`);
+			assert((await footer.innerText()).replace(/\s+/g, " ").trim() === `Signed in as <i>Sample</i> Member ${SIGN_OUT_ROW}`, `shared Home: the footer does not read as the member signed in with Sign out and its scope line, got ${JSON.stringify(await footer.innerText())}`);
 			assert((await footer.locator("i, b, script").count()) === 0, "shared Home: the name was read as markup");
 			assert((await footer.locator(".signed-in-as-tag").count()) === 0, "shared Home: a member carries the Admin tag");
-			assert((await footer.locator("a").getAttribute("href")) === SIGN_OUT_LINK, "shared Home: Sign out does not go to the server's link");
 
 			assert(JSON.stringify(await cardOrder(page)) === JSON.stringify(A_TO_Z), `shared Home: rooms not A to Z: ${await cardOrder(page)}`);
 			assert((await page.locator(".room-sort").count()) === 0, "shared Home: the sort control is on the page");
 			assert((await page.getByText(ORDER_NOT_LOADED).count()) === 0, "shared Home: the order-not-loaded sentence is on the page");
 			assert((await page.locator(".product-nav button").filter({ hasText: "Wallet" }).count()) === 0, "shared Home: the Wallet button is on the page");
 			assert((await page.locator(".remote-on-pill").count()) === 0, "shared Home: the remote pill is on the page");
-			pass("shared: Home lists the rooms A to Z with no sort control, no order sentence, no Wallet and no remote pill, and the footer says who is signed in, as text, with the server's Sign out link");
+			pass("shared: Home lists the rooms A to Z with no sort control, no order sentence, no Wallet and no remote pill, and the footer says who is signed in, as text, with Sign out and its scope line");
 
 			await openSettings(page);
 			assert((await tabCount(page, "Remote access")) === 0, "shared Settings: Remote access is offered");
@@ -656,7 +825,7 @@ try {
 
 			await openTab(page, "Connectors");
 			assert((await countText(page, ".settings-overlay", SHARED_LINE)) === 1, "shared Connectors: no shared-server line");
-			for (const selector of [".connector-dir-search", ".connector-dir-row button", ".connector-row-actions button"]) {
+			for (const selector of [".connector-dir-search", ".connector-dir-row button", ".connector-item-slot button", "button.connector-item-more", ".pane-head-actions button"]) {
 				assert((await page.locator(`.settings-overlay ${selector}`).count()) === 0, `shared Connectors: ${selector} is on the page`);
 			}
 
@@ -670,13 +839,12 @@ try {
 
 			await enterRoom(page, "Bash Room");
 			const railFooter = page.locator(".sidebar-footer .signed-in-as");
-			assert((await railFooter.innerText()).replace(/\s+/g, " ").trim() === "Signed in as <i>Sample</i> Member Sign out", `shared room: the rail's footer does not say who is signed in, got ${JSON.stringify(await railFooter.innerText())}`);
-			assert((await railFooter.locator("a").getAttribute("href")) === SIGN_OUT_LINK, "shared room: the rail's Sign out does not go to the server's link");
+			assert((await railFooter.innerText()).replace(/\s+/g, " ").trim() === `Signed in as <i>Sample</i> Member ${SIGN_OUT_ROW}`, `shared room: the rail's footer does not say who is signed in with Sign out and its scope line, got ${JSON.stringify(await railFooter.innerText())}`);
 			assert((await page.locator(".bash-mode-chip").count()) === 0, "shared room: the Bash chip is on the page");
 			await openRoomWorkspace(page);
-			for (const label of ["Edit", "Clear", "Choose folder"]) {
-				assert((await page.locator(".room-workspace-section button").filter({ hasText: label }).count()) === 0, `shared room with a folder: ${label} is offered`);
-			}
+			const sharedPane = page.locator(".room-workspace-section");
+			assert((await sharedPane.locator("button").count()) === 0, "shared room with a folder: the Folder pane offers a button");
+			for (const input of await sharedPane.locator("input").all()) assert(await input.isDisabled(), "shared room with a folder: a Folder pane switch can be changed");
 			await closeSettings(page);
 
 			await enterRoom(page, "Alpha Room");
@@ -685,8 +853,8 @@ try {
 			assert((await countText(page, ".room-workspace-section", NO_FOLDER_LINE)) === 1, "shared room without a folder: no shared-server line");
 			await closeSettings(page);
 			await openShelfFile(page);
-			assert((await page.locator(".artifact-viewer-quiet").filter({ hasText: "Save…" }).count()) === 0, "shared room: Save… is offered for a shelf file");
-			pass("shared: rooms offer no Bash chip, no folder editor, no Choose folder and no Save…");
+			assert((await page.locator(".artifact-viewer-quiet").filter({ hasText: /^\s*Save\s*$/ }).count()) === 0, "shared room: Save is offered for a shelf file");
+			pass("shared: rooms offer no Bash chip, no folder control, no Choose folder and no Save");
 
 			assert(asked.length === 0, `shared rooms and room settings: the page asked for what a shared server refuses: ${asked.join(", ")}`);
 			pass("shared rooms and room settings: the page never asked for a refused route");
@@ -746,9 +914,10 @@ try {
 			await closeContext(bare.context);
 			const noLink = await openApp(browser, true, undefined, { person: MEMBER });
 			assert((await noLink.page.locator(".product-sidebar-footer .signed-in-as").innerText()).includes("Signed in as"), "shared without a link: the name is missing");
-			assert((await noLink.page.locator(".product-sidebar-footer .signed-in-as a").count()) === 0, "shared without a link: a Sign out item is offered");
+			assert((await noLink.page.locator(".product-sidebar-footer .signed-in-as").innerText()).replace(/\s+/g, " ").trim() === "Signed in as <i>Sample</i> Member", "shared without a link: the footer says more than who is signed in (a Sign out or its scope line)");
+			assert((await noLink.page.locator(".product-sidebar-footer .signed-in-as :is(a, button)").count()) === 0, "shared without a link: a Sign out item is offered");
 			await closeContext(noLink.context);
-			pass("shared: no Sign out item without the server's link, and nothing at all without a name or a link");
+			pass("shared: no Sign out item or scope line without the server's link, and nothing at all without a name or a link");
 
 			const opened = await openApp(browser, true, undefined, { person: MEMBER, signOut: SIGN_OUT_LINK });
 			const { context, page, probe, reads } = opened;
@@ -797,8 +966,168 @@ try {
 			await settled(local);
 			assert(local.reads() === before, "this computer: focus read the person again");
 			assert((await local.page.locator(".signed-in-as").count()) === 0, "this computer: the footer says who is signed in");
+			assert((await local.page.locator(".product-sidebar-footer").getByText(/This signs you out|Sign out/).count()) === 0, "this computer: a Sign out or its scope line shows");
 			pass("this computer: nothing reads the person again and the footer says nothing");
 			await closeContext(local.context);
+		}
+
+		// --- Sign out: the server's sign-out first, its link only on a confirmed answer, and the two choices when it fails ---
+		{
+			const open = async () => {
+				const signOut: SignOutRoute = { mode: "answer", posts: 0, release: () => {}, followed: [] };
+				const opened = await openApp(browser, true, (context) => routeSignOut(context, signOut), { person: MEMBER, signOut: SIGN_OUT_LINK });
+				const footer = opened.page.locator(".product-sidebar-footer .signed-in-as");
+				const row = async () => (await footer.innerText()).replace(/\s+/g, " ").replace(/^Signed in as <i>Sample<\/i> Member /, "").trim();
+				return { ...opened, signOut, footer, row };
+			};
+			const followedLink = (signOut: SignOutRoute) => signOut.followed.length === 1 && signOut.followed[0] === SIGN_OUT_LINK;
+
+			// Answered: nothing is followed while the answer is out, a second press sends nothing, then the link is followed.
+			{
+				const opened = await open();
+				const { page, signOut, footer, row } = opened;
+				signOut.mode = "hold";
+				const look = () => footer.getByRole("button", { name: "Sign out", exact: true }).evaluate((button) => { const style = getComputedStyle(button); return `${style.textDecorationLine} ${style.opacity}`; });
+				const resting = await look();
+				// Two presses in one go: the first disables the button before the second can send.
+				await footer.getByRole("button", { name: "Sign out", exact: true }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+				await until(() => signOut.posts > 0, "S1 answered: Sign out sent no request");
+				await settled({ page, pending: () => opened.pending() - 1 });
+				assert(signOut.posts === 1, `S1 answered: a second press while the request was out sent it again (${signOut.posts} requests)`);
+				assert(signOut.followed.length === 0, "S1 answered: the sign-out link was followed before the server's answer");
+				assert(await footer.getByRole("button", { name: "Sign out", exact: true }).isDisabled(), "S1 answered: Sign out can be pressed again while the request is out");
+				assert((await row()) === SIGN_OUT_ROW, `S1 answered: the scope line left while the request is out, got ${JSON.stringify(await row())}`);
+				const pending = await look();
+				assert(pending !== resting, `S1 answered: Sign out looks the same while its request is out as before the press (${resting}), so nothing shows the press took`);
+				signOut.release();
+				await until(() => followedLink(signOut), `S1 answered: the confirmed answer did not follow the server's link (${JSON.stringify(signOut.followed)})`);
+				assert(signOut.posts === 1, `S1 answered: more than one request was sent (${signOut.posts})`);
+				pass("Sign out: shows its scope line, sends the server's sign-out once however often it is pressed, follows nothing while the answer is out, and follows the server's link on the confirmed answer");
+				await closeContext(opened.context);
+			}
+
+			// Refused, then Try again answered: nothing followed on the refusal, the link followed on the second answer.
+			{
+				const opened = await open();
+				const { page, signOut, footer, row } = opened;
+				signOut.mode = "refuse";
+				await footer.getByRole("button", { name: "Sign out", exact: true }).click();
+				await until(async () => (await row()) === SIGN_OUT_FAILED_ROW, `S2 refused: the failure line and its two choices did not show, got ${JSON.stringify(await row())}`);
+				await settled(opened);
+				assert(signOut.followed.length === 0, "S2 refused: a refused sign-out followed the link");
+				assert((await page.evaluate(() => document.activeElement?.textContent)) === "Try again", "S2 refused: focus did not come to Try again");
+				signOut.mode = "answer";
+				await footer.getByRole("button", { name: "Try again", exact: true }).click();
+				await until(() => followedLink(signOut), `S2 refused: Try again's confirmed answer did not follow the server's link (${JSON.stringify(signOut.followed)})`);
+				assert(signOut.posts === 2, `S2 refused: Try again did not send the request again (${signOut.posts} requests)`);
+				pass("Sign out refused: the failure line with Try again and Sign out of this browser only, nothing followed; Try again sends again and follows the link on its confirmed answer");
+				await closeContext(opened.context);
+			}
+
+			// Failed on the network, then this browser only: the link is followed with no further request.
+			{
+				const opened = await open();
+				const { signOut, footer, row } = opened;
+				signOut.mode = "network";
+				await footer.getByRole("button", { name: "Sign out", exact: true }).click();
+				await until(async () => (await row()) === SIGN_OUT_FAILED_ROW, `S3 network: the failure line and its two choices did not show, got ${JSON.stringify(await row())}`);
+				await settled(opened);
+				assert(signOut.followed.length === 0, "S3 network: a sign-out with no answer followed the link");
+				await footer.getByRole("button", { name: "Sign out of this browser only", exact: true }).click();
+				await until(() => followedLink(signOut), `S3 network: Sign out of this browser only did not follow the server's link (${JSON.stringify(signOut.followed)})`);
+				assert(signOut.posts === 1, `S3 network: Sign out of this browser only sent the server's sign-out (${signOut.posts} requests)`);
+				pass("Sign out failed on the network: the failure line, nothing followed; Sign out of this browser only follows the link with no request");
+				await closeContext(opened.context);
+			}
+
+			// Stalled: still waiting before the page's deadline, the failure line after it, nothing followed.
+			{
+				const opened = await open();
+				const { signOut, footer, row } = opened;
+				signOut.mode = "stall";
+				const pressed = Date.now();
+				await footer.getByRole("button", { name: "Sign out", exact: true }).click();
+				await until(() => signOut.posts > 0, "S4 stalled: Sign out sent no request");
+				await new Promise((resolve) => setTimeout(resolve, SIGN_OUT_WAIT_MS / 2));
+				assert((await row()) === SIGN_OUT_ROW && (await footer.getByRole("button", { name: "Sign out", exact: true }).isDisabled()), `S4 stalled: before the deadline the page gave up waiting, got ${JSON.stringify(await row())}`);
+				await until(async () => (await row()) === SIGN_OUT_FAILED_ROW, "S4 stalled: no failure line came after the page's deadline", SIGN_OUT_WAIT_MS + 10_000);
+				const waited = Date.now() - pressed;
+				assert(waited >= SIGN_OUT_WAIT_MS - 500, `S4 stalled: the failure line came before the deadline (${waited} ms)`);
+				await settled(opened);
+				assert(signOut.followed.length === 0, "S4 stalled: a stalled sign-out followed the link");
+				pass(`Sign out stalled: the failure line comes at the page's deadline (${Math.round(waited / 100) / 10} s), nothing followed`);
+				await closeContext(opened.context);
+			}
+
+			// Lost after the record: the server wrote it and closed this page's live connection, so the page's sign-in
+			// check and its client-context reads answer 401 session_signed_out, but the sign-out's own answer never comes.
+			// The page goes nowhere by itself, however long the failure line waits for the person, and moving to Memory
+			// while the answer is out keeps where the sign-out stands: then Try again, which the edge refuses as signed out,
+			// follows the link.
+			{
+				const signOut: SignOutRoute = { mode: "answer", posts: 0, release: () => {}, followed: [] };
+				const live: WebSocketRoute[] = [];
+				let recorded = false;
+				signOut.recorded = () => {
+					recorded = true;
+					for (const ws of live.splice(0)) void ws.close({ code: 4401, reason: SESSION_SIGNED_OUT.code });
+				};
+				let checked = 0;
+				// The 401s answered once the person has been looking at the failure line for a while.
+				let lateRefusals = 0;
+				let lateFrom = Infinity;
+				const opened = await openApp(browser, true, async (context) => {
+					await routeSignOut(context, signOut);
+					// Registered after openApp's own answer, so it comes first once the record is written.
+					await context.route("**/api/remote/client-context", (route) => {
+						if (!recorded) return route.fallback();
+						if (Date.now() >= lateFrom) lateRefusals += 1;
+						return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(SESSION_SIGNED_OUT) });
+					});
+					await context.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+						if (recorded) return void ws.close({ code: 4401, reason: SESSION_SIGNED_OUT.code });
+						ws.connectToServer();
+						live.push(ws);
+					});
+					await context.route("**/api/auth/status", (route) => {
+						if (!recorded) return route.continue();
+						checked += 1;
+						if (Date.now() >= lateFrom) lateRefusals += 1;
+						return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(SESSION_SIGNED_OUT) });
+					});
+				}, { person: MEMBER, signOut: SIGN_OUT_LINK });
+				const { page } = opened;
+				const footer = page.locator(".product-sidebar-footer .signed-in-as");
+				const row = async () => (await footer.innerText().catch(() => "")).replace(/\s+/g, " ").replace(/^Signed in as <i>Sample<\/i> Member /, "").trim();
+				await until(() => live.length > 0, "S5 lost: the page's live connection never opened");
+				let left: string | null = null;
+				page.on("request", (request) => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) left ??= new URL(request.url()).pathname; });
+				signOut.mode = "lost";
+				const pressed = Date.now();
+				// Past the page's 15 s between two sign-in redirects (api.ts): a hold that ran out there would show here.
+				lateFrom = pressed + 16_000;
+				await footer.getByRole("button", { name: "Sign out", exact: true }).click();
+				await until(() => checked > 0 || left !== null, "S5 lost: the page never asked whether it is still signed in after its live connection closed", 30_000);
+				// Another screen's footer, mounted while the answer is out.
+				await page.locator(".product-nav button").filter({ hasText: "Memory" }).click();
+				await page.locator(".product-nav button.active").filter({ hasText: "Memory" }).waitFor({ timeout: 10_000 });
+				assert(Date.now() - pressed < SIGN_OUT_WAIT_MS, "S5 lost: Memory opened only after the page's deadline, so the row proves nothing about a footer mounted while the answer is out");
+				assert((await row()) === SIGN_OUT_ROW && (await footer.getByRole("button", { name: "Sign out", exact: true }).isDisabled()), `S5 lost: Memory's footer offers Sign out again while the answer is out, got ${JSON.stringify(await row())}`);
+				await until(async () => left !== null || (await row()) === SIGN_OUT_FAILED_ROW, `S5 lost: Memory's footer showed no failure line after the page's deadline, got ${JSON.stringify(await row())}`, SIGN_OUT_WAIT_MS + 10_000);
+				assert(left === null, `S5 lost: the page left for ${left} by itself while the sign-out's answer was out, before the person chose`);
+				// The person reads the failure line for a while; Home keeps asking meanwhile, and every answer is 401.
+				await until(() => left !== null || (Date.now() >= pressed + 30_000 && lateRefusals > 0), `S5 lost: past 16 s after the press, ${lateRefusals} 401 answer(s) came, so the row proves nothing`, 60_000);
+				assert(left === null, `S5 lost: the page left for ${left} by itself ${Math.round((Date.now() - pressed) / 1000)} s after the press, while the failure line waited for the person`);
+				assert((await row()) === SIGN_OUT_FAILED_ROW, `S5 lost: the failure line left before the person chose, got ${JSON.stringify(await row())}`);
+				assert(signOut.followed.length === 0, "S5 lost: a sign-out whose answer never came followed the link");
+				assert(checked > 0 && (await page.getByText(SIGNED_OUT_LINE, { exact: true }).count()) === 0, `S5 lost: the signed-out banner shows beside the failure line (sign-in checks answered 401: ${checked}), so the page says both signed out and maybe still signed in`);
+				signOut.mode = "signed-out";
+				await footer.getByRole("button", { name: "Try again", exact: true }).click();
+				await until(() => followedLink(signOut), `S5 lost: Try again, refused as signed out, did not follow the server's link (${JSON.stringify(signOut.followed)})`);
+				assert(signOut.posts === 2, `S5 lost: Try again did not send the request again (${signOut.posts} requests)`);
+				pass(`Sign out whose answer is lost after the record: the 401s that follow (${lateRefusals} past 16 s) send the page nowhere, Memory opened meanwhile keeps the sign-out where it stands, the failure line stays until the person chooses, and Try again, refused as signed out, follows the link`);
+				await closeContext(opened.context);
+			}
 		}
 
 		// --- The page names its person: on every request and its socket on a shared server, nowhere on this computer ---
@@ -842,7 +1171,7 @@ try {
 			await closeContext(context);
 		}
 
-		// --- sharedServer: true, the server refuses the person the page names: the page ends and sends nothing more ---
+		// --- sharedServer: true, the server refuses the person the page names and says the page ends: it ends with the answer's words and sends nothing more ---
 		{
 			let refusing = false;
 			let socketsAfter = 0;
@@ -857,7 +1186,7 @@ try {
 				});
 				// Every request from here on, as the edge answers once another person is signed in.
 				await ctx.route("**/api/**", (route) => refusing
-					? route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify(PERSON_CHANGED) })
+					? route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify(ANOTHER_PERSON) })
 					: route.fallback());
 			}, { person: MEMBER });
 			const { context, page } = opened;
@@ -867,16 +1196,226 @@ try {
 			page.on("request", (request) => { if (ended && ["fetch", "xhr"].includes(request.resourceType())) sentAfter += 1; });
 			refusing = true;
 			await page.locator(".persistent-agent-card").filter({ hasText: "Beta Room" }).locator(".persistent-agent-primary-actions .landing-action").first().click();
-			const cover = page.locator(".person-changed-cover");
-			await cover.waitFor({ timeout: 15000 });
-			assert((await cover.innerText()).includes("Someone else is now signed in on this server."), `refused person: the cover does not say another person, got ${JSON.stringify(await cover.innerText())}`);
+			await assertEndedCover(page, "refused person", ANOTHER_PERSON.error);
 			await settled(opened);
 			ended = true;
 			const socketsThen = socketsAfter;
 			await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 			const more = await appears(() => sentAfter > 0 || socketsAfter > socketsThen, 3000);
 			assert(!more, `refused person: the ended page sent ${sentAfter} request(s) and opened ${socketsAfter - socketsThen} socket(s)`);
-			pass("shared: a request answered 409 person_changed ends the page with the person-changed cover (reload held) and nothing is sent after it");
+			pass("shared: a request answered 409 with endsPage ends the page with the cover in the answer's words (reload held) and nothing is sent after it");
+			await closeContext(context);
+		}
+
+		// --- sharedServer: true, a 403 and a 409 with endsPage and no words: the page ends with the fallback line ---
+		for (const [status, body] of [[403, { code: SWITCHED_OFF.code, endsPage: true }], [409, { error: "", code: ANOTHER_PERSON.code, endsPage: true }]] as const) {
+			let refusing = false;
+			const opened = await openApp(browser, true, (ctx) => ctx.route("**/api/**", (route) => refusing
+				? route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) })
+				: route.fallback()), { person: MEMBER });
+			const { context, page } = opened;
+			await holdReload(page);
+			refusing = true;
+			await page.locator(".persistent-agent-card").filter({ hasText: "Beta Room" }).locator(".persistent-agent-primary-actions .landing-action").first().click();
+			await assertEndedCover(page, `a ${status} with endsPage and no words`, ENDED_FALLBACK_LINE);
+			pass(`shared: a ${status} with endsPage and ${"error" in body ? "empty words" : "no words"} ends the page with the fallback line`);
+			await closeContext(context);
+		}
+
+		// --- A switched-off person: the server refuses every request with a 403 with endsPage and closes the socket with 4403 ---
+		// X1: at Home, the socket closed with 4403: the next question ends the page, and it reloads into the edge's refusal page.
+		{
+			let refusing = false;
+			const live: WebSocketRoute[] = [];
+			const opened = await openApp(browser, true, async (ctx) => {
+				await routeSwitchedOff(ctx, () => refusing);
+				await ctx.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+					if (refusing) return void ws.close(SWITCHED_OFF_CLOSE);
+					ws.connectToServer();
+					live.push(ws);
+				});
+			}, { person: MEMBER });
+			const { context, page } = opened;
+			await until(() => live.length > 0, "X1: Home's socket never opened");
+			refusing = true;
+			for (const ws of live.splice(0)) void ws.close(SWITCHED_OFF_CLOSE);
+			await until(async () => (await page.locator(".smoke-refusal-page").count()) === 1, "X1: the page did not reload into the edge's refusal page", 30000);
+			assert((await page.locator(".smoke-refusal-page").innerText()) === SWITCHED_OFF.error, "X1: the reloaded page is not the edge's refusal page");
+			pass("X1 shared: Home's socket closed with 4403 while every request is refused: the next question ends the page and it reloads into the refusal page");
+			await closeContext(context);
+		}
+
+		// X2: in a room, its socket still open, the reload held: a refused request ends the page, which closes the socket itself.
+		{
+			let refusing = false;
+			const live: WebSocketRoute[] = [];
+			let closedByPage = 0;
+			let socketsAfter = 0;
+			const opened = await openApp(browser, true, async (ctx) => {
+				await ctx.clock.install();
+				await routeSwitchedOff(ctx, () => refusing);
+				await ctx.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+					if (refusing) {
+						socketsAfter += 1;
+						return void ws.close(SWITCHED_OFF_CLOSE);
+					}
+					const server = ws.connectToServer();
+					ws.onClose((code, reason) => {
+						if (refusing) closedByPage += 1;
+						void server.close({ code, reason });
+					});
+					live.push(ws);
+				});
+			}, { person: MEMBER });
+			const { context, page, reads } = opened;
+			await enterRoom(page, "Beta Room");
+			const reloads = await countHeldReloads(page);
+			let sentAfter = 0;
+			let ended = false;
+			page.on("request", (request) => { if (ended && ["fetch", "xhr"].includes(request.resourceType())) sentAfter += 1; });
+			refusing = true;
+			const readsBefore = reads();
+			await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+			await until(() => reads() > readsBefore, "X2: a focus did not ask client-context");
+			await assertSwitchedOffCover(page, "X2");
+			await until(() => closedByPage > 0, "X2: the page did not close its own live connection");
+			await until(() => reloads() === 1, `X2: the page did not try to reload once (${reloads()})`);
+			ended = true;
+			await page.clock.runFor(150_000);
+			await settled(opened);
+			assert(sentAfter === 0 && socketsAfter === 0, `X2: the ended page went on: ${sentAfter} request(s), ${socketsAfter} socket(s)`);
+			assert((await page.getByText(/lost its connection/).count()) === 0, "X2: a lost-connection line shows beside the cover");
+			assert(reloads() === 1, `X2: the page tried to reload ${reloads()} times`);
+			pass("X2 shared: in a room with its socket open, a request refused with a 403 with endsPage ends the page once: the cover with the answer's words and Reload, the socket closed by the page, no ladder and no lost-connection line after it");
+			await closeContext(context);
+		}
+
+		// X3: two requests out when the page ends, answered after it: client-context with a 200 naming another person, and
+		// the sign-in check with a 401. Neither reaches its caller: the cover keeps its words, and nothing sends the page anywhere.
+		{
+			let refusing = false;
+			let holding = false;
+			const held: Array<() => Promise<void>> = [];
+			const live: WebSocketRoute[] = [];
+			const opened = await openApp(browser, true, async (ctx) => {
+				await routeSwitchedOff(ctx, () => refusing);
+				await ctx.route(/\/api\/(remote\/client-context|auth\/status)$/, async (route) => {
+					if (!holding) return route.fallback();
+					const late = new URL(route.request().url()).pathname === "/api/auth/status"
+						? { status: 401, contentType: "application/json", body: JSON.stringify(SESSION_SIGNED_OUT) }
+						: { contentType: "application/json", body: JSON.stringify({ remote: false, capability: "full", sharedServer: true, person: OTHER }) };
+					await new Promise<void>((resolve) => { held.push(async () => { resolve(); }); });
+					return route.fulfill(late);
+				});
+				await ctx.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+					if (holding) return void ws.close();
+					ws.connectToServer();
+					live.push(ws);
+				});
+			}, { person: MEMBER });
+			const { context, page } = opened;
+			await until(() => live.length > 0, "X3: Home's socket never opened");
+			let navigations = 0;
+			page.on("request", (request) => { if (request.isNavigationRequest()) navigations += 1; });
+			// A click first: a page with no touch from the person shows no prompt on leaving, so the reload would not be held.
+			await page.locator(".home-page h1").click();
+			const reloads = await countHeldReloads(page);
+			holding = true;
+			for (const ws of live.splice(0)) void ws.close();
+			// The drop asks at once whether the person is still signed in, and Home's retry asks client-context.
+			await until(() => held.length === 2, `X3: the sign-in check and the retry's question were not both sent (${held.length})`, 30000);
+			holding = false;
+			refusing = true;
+			await page.locator(".persistent-agent-card").filter({ hasText: "Beta Room" }).locator(".persistent-agent-primary-actions .landing-action").first().click();
+			await assertSwitchedOffCover(page, "X3");
+			await until(() => reloads() === 1, `X3: the page did not try to reload once (${reloads()})`);
+			for (const release of held.splice(0)) await release();
+			await settled(opened);
+			await assertSwitchedOffCover(page, "X3 after the late answers");
+			const redirected = await page.evaluate(() => sessionStorage.getItem("exxperts-auth-redirect"));
+			assert(reloads() === 1 && navigations === 0 && redirected === null, `X3: a late answer moved the page: ${reloads()} reload tries, ${navigations} navigations, sign-in mark ${JSON.stringify(redirected)}`);
+			pass("X3 shared, reload held: a client-context read answered 200 with another person and a sign-in check answered 401, both after the page ended, reach no caller: the cover keeps the sentence and the page goes nowhere");
+			await closeContext(context);
+		}
+
+		// X4: the first read failed, so the page took itself for this computer; then the socket closes with 4403 and the
+		// person is refused. Its next retry asks client-context and ends the page, at Home and in a room. Only that question
+		// is refused here: the sign-in check answers "signed in" and anything else gets no answer, so no other request can
+		// end the page in its place. At Home the drop asks the sign-in check too, as on a shared server.
+		for (const where of ["Home", "a room"] as const) {
+			let refusing = false;
+			let signInChecks = 0;
+			const live: WebSocketRoute[] = [];
+			const opened = await openApp(browser, true, async (ctx) => {
+				await ctx.route("**/api/**", (route) => {
+					if (!refusing) return route.fallback();
+					const { pathname } = new URL(route.request().url());
+					if (pathname === "/api/remote/client-context") return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify(SWITCHED_OFF) });
+					if (pathname !== "/api/auth/status") return route.abort();
+					signInChecks += 1;
+					return route.fulfill({ contentType: "application/json", body: "{}" });
+				});
+				await ctx.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+					if (refusing) return void ws.close(SWITCHED_OFF_CLOSE);
+					ws.connectToServer();
+					live.push(ws);
+				});
+			}, { fail: true });
+			const { context, page, probe } = opened;
+			if (where === "a room") await enterRoom(page, "Beta Room");
+			// A click first: a page with no touch from the person shows no prompt on leaving, so the reload would not be held.
+			else await page.locator(".home-page h1").click();
+			const reloads = await countHeldReloads(page);
+			await until(() => live.length > 0, `X4 ${where}: the live connection never opened`);
+			probe.fail = false;
+			refusing = true;
+			for (const ws of live.splice(0)) void ws.close(SWITCHED_OFF_CLOSE);
+			await assertSwitchedOffCover(page, `X4 ${where}`, 30000);
+			await until(() => reloads() === 1, `X4 ${where}: the page did not try to reload once (${reloads()})`);
+			assert(where === "a room" || signInChecks > 0, `X4 ${where}: the drop did not ask whether the person is still signed in`);
+			pass(`X4 a failed first read, then a 4403 and client-context refused, ${where}: the next retry asks client-context and the page ends with the sentence${where === "Home" ? "; the drop asked the sign-in check" : ""}`);
+			await closeContext(context);
+		}
+
+		// X5, X6: the edge cannot read the mark (503 switched_off_unchecked), or refuses with another code (403): nothing
+		// ends, and both ladders keep asking. The room first, then Home.
+		for (const [row, status, body] of [["X5", 503, SWITCHED_OFF_UNCHECKED], ["X6", 403, REFUSAL]] as const) {
+			let refusing = false;
+			const live: WebSocketRoute[] = [];
+			const opened = await openApp(browser, true, async (ctx) => {
+				await ctx.clock.install();
+				await ctx.route("**/api/**", (route) => refusing ? route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }) : route.fallback());
+				await ctx.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+					if (refusing) return void ws.close();
+					ws.connectToServer();
+					live.push(ws);
+				});
+			}, { person: MEMBER });
+			const { context, page, reads } = opened;
+			await enterRoom(page, "Beta Room");
+			const reloads = await countHeldReloads(page);
+			let navigations = 0;
+			page.on("request", (request) => { if (request.isNavigationRequest()) navigations += 1; });
+			const runUntil = async (condition: () => boolean, message: string) => {
+				for (let step = 0; step < 120 && !condition(); step += 1) {
+					await page.clock.runFor(1000);
+					await settled(opened);
+				}
+				assert(condition(), message);
+			};
+			for (const where of ["a room", "Home"] as const) {
+				if (where === "Home") {
+					refusing = false;
+					await leaveRoomToHome(page);
+				}
+				await until(() => live.length > 0, `${row} ${where}: the live connection never opened`);
+				refusing = true;
+				const readsBefore = reads();
+				for (const ws of live.splice(0)) void ws.close();
+				await runUntil(() => reads() >= readsBefore + 3, `${row} ${where}: the ladder stopped asking client-context after ${reads() - readsBefore} question(s)`);
+				assert((await page.locator(".person-changed-cover").count()) === 0 && reloads() === 0 && navigations === 0, `${row} ${where}: a ${status} ${body.code} ended the page`);
+			}
+			pass(`${row} shared: ${status} ${body.code} on every request ends nothing; Home's ladder and the room's keep asking client-context`);
 			await closeContext(context);
 		}
 
@@ -928,14 +1467,14 @@ try {
 				// Refused: the next question ends the page, with no rebuild after it.
 				probe.refuse = true;
 				const triesThen = tries;
-				await runUntil(async () => (await page.locator(".person-changed-cover").count()) === 1, "shared ladder: a 409 person_changed on client-context did not end the page");
+				await runUntil(async () => (await page.locator(".person-changed-cover").count()) === 1, "shared ladder: a 409 with endsPage on client-context did not end the page");
 				assert(tries === triesThen, `shared ladder: the socket was rebuilt ${tries - triesThen} time(s) after client-context answered 409`);
 				const readsThen = reads();
 				const linesThen = lines.length;
 				await page.clock.runFor(60_000);
 				await settled(opened);
 				assert(tries === triesThen && reads() === readsThen && lines.length === linesThen, `shared ladder: the ended page went on (${tries - triesThen} sockets, ${reads() - readsThen} reads, lines ${JSON.stringify(lines.slice(linesThen))})`);
-				pass(`shared: Home's dropped socket asks client-context first; no answer rebuilds nothing and brings the lost-connection line, an answer rebuilds, and its 409 person_changed ends the page with no rebuild and no further line (${lines.length} warning lines in all)`);
+				pass(`shared: Home's dropped socket asks client-context first; no answer rebuilds nothing and brings the lost-connection line, an answer rebuilds, and its 409 with endsPage ends the page with no rebuild and no further line (${lines.length} warning lines in all)`);
 			} else {
 				await runUntil(() => tries >= 2, "this computer ladder: Home's socket was not rebuilt");
 				assert(reads() === readsBefore, `this computer ladder: the ladder read client-context ${reads() - readsBefore} time(s)`);
@@ -967,7 +1506,9 @@ try {
 			}, "shared phone: a long name pushed Settings off the screen");
 			assert((await page.evaluate(() => document.documentElement.scrollWidth)) <= 390, "shared phone: a long name made the page scroll sideways");
 			assert((await page.locator(".product-sidebar-footer .signed-in-as-name").evaluate((node) => node.scrollWidth > node.clientWidth)), "shared phone: the long name was not cut");
-			pass("shared phone: a long name is cut with an ellipsis and Settings stays on screen");
+			assert(await page.locator(".product-sidebar .product-nav").evaluate((node) => node.scrollWidth <= node.clientWidth), "shared phone: with Sign out in the footer, the top bar's tabs are cut (the nav has to scroll)");
+			assert(await page.locator(".product-sidebar-footer .signed-in-as-scope").isVisible(), "shared phone: the scope line is not on screen");
+			pass("shared phone: a long name is cut with an ellipsis, Settings stays on screen, and Sign out with its scope line leaves the tabs whole");
 			await closeContext(context);
 		}
 
@@ -1232,16 +1773,22 @@ try {
 
 			// A sign-in that ended, with the page already sent to sign in a moment ago (it does not go twice
 			// within 15 s): the first failed attempt says so at once, with a way to sign in, and the lost line never shows.
-			const again = await openWithDroppableConnection(browser, true, true, async (context) => {
-				await context.addInitScript(() => { if (!sessionStorage.getItem("exxperts-auth-redirect")) sessionStorage.setItem("exxperts-auth-redirect", String(Date.now() + 60_000)); });
-			});
-			await until(() => again.isLive(), "signed out: the page's live connection never opened");
-			again.drop();
-			await again.opened.page.getByText(SIGNED_OUT_LINE, { exact: true }).waitFor({ timeout: 8000 });
-			assert((await again.opened.page.locator(".connection-lost-banner a").getAttribute("href")) === "/", "signed out: the line has no way to sign in");
-			assert((await again.opened.page.getByText(/lost its connection/).count()) === 0, "signed out: the lost-connection line shows beside it");
-			pass("a sign-in that ended inside the no-second-redirect window: the page says it, at the first failed attempt, with a link to sign in");
-			await closeContext(again.opened.context);
+			// Sign in again goes to the server's sign-out link when it sends one (a session ended on another device keeps
+			// this browser's cookie, which only the full sign-out clears), and to "/" when it sends none.
+			for (const signOut of [undefined, SIGN_OUT_LINK]) {
+				const where = signOut ? "with the server's sign-out link" : "with no sign-out link";
+				const again = await openWithDroppableConnection(browser, true, true, async (context) => {
+					await context.addInitScript(() => { if (!sessionStorage.getItem("exxperts-auth-redirect")) sessionStorage.setItem("exxperts-auth-redirect", String(Date.now() + 60_000)); });
+				}, { person: MEMBER, signOut });
+				await until(() => again.isLive(), `B1 signed out ${where}: the page's live connection never opened`);
+				again.drop();
+				await again.opened.page.getByText(SIGNED_OUT_LINE, { exact: true }).waitFor({ timeout: 8000 });
+				const href = await again.opened.page.locator(".connection-lost-banner a").getAttribute("href");
+				assert(href === (signOut ?? "/"), `B1 signed out ${where}: Sign in again goes to ${JSON.stringify(href)}, not ${signOut ? "the server's sign-out link" : "/"}`);
+				assert((await again.opened.page.getByText(/lost its connection/).count()) === 0, `B1 signed out ${where}: the lost-connection line shows beside it`);
+				pass(`a sign-in that ended inside the no-second-redirect window, ${where}: the page says it at the first failed attempt, Sign in again going to ${signOut ? "the server's sign-out link" : "/"}`);
+				await closeContext(again.opened.context);
+			}
 		}
 
 		// --- A room's connection lost for longer than two minutes (the clock runs on, so it takes seconds) ---
@@ -1448,7 +1995,7 @@ try {
 			// Room settings, Model, with no provider ready.
 			noProviders = true;
 			await enterRoom(page, "Beta Room");
-			await page.locator('button.icon-btn[aria-label="Room settings"]').click();
+			await page.locator(".topbar-actions").getByRole("button", { name: "Room settings", exact: true }).click();
 			await page.locator(".settings-dialog-nav button").filter({ hasText: "Model" }).first().click();
 			await page.locator(".room-model-pick:not(:disabled)").first().click();
 			const empty = (await page.locator(".room-model-menu-empty").innerText()).trim();
@@ -1462,7 +2009,7 @@ try {
 				await closeSettings(page);
 				await enterRoom(page, room);
 				noFolderRead = failRead;
-				await page.locator('button.icon-btn[aria-label="Room settings"]').click();
+				await page.locator(".topbar-actions").getByRole("button", { name: "Room settings", exact: true }).click();
 				await page.locator(".settings-dialog-nav button").filter({ hasText: "Archive or delete" }).first().click();
 				const dangerZone = page.locator(".room-danger-zone");
 				const said = linked ? "are deleted. The folder you linked is not touched. This cannot be undone." : "are deleted. This cannot be undone.";
@@ -1503,6 +2050,82 @@ try {
 			await closeContext(context);
 		}
 
+		// --- sharedServer: true, the Wallet's address: the sentence, and no usage read, the first load included ---
+		for (const [who, person] of [["a member", MEMBER], ["the admin", ADMIN]] as const) {
+			const opened = await openApp(browser, true, undefined, { person, signOut: SIGN_OUT_LINK });
+			const { context, page, probe, asked } = opened;
+			await firstLoadOfWalletHeld(opened);
+			assert(!asked.includes(USAGE_READ), `shared Wallet, ${who}: usage was read before the page knew the server was shared`);
+			assert((await page.locator(".dashboard").innerText()).trim() === "Loading…", `shared Wallet, ${who}: the page before the answer reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
+			probe.release();
+			await page.getByText(WALLET_HELD_BACK, { exact: true }).waitFor({ timeout: 10000 });
+			await settled(opened);
+			assert((await page.locator(".dashboard").innerText()).trim() === WALLET_HELD_BACK, `shared Wallet, ${who}: the page reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
+			assert(!asked.includes(USAGE_READ), `shared Wallet, ${who}: the page read usage`);
+			assert((await walletLine(page)) === "What your exxperts cost.", `shared Wallet, ${who}: the line reads ${JSON.stringify(await walletLine(page))}`);
+			// Mounted again with the answer already known: the sentence at once, still no read.
+			await page.goto(`${baseUrl}/#/`);
+			await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
+			await page.goto(`${baseUrl}/#/dashboard`);
+			await page.getByText(WALLET_HELD_BACK, { exact: true }).waitFor({ timeout: 10000 });
+			await settled(opened);
+			assert(!asked.includes(USAGE_READ), `shared Wallet, ${who}: the page read usage on coming back to the address`);
+			pass(`shared: the Wallet's address, for ${who}, shows the one sentence and never reads usage, before the answer, after it and on coming back`);
+			await closeContext(context);
+		}
+
+		// --- sharedServer: true, the first read fails: not knowing is not this computer, so still no usage read ---
+		{
+			const opened = await openApp(browser, true, undefined, { person: MEMBER, signOut: SIGN_OUT_LINK });
+			const { context, page, probe, asked, reads } = opened;
+			await page.goto("about:blank");
+			probe.fail = true;
+			asked.length = 0;
+			const before = reads();
+			await page.goto(`${baseUrl}/#/dashboard`);
+			await page.locator(".dashboard").waitFor({ timeout: 10000 });
+			await settled(opened);
+			assert(!asked.includes(USAGE_READ), "shared Wallet, a failed first read: the page read usage");
+			await until(() => reads() >= before + 2, "shared Wallet, a failed first read: the page did not ask client-context again");
+			await settled(opened);
+			assert(!asked.includes(USAGE_READ), "shared Wallet, a failed first read: the page read usage while it asked again");
+			assert((await page.locator(".dashboard").innerText()).trim() === "Loading…", `shared Wallet, a failed first read: the page reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
+			probe.fail = false;
+			await page.getByText(WALLET_HELD_BACK, { exact: true }).waitFor({ timeout: 20000 });
+			await settled(opened);
+			assert(!asked.includes(USAGE_READ), "shared Wallet, a failed first read: the page read usage once the answer came");
+			pass("shared: after a failed first read the Wallet's address reads no usage, asks again, and shows the sentence once the answer comes");
+			await closeContext(context);
+		}
+
+		// --- sharedServer: false, the Wallet's address: the neighbour of the rows above, through the same count ---
+		{
+			const opened = await openApp(browser, false);
+			const { context, page, probe, asked } = opened;
+			await firstLoadOfWalletHeld(opened);
+			assert(!asked.includes(USAGE_READ), "this computer's Wallet: usage was read before the page knew which server this is");
+			probe.release();
+			await page.locator(".dashboard .export-btn").waitFor({ timeout: 10000 });
+			assert(asked.includes(USAGE_READ), "this computer's Wallet: the Wallet shows, but its read was not counted: the shared rows prove nothing");
+			assert((await page.getByText(WALLET_HELD_BACK, { exact: true }).count()) === 0, "this computer's Wallet: the shared server's sentence is shown");
+			assert((await walletLine(page)) === "What your exxperts cost, locally measured.", `this computer's Wallet: the line reads ${JSON.stringify(await walletLine(page))}`);
+			await closeContext(context);
+			// A failed read holds the Wallet back here too, and the next answer opens it.
+			const failed = await openApp(browser, false);
+			await failed.page.goto("about:blank");
+			failed.probe.fail = true;
+			failed.asked.length = 0;
+			await failed.page.goto(`${baseUrl}/#/dashboard`);
+			await failed.page.locator(".dashboard").waitFor({ timeout: 10000 });
+			await settled(failed);
+			assert(!failed.asked.includes(USAGE_READ), "this computer's Wallet: usage was read after a failed read of client-context");
+			failed.probe.fail = false;
+			await failed.page.locator(".dashboard .export-btn").waitFor({ timeout: 20000 });
+			assert(failed.asked.includes(USAGE_READ), "this computer's Wallet: the Wallet shows after the failed read, but its read was not counted");
+			await closeContext(failed.context);
+			pass("this computer: the Wallet waits for the answer, then reads usage and shows, and after a failed read the next answer opens it");
+		}
+
 		// --- sharedServer: false, every control as today ---
 		{
 			const { context, page } = await openApp(browser, false);
@@ -1539,9 +2162,10 @@ try {
 			await enterRoom(page, "Bash Room");
 			assert((await page.locator(".bash-mode-chip").count()) === 1, "this computer: the Bash chip is missing");
 			await openRoomWorkspace(page);
-			for (const label of ["Edit", "Clear"]) {
-				assert((await page.locator(".room-workspace-section button").filter({ hasText: label }).count()) === 1, `this computer: ${label} is missing`);
-			}
+			const folderPane = page.locator(".room-workspace-section");
+			await folderPane.getByRole("switch", { name: COMMANDS, exact: true }).waitFor({ timeout: 10_000 });
+			assert((await folderPane.getByRole("switch", { name: CAN_CHANGE_FILES, exact: true }).count()) === 1, "this computer: Can change files is missing");
+			assert((await folderPane.getByRole("button", { name: STOP_USING_FOLDER }).count()) === 1 && (await folderPane.getByRole("button", { name: CHANGE_FOLDER }).count()) === 1, "this computer: Change folder or Stop using is missing");
 			await closeSettings(page);
 			await enterRoom(page, "Alpha Room");
 			await openRoomWorkspace(page);
@@ -1549,8 +2173,8 @@ try {
 			assert((await countText(page, ".room-workspace-section", NO_FOLDER_LINE)) === 0, "this computer: the shared-server folder line is shown");
 			await closeSettings(page);
 			await openShelfFile(page);
-			assert((await page.locator(".artifact-viewer-quiet").filter({ hasText: "Save…" }).count()) === 1, "this computer: Save… is missing");
-			pass("this computer: rooms offer the Bash chip, the folder editor, Choose folder and Save…");
+			assert((await page.locator(".artifact-viewer-quiet").filter({ hasText: /^\s*Save\s*$/ }).count()) === 1, "this computer: Save is missing");
+			pass("this computer: rooms offer the Bash chip, the Folder pane's controls, Choose folder and Save");
 			await closeContext(context);
 		}
 	} finally {

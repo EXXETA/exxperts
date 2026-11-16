@@ -1,5 +1,7 @@
+import { ALSO_ALLOWED_LOAD_FAILED } from "../../web-server/src/room-box/card-text";
 import { apiFetch } from "./api";
 import type {
+	PersistentRoomProtection,
 	PersistentRoomWorkspaceDefaultInput,
 	PersistentRoomWorkspaceDefaultResponse,
 	SystemChooseFolderResponse,
@@ -72,13 +74,18 @@ export async function clearPersistentRoomWorkspaceDefault(agentId: string): Prom
 }
 
 /** What the folder is for; the server turns it into the line the native dialog shows. */
-export type SystemChooseFolderPurpose = "workspace" | "data-folder";
+export type SystemChooseFolderPurpose = "workspace" | "data-folder" | "save-to";
 
-export async function chooseSystemFolder(purpose: SystemChooseFolderPurpose = "workspace"): Promise<SystemChooseFolderResponse> {
+/** The route's codes for a computer with no folder window: the path is typed instead. */
+export const NO_FOLDER_WINDOW_CODES: ReadonlySet<string> = new Set(["unsupported_platform", "folder_chooser_unavailable"]);
+
+/** Waits as long as the window is open; `signal` closes it. */
+export async function chooseSystemFolder(purpose: SystemChooseFolderPurpose = "workspace", signal?: AbortSignal): Promise<SystemChooseFolderResponse> {
 	return fetchJson<SystemChooseFolderResponse>(
 		"/api/system/choose-folder",
 		{
 			method: "POST",
+			...(signal ? { signal } : {}),
 			headers: {
 				"Content-Type": "application/json",
 				"X-Exxperts-Local-Action": "choose-folder",
@@ -87,4 +94,58 @@ export async function chooseSystemFolder(purpose: SystemChooseFolderPurpose = "w
 		},
 		"Folder chooser failed. Enter the path manually."
 	);
+}
+
+/** One folder on a room's Also allowed list. A page away from the computer gets no path. */
+export interface AlsoAllowedFolderView {
+	name: string;
+	access: "read" | "write";
+	path?: string;
+	/** Whether Allow changes can widen this Can read folder. */
+	canAllowChanges: boolean;
+}
+export interface AlsoAllowedList {
+	folders: AlsoAllowedFolderView[];
+	sites: { host: string; port: number }[];
+}
+/** What Add a folder… came to: a refused pick carries the line to show. */
+export type AlsoAllowedAddResponse = { list: AlsoAllowedList } & ({ state: "added"; name: string } | { state: "already" | "refused"; line: string } | { state: "unchanged" });
+/** What the cross took off, for its line and Undo; `stillReadThrough` names the row that still lets the room read it. */
+export type AlsoAllowedRemoveResponse = { list: AlsoAllowedList; stillReadThrough?: string; removed: { kind: "folder"; name: string; path: string; access: "read" | "write" } | { kind: "site"; host: string; port: number } };
+/** A list entry by what the server knows it by: a folder's path, or a site's host and port. */
+export type AlsoAllowedEntryName = { path: string } | { host: string; port: number };
+
+function alsoAllowedUrl(agentId: string, tail = ""): string {
+	return `/api/persistent-agents/${encodeURIComponent(agentId)}/also-allowed${tail}`;
+}
+
+const postJson = (body: unknown): RequestInit => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+export async function fetchAlsoAllowed(agentId: string): Promise<AlsoAllowedList> {
+	return fetchJson<AlsoAllowedList>(alsoAllowedUrl(agentId), undefined, ALSO_ALLOWED_LOAD_FAILED);
+}
+
+/** Add a folder…: the server opens the computer's own folder window; the page sends no path. */
+export async function addAlsoAllowedFolder(agentId: string): Promise<AlsoAllowedAddResponse> {
+	const asked = postJson({});
+	// The server opens its window only for the app's own page.
+	return fetchJson<AlsoAllowedAddResponse>(alsoAllowedUrl(agentId, "/folders"), { ...asked, headers: { ...(asked.headers as Record<string, string>), "X-Exxperts-Local-Action": "choose-folder" } });
+}
+
+export async function setAlsoAllowedAccess(agentId: string, path: string, access: "read" | "write"): Promise<{ list: AlsoAllowedList }> {
+	return fetchJson<{ list: AlsoAllowedList }>(alsoAllowedUrl(agentId, "/access"), postJson({ path, access }));
+}
+
+export async function removeAlsoAllowed(agentId: string, entry: AlsoAllowedEntryName): Promise<AlsoAllowedRemoveResponse> {
+	return fetchJson<AlsoAllowedRemoveResponse>(alsoAllowedUrl(agentId, "/remove"), postJson(entry));
+}
+
+/** Undo after the cross: the server puts back what it kept. */
+export async function restoreAlsoAllowed(agentId: string, entry: AlsoAllowedEntryName): Promise<{ list: AlsoAllowedList }> {
+	return fetchJson<{ list: AlsoAllowedList }>(alsoAllowedUrl(agentId, "/restore"), postJson(entry));
+}
+
+/** Turn off (after its confirm) or Turn on, from the Folder pane at the computer. The answer is the room's protection now. */
+export async function setPersistentRoomProtection(agentId: string, state: "on" | "off"): Promise<{ agentId: string; protection?: PersistentRoomProtection }> {
+	return fetchJson<{ agentId: string; protection?: PersistentRoomProtection }>(`/api/persistent-agents/${encodeURIComponent(agentId)}/protection`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state }) });
 }

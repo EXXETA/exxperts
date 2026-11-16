@@ -413,9 +413,9 @@ try {
 	const noRoom = await exportArtifact("tsk-export1", "tasks/tsk-export1/diagram.svg", "");
 	assert(noRoom.status === 400, `missing roomId export: expected 400, got ${noRoom.status}: ${JSON.stringify(noRoom.body)}`);
 
-	// 8. Thread-effective policy (hardening pass): a conversation with a thread
-	//    workspace override exports into ITS workspace; without a conversationId
-	//    (or with one that has no override) the room default still applies.
+	// 8. A conversation's own settings, which only older versions wrote, give way
+	//    to the room's: its export lands in the room's folder, as one without a
+	//    conversationId, or with one that has none, does.
 	const THREAD_ID = "pi_export_0001";
 	const threadWorkspaceRoot = path.join(tempHome, "thread-workspace");
 	fs.mkdirSync(threadWorkspaceRoot, { recursive: true });
@@ -434,8 +434,8 @@ try {
 	const threadWorkspaceReal = fs.realpathSync.native(threadWorkspaceRoot);
 	const threadScoped = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, THREAD_ID);
 	assert(threadScoped.status === 200, `thread-scoped export: expected 200, got ${threadScoped.status}: ${JSON.stringify(threadScoped.body)}`);
-	assert(String(threadScoped.body?.savedTo ?? "") === path.join(threadWorkspaceReal, "notes.md"), `thread-scoped export must land in the THREAD workspace, got "${threadScoped.body?.savedTo}"`);
-	assert(!fs.existsSync(path.join(workspaceRealRoot, "notes.md")), "thread-scoped export must not land in the room-default workspace");
+	assert(String(threadScoped.body?.savedTo ?? "") === path.join(workspaceRealRoot, "notes.md"), `a conversation with its own older settings must export into the room's folder, got "${threadScoped.body?.savedTo}"`);
+	assert(!fs.existsSync(path.join(threadWorkspaceReal, "notes.md")), "a conversation's own older folder must not take the export");
 	const defaultScoped = await exportArtifact("tsk-export1", "tasks/tsk-export1/diagram.svg", ROOM_WITH_WORKSPACE);
 	assert(defaultScoped.status === 200 && String(defaultScoped.body?.savedTo ?? "") === path.join(workspaceRealRoot, "diagram.svg"), `no-conversation export must use the room default, got ${JSON.stringify(defaultScoped.body)}`);
 	fs.writeFileSync(path.join(taskDir, "extra.md"), "extra");

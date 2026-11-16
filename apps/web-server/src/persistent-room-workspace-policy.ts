@@ -6,14 +6,25 @@ import {
 	type PersistentRoomWorkspaceToolSelection,
 	normalizePersistentRoomWorkspaceToolSelectionInput,
 	normalizeStoredPersistentRoomWorkspaceToolSelection,
+	PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES,
+	persistentRoomFoldedToolSelection,
 	persistentRoomWorkspaceToolNamesForPolicy,
 	persistentRoomWorkspaceToolNamesForSelection,
 	persistentRoomWorkspaceToolSelectionViewForPolicy,
 } from "./persistent-room-tool-policy.js";
 import { productAppStatePath, productAppStateRoot, stateHome } from "../../../pi-package/product-state-paths.js";
+import { readPersistentRoomBashSettings, storeRunWithoutAskingAsOwn } from "./persistent-room-bash-settings.js";
+import { type PersistentRoomProtection, persistentRoomProtection, persistentRoomProtectionCanRun } from "./persistent-room-protection.js";
 import { serverHooks } from "./server-hooks.js";
 
 export type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
+/**
+ * How a room's commands stand, in one field. `automatic`: on by the start-on
+ * default of a room made where its protection runs, honoured only while it does.
+ * `on`: the person turned them on. `off`: never on. `switched-off`: the person
+ * switched them off, so the room never asks for them on a card.
+ */
+export type PersistentRoomCommands = "automatic" | "on" | "off" | "switched-off";
 export type PersistentRoomWorkspaceRootSource = "manual" | "query-param" | "runtime-state" | "admin-dev";
 export type PersistentRoomForbiddenRootKind = "repo-root" | "persistent-agents-root" | "persistent-agent-root" | "exxeta-state-root";
 
@@ -49,7 +60,9 @@ export interface PersistentRoomCapabilityPolicy {
 	modes: { read: boolean; write: boolean };
 	allowedToolNames: string[];
 	toolSelection?: PersistentRoomWorkspaceToolSelection;
+	/** Whether `commands` is on or automatic. On disk it is always false, for an older app (`storedPolicyBody`). */
 	bashEnabled?: boolean;
+	commands?: PersistentRoomCommands;
 	deniedRoots: PersistentRoomDeniedRootView[];
 	denySegments: string[];
 	denyFilenameGlobs: string[];
@@ -143,8 +156,8 @@ export interface CreatePersistentRoomCapabilityPolicyInput extends PersistentRoo
 }
 
 export type CreatePersistentRoomDefaultCapabilityPolicyInput = Omit<CreatePersistentRoomCapabilityPolicyInput, "conversationId">;
-export type PersistentRoomCapabilityPolicyResolutionSource = "thread" | "room-default" | "none";
-export type PersistentRoomEffectiveWorkspacePolicySource = "thread" | "room-default" | "none";
+export type PersistentRoomCapabilityPolicyResolutionSource = "room-default" | "none";
+export type PersistentRoomEffectiveWorkspacePolicySource = "room-default" | "none";
 
 export interface PersistentRoomCapabilityPolicyResolution {
 	policy: PersistentRoomCapabilityPolicy | null;
@@ -159,6 +172,8 @@ export interface PersistentRoomWorkspaceCapabilitySummary {
 	availableToolNames: string[];
 	writeEnabled: boolean;
 	bashEnabled: boolean;
+	/** Commands can change files whatever Can change files says: they run, and nothing holds them to the room's access. */
+	commandsChangeFiles: boolean;
 	nativePiFilesystemToolsEnabled: boolean;
 }
 
@@ -184,13 +199,15 @@ export const PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE = "persistent-agen
 export const PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID = "room_default";
 export const PERSISTENT_ROOM_DEFAULT_WORKSPACE_ACCESS_MODE: PersistentRoomWorkspaceAccessMode = "localFiles";
 export const PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE: PersistentRoomWorkspaceAccessMode = "bounded";
-// `.pi` and `.mcp.json` hold tool and connector settings, not documents: a
-// bounded room neither reads nor writes them.
+// `.pi` holds tool settings, not documents: no room opens it.
 export const PERSISTENT_ROOM_APP_STATE_SEGMENTS = [".exxeta", ".exxperts", ".pi"] as const;
+// What a new policy stores. The file fence (room-files.ts) closes only what a
+// stored policy lists beyond these, so `.git` and `node_modules` read and
+// `.mcp.json` reads but never changes, in policies stored before too.
 export const PERSISTENT_ROOM_DEFAULT_DENY_SEGMENTS = [".git", ...PERSISTENT_ROOM_APP_STATE_SEGMENTS, "node_modules"] as const;
 export const PERSISTENT_ROOM_DEFAULT_DENY_FILENAME_GLOBS = [".env", ".env.*", "*.pem", "*.key", "id_rsa", "id_ed25519", ".mcp.json"] as const;
-// Keynote saves a deck as a folder or a zip named `*.key`: Full access rooms
-// open such a folder, and a file of that name only when it is a zip.
+// Keynote saves a deck as a folder or a zip named `*.key`: rooms open such a
+// folder, and a file of that name only when it is a zip.
 export const PERSISTENT_ROOM_ZIP_OPENS_FILENAME_GLOBS = ["*.key"] as const;
 // Committed templates that hold no secrets, although `.env.*` matches them.
 export const PERSISTENT_ROOM_SECRET_FILENAME_TEMPLATES = [".env.example", ".env.sample", ".env.template", ".env.dist"] as const;
@@ -495,9 +512,174 @@ function persistentRoomNativePiFilesystemToolsEnabledForMode(mode: PersistentRoo
 	return mode === "localFiles";
 }
 
-function normalizePersistentRoomBashEnabled(raw: unknown, workspaceAccessMode: PersistentRoomWorkspaceAccessMode): boolean {
-	return workspaceAccessMode === "localFiles" && raw === true;
+/**
+ * The room's access as stored: `access` is this version's own field, and an
+ * older app drops it when it saves the room, so its `workspaceAccessMode` is
+ * read then, on every read. An unknown old value drops the folder either way.
+ */
+function storedPersistentRoomWorkspaceAccessMode(raw: { access?: unknown; workspaceAccessMode?: unknown }): PersistentRoomWorkspaceAccessMode | null {
+	const older = normalizeStoredPersistentRoomWorkspaceAccessMode(raw.workspaceAccessMode);
+	if (older === null) return null;
+	return raw.access === "bounded" || raw.access === "localFiles" ? raw.access : older;
 }
+
+/**
+ * How the room's commands stand as stored, read leniently. This version keeps
+ * them in `commands` and never sets `bashEnabled`; an older app writes
+ * `bashEnabled` and drops `commands`, so its Bash on reads as on, every time.
+ */
+function storedPersistentRoomCommands(rawCommands: unknown, rawBashEnabled: unknown, workspaceAccessMode: PersistentRoomWorkspaceAccessMode): PersistentRoomCommands {
+	if (workspaceAccessMode === "localFiles" && (rawBashEnabled === true || rawCommands === "on" || rawCommands === "automatic")) return rawCommands === "automatic" ? "automatic" : "on";
+	return rawCommands === "switched-off" ? "switched-off" : "off";
+}
+
+/**
+ * A policy as it goes to disk. An older app reads only `workspaceAccessMode`
+ * and `bashEnabled`, so they say Bounded and off: there its file tools keep to
+ * the folder and no command runs. This version reads `access` and `commands`.
+ */
+function storedPolicyBody(policy: PersistentRoomCapabilityPolicy): string {
+	const stored = { ...policy, workspaceAccessMode: "bounded", access: policy.workspaceAccessMode, bashEnabled: false, commands: persistentRoomCommandsOf(policy) };
+	return JSON.stringify(stored, null, 2) + "\n";
+}
+
+function writePolicyFile(file: string, policy: PersistentRoomCapabilityPolicy): void {
+	ensurePrivateDir(path.dirname(file));
+	const temporary = `${file}.${process.pid}.tmp`;
+	fs.writeFileSync(temporary, storedPolicyBody(policy), { mode: 0o600 });
+	fs.renameSync(temporary, file);
+}
+
+/** Whether a stored policy is in this version's shape, as `storedPolicyBody` writes it. */
+function storedForOlderApp(raw: any): boolean {
+	return raw?.workspaceAccessMode === "bounded" && raw.bashEnabled === false && (raw.access === "bounded" || raw.access === "localFiles");
+}
+
+/**
+ * A room an older app saved keeps its old fields in every file this version
+ * hasn't written since. Any write or removal here rewrites the room's other settings in
+ * this version's fields, each as it reads now: the room's own, each
+ * conversation's and how commands are answered. So a room changed here, by
+ * whichever control, never runs commands or reaches past its folder in an
+ * older app. A cut halfway leaves old fields, which every read still maps.
+ */
+export function storeRoomInOwnFields(agentIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): void {
+	const agentId = safePolicyFileId(agentIdRaw, "agent id");
+	const conversationFiles = fs.existsSync(workspacePolicyDir(agentId, options)) ? fs.readdirSync(workspacePolicyDir(agentId, options)).filter((name) => name.endsWith(".json")) : [];
+	const places: Array<[string, string]> = [
+		[persistentRoomWorkspaceDefaultPath(agentId, options), PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID],
+		...conversationFiles.map((name): [string, string] => [path.join(workspacePolicyDir(agentId, options), name), name.slice(0, -".json".length)]),
+	];
+	for (const [file, conversationId] of places) {
+		const raw = fs.existsSync(file) ? readJson(file) : null;
+		if (raw === null || storedForOlderApp(raw)) continue;
+		const policy = normalizePersistentRoomCapabilityPolicy(raw, agentId, conversationId);
+		if (policy) writePolicyFile(file, policy);
+	}
+	storeRunWithoutAskingAsOwn(agentId, options);
+}
+
+/** Whether the room's commands run on this computer: an automatic yes holds only where the room's protection can run, turned off by the person or not. */
+export function persistentRoomCommandsRun(commands: PersistentRoomCommands, agentId: string): boolean {
+	return commands === "on" || (commands === "automatic" && persistentRoomProtectionCanRun(agentId));
+}
+
+/** Whether a room's commands could run at all: on a computer with no box only while the room can change files, since there a command can change any file. */
+export function persistentRoomCommandsCanRun(policy: PersistentRoomCapabilityPolicy): boolean {
+	const protection = persistentRoomProtection(policy.agentId);
+	return policy.modes.write || !(protection.state === "off" && protection.cause === "computer");
+}
+
+/** Whether a policy's commands run now: as stored, where they could run at all. */
+function persistentRoomPolicyCommandsRun(policy: PersistentRoomCapabilityPolicy): boolean {
+	return persistentRoomCommandsRun(persistentRoomCommandsOf(policy), policy.agentId) && persistentRoomCommandsCanRun(policy);
+}
+
+/** How a stored policy's commands stand. */
+export function persistentRoomCommandsOf(policy: PersistentRoomCapabilityPolicy): PersistentRoomCommands {
+	return storedPersistentRoomCommands(policy.commands, policy.bashEnabled, policy.workspaceAccessMode ?? PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE);
+}
+
+function withCommands(commands: PersistentRoomCommands): { bashEnabled: boolean; commands: PersistentRoomCommands } {
+	return { bashEnabled: commands === "on" || commands === "automatic", commands };
+}
+
+/**
+ * The Commands switch as the page sends it with every save, against how they
+ * stood: on as it was keeps an automatic yes automatic, and only on to off in
+ * Full access is the person switching them off; Bounded turns them off with it.
+ * A switched-off room stays so until she turns them on.
+ */
+function commandsAfterSwitch(agentId: string, before: PersistentRoomCommands, bashEnabled: boolean, workspaceAccessMode: PersistentRoomWorkspaceAccessMode): PersistentRoomCommands {
+	const running = persistentRoomCommandsRun(before, agentId);
+	if (bashEnabled) return before === "automatic" && running ? "automatic" : "on";
+	return running && workspaceAccessMode === "localFiles" ? "switched-off" : before;
+}
+
+/**
+ * A commands card's yes: where the room is protected it was given under the
+ * card's promise that commands stay inside the room, so it holds only where
+ * the protection can run; elsewhere it was Turn on anyway, the person's own.
+ */
+export function withCommandsFromCard(policy: PersistentRoomCapabilityPolicy, now = new Date()): PersistentRoomCapabilityPolicy {
+	const workspaceAccessMode = policy.workspaceAccessMode ?? PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE;
+	const automatic = persistentRoomProtection(policy.agentId).state === "on";
+	return { ...policy, ...withCommands(storedPersistentRoomCommands(automatic ? "automatic" : "on", true, workspaceAccessMode)), updatedAt: now.toISOString() };
+}
+
+/** Whether the person switched the room's commands off, which every conversation of it follows. */
+export function persistentRoomCommandsSwitchedOff(agentId: string, _conversationId: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): boolean {
+	const policy = readPersistentRoomDefaultCapabilityPolicy(agentId, options);
+	return policy !== null && persistentRoomCommandsOf(policy) === "switched-off";
+}
+
+/** Present in a room made where its protection runs, until its first folder is saved: that folder's commands start on. */
+function commandsStartOnPath(agentId: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): string {
+	return path.join(workspaceRuntimeDir(safePolicyFileId(agentId, "agent id"), options), "commands-start-on.json");
+}
+
+/**
+ * Whether a room with no folder will run commands without asking once one is
+ * chosen with the switch untouched: a new room's start-on default, or how Clear
+ * kept them. Never where that folder will only
+ * read: protected, its commands only read too, and elsewhere they don't run.
+ */
+export function persistentRoomCommandsStartOn(agentId: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): boolean {
+	if (readPersistentRoomDefaultCapabilityPolicy(agentId, options) !== null) return false;
+	const kept = readKeptForNextFolder(agentId, options);
+	if (!untouchedCanChangeFiles(null, kept.canChangeFiles)) return false;
+	const commands = untouchedCommands(kept.commands, fs.existsSync(commandsStartOnPath(agentId, options)));
+	return persistentRoomCommandsRun(commands, agentId) && readPersistentRoomBashSettings(agentId, options).autoApprove;
+}
+
+/** A folder's commands when the save leaves the switch untouched: as they stood, or for a room's first folder its start-on default. */
+function untouchedCommands(before: PersistentRoomCommands | null, startsOn: boolean): PersistentRoomCommands {
+	return before ?? (startsOn ? "automatic" : "off");
+}
+
+/** Whether a folder saved without a tool choice can change files: as the room's folder can, else as Clear kept it, else yes (a new room's first folder, or a kept file from before the field). */
+function untouchedCanChangeFiles(previous: PersistentRoomCapabilityPolicy | null, kept: boolean | null): boolean {
+	return previous ? previous.modes.write : kept !== false;
+}
+
+/** Present after Clear: how the room's commands stood and whether it could change files, which its next folder keeps. Removed when that folder is saved. */
+function keptCommandsPath(agentId: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): string {
+	return path.join(workspaceRuntimeDir(safePolicyFileId(agentId, "agent id"), options), "commands-kept.json");
+}
+
+type KeptForNextFolder = { commands: PersistentRoomCommands | null; canChangeFiles: boolean | null };
+
+function readKeptForNextFolder(agentId: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): KeptForNextFolder {
+	const raw = readJson(keptCommandsPath(agentId, options));
+	const commands = raw?.commands;
+	return {
+		commands: commands === "automatic" || commands === "on" || commands === "off" || commands === "switched-off" ? commands : null,
+		canChangeFiles: typeof raw?.canChangeFiles === "boolean" ? raw.canChangeFiles : null,
+	};
+}
+
+/** The file a new room is made with where its protection runs, relative to the room's folder. */
+export const PERSISTENT_ROOM_COMMANDS_START_ON_FILE = "runtime/commands-start-on.json";
 
 /** The single source of truth for "this room can make changes": a writer tool
  * is in the selection. Everything that reports or stores a write capability
@@ -516,10 +698,10 @@ function normalizePersistentRoomCapabilityPolicy(raw: any, agentId: string, conv
 	const createdAt = String(raw.createdAt ?? "").trim();
 	const updatedAt = String(raw.updatedAt ?? "").trim();
 	const policyId = String(raw.policyId ?? "").trim();
-	const workspaceAccessMode = normalizeStoredPersistentRoomWorkspaceAccessMode(raw.workspaceAccessMode);
+	const workspaceAccessMode = storedPersistentRoomWorkspaceAccessMode(raw);
 	const toolSelection = workspaceAccessMode === null ? null : normalizeStoredPersistentRoomWorkspaceToolSelection(raw.toolSelection, workspaceAccessMode);
 	if (!policyId || !createdAt || !updatedAt || workspaceAccessMode === null || toolSelection === null) return null;
-	const bashEnabled = normalizePersistentRoomBashEnabled(raw.bashEnabled, workspaceAccessMode);
+	const commands = storedPersistentRoomCommands(raw.commands, raw.bashEnabled, workspaceAccessMode);
 	const policy: PersistentRoomCapabilityPolicy = {
 		schemaVersion: 1,
 		policyId,
@@ -530,7 +712,7 @@ function normalizePersistentRoomCapabilityPolicy(raw: any, agentId: string, conv
 		modes: { read: raw.modes?.read === true, write: false },
 		allowedToolNames: Array.isArray(raw.allowedToolNames) ? raw.allowedToolNames.map(String).filter(Boolean) : [],
 		...(toolSelection ? { toolSelection } : {}),
-		bashEnabled,
+		...withCommands(commands),
 		deniedRoots: deniedRoots as PersistentRoomDeniedRootView[],
 		denySegments: Array.isArray(raw.denySegments) ? raw.denySegments.map(String).filter(Boolean) : [],
 		denyFilenameGlobs: Array.isArray(raw.denyFilenameGlobs) ? raw.denyFilenameGlobs.map(String).filter(Boolean) : [],
@@ -544,20 +726,36 @@ function normalizePersistentRoomCapabilityPolicy(raw: any, agentId: string, conv
 	return policy;
 }
 
-export function readPersistentRoomCapabilityPolicy(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicy | null {
-	const agentId = safePolicyFileId(agentIdRaw, "agent id");
-	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
-	const file = persistentRoomWorkspacePolicyPath(agentId, conversationId, options);
-	if (!fs.existsSync(file)) return null;
-	return normalizePersistentRoomCapabilityPolicy(readJson(file), agentId, conversationId);
+/**
+ * A stored policy as this version runs it, on every read: one access, where
+ * commands alone differ, and the Folder pane's file tools. A Bounded room's
+ * file tools stopped where every room's stop (room-files.ts), and its commands
+ * never ran: they read switched off, so the room never asks for them until the
+ * person turns them on. Nothing is stored until the person changes the room.
+ */
+function foldedPersistentRoomPolicy(policy: PersistentRoomCapabilityPolicy): PersistentRoomCapabilityPolicy | null {
+	const toolSelection = persistentRoomFoldedToolSelection(persistentRoomWorkspaceToolNamesForPolicy(policy));
+	if (toolSelection === null) return null;
+	const allowedToolNames = persistentRoomWorkspaceToolNamesForSelection(toolSelection, "localFiles");
+	const commands = policy.workspaceAccessMode === "bounded" ? "switched-off" : persistentRoomCommandsOf(policy);
+	return { ...policy, workspaceAccessMode: "localFiles", allowedToolNames, toolSelection, modes: { read: true, write: persistentRoomWorkspaceWriterToolsEnabled(allowedToolNames) }, ...withCommands(commands) };
+}
+
+/**
+ * A conversation's own settings, which only older versions wrote, give way to
+ * the room's: none is read. Its file is kept, so that going back can still
+ * find it; the room's next save rewrites it in this version's fields with the
+ * same meaning (`storeRoomInOwnFields`).
+ */
+export function readPersistentRoomCapabilityPolicy(_agentIdRaw: string, _conversationIdRaw: string, _options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicy | null {
+	return null;
 }
 
 export function writePersistentRoomCapabilityPolicy(policy: PersistentRoomCapabilityPolicy, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicy {
 	const agentId = safePolicyFileId(policy.agentId, "agent id");
 	const conversationId = safePolicyFileId(policy.conversationId, "conversation id");
-	const file = persistentRoomWorkspacePolicyPath(agentId, conversationId, options);
-	ensurePrivateDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(policy, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writePolicyFile(persistentRoomWorkspacePolicyPath(agentId, conversationId, options), policy);
+	storeRoomInOwnFields(agentId, options);
 	return policy;
 }
 
@@ -565,6 +763,7 @@ export function deletePersistentRoomCapabilityPolicy(agentIdRaw: string, convers
 	const file = persistentRoomWorkspacePolicyPath(agentIdRaw, conversationIdRaw, options);
 	if (!fs.existsSync(file)) return { deleted: false };
 	fs.rmSync(file, { force: true });
+	storeRoomInOwnFields(agentIdRaw, options);
 	return { deleted: true };
 }
 
@@ -572,7 +771,8 @@ export function readPersistentRoomDefaultCapabilityPolicy(agentIdRaw: string, op
 	const agentId = safePolicyFileId(agentIdRaw, "agent id");
 	const file = persistentRoomWorkspaceDefaultPath(agentId, options);
 	if (!fs.existsSync(file)) return null;
-	return normalizePersistentRoomCapabilityPolicy(readJson(file), agentId, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID);
+	const stored = normalizePersistentRoomCapabilityPolicy(readJson(file), agentId, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID);
+	return stored && foldedPersistentRoomPolicy(stored);
 }
 
 export function missingPersistentRoomWorkspaceRootWarnings(policy: PersistentRoomCapabilityPolicy | null): string[] {
@@ -589,22 +789,35 @@ export function missingPersistentRoomWorkspaceRootWarnings(policy: PersistentRoo
 export function writePersistentRoomDefaultCapabilityPolicy(policy: PersistentRoomCapabilityPolicy, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicy {
 	const agentId = safePolicyFileId(policy.agentId, "agent id");
 	if (policy.conversationId !== PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID) throw new Error("room-default workspace policy must use the room-default conversation id");
-	const file = persistentRoomWorkspaceDefaultPath(agentId, options);
-	ensurePrivateDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(policy, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	// An older app's yes moves by the room's commands as they stood, before this save changes them.
+	storeRunWithoutAskingAsOwn(agentId, options);
+	writePolicyFile(persistentRoomWorkspaceDefaultPath(agentId, options), policy);
+	storeRoomInOwnFields(agentId, options);
+	// The first folder took the start-on default, or the commands Clear kept; after a cut here the next save takes them again, which gives the same.
+	fs.rmSync(commandsStartOnPath(agentId, options), { force: true });
+	fs.rmSync(keptCommandsPath(agentId, options), { force: true });
 	return policy;
 }
 
+/** Clear: the folder goes, and how the room's commands stood and whether it could change files are kept, first, for its next folder. */
 export function deletePersistentRoomDefaultCapabilityPolicy(agentIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): { deleted: boolean } {
 	const file = persistentRoomWorkspaceDefaultPath(agentIdRaw, options);
 	if (!fs.existsSync(file)) return { deleted: false };
+	storeRunWithoutAskingAsOwn(agentIdRaw, options);
+	const policy = readPersistentRoomDefaultCapabilityPolicy(agentIdRaw, options);
+	if (policy) {
+		const kept = keptCommandsPath(agentIdRaw, options);
+		const temporary = `${kept}.${process.pid}.tmp`;
+		fs.writeFileSync(temporary, JSON.stringify({ schemaVersion: 1, commands: persistentRoomCommandsOf(policy), canChangeFiles: policy.modes.write }, null, 2) + "\n", { mode: 0o600 });
+		fs.renameSync(temporary, kept);
+	}
 	fs.rmSync(file, { force: true });
+	storeRoomInOwnFields(agentIdRaw, options);
 	return { deleted: true };
 }
 
-export function resolvePersistentRoomCapabilityPolicy(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicyResolution {
-	const threadPolicy = readPersistentRoomCapabilityPolicy(agentIdRaw, conversationIdRaw, options);
-	if (threadPolicy) return { policy: threadPolicy, source: "thread" };
+/** Every conversation of a room runs on the room's own settings. */
+export function resolvePersistentRoomCapabilityPolicy(agentIdRaw: string, _conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicyResolution {
 	const defaultPolicy = readPersistentRoomDefaultCapabilityPolicy(agentIdRaw, options);
 	if (defaultPolicy) return { policy: defaultPolicy, source: "room-default" };
 	return { policy: null, source: "none" };
@@ -726,9 +939,23 @@ export function createPersistentRoomCapabilityPolicy(input: CreatePersistentRoom
 	const now = (input.now ?? new Date()).toISOString();
 	const rootGrant = validatePersistentRoomWorkspaceRoot(input.root, { ...input, agentId, now: new Date(now) });
 	const workspaceAccessMode = normalizePersistentRoomWorkspaceAccessModeInput(input.workspaceAccessMode);
-	const toolSelection = normalizePersistentRoomWorkspaceToolSelectionInput(input.toolSelection, { defaultToStandard: true, workspaceAccessMode });
+	// Left out, a new room's first folder takes the start-on default; sent, it is the person's own choice.
+	// Another folder for the room, or its next one after Clear, keeps how its commands stood, the switched-off mark included,
+	// and, with no tool choice sent, whether it could change files.
+	const isRoomDefault = input.conversationId === PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID;
+	const previous = isRoomDefault ? readPersistentRoomDefaultCapabilityPolicy(agentId, input) : null;
+	const kept: KeptForNextFolder = isRoomDefault ? readKeptForNextFolder(agentId, input) : { commands: null, canChangeFiles: null };
+	const toolSelection: PersistentRoomWorkspaceToolSelection = input.toolSelection === undefined && isRoomDefault
+		? (untouchedCanChangeFiles(previous, kept.canChangeFiles) ? { kind: "standard" } : { kind: "custom", allowedToolNames: [...PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES] })
+		: normalizePersistentRoomWorkspaceToolSelectionInput(input.toolSelection, { defaultToStandard: true, workspaceAccessMode });
 	const selectedToolNames = persistentRoomWorkspaceToolNamesForSelection(toolSelection, workspaceAccessMode);
-	const bashEnabled = normalizePersistentRoomBashEnabled(input.bashEnabled, workspaceAccessMode);
+	const before = previous ? persistentRoomCommandsOf(previous) : kept.commands;
+	const startsOn = isRoomDefault && fs.existsSync(commandsStartOnPath(agentId, input));
+	// Before a new room's first folder the switch shows on: turned off there, the person switched them off.
+	const chosen: PersistentRoomCommands = input.bashEnabled === undefined ? untouchedCommands(before, startsOn)
+		: before !== null ? commandsAfterSwitch(agentId, before, input.bashEnabled, workspaceAccessMode)
+		: input.bashEnabled ? "on" : startsOn && workspaceAccessMode === "localFiles" ? "switched-off" : "off";
+	const commands = storedPersistentRoomCommands(chosen, chosen === "on" || chosen === "automatic", workspaceAccessMode);
 	return {
 		schemaVersion: 1,
 		policyId: `prcp_${crypto.randomUUID()}`,
@@ -742,7 +969,7 @@ export function createPersistentRoomCapabilityPolicy(input: CreatePersistentRoom
 		},
 		allowedToolNames: selectedToolNames,
 		toolSelection,
-		bashEnabled,
+		...withCommands(commands),
 		deniedRoots: persistentRoomDeniedRootViews({ ...input, agentId }),
 		denySegments: [...PERSISTENT_ROOM_DEFAULT_DENY_SEGMENTS],
 		denyFilenameGlobs: [...PERSISTENT_ROOM_DEFAULT_DENY_FILENAME_GLOBS],
@@ -774,14 +1001,15 @@ export function updatePersistentRoomCapabilityPolicyWorkspaceSettings(policy: Pe
 	const workspaceAccessMode = input.workspaceAccessMode ?? previousWorkspaceAccessMode;
 	const selectionInput = input.toolSelection ?? (workspaceAccessMode === previousWorkspaceAccessMode ? policy.toolSelection : undefined) ?? { kind: "standard" };
 	const toolSelection = normalizePersistentRoomWorkspaceToolSelectionInput(selectionInput, { defaultToStandard: true, workspaceAccessMode });
-	const bashInput = Object.prototype.hasOwnProperty.call(input, "bashEnabled") ? input.bashEnabled : policy.bashEnabled;
-	const bashEnabled = normalizePersistentRoomBashEnabled(bashInput, workspaceAccessMode);
+	const before = persistentRoomCommandsOf(policy);
+	const switched = Object.prototype.hasOwnProperty.call(input, "bashEnabled") ? commandsAfterSwitch(policy.agentId, before, input.bashEnabled === true, workspaceAccessMode) : before;
+	const commands = storedPersistentRoomCommands(switched, switched === "on" || switched === "automatic", workspaceAccessMode);
 	return {
 		...policy,
 		workspaceAccessMode,
 		allowedToolNames: persistentRoomWorkspaceToolNamesForSelection(toolSelection, workspaceAccessMode),
 		toolSelection,
-		bashEnabled,
+		...withCommands(commands),
 		updatedAt: now.toISOString(),
 	};
 }
@@ -793,7 +1021,7 @@ export function persistentRoomCapabilityPolicyView(policy: PersistentRoomCapabil
 	const workspaceAccessMode = policy.workspaceAccessMode ?? PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE;
 	const workspaceToolNames = persistentRoomWorkspaceToolNamesForPolicy(policy);
 	const writeEnabled = persistentRoomWorkspaceWriterToolsEnabled(workspaceToolNames);
-	const bashEnabled = normalizePersistentRoomBashEnabled(policy.bashEnabled, workspaceAccessMode);
+	const bashEnabled = persistentRoomPolicyCommandsRun(policy);
 	return {
 		schemaVersion: policy.schemaVersion,
 		policyId: policy.policyId,
@@ -838,9 +1066,12 @@ function fingerprintEffectiveWorkspacePolicy(input: {
 	allowedToolNames: string[];
 	workspaceToolsEnabled: boolean;
 	bashEnabled: boolean;
+	protection: PersistentRoomProtection;
 }): PersistentRoomPathHash {
 	return hashPersistentRoomPath(JSON.stringify({
 		source: input.source,
+		// Turn off or on, or a cause that comes or goes, rebinds the next message: the box is handed out at the bind.
+		protection: input.protection,
 		policyId: input.policy?.policyId ?? null,
 		agentId: input.policy?.agentId ?? null,
 		conversationId: input.policy?.conversationId ?? null,
@@ -868,6 +1099,8 @@ function effectiveWorkspaceCapability(policy: PersistentRoomCapabilityPolicy, al
 		availableToolNames: [...allowedToolNames],
 		writeEnabled: persistentRoomWorkspaceWriterToolsEnabled(allowedToolNames),
 		bashEnabled,
+		// Where protection runs it holds commands to the room's access; off, by the person or for the folder, nothing does.
+		commandsChangeFiles: bashEnabled && persistentRoomProtection(policy.agentId).state === "off",
 		nativePiFilesystemToolsEnabled: view.nativePiFilesystemToolsEnabled,
 	};
 }
@@ -880,7 +1113,7 @@ function effectiveWorkspacePolicyFromResolution(input: {
 }): PersistentRoomEffectiveWorkspacePolicy {
 	const workspaceAccessMode = input.policy?.workspaceAccessMode ?? PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE;
 	const allowedToolNames = input.policy ? persistentRoomWorkspaceToolNamesForPolicy(input.policy) : [];
-	const policyBashEnabled = input.policy ? normalizePersistentRoomBashEnabled(input.policy.bashEnabled, workspaceAccessMode) : false;
+	const policyBashEnabled = input.policy ? persistentRoomPolicyCommandsRun(input.policy) : false;
 	const workspaceToolsEnabled = Boolean(input.policy && (allowedToolNames.length > 0 || policyBashEnabled) && input.policy.modes.read === true && workspacePolicyRootCurrentlyUsable(input.policy));
 	const effectiveAllowedToolNames = workspaceToolsEnabled ? allowedToolNames : [];
 	const effectiveBashEnabled = workspaceToolsEnabled ? policyBashEnabled : false;
@@ -890,6 +1123,7 @@ function effectiveWorkspacePolicyFromResolution(input: {
 		allowedToolNames: effectiveAllowedToolNames,
 		workspaceToolsEnabled,
 		bashEnabled: effectiveBashEnabled,
+		protection: persistentRoomProtection(input.agentId),
 	});
 	return {
 		agentId: input.agentId,
@@ -915,32 +1149,6 @@ export function resolvePersistentRoomEffectiveWorkspacePolicy(agentIdRaw: string
 	return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: resolution.source, policy: resolution.policy });
 }
 
-/** What a new conversation of this room starts on: the room's default, whatever settings one conversation keeps for itself. */
-export function resolvePersistentRoomNewConversationWorkspacePolicy(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomEffectiveWorkspacePolicy {
-	const agentId = safePolicyFileId(agentIdRaw, "agent id");
-	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
-	const policy = readPersistentRoomDefaultCapabilityPolicy(agentId, options);
-	return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: policy ? "room-default" : "none", policy });
-}
-
-/** Content identity for workspace policies: everything that decides what the
- * room may touch and with which tools, ignoring per-copy bookkeeping (policyId,
- * conversationId, timestamps). Two policies that agree here grant exactly the
- * same capability. */
-export function persistentRoomCapabilityPoliciesShareContent(a: PersistentRoomCapabilityPolicy, b: PersistentRoomCapabilityPolicy): boolean {
-	const contentKey = (policy: PersistentRoomCapabilityPolicy): string => JSON.stringify({
-		workspaceAccessMode: policy.workspaceAccessMode,
-		rootHashes: policy.roots.map((root) => root.pathHash.value),
-		modes: { read: policy.modes.read === true, write: policy.modes.write === true },
-		allowedToolNames: policy.allowedToolNames,
-		toolSelection: persistentRoomWorkspaceToolSelectionViewForPolicy(policy),
-		bashEnabled: normalizePersistentRoomBashEnabled(policy.bashEnabled, policy.workspaceAccessMode),
-		denySegments: policy.denySegments,
-		denyFilenameGlobs: policy.denyFilenameGlobs,
-	});
-	return contentKey(a) === contentKey(b);
-}
-
 /** The one boundary a live workspace-default mutation still respects: a turn
  * actually in flight finishes under the rules it started with. */
 export function assertPersistentRoomWorkspaceDefaultMutable(activeThread: { inFlight: boolean; cancelling: boolean } | null | undefined, action: "Save" | "Clear" = "Save"): void {
@@ -958,21 +1166,6 @@ export function persistentRoomSettingsNotAppliedFrame(error: unknown, sharedServ
 	const next = sharedServer ? "Try again in a moment; if it repeats, tell your admin." : "Try again; if it repeats, restart exxperts.";
 	const message = `The room could not apply its new settings, so your message was not sent. Nothing was lost. ${next}`;
 	return withDetails ? { code: "room_settings_not_applied", message, details: error instanceof Error ? error.message : String(error) } : { code: "room_settings_not_applied", message };
-}
-
-/** Live-workspace healing for threads born under the old snapshot regime: a
- * thread sidecar that grants exactly what the room default grants is an
- * automatic mirror, not a deliberate per-conversation choice — dropping it
- * lets the thread follow the live default from now on. A sidecar that differs
- * from the default is honored as a deliberate override and kept. */
-export function releasePersistentRoomThreadWorkspaceMirror(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): { released: boolean } {
-	const agentId = safePolicyFileId(agentIdRaw, "agent id");
-	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
-	const threadPolicy = readPersistentRoomCapabilityPolicy(agentId, conversationId, options);
-	if (!threadPolicy) return { released: false };
-	const defaultPolicy = readPersistentRoomDefaultCapabilityPolicy(agentId, options);
-	if (!defaultPolicy || !persistentRoomCapabilityPoliciesShareContent(threadPolicy, defaultPolicy)) return { released: false };
-	return { released: deletePersistentRoomCapabilityPolicy(agentId, conversationId, options).deleted };
 }
 
 export function persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy | null | undefined, fallbackCwd: string): string {

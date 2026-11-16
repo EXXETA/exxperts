@@ -91,8 +91,13 @@ function viewRoutes(roomId: string, conversationId: string, folder: string): Arr
 		{ label: "GET workspace-default", method: "GET", pathname: `${room}/workspace-default` },
 		{ label: "PUT workspace-default", method: "PUT", pathname: `${room}/workspace-default`, body: JSON.stringify({ workspaceAccessMode: "localFiles" }) },
 		{ label: "POST workspace/validate", method: "POST", pathname: `${room}/workspace/validate`, body: JSON.stringify({ conversationId, root: folder, workspaceAccessMode: "localFiles" }) },
-		{ label: "GET workspace-policy", method: "GET", pathname: `${room}/workspace-policy?conversationId=${conversationId}` },
 	];
+}
+
+/** A conversation's own settings give way to the room's, so this read sends no workspace view, and so no path, anywhere. */
+function conversationPolicyIsNone(answer: { status: number; text: string }, label: string): void {
+	assert(answer.status === 200, `GET workspace-policy ${label} answers, got ${answer.status} ${answer.text}`);
+	assert(JSON.parse(answer.text)?.policy === null, `GET workspace-policy ${label} sends no policy, got ${answer.text}`);
 }
 
 function assertNoPath(text: string, place: Place, label: string): void {
@@ -169,7 +174,7 @@ async function assertNameOnlyPage(page: Page, place: Place, where: string): Prom
 	const text = await pane.innerText();
 	assert(!text.includes(place.folder) && !text.includes("Client work"), `${where}: the page shows no path, got: ${text}`);
 	assert(!text.includes(OLD_LINE), `${where}: the line about the hidden path is gone, got: ${text}`);
-	assert(await pane.locator(".workspace-folder-path").count() === 0, `${where}: the folder row has no path`);
+	assert(!(await pane.locator("[title]").evaluateAll((els) => els.map((el) => el.getAttribute("title") ?? ""))).some((title) => title.includes("Client work")), `${where}: no name carries the path for the pointer`);
 }
 
 const servers: ChildProcessWithoutNullStreams[] = [];
@@ -197,6 +202,7 @@ try {
 			assert(root?.path === desk.folder, `${route.label} on this computer carries the folder's full path, got ${JSON.stringify(root)}`);
 			assert(!answer.text.includes("realpath"), `${route.label} on this computer carries the path the person chose, never the resolved one`);
 		}
+		conversationPolicyIsNone(await api(desk, `/api/persistent-agents/${encodeURIComponent(deskRoom.roomId)}/workspace-policy?conversationId=${deskRoom.conversationId}`), "on this computer");
 		const deskExposure = await api(desk, "/api/remote/rooms");
 		assert(deskExposure.status === 200, `the exposure list answers on this computer, got ${deskExposure.status}`);
 		assertNoPath(deskExposure.text, desk, "the exposure list on this computer");
@@ -244,6 +250,7 @@ try {
 			assert(answer.body?.policy?.roots?.[0]?.basename === "Quarterly reports", `${route.label} names the folder on the shared server, got ${answer.text}`);
 			assertNoPath(answer.text, shared, `${route.label} on a shared server`);
 		}
+		conversationPolicyIsNone(await api(shared, `/api/persistent-agents/${encodeURIComponent(sharedRoom.roomId)}/workspace-policy?conversationId=${sharedRoom.conversationId}`), "on a shared server");
 		const sharedExposure = await api(shared, "/api/remote/rooms");
 		assertNoPath(sharedExposure.text, shared, "the exposure list on a shared server");
 		pass("on a shared server no workspace answer carries a path");

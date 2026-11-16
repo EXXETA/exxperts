@@ -112,23 +112,6 @@
 	position: relative;
 	display: flex;
 }
-.sidebar-config-gear {
-	background: transparent;
-	border: 1px solid var(--border);
-	color: var(--fg);
-	border-radius: 6px;
-	padding: 2px 7px;
-	font-size: 13px;
-	line-height: 1.2;
-	cursor: pointer;
-}
-.sidebar-config-gear:hover,
-.sidebar-config-gear:focus-visible {
-	background: var(--fg);
-	color: var(--bg);
-	border-color: var(--fg);
-	outline: none;
-}
 .sidebar-config-menu {
 	position: absolute;
 	bottom: 100%;
@@ -173,7 +156,7 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	padding: 4px 8px;
+	padding: 0 8px;
 }
 .sidebar-config-menu .menu-row-label {
 	color: var(--fg);
@@ -209,28 +192,29 @@
 	border-color: var(--border);
 	background: var(--panel-2);
 }
-.sidebar-config-menu .menu-appearance-seg {
+/* The theme row: Settings' Theme switch (.settings-segments), its words
+   drawn as icons, each a square inside the edge. Theme, Settings and Help
+   stand evenly spaced, so their rows are one height: with a mouse the
+   switch shrinks to a Settings row's (a line of small words, 6 px above and
+   below, and the edge); where nothing hovers or on a phone, the icons keep a
+   finger's 44 px and Settings and Help grow to the switch's height. */
+.sidebar-config-menu .menu-theme-seg {
+	--menu-theme-icon: var(--exx-btn-h);
+	box-sizing: content-box;
+	height: var(--menu-theme-icon);
+}
+.sidebar-config-menu .menu-theme-seg .settings-segment {
 	display: inline-flex;
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	overflow: hidden;
+	align-items: center;
+	justify-content: center;
+	width: var(--menu-theme-icon);
+	padding: 0;
 }
-.sidebar-config-menu .menu-appearance-seg button {
-	background: transparent;
-	border: 0;
-	color: var(--fg-soft);
-	font-size: var(--exx-font-size-xs);
-	padding: 4px 10px;
-	cursor: pointer;
+@media (hover: hover) and (min-width: 761px) {
+	.sidebar-config-menu .menu-theme-seg { --menu-theme-icon: 25px; }
 }
-.sidebar-config-menu .menu-appearance-seg button:hover,
-.sidebar-config-menu .menu-appearance-seg button:focus-visible {
-	color: var(--fg);
-	outline: none;
-}
-.sidebar-config-menu .menu-appearance-seg button.on {
-	background: var(--fg);
-	color: var(--bg);
+@media (hover: none), (max-width: 760px) {
+	.sidebar-config-menu .menu-item { min-height: calc(var(--exx-btn-h) + 2px); }
 }
 .landing {
 	background: var(--bg);
@@ -409,47 +393,64 @@
 	gap: 10px;
 	min-height: 0;
 }
-/* "+ New room" tile — a dashed add-card that sits in the room grid and stretches
-   to match the room cards in its row. */
+/* The New room tile: not one of the button family's kinds but its own, a
+   card-sized wash with no edge that sits in the room grid and stretches to
+   match the room cards in its row. The edge stays, transparent, so forced
+   colours can draw it. The light theme's card colours are more specific than
+   one class, so its selector is named for the colours only: the tile's size
+   and spacing stay the grid's (07-room-cards.css). */
+.add-room-card,
+:root[data-theme="light"] .landing-card.add-room-card {
+	background: color-mix(in srgb, var(--fg) 4%, transparent);
+	border: 1px solid transparent;
+	box-shadow: none;
+	color: var(--fg-soft);
+}
 .add-room-card {
-	background: transparent;
-	border: 1px dashed color-mix(in srgb, var(--fg-soft) 45%, var(--border-soft));
 	align-items: center;
 	justify-content: center;
 	gap: 6px;
-	min-height: 112px;
-	color: var(--fg-soft);
 	cursor: pointer;
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	font-weight: 500;
 	text-align: center;
-	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+	transition: background 120ms ease, color 120ms ease;
 }
-.add-room-card:hover,
-.add-room-card:focus-visible {
-	background: color-mix(in srgb, var(--fg) 6%, transparent);
-	border-color: var(--fg-soft);
-	color: var(--fg);
+/* Alone in its row beside a column of cards, the room card's height before
+   it (landing.tsx measures it). In the one column of a phone or a narrow
+   window, where cards drop their least height (21-approval-preview.css), it
+   keeps the 85 px it has always had there, its plus and words centred. */
+.add-room-card {
+	min-height: var(--row-card-h, 112px);
 }
-.add-room-card:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: 2px; }
-.add-room-plus { font-size: 30px; line-height: 1; font-weight: 300; }
-.add-room-label { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
+@media (max-width: 900px) {
+	.landing-card.add-room-card { min-height: 85px; }
+}
+@media (hover: hover) {
+	.add-room-card:hover:not(:disabled),
+	:root[data-theme="light"] .landing-card.add-room-card:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--fg) 7%, transparent);
+		color: var(--fg);
+	}
+}
+.add-room-plus { display: inline-flex; line-height: 1; }
 /* Under "New room" while nothing can answer yet: the room would wait. */
 .add-room-hint { color: var(--muted); font-size: var(--exx-font-size-xs); }
 /* The first room, once an AI is connected: New room is the one thing to do.
    The light theme's own card colours (below, and 11-light-sidebar-home.css)
    are more specific than a class pair, so the light selectors are named too. */
 .add-room-card.is-primary,
-:root[data-theme="light"] .add-room-card.is-primary {
+:root[data-theme="light"] .landing-card.add-room-card.is-primary {
 	background: var(--exx-action-primary-bg);
-	border: 1px solid var(--exx-action-primary-bg);
 	color: var(--exx-action-primary-fg);
 }
-.add-room-card.is-primary:hover,
-.add-room-card.is-primary:focus-visible,
-:root[data-theme="light"] .add-room-card.is-primary:hover,
-:root[data-theme="light"] .add-room-card.is-primary:focus-visible {
-	background: var(--exx-action-primary-hover-bg);
-	border-color: var(--exx-action-primary-hover-bg);
-	color: var(--exx-action-primary-fg);
+@media (hover: hover) {
+	.add-room-card.is-primary:hover:not(:disabled),
+	:root[data-theme="light"] .landing-card.add-room-card.is-primary:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--exx-action-primary-bg) 90%, var(--bg));
+		color: var(--exx-action-primary-fg);
+	}
 }
 .landing-card-primary {
 	min-height: clamp(148px, 19vh, 184px);

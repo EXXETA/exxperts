@@ -11,18 +11,29 @@
 // A deck's head keeps its template's kicker over its name, as tall as the row,
 // its icons on the row. The row drags the window and its buttons click; the
 // bars over it reach the drag strip's bottom, and Home's content starts under
-// the strip, at 69.4% zoom too. The sidebar's wordmark stays where it was. On a sharp screen the sidebar button's glyph centres on
-// the wordmark's small letters. The floating sidebar button shown while the
+// the strip, at 69.4% zoom too. In the Windows app, at 80%, 100% and 125% zoom,
+// the arrows end the open sidebar's top line and follow the sidebar button
+// with it hidden, at Home and in a room, the drawer's line too in a narrow
+// window, and the button, the logo, the home button and the room's name keep
+// clear of them; in a narrow window, as in the mac app, they stay over Home's
+// top bar, which starts under them, and over an open file, its head past them. The sidebar's wordmark stays where it was. On a sharp screen the sidebar button's glyph centres on
+// the wordmark's small letters. The back and forward arrows keep one size and
+// place in window points beside the sidebar button, sidebar open and hidden, in
+// fullscreen and at phone width, out of the drag area, and the row clears them,
+// a maximized file's head included. In fullscreen the sidebar button's glyph
+// starts on the sidebar's text line. The floating sidebar button shown while the
 // sidebar is collapsed is just its glyph at rest; hover and keyboard focus
 // show its square, and focus a ring. A dialog's backdrop covers it. At phone width the bar has no "Talking
-// to" either, and the button keeps its resting square. Offline: a synthetic model answers
+// to" either, and the button keeps its resting square. There, in the mac app's look, no bar drags over the open
+// drawer, over the room or a file, and the bars drag again once it closes. Offline: a synthetic model answers
 // "Noted.". Throwaway HOME.
 import fs from "node:fs";
 import path from "node:path";
-import { chromium, type Page } from "playwright";
+import { chromium, type Locator, type Page } from "playwright";
 import { agentsRoot, assert, baseUrl, openRoom, rename, requestJson, startRoomStateServer, stopRoomStateServer, waitUntil } from "./room-state-setup.js";
 import { SMOKE_AUTH_TOKEN } from "./smoke-server-process.js";
 import { closeBrowser, closeContext } from "./smoke-close-context.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 {
 	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
@@ -33,6 +44,7 @@ import { closeBrowser, closeContext } from "./smoke-close-context.js";
 }
 
 const ROOM = "Lisbon Trip";
+const DRAWER_BUTTON = ".sidebar-header .sidebar-toggle";
 // Longer than a 360px chat column, beside an open file pane.
 const LONG_ROOM = "Lisbon Trip, three days of planning for the whole design team offsite";
 const MESSAGE = "Plan three days in Lisbon for a team offsite.";
@@ -41,13 +53,27 @@ const FILE = "agenda.md";
 // A deck a template made in this conversation: its head keeps the template's kicker over the file's name.
 const DECK = "offsite-deck.html";
 const TRANSPARENT = "rgba(0, 0, 0, 0)";
+// The mac row's fixed buttons, in window points: the sidebar button, 87 in, then
+// the two arrows, all 28 wide and 2 apart.
+const MAC_BUTTON = { left: 87, size: 28, gap: 2 };
+const MAC_ROW_END = MAC_BUTTON.left + 3 * MAC_BUTTON.size + 2 * MAC_BUTTON.gap;
+// In fullscreen the button's 16-point glyph, 6 points inside its box, starts on the sidebar's text line, 27px in.
+const macFullscreenLeft = (zoom: number) => 27 * zoom - 6;
 // With the sidebar collapsed the bar keeps clear of the floating sidebar
-// button (and in the mac app of the traffic lights): a floor under the room
-// name's edge, for a column so narrow its answers start under the button. In
-// the mac app the floor is 12px past the 28px button, which sits 87 window
-// points in. Kept with the clearances in 35-sidebar-remote.css and
-// 34-desktop-app.css.
-const COLLAPSED_CLEARANCE = { browser: () => 52, mac: (zoom: number) => 87 / zoom + 40 };
+// button (and in the mac app of the traffic lights and the arrows): a floor
+// under the room name's edge, for a column so narrow its answers start under
+// the buttons. In the mac app the floor is 12px past the row's buttons, in the
+// Windows app 14px past the arrows. Kept with the clearances in
+// 35-sidebar-remote.css and 34-desktop-app.css.
+// The Windows app's top line, in CSS px at every zoom: the sidebar button 10px in
+// and 8px down, the arrows 2px apart and as wide, and with the sidebar open they
+// end 10px inside its right edge. The logo starts 41px in.
+const WINDOWS = { button: { left: 10, top: 8, size: 28 }, gap: 2, inset: 10, logoLeft: 41 };
+const WINDOWS_ROW_END = WINDOWS.button.left + 3 * WINDOWS.button.size + 2 * WINDOWS.gap;
+const COLLAPSED_CLEARANCE = { browser: () => 52, mac: (zoom: number) => MAC_ROW_END / zoom + 12, windows: () => WINDOWS_ROW_END + 14 };
+// The shell's user agent turns the arrows on; a page in a browser has no title bar overlay, so one that is showing stands in for it.
+const MAC_APP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 ExxpertsDesktop/0.14.3";
+const WINDOWS_APP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 ExxpertsDesktop/0.14.3";
 const ROOM_NAME = ".topbar .title";
 const WORDMARK = ".brand img.logo";
 // The mac window buttons' row: its centre in window points, and how far an ink centre may sit off it.
@@ -164,8 +190,7 @@ try {
 	const composer = page.locator("textarea").first();
 	await composer.waitFor({ timeout: 15_000 });
 	await composer.fill(MESSAGE);
-	await waitUntil(() => page.getByRole("button", { name: "Send", exact: true }).isEnabled(), "Send is enabled");
-	await composer.press("Enter");
+	await sendFromBox(page);
 	await page.locator(".messages").getByText(ANSWER, { exact: true }).first().waitFor({ timeout: 20_000 });
 	await waitUntil(async () => (await requestJson(`/api/persistent-agents/${roomId}/status`)).body?.activeThread?.inFlight === false, "the turn settled");
 
@@ -191,6 +216,9 @@ try {
 		await on.mouse.move(viewport.width / 2, viewport.height - 40);
 		// The display font sets the lines' metrics: measured before it loads, every line sits elsewhere.
 		await on.evaluate(() => document.fonts.ready.then(() => undefined));
+		// A file pane slides and fades in: read mid-way, its box is still off to the right and a thin mark too faint to
+		// count as ink. Measured once every animation that ends has ended.
+		await on.evaluate(() => Promise.all(document.getAnimations().filter((animation) => animation.effect?.getTiming().iterations !== Infinity).map((animation) => animation.finished.catch(() => undefined))).then(() => undefined));
 		// A pane just opened paints its head a frame or two later: measured once every part shows ink.
 		let inks: [string, Ink | string][] = [];
 		await waitUntil(async () => {
@@ -228,24 +256,120 @@ try {
 		if (problems.length > 0) failures.push(`${label}: the drag area: ${problems.join("; ")}`);
 		else passes += 1;
 	};
-	// The mac app takes a no-drag box out of the drag area in the page's order, not by what paints on top: a bar that
-	// drags and comes after the floating button covers it again, and a click there moves the window.
-	const checkFloatingClicks = async (on: Page, label: string) => {
-		const problems = await on.evaluate(() => {
-			const button = document.querySelector(".sidebar-toggle-floating");
-			if (!button) return ["no floating button"];
-			const own = getComputedStyle(button).getPropertyValue("-webkit-app-region");
-			if (own !== "no-drag") return [`the floating button is ${own || "unset"}, not no-drag`];
+	// The sidebar button keeps one size and place in window points at every zoom, as the window buttons do.
+	const checkMacButton = async (on: Page, label: string, zoom: number, left: number) => {
+		const look = await on.locator(".sidebar-toggle:visible").first().evaluate((button) => {
 			const box = button.getBoundingClientRect();
+			return { left: box.left, centre: box.top + box.height / 2, width: box.width, height: box.height, glyph: button.querySelector("svg")?.getBoundingClientRect().width ?? 0 };
+		});
+		const problems = [
+			...(Math.abs(look.left * zoom - left) > 1 ? [`its left edge is at ${(look.left * zoom).toFixed(1)}, not ${left}`] : []),
+			...(Math.abs(look.centre * zoom - MAC_ROW_CENTRE) > 1 ? [`it centres at ${(look.centre * zoom).toFixed(1)}, not ${MAC_ROW_CENTRE}`] : []),
+			...(Math.abs(look.width * zoom - 28) > 0.5 || Math.abs(look.height * zoom - 28) > 0.5 ? [`its box is ${(look.width * zoom).toFixed(1)} by ${(look.height * zoom).toFixed(1)}, not 28`] : []),
+			...(Math.abs(look.glyph * zoom - 16) > 0.5 ? [`its glyph is ${(look.glyph * zoom).toFixed(1)}, not 16`] : []),
+		];
+		if (problems.length > 0) failures.push(`${label}: the sidebar button: ${problems.join("; ")}`);
+		else passes += 1;
+	};
+	// The arrows hold the same size, right after the sidebar button's spot, whether or not that button is showing.
+	const checkMacArrows = async (on: Page, label: string, zoom: number, buttonLeft: number) => {
+		const arrows = await on.locator(".history-arrow").evaluateAll((buttons) => buttons.map((button) => {
+			const box = button.getBoundingClientRect();
+			return { left: box.left, centre: box.top + box.height / 2, width: box.width, height: box.height, glyph: button.querySelector("svg")?.getBoundingClientRect().width ?? 0 };
+		}));
+		const problems = arrows.length !== 2 ? [`${arrows.length} on screen, not 2`] : arrows.flatMap((look, at) => {
+			const name = at === 0 ? "Back" : "Forward";
+			const left = buttonLeft + (at + 1) * (MAC_BUTTON.size + MAC_BUTTON.gap);
+			return [
+				...(Math.abs(look.left * zoom - left) > 1 ? [`${name}'s left edge is at ${(look.left * zoom).toFixed(1)}, not ${left}`] : []),
+				...(Math.abs(look.centre * zoom - MAC_ROW_CENTRE) > 1 ? [`${name} centres at ${(look.centre * zoom).toFixed(1)}, not ${MAC_ROW_CENTRE}`] : []),
+				...(Math.abs(look.width * zoom - 28) > 0.5 || Math.abs(look.height * zoom - 28) > 0.5 ? [`${name}'s box is ${(look.width * zoom).toFixed(1)} by ${(look.height * zoom).toFixed(1)}, not 28`] : []),
+				...(Math.abs(look.glyph * zoom - 16) > 0.5 ? [`${name}'s glyph is ${(look.glyph * zoom).toFixed(1)}, not 16`] : []),
+			];
+		});
+		if (problems.length > 0) failures.push(`${label}: the arrows: ${problems.join("; ")}`);
+		else passes += 1;
+	};
+	// The mac app takes a no-drag box out of the drag area in the page's order, not by what paints on top: a bar that
+	// drags and comes after a button covers it again, and a click there moves the window.
+	const checkNothingDragsOver = async (on: Page, label: string, selector: string) => {
+		const problems = await on.evaluate((selector) => {
+			const target = document.querySelector(selector);
+			if (!target) return [`no ${selector}`];
+			const box = target.getBoundingClientRect();
 			return [...document.querySelectorAll("*")]
-				.filter((el) => getComputedStyle(el).getPropertyValue("-webkit-app-region") === "drag" && (button.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
+				.filter((el) => getComputedStyle(el).getPropertyValue("-webkit-app-region") === "drag" && !target.contains(el) && (target.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
 				.filter((el) => {
 					const bar = el.getBoundingClientRect();
 					return bar.left < box.right && box.left < bar.right && bar.top < box.bottom && box.top < bar.bottom;
 				})
-				.map((el) => `.${String(el.className).trim().split(/\s+/).join(".")} drags over the floating button and comes after it in the page`);
-		});
-		if (problems.length > 0) failures.push(`${label}: the floating button's click: ${problems.join("; ")}`);
+				.map((el) => `.${String(el.className).trim().split(/\s+/).join(".")} drags over ${selector} and comes after it in the page`);
+		}, selector);
+		if (problems.length > 0) failures.push(`${label}: ${selector}'s click: ${problems.join("; ")}`);
+		else passes += 1;
+	};
+	const checkRowClicks = async (on: Page, label: string, selector: string) => {
+		const own = await on.evaluate((selector) => {
+			const button = document.querySelector(selector);
+			return button ? getComputedStyle(button).getPropertyValue("-webkit-app-region") : "missing";
+		}, selector);
+		if (own === "no-drag") await checkNothingDragsOver(on, label, selector);
+		else failures.push(`${label}: ${selector} is ${own || "unset"}, not no-drag`);
+	};
+	const isOnTop = (button: Locator) => button.evaluate((el) => {
+		const box = el.getBoundingClientRect();
+		return el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+	});
+	// The Windows app's top line: the sidebar button and the logo where the browser has them, the arrows on the button's
+	// line, 2px apart, at the open sidebar's end or right after the button, and each of them the top thing at its centre.
+	const checkWindowsLine = async (on: Page, label: string, place: "the sidebar's end" | "after the button") => {
+		const [button, logo, sidebar, back, forward] = await on.evaluate((selectors) => selectors.map((selector) => {
+			const el = [...document.querySelectorAll(selector)].find((candidate) => candidate.getBoundingClientRect().width > 0);
+			if (!el) return null;
+			const box = el.getBoundingClientRect();
+			return { left: box.left, top: box.top, right: box.right, width: box.width, height: box.height, onTop: el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) };
+		}), [".sidebar-toggle", ".brand img.logo", ".app > .sidebar, .product-sidebar", '.history-arrow[aria-label="Back"]', '.history-arrow[aria-label="Forward"]']);
+		if (!button || !back || !forward) {
+			failures.push(`${label}: not on screen: ${[!button && "the sidebar button", !back && "Back", !forward && "Forward"].filter(Boolean).join(", ")}`);
+			return;
+		}
+		const open = place === "the sidebar's end";
+		const problems = [
+			// A sharp screen lifts the button by half a pixel.
+			...(Math.abs(button.left - WINDOWS.button.left) > 0.5 || Math.abs(button.top - WINDOWS.button.top) > 0.5 ? [`the sidebar button moved to ${button.left.toFixed(1)}, ${button.top.toFixed(1)}`] : []),
+			...[back, forward].flatMap((arrow, at) => [
+				...(Math.abs(arrow.width - WINDOWS.button.size) > 0.5 || Math.abs(arrow.height - WINDOWS.button.size) > 0.5 ? [`${at ? "Forward" : "Back"}'s box is ${arrow.width.toFixed(1)} by ${arrow.height.toFixed(1)}`] : []),
+				...(Math.abs(arrow.top - button.top) > 0.25 ? [`${at ? "Forward" : "Back"}'s top is ${arrow.top.toFixed(2)}, the sidebar button's ${button.top.toFixed(2)}`] : []),
+			]),
+			...(Math.abs(forward.left - back.right - WINDOWS.gap) > 0.5 ? [`the arrows are ${(forward.left - back.right).toFixed(1)}px apart, not ${WINDOWS.gap}`] : []),
+			...(open && !sidebar ? ["no open sidebar"] : []),
+			...(open && sidebar && Math.abs(sidebar.right - WINDOWS.inset - forward.right) > 0.5 ? [`Forward ends ${(sidebar.right - forward.right).toFixed(1)}px inside the sidebar's edge, not ${WINDOWS.inset}`] : []),
+			...(!open && Math.abs(back.left - button.right - WINDOWS.gap) > 0.5 ? [`Back starts ${(back.left - button.right).toFixed(1)}px past the sidebar button, not ${WINDOWS.gap}`] : []),
+			...(open && !logo ? ["no logo"] : []),
+			...(open && logo && Math.abs(logo.left - WINDOWS.logoLeft) > 0.5 ? [`the logo moved to ${logo.left.toFixed(1)}`] : []),
+			...(open && logo && logo.right > back.left ? [`the logo ends at ${logo.right.toFixed(1)}, under Back from ${back.left.toFixed(1)}`] : []),
+			...([["the sidebar button", button], ["Back", back], ["Forward", forward], ...(open && logo ? [["the logo", logo] as const] : [])] as const).filter(([, part]) => !part.onTop).map(([name]) => `something covers ${name}`),
+		];
+		if (problems.length > 0) failures.push(`${label}: the top line: ${problems.join("; ")}`);
+		else passes += 1;
+	};
+	// Home's top bar in a narrow window, as in the mac app: the arrows keep their place after the sidebar button's spot,
+	// which this bar does not show, and the bar starts under them.
+	const checkWindowsHomeBar = async (on: Page, label: string) => {
+		const homeBar = await on.evaluate(() => [".history-arrow", '.history-arrow[aria-label="Forward"]', ".brand img.logo"].map((selector) => {
+			const el = document.querySelector(selector);
+			if (!el) return null;
+			const box = el.getBoundingClientRect();
+			return { left: box.left, top: box.top, bottom: box.bottom, onTop: el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) };
+		}));
+		const [homeBack, homeForward, homeLogo] = homeBar;
+		const homeProblems = !homeBack || !homeForward || !homeLogo ? [`not on screen: ${JSON.stringify(homeBar)}`] : [
+			...(Math.abs(homeBack.left - (WINDOWS.button.left + WINDOWS.button.size + WINDOWS.gap)) > 0.5 || Math.abs(homeBack.top - WINDOWS.button.top) > 0.5 ? [`Back sits at ${homeBack.left.toFixed(1)}, ${homeBack.top.toFixed(1)}`] : []),
+			...(!homeBack.onTop || !homeForward.onTop ? ["something covers the arrows"] : []),
+			...(!homeLogo.onTop ? ["something covers the logo"] : []),
+			...(homeLogo.top < homeForward.bottom ? [`the logo starts at ${homeLogo.top.toFixed(1)}, beside the arrows that end at ${homeForward.bottom.toFixed(1)}`] : []),
+		];
+		if (homeProblems.length > 0) failures.push(`${label}: ${homeProblems.join("; ")}`);
 		else passes += 1;
 	};
 	// A dialog's backdrop takes the place of the floating button: the button comes later in the page, so only its lower
@@ -257,7 +381,7 @@ try {
 		});
 		const dialog = page.getByRole("dialog", { name: "Remember this conversation" });
 		const shownAlone = await buttonOnTop();
-		await page.getByRole("button", { name: "Choose what to keep…", exact: true }).click();
+		await page.getByRole("button", { name: "Choose what to keep", exact: true }).click();
 		await dialog.waitFor({ timeout: 10_000 });
 		const shownOverDialog = await buttonOnTop();
 		await dialog.getByRole("button", { name: "Close", exact: true }).click();
@@ -363,7 +487,8 @@ try {
 	// The mac app's window, 1280x860 window points on a sharp screen, at 100% and 125% zoom: CSS px are window points over the zoom.
 	for (const zoom of [0.694, 1, 1.25]) {
 		const at = `mac app at ${Math.round(zoom * 1000) / 10}% zoom`;
-		const mac = await (await browser.newContext({ viewport: { width: Math.round(1280 / zoom), height: Math.round(860 / zoom) }, deviceScaleFactor: 2 * zoom })).newPage();
+		const mac = await (await browser.newContext({ viewport: { width: Math.round(1280 / zoom), height: Math.round(860 / zoom) }, deviceScaleFactor: 2 * zoom, userAgent: MAC_APP_UA })).newPage();
+		await mac.addInitScript(() => Object.defineProperty(navigator, "windowControlsOverlay", { value: Object.assign(new EventTarget(), { visible: true }) }));
 		let roomSocket: { send(message: string): void } | undefined;
 		await mac.routeWebSocket(/\/ws\?/, (ws) => {
 			roomSocket = ws;
@@ -371,11 +496,8 @@ try {
 			ws.onMessage((message) => upstream.send(message));
 			upstream.onMessage((message) => ws.send(message));
 		});
-		// The shell sets the class before the page runs and measures the zoom from the window; here both are set by hand.
-		const macLook = () => mac.evaluate((windowZoom) => {
-			document.documentElement.classList.add("desktop-app-mac");
-			document.documentElement.style.setProperty("--window-zoom", String(windowZoom));
-		}, zoom);
+		// The title bar overlay gives the row; a browser has none, so the zoom behind the CSS's fallback is set by hand.
+		const macLook = () => mac.evaluate((windowZoom) => document.documentElement.style.setProperty("--window-zoom", String(windowZoom)), zoom);
 		const openFile = async () => {
 			await mac.locator(".attachments-entry").click();
 			await mac.locator(".att-card").filter({ hasText: FILE.replace(/\.md$/, "") }).first().locator(".att-open").click();
@@ -397,6 +519,9 @@ try {
 		await macLook();
 		await checkMacRow(mac, `${at}, sidebar open`, zoom, TOPBAR_PARTS);
 		await checkMacDrag(mac, `${at}, sidebar open`, zoom, [".topbar"]);
+		await checkMacButton(mac, `${at}, sidebar open`, zoom, MAC_BUTTON.left);
+		await checkMacArrows(mac, `${at}, sidebar open`, zoom, MAC_BUTTON.left);
+		await checkRowClicks(mac, `${at}, sidebar open`, ".history-arrows");
 		// Zoomed out, the row only has to stay covered: the rest is checked at 100% and 125%.
 		if (zoom < 1) {
 			await closeContext(mac.context());
@@ -414,13 +539,36 @@ try {
 		await mac.getByRole("button", { name: "Hide sidebar" }).first().click();
 		await mac.locator(".sidebar-toggle-floating").waitFor({ timeout: 5_000 });
 		await checkMacRow(mac, `${at}, sidebar hidden, file pane open`, zoom, { ...TOPBAR_PARTS, ...FILE_PARTS });
+		// A file made as wide as the window: its head takes the top left, and its text starts at least 14px past the row's buttons.
+		await mac.getByRole("button", { name: "Maximize panel" }).click();
+		await mac.locator(".workbench.artifact-pane-maximized").waitFor({ timeout: 5_000 });
+		const maximizedHead = await mac.locator(".artifact-viewer-head").evaluate((head) => parseFloat(getComputedStyle(head).paddingLeft) + head.getBoundingClientRect().left);
+		if (maximizedHead < MAC_ROW_END / zoom + 14 - 0.5) failures.push(`${at}, a maximized file: its head's text starts at ${maximizedHead.toFixed(1)}, not 14px past the row's buttons at ${(MAC_ROW_END / zoom).toFixed(1)}`);
+		else passes += 1;
+		await checkRowClicks(mac, `${at}, a maximized file`, ".history-arrows");
+		await mac.getByRole("button", { name: "Restore panel size" }).click();
 		await mac.locator(".artifact-viewer-close").click();
 		await mac.locator("aside.artifact-viewer").waitFor({ state: "detached", timeout: 5_000 });
 		await checkMacRow(mac, `${at}, sidebar hidden`, zoom, TOPBAR_PARTS);
 		await checkPlace(`${at}, sidebar hidden`, COLLAPSED_CLEARANCE.mac(zoom), mac);
-		await checkFloatingClicks(mac, `${at}, sidebar hidden`);
+		await checkRowClicks(mac, `${at}, sidebar hidden`, ".sidebar-toggle-floating");
+		await checkRowClicks(mac, `${at}, sidebar hidden`, ".history-arrows");
+		await checkMacButton(mac, `${at}, sidebar hidden`, zoom, MAC_BUTTON.left);
+		await checkMacArrows(mac, `${at}, sidebar hidden`, zoom, MAC_BUTTON.left);
+		// Fullscreen takes the lights away: the shell's page sets this class, and the row slides left on the same line.
+		await mac.evaluate(() => document.documentElement.classList.add("mac-fullscreen"));
+		await checkMacButton(mac, `${at}, sidebar hidden, fullscreen`, zoom, macFullscreenLeft(zoom));
+		await checkMacArrows(mac, `${at}, sidebar hidden, fullscreen`, zoom, macFullscreenLeft(zoom));
+		await checkMacDrag(mac, `${at}, fullscreen`, zoom, [".topbar"]);
+		await mac.evaluate(() => document.documentElement.classList.remove("mac-fullscreen"));
 		await mac.getByRole("button", { name: "Show sidebar" }).first().click();
 		await mac.locator(".sidebar-toggle-floating").waitFor({ state: "detached", timeout: 5_000 });
+		// With the sidebar open the glyph starts on the line the wordmark and the lists start on, in window points at this zoom too.
+		await mac.evaluate(() => document.documentElement.classList.add("mac-fullscreen"));
+		const line = await mac.evaluate((wordmark) => ({ glyph: document.querySelector(".sidebar-toggle svg")?.getBoundingClientRect().left ?? 0, logo: document.querySelector(wordmark)?.getBoundingClientRect().left ?? 0 }), WORDMARK);
+		if (Math.abs(line.glyph - line.logo) > 0.5) failures.push(`${at}, sidebar open, fullscreen: the sidebar button's glyph starts at ${line.glyph.toFixed(1)}, the wordmark at ${line.logo.toFixed(1)}`);
+		else passes += 1;
+		await mac.evaluate(() => document.documentElement.classList.remove("mac-fullscreen"));
 		assert(roomSocket, "the page's room socket is open");
 		roomSocket.send(JSON.stringify(PREVIEW_CARD));
 		await mac.locator("aside.preview-pane").waitFor({ timeout: 5_000 });
@@ -454,13 +602,170 @@ try {
 		else passes += 1;
 		await checkMacRow(mac, `${at}, a long name beside the file pane`, zoom, { ...TOPBAR_PARTS, ...FILE_PARTS });
 		await rename(roomId, ROOM);
+		// Zoomed in as far as phone width, the home button joins the row: it keeps its CSS size, so it centres on its own.
+		if (zoom > 1) {
+			await mac.locator(".artifact-viewer-close").click();
+			await mac.setViewportSize({ width: 700, height: 600 });
+			await mac.locator(".topbar-home-btn").waitFor({ timeout: 5_000 });
+			const row = await mac.evaluate(() => {
+				const home = document.querySelector(".topbar-home-btn")!.getBoundingClientRect();
+				const forward = document.querySelector('.history-arrow[aria-label="Forward"]')!.getBoundingClientRect();
+				return { centre: home.top + home.height / 2, gap: home.left - forward.right, bar: parseFloat(getComputedStyle(document.querySelector(".topbar")!).paddingLeft), right: home.right };
+			});
+			const problems = [
+				...(Math.abs(row.centre * zoom - MAC_ROW_CENTRE) > 1 ? [`it centres at ${(row.centre * zoom).toFixed(1)}, not ${MAC_ROW_CENTRE}`] : []),
+				...(Math.abs(row.gap - 8) > 0.5 ? [`it sits ${row.gap.toFixed(1)}px from the arrows, not 8`] : []),
+				...(Math.abs(row.bar - row.right - 12) > 0.5 ? [`the bar starts ${(row.bar - row.right).toFixed(1)}px past it, not 12`] : []),
+			];
+			if (problems.length > 0) failures.push(`${at}, at phone width: the home button: ${problems.join("; ")}`);
+			else passes += 1;
+			await checkMacArrows(mac, `${at}, at phone width`, zoom, MAC_BUTTON.left);
+			// The open drawer's row keeps them, and still lets them click.
+			await mac.getByRole("button", { name: "Show sidebar" }).first().click();
+			await mac.locator(".sidebar-drawer-backdrop").waitFor({ timeout: 5_000 });
+			await checkMacArrows(mac, `${at}, at phone width, drawer open`, zoom, MAC_BUTTON.left);
+			if (!(await isOnTop(mac.locator(".history-arrow").first()))) failures.push(`${at}, at phone width, drawer open: the drawer covers the arrows`);
+			else passes += 1;
+			// The drawer lies over the bar, which comes later in the page: no bar drags over it while it is open, and closed, the bar drags.
+			await checkRowClicks(mac, `${at}, at phone width, drawer open`, DRAWER_BUTTON);
+			await checkNothingDragsOver(mac, `${at}, at phone width, drawer open`, ".app > .sidebar");
+			await mac.locator(DRAWER_BUTTON).click();
+			await mac.locator(".sidebar-drawer-backdrop").waitFor({ state: "detached", timeout: 5_000 });
+			await checkMacDrag(mac, `${at}, at phone width, drawer closed`, zoom, [".topbar"]);
+			await mac.getByRole("button", { name: "Show sidebar" }).first().click();
+			await mac.locator(".sidebar-drawer-backdrop").waitFor({ timeout: 5_000 });
+			// A file fills the window at this width: the arrows stay on top of it, and its head starts past them.
+			await mac.locator(".attachments-entry").click();
+			await mac.locator(".att-card").filter({ hasText: FILE.replace(/\.md$/, "") }).first().locator(".att-open").click();
+			await mac.locator(".workbench.with-file-pane aside.artifact-viewer").waitFor({ timeout: 10_000 });
+			await checkMacArrows(mac, `${at}, at phone width, file open`, zoom, MAC_BUTTON.left);
+			const fileHead = await mac.evaluate(() => {
+				const arrow = document.querySelector(".history-arrow")!;
+				const box = arrow.getBoundingClientRect();
+				const name = document.querySelector(".artifact-viewer-head .artifact-viewer-template, .artifact-viewer-head h2")?.getBoundingClientRect().left ?? 0;
+				return { onTop: arrow.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)), name, end: document.querySelector('.history-arrow[aria-label="Forward"]')!.getBoundingClientRect().right };
+			});
+			if (!fileHead.onTop || fileHead.name < fileHead.end) failures.push(`${at}, at phone width, file open: ${fileHead.onTop ? "" : "the file covers the arrows; "}its name starts at ${fileHead.name.toFixed(1)}, the arrows end at ${fileHead.end.toFixed(1)}`);
+			else passes += 1;
+			// The sidebar button stays on top of the file with them, and the drawer opens over the file as it does over the room.
+			const overFile = mac.locator(".sidebar-toggle-floating");
+			if (!(await isOnTop(overFile))) failures.push(`${at}, at phone width, file open: the file covers the sidebar button`);
+			else {
+				passes += 1;
+				await checkRowClicks(mac, `${at}, at phone width, file open`, ".sidebar-toggle-floating");
+				await overFile.click();
+				await mac.locator(".sidebar-drawer-backdrop").waitFor({ timeout: 5_000 });
+				if (!(await isOnTop(mac.locator(".history-arrow").first()))) failures.push(`${at}, at phone width, file and drawer open: the drawer covers the arrows`);
+				else passes += 1;
+				await checkRowClicks(mac, `${at}, at phone width, file and drawer open`, DRAWER_BUTTON);
+				await checkNothingDragsOver(mac, `${at}, at phone width, file and drawer open`, ".app > .sidebar");
+				await mac.locator(DRAWER_BUTTON).click();
+				await mac.locator(".sidebar-drawer-backdrop").waitFor({ state: "detached", timeout: 5_000 });
+				await checkMacDrag(mac, `${at}, at phone width, file open, drawer closed`, zoom, [".artifact-viewer-head"]);
+			}
+		}
 		await closeContext(mac.context());
+	}
+
+	// The Windows app's window, 1280x860 on a sharp screen at 80%, 100% and 125% zoom. It has its own title bar, so the
+	// page's top line is the sidebar's: the arrows end it with the sidebar open and follow the sidebar button with it
+	// hidden, at Home and in a room, a maximized file's head and Home's content clear them, and in a narrow window they
+	// follow the button with the drawer closed and end the drawer's top line with it open.
+	for (const zoom of [0.8, 1, 1.25]) {
+		const at = `Windows app at ${zoom * 100}% zoom`;
+		const win = await (await browser.newContext({ viewport: { width: Math.round(1280 / zoom), height: Math.round(860 / zoom) }, deviceScaleFactor: 2 * zoom, userAgent: WINDOWS_APP_UA })).newPage();
+		await win.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+		await win.waitForLoadState("networkidle");
+		if (await win.locator(".whats-new-close").count()) await win.locator(".whats-new-close").click();
+		await win.locator(".persistent-agent-card").first().waitFor({ timeout: 15_000 });
+		await win.mouse.move(800, 600);
+		await checkWindowsLine(win, `${at}, Home, sidebar open`, "the sidebar's end");
+		await win.locator(".persistent-agent-card").filter({ hasText: ROOM }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
+		await win.locator(".room-workspace-nudge").waitFor({ timeout: 15_000 });
+		await win.mouse.move(800, 600);
+		await checkWindowsLine(win, `${at}, sidebar open`, "the sidebar's end");
+		await checkPlace(`${at}, sidebar open`, 0, win);
+		await win.locator(".attachments-entry").click();
+		await win.locator(".att-card").filter({ hasText: FILE.replace(/\.md$/, "") }).first().locator(".att-open").click();
+		await win.locator(".workbench.with-right-pane aside.artifact-viewer").waitFor({ timeout: 10_000 });
+		await win.getByRole("button", { name: "Hide sidebar" }).first().click();
+		await win.locator(".sidebar-toggle-floating").waitFor({ timeout: 5_000 });
+		await win.getByRole("button", { name: "Maximize panel" }).click();
+		await win.locator(".workbench.artifact-pane-maximized").waitFor({ timeout: 5_000 });
+		const maximizedHead = await win.locator(".artifact-viewer-head").evaluate((head) => parseFloat(getComputedStyle(head).paddingLeft) + head.getBoundingClientRect().left);
+		if (maximizedHead < WINDOWS_ROW_END + 14 - 0.5) failures.push(`${at}, a maximized file: its head's text starts at ${maximizedHead.toFixed(1)}, not 14px past the arrows at ${WINDOWS_ROW_END}`);
+		else passes += 1;
+		await checkWindowsLine(win, `${at}, a maximized file`, "after the button");
+		await win.getByRole("button", { name: "Restore panel size" }).click();
+		await win.locator(".artifact-viewer-close").click();
+		await win.locator("aside.artifact-viewer").waitFor({ state: "detached", timeout: 5_000 });
+		await checkWindowsLine(win, `${at}, sidebar hidden`, "after the button");
+		await checkPlace(`${at}, sidebar hidden`, COLLAPSED_CLEARANCE.windows(), win);
+		// Just wider than a phone, where the room's name and Home's content start nearest the arrows.
+		await win.setViewportSize({ width: 800, height: 600 });
+		await checkPlace(`${at}, 800 wide, sidebar hidden`, COLLAPSED_CLEARANCE.windows(), win);
+		await win.goBack();
+		await win.locator(".home-page").waitFor({ timeout: 10_000 });
+		await checkWindowsLine(win, `${at}, 800 wide, Home, sidebar hidden`, "after the button");
+		const homeStart = await win.locator(".home-page .landing-hero").evaluate((hero) => hero.getBoundingClientRect().left);
+		if (homeStart < WINDOWS_ROW_END + 18 - 0.5) failures.push(`${at}, 800 wide, Home, sidebar hidden: its content starts at ${homeStart.toFixed(1)}, not 18px past the arrows at ${WINDOWS_ROW_END}`);
+		else passes += 1;
+		// A narrow window: Home's top bar has no sidebar button and keeps its logo clear; in the room the drawer.
+		await win.setViewportSize({ width: 700, height: 600 });
+		await checkWindowsHomeBar(win, `${at}, narrow, Home`);
+		await win.goForward();
+		await win.locator(".topbar-home-btn").waitFor({ timeout: 10_000 });
+		await checkWindowsLine(win, `${at}, narrow, drawer closed`, "after the button");
+		const bar = await win.evaluate(() => {
+			const home = document.querySelector(".topbar-home-btn")!;
+			const box = home.getBoundingClientRect();
+			return { top: box.top, left: box.left, right: box.right, onTop: home.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)), forward: document.querySelector('.history-arrow[aria-label="Forward"]')!.getBoundingClientRect().right, padding: parseFloat(getComputedStyle(document.querySelector(".app .topbar")!).paddingLeft) };
+		});
+		const barProblems = [
+			...(Math.abs(bar.left - bar.forward - 8) > 0.5 ? [`the home button sits ${(bar.left - bar.forward).toFixed(1)}px from the arrows, not 8`] : []),
+			...(Math.abs(bar.top - WINDOWS.button.top) > 0.5 ? [`the home button's top is ${bar.top.toFixed(1)}, not ${WINDOWS.button.top}`] : []),
+			...(!bar.onTop ? ["something covers the home button"] : []),
+			...(Math.abs(bar.padding - bar.right - 12) > 0.5 ? [`the bar starts ${(bar.padding - bar.right).toFixed(1)}px past the home button, not 12`] : []),
+		];
+		if (barProblems.length > 0) failures.push(`${at}, narrow, drawer closed: ${barProblems.join("; ")}`);
+		else passes += 1;
+		await win.getByRole("button", { name: "Show sidebar" }).first().click();
+		await win.locator(".sidebar-drawer-backdrop").waitFor({ timeout: 5_000 });
+		await checkWindowsLine(win, `${at}, narrow, drawer open`, "the sidebar's end");
+		// A file fills the window at this width: as in the mac app, the sidebar button and the arrows stay on top of it,
+		// its head starts past them, and the drawer opens over it with the arrows on its line.
+		await win.locator(".attachments-entry").click();
+		await win.locator(".att-card").filter({ hasText: FILE.replace(/\.md$/, "") }).first().locator(".att-open").click();
+		await win.locator(".workbench.with-file-pane aside.artifact-viewer").waitFor({ timeout: 10_000 });
+		await checkWindowsLine(win, `${at}, narrow, file open`, "after the button");
+		const narrowHead = await win.locator(".artifact-viewer-head").evaluate((head) => parseFloat(getComputedStyle(head).paddingLeft) + head.getBoundingClientRect().left);
+		if (narrowHead < WINDOWS_ROW_END + 14 - 0.5) failures.push(`${at}, narrow, file open: its head's text starts at ${narrowHead.toFixed(1)}, not 14px past the arrows at ${WINDOWS_ROW_END}`);
+		else passes += 1;
+		// One line with them, as the mac's head is one with its row: the file's name and its close centre on the sidebar button's glyph.
+		await win.mouse.move(350, 500);
+		await win.locator("aside.artifact-viewer").evaluate((viewer) => Promise.all(viewer.getAnimations().map((animation) => animation.finished)));
+		const lineInk = [await inkOf(win, decoder, ".sidebar-toggle-floating svg", { pad: 1 }), await inkOf(win, decoder, ".artifact-viewer-head .artifact-viewer-template", { pad: 1 }), await inkOf(win, decoder, ".artifact-viewer-head .artifact-viewer-close svg", { pad: 1 })] as const;
+		const [buttonInk, nameInk, closeInk] = lineInk;
+		if (typeof buttonInk === "string" || typeof nameInk === "string" || typeof closeInk === "string") failures.push(`${at}, narrow, file open: ${lineInk.filter((ink) => typeof ink === "string").join(", ")}`);
+		else if (Math.abs(nameInk.centre - buttonInk.centre) > 1 || Math.abs(closeInk.centre - buttonInk.centre) > 1) failures.push(`${at}, narrow, file open: the file's name centres at ${nameInk.centre.toFixed(1)} and its close at ${closeInk.centre.toFixed(1)}, the sidebar button at ${buttonInk.centre.toFixed(1)}`);
+		else passes += 1;
+		await win.locator(".sidebar-toggle-floating").click();
+		await win.locator(".sidebar-drawer-backdrop").waitFor({ timeout: 5_000 });
+		await checkWindowsLine(win, `${at}, narrow, file and drawer open`, "the sidebar's end");
+		// Home from the drawer leaves the sidebar open in name: the arrows still keep the bar's place.
+		await win.locator(".sidebar-home-btn").click();
+		await win.locator(".home-page").waitFor({ timeout: 10_000 });
+		await checkWindowsHomeBar(win, `${at}, narrow, Home from the drawer`);
+		await closeContext(win.context());
 	}
 
 	assert(failures.length === 0, `the room's top bar:\n  ${failures.join("\n  ")}`);
 	console.log(`  ok the room name starts where the answers do and the last action's glyph ends on the workspace banner's edge, with no "Talking to", at 1280 and 1600 wide, sidebar open and collapsed, viewer closed and open, browser and mac look`);
 	console.log("  ok in the mac app's look the room name, trash, gear, the file's name and icons, and the approval preview's head centre on the window buttons' row, at 1x, 2x and 125% zoom, sidebar open and hidden; a long name beside the file pane is one line ending in \"…\"; the row drags, its buttons click, and the sidebar's wordmark stays");
+	console.log("  ok the arrows keep one size and place beside the sidebar button at each zoom, sidebar open and hidden, in fullscreen and at phone width; they stay out of the drag area and the row clears them, a maximized file's head included; in fullscreen the sidebar button's glyph starts on the sidebar's text line");
+	console.log("  ok in the Windows app, at 80%, 100% and 125% zoom, the arrows end the open sidebar's top line and follow the sidebar button with it hidden, at Home and in a room, and end the open drawer's line in a narrow window, with the button, the logo, the home button and the room's name clear of them; in a narrow window they stay over Home's top bar and over an open file, as in the mac app");
 	console.log(`  ok at 2x the sidebar button's glyph centres on the wordmark's small letters`);
+	console.log("  ok at phone width in the mac app's look no bar drags over the open drawer, its button closes it over the room and over a file, and closed, the bars drag; the sidebar button and the arrows stay on top of a file");
 	console.log("  ok the collapsed sidebar's button is only its glyph at rest; hover and keyboard focus show its square, focus with a ring");
 	console.log(`  ok at phone width the bar has no "Talking to", nothing in it overlaps, and the sidebar button keeps its resting square`);
 	console.log(`room-topbar-ui-smoke: ${passes} checks passed`);

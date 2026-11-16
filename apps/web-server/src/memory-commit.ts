@@ -2,13 +2,16 @@
 //
 // A save writes several files: a Remember writes the archive copy, the memory
 // file, the fresh conversation, the old one closed, agent.json and an event
-// record; a memory write its snapshot, the archive, the memory file, a raised
+// record; a memory write its snapshot, the memory file, the archive, a raised
 // limit and a record; a Forget closes the conversation and opens a fresh one.
 // A crash between two of them used to leave the room half saved. Now every
-// save has ONE commit point and an intent written before anything else:
+// save has ONE commit point and an intent written before anything else, and
+// each file goes through the runtime's writeFileAtomic, so it reaches the disk
+// whole and in this order:
 //
 //   1. the intent, `<room>/runtime/commit/<kind>.json`: ids, times, counts and
-//      the record the save will write, never a conversation's words;
+//      the record the save will write, never a conversation's words; a memory
+//      write's also holds the archive rows it still owes, whole notes included;
 //   2. the writes before the commit point;
 //   3. the commit point itself (the memory file for Remember and a memory
 //      write, the old conversation closed for Forget);
@@ -34,6 +37,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "@exxeta/exxperts-runtime";
 
 export type CommitKind = "remember" | "memory" | "forget";
 
@@ -52,9 +56,7 @@ export function commitIntentPath(roomDir: string, kind: CommitKind): string {
 export function writeCommitIntent(roomDir: string, kind: CommitKind, intent: object): void {
 	const file = commitIntentPath(roomDir, kind);
 	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-	const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-	fs.writeFileSync(tmp, JSON.stringify({ version: 1, ...intent }, null, 2) + "\n", { mode: 0o600 });
-	fs.renameSync(tmp, file);
+	writeFileAtomic(file, JSON.stringify({ version: 1, ...intent }, null, 2) + "\n");
 }
 
 export function readCommitIntent<T>(roomDir: string, kind: CommitKind): T | null {

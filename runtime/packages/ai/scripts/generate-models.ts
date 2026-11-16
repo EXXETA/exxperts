@@ -17,10 +17,25 @@ import {
 	type ModelThinkingLevel,
 	type OpenAICompletionsCompat,
 } from "../src/types.js";
+// The catalogue as committed, read before this run overwrites it.
+import { MODELS as COMMITTED_MODELS } from "../src/models.generated.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageRoot = join(__dirname, "..");
+
+// A source that cannot be read must stop the run: writing without it would
+// drop every model it lists, and a room using one would lose its model.
+async function fetchSourceJson(url: string): Promise<any> {
+	const response = await fetch(url);
+	if (!response.ok) throw new Error(`${url} answered ${response.status} ${response.statusText}`);
+	return response.json();
+}
+
+function requireModels(models: Model<any>[]): Model<any>[] {
+	if (models.length === 0) throw new Error("it listed no models");
+	return models;
+}
 
 interface ModelsDevModel {
 	id: string;
@@ -352,6 +367,14 @@ function isGemma4Model(modelId: string): boolean {
 	return /gemma-?4/.test(modelId.toLowerCase());
 }
 
+function isGemini4Model(modelId: string): boolean {
+	return /gemini-4(?:\.\d+)?-/.test(modelId.toLowerCase());
+}
+
+// Google's thinking guide (aistudio.google.com/docs/thinking) names xhigh for
+// Gemini 4 Hydrogen only; Carbon and Argon stop at high.
+const GEMINI_4_XHIGH_MODELS = new Set(["gemini-4-hydrogen"]);
+
 function applyThinkingLevelMetadata(model: Model<any>): void {
 	// A map that already exists here was shaped where the model was built, by a
 	// provider that knows its own reasoning surface (Together's toggle, for
@@ -443,6 +466,15 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	if (isGoogleThinkingApi(model) && isGemini3FlashModel(model.id)) {
 		mergeThinkingLevelMap(model, { off: null });
 	}
+	// Gemini 4 cannot stop thinking and has no minimal level. The provider
+	// sends it a thinkingLevel, never the budget Google deprecated for it.
+	if (isGoogleThinkingApi(model) && isGemini4Model(model.id)) {
+		mergeThinkingLevelMap(model, {
+			off: null,
+			minimal: null,
+			...(GEMINI_4_XHIGH_MODELS.has(model.id) ? { xhigh: "XHIGH" } : {}),
+		});
+	}
 	if (isGoogleThinkingApi(model) && isGemma4Model(model.id)) {
 		mergeThinkingLevelMap(model, { off: null, minimal: "MINIMAL", low: null, medium: null, high: "HIGH" });
 	}
@@ -485,8 +517,7 @@ function getBedrockBaseUrl(modelId: string): string {
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
-		const response = await fetch("https://openrouter.ai/api/v1/models");
-		const data = await response.json();
+		const data = await fetchSourceJson("https://openrouter.ai/api/v1/models");
 
 		const models: Model<any>[] = [];
 
@@ -511,6 +542,9 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 			const outputCost = parseFloat(model.pricing?.completion || "0") * 1_000_000;
 			const cacheReadCost = parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000;
 			const cacheWriteCost = parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000;
+			// OpenRouter prices a router that picks the model per request at -1;
+			// as a row that price would subtract from a room's cost.
+			if (inputCost < 0 || outputCost < 0) continue;
 
 			const normalizedModel: Model<any> = {
 				id: modelKey,
@@ -533,18 +567,16 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 		}
 
 		console.log(`Fetched ${models.length} tool-capable models from OpenRouter`);
-		return models;
+		return requireModels(models);
 	} catch (error) {
-		console.error("Failed to fetch OpenRouter models:", error);
-		return [];
+		throw new Error(`Could not read OpenRouter; nothing was written`, { cause: error });
 	}
 }
 
 async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from Vercel AI Gateway API...");
-		const response = await fetch(`${AI_GATEWAY_MODELS_URL}/models`);
-		const data = await response.json();
+		const data = await fetchSourceJson(`${AI_GATEWAY_MODELS_URL}/models`);
 		const models: Model<any>[] = [];
 
 		const toNumber = (value: string | number | undefined): number => {
@@ -591,18 +623,16 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 		}
 
 		console.log(`Fetched ${models.length} tool-capable models from Vercel AI Gateway`);
-		return models;
+		return requireModels(models);
 	} catch (error) {
-		console.error("Failed to fetch Vercel AI Gateway models:", error);
-		return [];
+		throw new Error(`Could not read Vercel AI Gateway; nothing was written`, { cause: error });
 	}
 }
 
 async function loadModelsDevData(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from models.dev API...");
-		const response = await fetch("https://models.dev/api.json");
-		const data = await response.json();
+		const data = await fetchSourceJson("https://models.dev/api.json");
 		recordUpstreamEffortLadders(data);
 
 		const models: Model<any>[] = [];
@@ -1091,6 +1121,14 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						// Qwen/DashScope uses enable_thinking at the top level.
 						compat = { ...(compat ?? {}), thinkingFormat: "qwen" };
 					}
+					// models.dev moved these two to the Anthropic SDK after rooms
+					// had them on /v1/chat/completions, the path the Qwen rows
+					// above need; they stay there until a real answer shows the
+					// Anthropic path works for them.
+					if (modelId === "qwen3.7-plus" || modelId === "qwen3.8-max") {
+						api = "openai-completions";
+						baseUrl = `${variant.basePath}/v1`;
+					}
 				}
 
 				models.push({
@@ -1324,10 +1362,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		}
 
 		console.log(`Loaded ${models.length} tool-capable models from models.dev`);
-		return models;
+		return requireModels(models);
 	} catch (error) {
-		console.error("Failed to load models.dev data:", error);
-		return [];
+		throw new Error(`Could not read models.dev; nothing was written`, { cause: error });
 	}
 }
 
@@ -2242,6 +2279,21 @@ async function generateModels() {
 		}
 	}
 
+	// A row the committed catalogue has and today's sources lack stays as it
+	// was: a room may still use it, and taking a model out is a decision for a
+	// person, never a side effect of a refresh.
+	const kept: string[] = [];
+	for (const [providerId, committedModels] of Object.entries(COMMITTED_MODELS as Record<string, Record<string, Model<any>>>)) {
+		for (const [modelId, model] of Object.entries(committedModels)) {
+			providers[providerId] ??= {};
+			if (providers[providerId][modelId]) continue;
+			providers[providerId][modelId] = model;
+			kept.push(`${providerId}/${modelId}`);
+		}
+	}
+	for (const row of kept) console.log(`Kept ${row}: in the committed catalogue, not in today's sources`);
+	console.log(`Kept ${kept.length} rows today's sources lack`);
+
 	// Generate TypeScript file
 	let output = `// This file is auto-generated by scripts/generate-models.ts
 // Do not edit manually - run 'npm run generate-models' to update
@@ -2315,4 +2367,7 @@ export const MODELS = {
 }
 
 // Run the generator
-generateModels().catch(console.error);
+generateModels().catch((error) => {
+	console.error(error);
+	process.exitCode = 1;
+});

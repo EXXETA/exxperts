@@ -1866,6 +1866,7 @@ export class AgentSession {
 					effectiveInstructions,
 					this._compactionAbortController.signal,
 					this.thinkingLevel,
+					this.agent.metadata,
 				);
 				summary = result.summary;
 				firstKeptEntryId = result.firstKeptEntryId;
@@ -2139,6 +2140,7 @@ export class AgentSession {
 					agentPreserve,
 					this._autoCompactionAbortController.signal,
 					this.thinkingLevel,
+					this.agent.metadata,
 				);
 				summary = compactResult.summary;
 				firstKeptEntryId = compactResult.firstKeptEntryId;
@@ -3015,6 +3017,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
+					metadata: this.agent.metadata,
 				});
 				if (result.aborted) {
 					return { cancelled: true, aborted: true };

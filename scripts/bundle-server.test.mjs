@@ -126,6 +126,9 @@ function fixtureTree(overrides = {}) {
 			"export async function adminConfig(): Promise<string> { return (await import(ADAPTER_CONFIG)).marker; }",
 		].join("\n"),
 		"apps/web-server/src/shelf-parse-worker.mjs": "process.exit(0);\n",
+		"apps/web-server/src/room-box/box-worker.mjs": "process.exit(0);\n",
+		"apps/web-server/src/room-box/file-worker.mjs": "process.exit(0);\n",
+		"apps/web-server/src/room-box/windows/box-worker-windows.ts": 'import { getPlatformSupport } from "@microsoft/mxc-sdk/v1";\nconsole.log(typeof getPlatformSupport);\n',
 		"pi-package/extensions/mcp/index.ts": [
 			'const CONNECTORS_PANEL_SPECIFIER = "./connectors-panel.ts" as string;',
 			"export async function panel(): Promise<string> { return (await import(CONNECTORS_PANEL_SPECIFIER)).marker; }",
@@ -176,7 +179,7 @@ test("the bundle copies the files its code reads beside itself, writes the licen
 	const mapFile = path.join(makeTree({}), "maps", "server.mjs.map");
 	await bundleServer({ root: dir, mapFile, log: () => {} });
 	const outDir = path.join(dir, "apps", "web-server", "dist");
-	assert.deepEqual(fs.readdirSync(outDir).sort(), ["app-bridge.bundle.js", "photon_rs_bg.wasm", "server.mjs", "server.mjs.licenses.txt", "shelf-parse-worker.mjs"]);
+	assert.deepEqual(fs.readdirSync(outDir).sort(), ["app-bridge.bundle.js", "box-worker-windows.mjs", "box-worker.mjs", "file-worker.mjs", "photon_rs_bg.wasm", "server.mjs", "server.mjs.licenses.txt", "shelf-parse-worker.mjs"]);
 	assert.ok(fs.statSync(mapFile).size > 0);
 	const licences = fs.readFileSync(path.join(outDir, "server.mjs.licenses.txt"), "utf8");
 	assert.match(licences, /pi-mcp-adapter 2\.10\.0 \(MIT\)[\s\S]*MIT licence text of the adapter/);
@@ -324,6 +327,39 @@ test("the shelf worker may import only packages that ship as files", async () =>
 	await assert.rejects(bundleServer({ root: dir, log: () => {} }), /left-pad/);
 });
 
+const WINDOWS_WORKER = "apps/web-server/src/room-box/windows/box-worker-windows.ts";
+
+test("the Windows box worker is a bundle of its own beside the server, our code inlined and the sandbox kit left outside", async () => {
+	const dir = fixtureTree({
+		[WINDOWS_WORKER]: 'import { getPlatformSupport } from "@microsoft/mxc-sdk/v1";\nimport { line } from "./worker-line.ts";\nconsole.log(line, typeof getPlatformSupport);\n',
+		"apps/web-server/src/room-box/windows/worker-line.ts": 'export const line: string = "our-line-inlined";\n',
+	});
+	await bundleServer({ root: dir, log: () => {} });
+	const worker = fs.readFileSync(path.join(dir, "apps", "web-server", "dist", "box-worker-windows.mjs"), "utf8");
+	assert.match(worker, /our-line-inlined/);
+	assert.match(worker, /from\s*"@microsoft\/mxc-sdk\/v1"/);
+	assert.doesNotMatch(worker, /worker-line\.ts/, "the shipped worker carries no module path comments");
+	assert.ok(!fs.existsSync(path.join(dir, "apps", "web-server", "dist", "box-worker-windows.mjs.map")), "the worker ships no source map");
+	fs.rmSync(path.join(dir, "apps", "web-server", "dist", "box-worker-windows.mjs"));
+	assert.deepEqual(checkServerFiles(dir), ["apps/web-server/dist/box-worker-windows.mjs is missing"]);
+});
+
+test("the Windows box worker passes the server's checks: no computed import, no inlined package, no package loaded by name", async () => {
+	const kit = 'import "@microsoft/mxc-sdk/v1";\n';
+	const leftPad = {
+		"node_modules/left-pad/package.json": JSON.stringify({ name: "left-pad", version: "1.3.0", license: "WTFPL", main: "index.js" }),
+		"node_modules/left-pad/index.js": "module.exports = (text) => text;\n",
+	};
+	for (const [source, message] of [
+		[`${kit}const name = process.argv[2];\nawait import(name);\n`, /box-worker-windows\.ts \(box-worker-windows\.mjs line \d+\) loads a module by a computed name/],
+		[`${kit}import pad from "left-pad";\nconsole.log(pad("x"));\n`, /box-worker-windows\.mjs inlines node_modules\/left-pad\/index\.js/],
+		[`${kit}import { createRequire } from "node:module";\nconsole.log(createRequire(import.meta.url)("left-pad"));\n`, /loads left-pad by name at run time \(box-worker-windows\.mjs line \d+\)/],
+	]) {
+		await assert.rejects(bundleServer({ root: fixtureTree({ ...leftPad, [WINDOWS_WORKER]: source }), log: () => {} }), message, source);
+	}
+	await bundleServer({ root: fixtureTree({ ...leftPad, [WINDOWS_WORKER]: `${kit}import { platform } from "node:os";\nconsole.log(platform());\n` }), log: () => {} });
+});
+
 test("a package with neither a licence file nor a license field fails the bundle", async () => {
 	const dir = fixtureTree({
 		"apps/web-server/src/index.ts": 'import "@silvia-odwyer/photon-node";\nimport "pi-mcp-adapter/ui-server.ts";\nimport { x } from "unlicensed";\nconsole.log(x);\n',
@@ -350,6 +386,17 @@ test("checkServerFiles finds a pruned package or asset in a payload", async () =
 	const problems = checkServerFiles(dir).join("\n");
 	assert.match(problems, /qrcode-terminal/);
 	assert.match(problems, /photon_rs_bg\.wasm/);
+});
+
+test("checkServerFiles lets a payload leave out only the shipped packages it names", async () => {
+	const dir = fixtureTree();
+	await bundleServer({ root: dir, log: () => {} });
+	fs.rmSync(path.join(dir, "node_modules", "@anthropic-ai", "sandbox-runtime"), { recursive: true });
+	const leaveOut = ["@anthropic-ai/sandbox-runtime"];
+	assert.match(checkServerFiles(dir).join("\n"), /@anthropic-ai\/sandbox-runtime is missing/);
+	assert.deepEqual(checkServerFiles(dir, undefined, { leaveOut }), []);
+	fs.rmSync(path.join(dir, "node_modules", "jszip"), { recursive: true });
+	assert.deepEqual(checkServerFiles(dir, undefined, { leaveOut }), ["jszip is missing"]);
 });
 
 test("reviewed runtime places pass whether the runtime is linked from its workspace or copied into node_modules", async () => {

@@ -25,7 +25,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -167,18 +167,12 @@ try {
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		const settled = () => waitUntil(async () => (await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/status`)).json())?.activeThread?.inFlight === false, "the turn settled", 30000);
-		// A new room opens its session after the page shows; a send that came too early stays in the box.
 		// Sent means it reached the endpoint: a failed message comes back to the box afterwards.
 		const send = async (text: string) => {
 			const seen = calls.filter((words) => words.includes(text)).length;
-			const reached = () => calls.filter((words) => words.includes(text)).length > seen;
 			await composer.fill(text);
-			await waitUntil(async () => {
-				if (reached()) return true;
-				if ((await composer.inputValue()) === text) await composer.press("Enter");
-				await new Promise((resolve) => setTimeout(resolve, 500));
-				return reached();
-			}, `"${text}" was sent`, 15000);
+			await sendFromBox(page);
+			await waitUntil(() => calls.filter((words) => words.includes(text)).length > seen, `"${text}" was sent`, 15000);
 		};
 		const callsFor = (pattern: RegExp) => calls.filter((words) => pattern.test(words)).length;
 		// Once the server has settled the turn, the page shows its end: Stop gives way to Send.

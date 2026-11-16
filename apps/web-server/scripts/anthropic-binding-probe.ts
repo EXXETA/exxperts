@@ -55,9 +55,10 @@ const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 // runtime/packages/ai/src/providers/anthropic.ts).
 const OAUTH_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
 // Same value as claudeCodeVersion in the provider, which is not exported:
-// 2.1.280, the minimum the subscription named for claude-opus-5-5
-// (error_code claude_code_version_too_old on 2.1.251).
-const CLAUDE_CODE_VERSION = "2.1.280";
+// 2.1.290, the minimum the subscription named for claude-fable-5-2 ("Claude
+// Code 2.1.280 does not support this model; version 2.1.290 or newer is
+// required").
+const CLAUDE_CODE_VERSION = "2.1.290";
 // The provider's default: a third of the model's output limit (128000 for the
 // Claude 5 line).
 const MAX_TOKENS = (128000 / 3) | 0;

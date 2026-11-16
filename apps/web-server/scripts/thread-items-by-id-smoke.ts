@@ -80,6 +80,16 @@ row("a files-only question the page never saved lands with its chips, where its 
 	const landed = landTurnItems(file, own, place("k1", ["k0", "k1"], "k0-a1"), none);
 	assert(ids(landed) === "k0,k0-a1,k1,k1-a1" && byId(landed, "k1").attachments.length === 2, `the question with both chips, then the answer, got ${ids(landed)}`);
 });
+row("a question the page never saved lands after what the conversation ended on when it was sent", () => {
+	// A line the page added under the turn before: the new question goes after it, not between the two.
+	const file = [q("k0", "Earlier"), a("k0-a1", "Cut", { landed: true }), { kind: "system", id: "m9", text: "Stopped.", level: "error" }];
+	const landed = landTurnItems(file, [q("k1", "Next"), a("k1-a1", "Done.")], place("k1", ["k0", "k1"], "m9"), none);
+	assert(ids(landed) === "k0,k0-a1,m9,k1,k1-a1", `after the page's line, got ${ids(landed)}`);
+	// The turn before landed more after the message was sent: the new question goes after all of it.
+	const later = [q("k0", "Earlier"), a("k0-a1", "Part one", { landed: true }), a("k0-a2", "Part two", { landed: true })];
+	const after = landTurnItems(later, [q("k1", "Next")], place("k1", ["k0", "k1"], "k0-a1"), none);
+	assert(ids(after) === "k0,k0-a1,k0-a2,k1", `after the turn before's last part, got ${ids(after)}`);
+});
 row("a late save of the three questions keeps each turn's items in its own turn", () => {
 	let file: ThreadItem[] = [];
 	file = landTurnItems(file, [q("k1", "One"), took("s1", "And this"), a("k1-a1", "First answer")], place("k1", ["k1"], null), none);

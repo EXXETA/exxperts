@@ -181,7 +181,7 @@ async function openWatched(browser: Browser, sharedServer: boolean): Promise<Wat
 async function enterRoom(watched: Watched): Promise<void> {
 	const before = watched.roomReady();
 	await watched.page.locator(".persistent-agent-card").filter({ hasText: ROOM }).locator(".persistent-agent-primary-actions .landing-action").first().click();
-	await watched.page.locator('button.icon-btn[aria-label="Room settings"]').waitFor({ timeout: 15000 });
+	await watched.page.locator(".topbar-actions").getByRole("button", { name: "Room settings", exact: true }).waitFor({ timeout: 15000 });
 	await until(() => watched.roomReady() > before, "the room's live connection said ready");
 }
 
@@ -205,7 +205,7 @@ async function crash(page: Page): Promise<void> {
 		throw new Error("no error boundary in the page");
 	});
 	await page.getByText(BOUNDARY_LINE).waitFor({ timeout: 10000 });
-	assert((await page.locator(".persistent-agent-card, button.icon-btn[aria-label=\"Room settings\"]").count()) === 0, "the crash screen shows, but the app is still drawn");
+	assert((await page.locator(".persistent-agent-card").or(page.locator(".topbar-actions").getByRole("button", { name: "Room settings", exact: true })).count()) === 0, "the crash screen shows, but the app is still drawn");
 }
 
 /**

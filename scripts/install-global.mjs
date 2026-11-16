@@ -142,7 +142,8 @@ function detectNpm() {
 // values via environment, so a shell layer dropping one leaves the other.
 const npmVersionString = detectNpm();
 const tarball = path.join(root, filename);
-const scriptAllows = [tarball, pkg.name, ...Object.keys(pkg.allowScripts ?? {})];
+// A package set to false in allowScripts is one whose script never runs.
+const scriptAllows = [tarball, pkg.name, ...Object.entries(pkg.allowScripts ?? {}).filter(([, allowed]) => allowed === true).map(([name]) => name)];
 const installArgs = ["install", "-g", tarball, "--allow-remote=all", ...scriptAllows.map((entry) => `--allow-scripts=${entry}`)];
 const installEnv = { ...process.env, npm_config_allow_remote: "all", npm_config_allow_scripts: scriptAllows.join(",") };
 console.log(`[exxperts] npm ${npmVersionString || "(version not detected)"}: allowing the tarball's remote dependency and install scripts for the global step`);

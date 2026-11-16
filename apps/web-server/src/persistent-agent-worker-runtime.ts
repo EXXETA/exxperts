@@ -8,6 +8,7 @@ import {
 import { type CallKind, callCacheRetention } from "./memory-call-cache.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
 import { serverHooks } from "./server-hooks.js";
+import { modelCallMetadata, type UsageKind } from "./usage-log.js";
 
 type RuntimeModel = NonNullable<CreateAgentSessionOptions["model"]>;
 
@@ -59,6 +60,12 @@ export interface IsolatedPersistentAgentWorkerInput<TModelLock extends { provide
 	maxTokens?: number;
 	/** Which kind of call it is: its prompt cache follows the policy for it (memory-call-cache.ts); omitted, the provider default. */
 	callKind?: CallKind;
+	/**
+	 * The room and kind the caller's usage row for this call names, and for a
+	 * call that names no room, the `who` it passes for the row: the call names
+	 * the same person. Omitted, the call names no one.
+	 */
+	attribution?: { agent: string; kind: UsageKind; who?: { person: string; space: string } };
 }
 
 export interface IsolatedPersistentAgentWorkerResult {
@@ -221,6 +228,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		...(workerMaxTokens ? { maxTokens: workerMaxTokens } : {}),
 		...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
 		...(input.callKind ? { cacheRetention: callCacheRetention(input.callKind, model) } : {}),
+		metadata: input.attribution && modelCallMetadata(input.attribution.agent, input.attribution.kind, input.attribution.who),
 		maxRetries: 0,
 		autoCompaction: false,
 		autoRetry: false,

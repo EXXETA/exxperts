@@ -22,7 +22,7 @@
 .memory-budget-value {
 	color: var(--fg);
 	font-size: 13px;
-	font-weight: 500;
+	font-weight: 400;
 	font-variant-numeric: tabular-nums;
 }
 .memory-budget-slider {
@@ -114,20 +114,30 @@
 	color: var(--muted);
 	font-variant-numeric: tabular-nums;
 }
-.memory-history-what { color: var(--fg-soft); min-width: 0; }
+/* The words give way, so Undo and "What changed" stay on the row's line, but
+   never below their longest word: past that the buttons wrap. */
+.memory-history-what { color: var(--fg-soft); flex: 1 1 0; }
 .memory-history-undone {
 	font-size: 10px;
 	color: var(--muted);
 }
 .memory-history-row :is(.rs-btn, .rs-quiet) { margin-left: auto; }
-/* The dialogs widen the gap beside a quiet action; a history row keeps its
-   own, or rows with Undo or What changed sit out of line with the rest. */
-.settings-dialog-pane .memory-history-row:has(> button.rs-quiet) { column-gap: 10px; }
 /* "What changed" sits at the row's end beside Undo, and its fold wraps to a
    full-width line under the row on both surfaces. */
 .memory-history-row, .mem-hist-row { flex-wrap: wrap; }
 .memory-history-row :is(.rs-btn, .rs-quiet) ~ :is(.rs-btn, .rs-quiet) { margin-left: 0; }
 .mem-hist-row .memory-history-toggle { margin-left: auto; flex: 0 0 auto; }
+/* The row's last button ends on the row's right edge, or as near as the pane
+   leaves the focus ring whole: a phone's 16 px side less 4 px. Its first one
+   lets its empty inset stand for the row's 10 px gap, so the words keep the
+   room they have beside bare words. */
+.memory-history-row > .rs-btn:last-of-type { margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 12px)); }
+.memory-history-row > .rs-btn:first-of-type { margin-left: -10px; }
+/* On a phone the date column keeps 15 px beside its widest date, and gives the
+   rest to the words. */
+@media (max-width: 760px) {
+	.memory-history-when { flex-basis: 96px; }
+}
 .memory-history-change { flex: 1 0 100%; min-width: 0; }
 .memory-history-change .mem-diff-note { color: var(--muted); font-size: 12.5px; }
 .memory-topic-count {
@@ -146,7 +156,8 @@
 	padding-left: 18px;
 }
 /* A note: kind and date on the left, its small actions on the right, the
-   text below; a hairline above each note. */
+   text below; a hairline above each note. Where the actions don't fit
+   beside the kind and date, as on a phone, they take a line of their own. */
 .memory-entry {
 	border-top: 1px solid var(--exx-divider);
 	padding: 12px 0;
@@ -155,17 +166,25 @@
 }
 .memory-entry-head {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: space-between;
-	gap: 12px;
+	gap: 4px 12px;
 }
 .memory-entry-head .memory-entry-meta {
 	color: var(--muted);
 }
+/* The buttons' own sides space them; the row's ends are pulled out so the
+   first and last words keep the note's edges (--exx-btn-inset-sm). A note
+   sits 18 px inside the pane on the left, but where its buttons end beside
+   the kind and date they reach the pane's 16 px side: the pull stops 4 px
+   short of it. */
 .memory-entry-tools {
 	display: flex;
-	gap: 14px;
+	gap: 4px;
 	flex-shrink: 0;
+	margin-left: calc(-1 * var(--exx-btn-inset-sm));
+	margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 12px));
 }
 /* The add-note form: labelled fields, Topic and Kind side by side, the
    buttons at the foot on the right. */
@@ -216,9 +235,24 @@
 	gap: 10px;
 	flex-wrap: wrap;
 }
+/* An archived note's Restore and Delete start on the note's edge, or as near
+   as the pane leaves the focus ring whole: a phone's 16 px side less 4 px. */
+.memory-entry-actions {
+	margin-left: calc(-1 * min(var(--exx-btn-inset-sm), 12px));
+}
 .memory-entry-confirm span {
 	font-size: 12.5px;
 	color: var(--muted);
+}
+/* Where the question takes a line of its own, Keep it starts the next one on
+   the note's edge: on a phone, and always for an archived note, whose question
+   is longer. An archived note has only the pane's 16 px side, less the 4 px
+   ring. */
+.memory-archive-entries .memory-entry-confirm > span { flex-basis: 100%; }
+.memory-archive-entries .memory-entry-confirm > .rs-btn:first-of-type { margin-left: calc(-1 * min(var(--exx-btn-inset-sm), 12px)); }
+@media (max-width: 760px) {
+	.memory-entry-confirm > span { flex-basis: 100%; }
+	.memory-entry-confirm > .rs-btn:first-of-type { margin-left: calc(-1 * var(--exx-btn-inset-sm)); }
 }
 .memory-entry-edit,
 .memory-entry-add {
@@ -305,14 +339,6 @@
 	opacity: 0.6;
 }
 
-/* Room settings: the workspace tools in two columns of rows. */
-.workspace-tool-columns {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-	column-gap: 32px;
-	align-items: start;
-}
-
 /* Room settings: session / memento ------------------------------------ */
 .room-session-section {
 	display: flex;
@@ -331,8 +357,9 @@
 	resize: vertical;
 	font-size: 13px;
 	line-height: 1.5;
-	/* The text wraps before Clear, so a click on the text never lands on it. */
-	padding-right: 76px;
+	/* The text wraps before Clear or Undo, 14 px from the edge and up to
+	   67 px wide at a finger's size, so a click on the text never lands on it. */
+	padding-right: 86px;
 }
 /* One button tall without buttons too, so the counter stays put when
    Discard and Save appear. */
@@ -342,7 +369,7 @@
 	justify-content: space-between;
 	gap: 16px;
 	flex-wrap: wrap;
-	min-height: 32px;
+	min-height: var(--exx-btn-h);
 }
 /* Even-width digits: the counter keeps its width as the text crosses the
    limit, so the buttons beside it stay put. */

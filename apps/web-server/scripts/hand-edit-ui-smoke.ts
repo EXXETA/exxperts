@@ -20,7 +20,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Locator, type Page, type Route } from "playwright";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 import { closeBrowser } from "./smoke-close-context.js";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -444,10 +444,10 @@ try {
 			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15_000 });
 			await page.waitForTimeout(800);
 			await composer.fill("When is the exam? We agreed it is in May.");
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await page.getByText("Answer from claude-fake.").waitFor({ timeout: 20_000 });
 			await page.waitForTimeout(800);
-			await page.getByRole("button", { name: "Choose what to keep…" }).click();
+			await page.getByRole("button", { name: "Choose what to keep" }).click();
 			await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 			await dialog.getByRole("button", { name: "Save to memory" }).waitFor({ timeout: 20_000 });
 			proposalReady = true;
@@ -463,7 +463,7 @@ try {
 			await page.keyboard.press("Escape");
 			await page.keyboard.press("Escape");
 			await waitUntil(async () => (await dialog.count()) === 0, "the dialog closes", 5_000);
-			await page.getByRole("button", { name: "Choose what to keep…" }).click();
+			await page.getByRole("button", { name: "Choose what to keep" }).click();
 			await dialog.waitFor({ timeout: 5_000 });
 			if (await dialog.getByRole("button", { name: "Edit", exact: true }).count()) await dialog.getByRole("button", { name: "Edit", exact: true }).click();
 			const value = await dialog.getByLabel(/What to keep/).inputValue();
@@ -515,10 +515,10 @@ try {
 			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15_000 });
 			await page.waitForTimeout(800);
 			await composer.fill(NOTHING_TO_KEEP_CHAT);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await page.getByText("Answer from claude-fake.").waitFor({ timeout: 20_000 });
 			await page.waitForTimeout(800);
-			await page.getByRole("button", { name: "Choose what to keep…" }).click();
+			await page.getByRole("button", { name: "Choose what to keep" }).click();
 			await dialog.getByRole("button", { name: "Generate memory proposal" }).click();
 			await dialog.getByRole("button", { name: "Save to memory" }).waitFor({ timeout: 20_000 });
 			if (await dialog.getByRole("button", { name: "Edit", exact: true }).count()) await dialog.getByRole("button", { name: "Edit", exact: true }).click();

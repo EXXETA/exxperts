@@ -121,9 +121,10 @@ try {
 	assert(!fs.existsSync(controlPolicyPath), "workspace policy must not be written under control room");
 	assert(workspacePolicyCount(selectedRoot) === 1, "selected room should have one workspace policy");
 	assert(workspacePolicyCount(controlRoot) === controlWorkspacePolicyCountBefore, "control room workspace policy count must remain unchanged");
-	const restoredPolicy = readPersistentRoomCapabilityPolicy(agentId, conversationId, { persistentAgentsRoot: tempAgentsRoot });
-	assert(restoredPolicy?.agentId === agentId, "read policy should belong to selected room");
-	const policyViewJson = JSON.stringify(persistentRoomCapabilityPolicyView(restoredPolicy));
+	// A conversation's own settings give way to the room's: none is read, and its file stays in the selected room.
+	assert(readPersistentRoomCapabilityPolicy(agentId, conversationId, { persistentAgentsRoot: tempAgentsRoot }) === null, "a conversation's own policy should give way to the room's");
+	assert(fs.existsSync(selectedPolicyPath), "the conversation's own policy file should stay after a read");
+	const policyViewJson = JSON.stringify(persistentRoomCapabilityPolicyView(policy));
 	assert(!policyViewJson.includes(workspaceRoot), "policy view should not expose raw workspace root");
 	const deletedPolicy = deletePersistentRoomCapabilityPolicy(agentId, conversationId, { persistentAgentsRoot: tempAgentsRoot });
 	assert(deletedPolicy.deleted === true, "delete should remove selected workspace policy");

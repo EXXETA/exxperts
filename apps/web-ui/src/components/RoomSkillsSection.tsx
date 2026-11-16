@@ -18,17 +18,17 @@ function skillProblemLine(state: PersistentRoomEnabledSkillStatus): string | nul
 }
 
 /** The files line's state: allowed, off, or allowed before and changed since. Files run
- * only through Bash, so an allowed skill in a room with Bash off says so. */
+ * only through commands, so an allowed skill in a room with commands off says so. */
 function runFilesLine(executeState: PersistentRoomEnabledSkillStatus["executeState"], count: number, terminalOn: boolean | null, sharedServer: boolean): string {
 	const one = count === 1;
 	if (executeState === "approved" && sharedServer) return one ? "Allowed. On a shared server, its file never runs." : `Allowed. On a shared server, its ${count} files never run.`;
 	if (executeState === "approved" && terminalOn === false) {
 		return one
-			? "Allowed. Its file runs only while this room's Bash is on; turn it on under Folder."
-			: `Allowed. Its ${count} files run only while this room's Bash is on; turn it on under Folder.`;
+			? "Allowed. Its file runs only while this room's commands are on; turn them on under Folder."
+			: `Allowed. Its ${count} files run only while this room's commands are on; turn them on under Folder.`;
 	}
-	// While the room's Bash is not known, say only what is true either way.
-	if (executeState === "approved" && terminalOn === null) return one ? "Allowed. Its file runs only while this room's Bash is on." : `Allowed. Its ${count} files run only while this room's Bash is on.`;
+	// While the room's commands are not known, say only what is true either way.
+	if (executeState === "approved" && terminalOn === null) return one ? "Allowed. Its file runs only while this room's commands are on." : `Allowed. Its ${count} files run only while this room's commands are on.`;
 	if (executeState === "approved") return one ? "Allowed. The room may run its file as it is now." : `Allowed. The room may run its ${count} files as they are now.`;
 	if (executeState === "drifted") {
 		return one
@@ -161,7 +161,7 @@ export function RoomSkillsSection({ status, terminalOn = null, onOpenSkillsLibra
 					<RsInfo text="Each enabled skill adds a ~100-token index entry to every turn of this room. Enabling or disabling takes effect right away, from the room's next reply on; a changed or removed skill stops being injected immediately. A skill's full instructions load only when the room reads it and are never memorized." />
 				</>}
 				actions={loaded && library.length > enabledNames.size && !pickerOpen
-					? <button className="rs-btn" onClick={() => { setPickerOpen(true); setQuery(""); }}>Enable skills…</button>
+					? <button className="rs-btn" onClick={() => { setPickerOpen(true); setQuery(""); }}>Enable skills</button>
 					: loaded && library.length === 0 && enabled.length === 0 && onOpenSkillsLibrary
 						? <button className="rs-btn" type="button" onClick={onOpenSkillsLibrary}>Open skills</button>
 						: null}
@@ -178,7 +178,7 @@ export function RoomSkillsSection({ status, terminalOn = null, onOpenSkillsLibra
 						<div className="room-skills-review">
 							<div className="room-skills-review-head">
 								<strong>Review “{reviewing.displayName || reviewing.name}” before re-enabling</strong>
-								<button className="icon-btn" onClick={() => setReviewing(null)} aria-label="Close review">Close</button>
+								<button className="rs-btn" onClick={() => setReviewing(null)} aria-label="Close review">Close</button>
 							</div>
 							<p className="room-skills-warn">This is the skill's current content, which changed since you first enabled it. Read it, then re-enable only if you trust the change.</p>
 							{reviewing.scanFindings && reviewing.scanFindings.length > 0 && (
@@ -273,7 +273,7 @@ export function RoomSkillsSection({ status, terminalOn = null, onOpenSkillsLibra
 									autoFocus
 									onChange={(e) => setQuery(e.target.value)}
 								/>
-								<button className="icon-btn" aria-label="Close skill picker" onClick={() => setPickerOpen(false)}>✕</button>
+								<button className="rs-btn rs-btn-icon" aria-label="Close skill picker" onClick={() => setPickerOpen(false)}>✕</button>
 							</div>
 							<div className="room-skills-picker-list">
 								{available.length === 0 && <p className="ai-setup-copy">{query.trim() ? "No skills match." : "Everything in your library is already enabled."}</p>}

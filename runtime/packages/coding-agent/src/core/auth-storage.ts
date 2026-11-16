@@ -18,6 +18,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "f
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.js";
+import { acquireLockSyncWithRetry, ownedLockFs } from "./owned-lock.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
 export type ApiKeyCredential = {
@@ -66,40 +67,13 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 		}
 	}
 
-	private acquireLockSyncWithRetry(path: string): () => void {
-		const maxAttempts = 10;
-		const delayMs = 20;
-		let lastError: unknown;
-
-		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			try {
-				return lockfile.lockSync(path, { realpath: false });
-			} catch (error) {
-				const code =
-					typeof error === "object" && error !== null && "code" in error
-						? String((error as { code?: unknown }).code)
-						: undefined;
-				if (code !== "ELOCKED" || attempt === maxAttempts) {
-					throw error;
-				}
-				lastError = error;
-				const start = Date.now();
-				while (Date.now() - start < delayMs) {
-					// Sleep synchronously to avoid changing callers to async.
-				}
-			}
-		}
-
-		throw (lastError as Error) ?? new Error("Failed to acquire auth storage lock");
-	}
-
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
 		this.ensureParentDir();
 		this.ensureFileExists();
 
 		let release: (() => void) | undefined;
 		try {
-			release = this.acquireLockSyncWithRetry(this.authPath);
+			release = acquireLockSyncWithRetry(this.authPath);
 			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
 			const { result, next } = fn(current);
 			if (next !== undefined) {
@@ -137,6 +111,9 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 					randomize: true,
 				},
 				stale: 30000,
+				// A refresh crosses the network, and a sync reader's stale time is ten seconds.
+				update: 5000,
+				fs: ownedLockFs,
 				onCompromised: (err) => {
 					lockCompromised = true;
 					lockCompromisedError = err;
@@ -185,6 +162,11 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
 	}
 }
 
+// A key the process's start provides for one provider, held in memory only and
+// never written: every instance asks it first, for that provider alone, so a
+// reader made anywhere gets it without a stored copy. Set at most once.
+let processKey: { readonly providerId: string; readonly key: string } | undefined;
+
 /**
  * Credential storage backed by a JSON file.
  */
@@ -211,6 +193,17 @@ export class AuthStorage {
 		const storage = new InMemoryAuthStorageBackend();
 		storage.withLock(() => ({ result: undefined, next: JSON.stringify(data, null, 2) }));
 		return AuthStorage.fromStorage(storage);
+	}
+
+	/**
+	 * Set the process's key for one provider, once, before any reader asks:
+	 * getApiKey, hasAuth and getAuthStatus of every instance answer it first for
+	 * that provider, and for no other. A second call throws.
+	 */
+	static setProcessKey(providerId: string, key: string): void {
+		if (processKey) throw new Error("the process key is already set");
+		if (!providerId || !key) throw new Error("the process key needs a provider id and a key");
+		processKey = Object.freeze({ providerId, key });
 	}
 
 	/**
@@ -329,6 +322,7 @@ export class AuthStorage {
 	 * Unlike getApiKey(), this doesn't refresh OAuth tokens.
 	 */
 	hasAuth(provider: string): boolean {
+		if (processKey?.providerId === provider) return true;
 		if (this.runtimeOverrides.has(provider)) return true;
 		if (this.data[provider]) return true;
 		if (getEnvApiKey(provider)) return true;
@@ -340,6 +334,10 @@ export class AuthStorage {
 	 * Return auth status without exposing credential values or refreshing tokens.
 	 */
 	getAuthStatus(provider: string): AuthStatus {
+		if (processKey?.providerId === provider) {
+			return { configured: true, source: "runtime", label: "set by the server" };
+		}
+
 		if (this.data[provider]) {
 			return { configured: true, source: "stored" };
 		}
@@ -446,6 +444,7 @@ export class AuthStorage {
 	/**
 	 * Get API key for a provider.
 	 * Priority:
+	 * 0. The process key, for its one provider (setProcessKey)
 	 * 1. Runtime override (CLI --api-key)
 	 * 2. API key from auth.json
 	 * 3. OAuth token from auth.json (auto-refreshed with locking)
@@ -453,6 +452,10 @@ export class AuthStorage {
 	 * 5. Fallback resolver (models.json custom providers)
 	 */
 	async getApiKey(providerId: string, options?: { includeFallback?: boolean }): Promise<string | undefined> {
+		if (processKey?.providerId === providerId) {
+			return processKey.key;
+		}
+
 		// Runtime override takes highest priority
 		const runtimeKey = this.runtimeOverrides.get(providerId);
 		if (runtimeKey) {
@@ -460,6 +463,12 @@ export class AuthStorage {
 		}
 
 		const cred = this.data[providerId];
+
+		// A shared server serves no subscription: a sign-in gives no key and is never
+		// refreshed, and these two providers are subscriptions whatever the entry's type.
+		if (process.env.EXXPERTS_SHARED_SERVER === "1" && cred && (cred.type === "oauth" || providerId === "openai-codex" || providerId === "github-copilot")) {
+			return undefined;
+		}
 
 		if (cred?.type === "api_key") {
 			return resolveConfigValue(cred.key);

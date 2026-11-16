@@ -24,7 +24,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import type { GoogleThinkingLevel } from "./google-shared.js";
+import { type GoogleThinkingLevel, getGemini4ThinkingLevel, isGemini4Model } from "./google-shared.js";
 import {
 	convertMessages,
 	convertTools,
@@ -56,6 +56,8 @@ const THINKING_LEVEL_MAP: Record<GoogleThinkingLevel, ThinkingLevel> = {
 	LOW: ThinkingLevel.LOW,
 	MEDIUM: ThinkingLevel.MEDIUM,
 	HIGH: ThinkingLevel.HIGH,
+	// Gemini 4 Hydrogen's top level; @google/genai's enum does not name it yet.
+	XHIGH: "XHIGH" as ThinkingLevel,
 };
 
 // Counter for generating unique tool call IDs
@@ -311,6 +313,13 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
 	const effort = (clampedReasoning === "off" ? "high" : clampedReasoning) as ClampedThinkingLevel;
 	const geminiModel = model as unknown as Model<"google-generative-ai">;
 
+	if (isGemini4Model(geminiModel)) {
+		return streamGoogleVertex(model, context, {
+			...base,
+			thinking: { enabled: true, level: getGemini4ThinkingLevel(clampedReasoning) },
+		} satisfies GoogleVertexOptions);
+	}
+
 	if (isGemini3ProModel(geminiModel) || isGemini3FlashModel(geminiModel)) {
 		return streamGoogleVertex(model, context, {
 			...base,
@@ -505,6 +514,9 @@ function getDisabledThinkingConfig(model: Model<"google-vertex">): ThinkingConfi
 	}
 	if (isGemini3FlashModel(geminiModel)) {
 		return { thinkingLevel: ThinkingLevel.MINIMAL };
+	}
+	if (isGemini4Model(geminiModel)) {
+		return { thinkingLevel: ThinkingLevel.LOW };
 	}
 
 	// Gemini 2.x supports disabling via thinkingBudget = 0.

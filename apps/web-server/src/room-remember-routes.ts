@@ -1,7 +1,7 @@
 import { getAgentDir } from "@exxeta/exxperts-runtime";
 import { beginRememberGeneration, buildCheckpointProposal, REMEMBER_WORKER_MAX_OUTPUT_TOKENS, assertRememberReadsOpenConversation, checkpointProposalStillFresh, REMEMBER_ALREADY_GENERATING_MESSAGE, getPersistentAgentThread, createPersistentAgentInstance, getRememberGeneration, estimateCheckpointRead, parseCheckpointApprovalRequest, writeApprovedCheckpoint, buildConsultAnswer } from "./persistent-agents.js";
 import { resolvePersistentRoomEffectiveWorkspacePolicy, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
-import { createRoomModelCatalog, parseModelLock, rememberSaveMemoryModels, type RoomModelCatalog } from "./room-models.js";
+import { createRoomModelCatalog, keepChatPickAsRoomModel, parseModelLock, rememberSaveMemoryModels, type RoomModelCatalog } from "./room-models.js";
 import fs from "node:fs";
 import path from "node:path";
 import { persistentAgentModelLocksEqual } from "./persistent-agent-ai-profiles.js";
@@ -83,6 +83,7 @@ async function runRememberJob(id: string, conversationId: string, request: Recor
 					timeoutMs: MAINTENANCE_WORKER_TIMEOUT_MS,
 					idleTimeoutMs: MODEL_CALL_IDLE_TIMEOUT_MS,
 					callKind,
+					attribution: { agent: id, kind: "upkeep" },
 				});
 			} catch (error) {
 				// A failed call is paid for too, when it moved tokens.
@@ -288,7 +289,12 @@ app.post("/api/persistent-agents/:id/checkpoint/approve", async (req, reply) => 
 		const result = await withRoomSaveLock(status.id, () => {
 			const continuation = rememberContinuation(status.id, parsed.request.conversationId, (req.body as any)?.proposal?.continueOn, parsed.request.approvedRecentContext, defaultFreshModel);
 			const freshModel = continuation?.kind === "continued" ? continuation.model : defaultFreshModel;
-			return writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date(), { runtimeCwd, ...(freshModel ? { freshModel } : {}), ...(continuation ? { freshContinuation: { kind: continuation.kind, line: continuation.line } } : {}) });
+			const saved = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date(), { runtimeCwd, ...(freshModel ? { freshModel } : {}), ...(continuation ? { freshContinuation: { kind: continuation.kind, line: continuation.line } } : {}) });
+			// The memory is saved and the new conversation runs on the pick: a failed write only leaves the room's model as it was.
+			if (continuation?.kind === "continued") {
+				try { keepChatPickAsRoomModel(status.id, continuation.model, createRoomModelCatalog()); } catch (error) { app.log.warn({ err: error }, "failed to keep the chat's pick as the room's conversation model"); }
+			}
+			return saved;
 		});
 		return browserSafeCheckpointApprovalResponse(result);
 	} catch (e) {

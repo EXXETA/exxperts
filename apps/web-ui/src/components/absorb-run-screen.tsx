@@ -41,7 +41,7 @@ function SortedRow({ row, topics, onMove }: { row: NonNullable<AbsorbRun["sorted
 	return (
 		<li className="absorb-run-sorted-row">
 			<span>{row.text.split("\n")[0].replace(/^\s*[-*]\s+/, "")}</span> <span className="absorb-run-sorted-topic">under {topicLabel(row.topic)}</span>
-			{onMove && !moving && <> <button type="button" className="rs-quiet" onClick={() => setMoving(true)}>Move</button></>}
+			{onMove && !moving && <> <button type="button" className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" onClick={() => setMoving(true)}>Move</button></>}
 			{moving && <TopicMove topics={topics} current={row.topic} busy={busy} onMove={(topic) => void save(topic)} onCancel={() => { setMoving(false); setError(null); }} />}
 			{error && <p className="checkpoint-proposal-error" role="alert">{error}</p>}
 		</li>
@@ -61,7 +61,7 @@ export function NoteEditor({ text, busy, onSave, onCancel }: { text: string; bus
 			{limit.line && <p className="memory-editor-limit" role="status">{limit.line}</p>}
 			<div className="memory-entry-actions">
 				<button className="rs-btn" type="button" disabled={busy || !limit.canSave} onClick={() => onSave(draft.trim())}>{busy ? "Saving…" : "Save"}</button>
-				<button className="rs-quiet" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+				<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
 			</div>
 		</div>
 	);
@@ -99,7 +99,7 @@ function ChangeRow({ change, onEdit, onChoose }: { change: NonNullable<AbsorbRun
 			setSaving(false);
 		}
 	}
-	const editControls = editable && !editing && <button type="button" className="rs-quiet absorb-run-change-edit" onClick={() => setEditing(true)}>Edit</button>;
+	const editControls = editable && !editing && <button type="button" className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet absorb-run-change-edit" onClick={() => setEditing(true)}>Edit</button>;
 	const editor = editing && <NoteEditor text={change.after ?? ""} busy={saving} onSave={(text) => void save(text)} onCancel={() => { setEditing(false); setEditError(null); }} />;
 	const errorLine = editError && <p className="checkpoint-proposal-error" role="alert">{editError}</p>;
 	// A topic this update created is said next to its name, so a new heading in
@@ -269,7 +269,7 @@ export function EntryList({ entries, keepIds, keepTopics, listId, busy, onToggle
 									))}
 								</ul>
 								{page.hidden > 0 && (
-									<button type="button" className="rs-quiet absorb-run-entry-more" onClick={() => setShowAll((current) => ({ ...current, [key]: true }))}>
+									<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet absorb-run-entry-more" onClick={() => setShowAll((current) => ({ ...current, [key]: true }))}>
 										{showMoreLabel(page.hidden)}
 									</button>
 								)}

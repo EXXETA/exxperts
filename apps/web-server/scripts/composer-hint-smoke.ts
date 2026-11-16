@@ -11,7 +11,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 type Keys = ComposerHintState["keys"];
-const idle = (keys: Keys): ComposerHintState => ({ room: "Atlas", asToday: false, connected: true, reconnect: "idle", reconnectingTurn: false, elsewhere: false, switchingTo: null, stopping: false, stepAsks: false, answering: false, keys });
+const idle = (keys: Keys): ComposerHintState => ({ room: "Atlas", asking: null, asToday: false, connected: true, reconnect: "idle", reconnectingTurn: false, elsewhere: false, switchingTo: null, stopping: false, roomAsk: null, stepAsks: false, answering: false, keys });
 
 // The decided list, first match wins: what turns each row on, and its words per key form.
 const ROWS: Array<{ name: string; on: Partial<ComposerHintState>; words: Record<Keys, string> }> = [
@@ -22,6 +22,8 @@ const ROWS: Array<{ name: string; on: Partial<ComposerHintState>; words: Record<
 	{ name: "open in another window", on: { elsewhere: true }, words: { mac: "Ask Atlas…", windows: "Ask Atlas…", touch: "Ask Atlas…" } },
 	{ name: "a model switch settling", on: { switchingTo: "Room Model" }, words: { mac: "Switching to Room Model…", windows: "Switching to Room Model…", touch: "Switching to Room Model…" } },
 	{ name: "stopping", on: { stopping: true }, words: { mac: "Stopping current response…", windows: "Stopping current response…", touch: "Stopping current response…" } },
+	{ name: "a room's card waits", on: { roomAsk: "here" }, words: { mac: "Sending a message counts as Not now.", windows: "Sending a message counts as Not now.", touch: "Sending a message counts as Not now." } },
+	{ name: "a room's card waits at the computer", on: { roomAsk: "at-computer" }, words: { mac: "Sending ends this question.", windows: "Sending ends this question.", touch: "Sending ends this question." } },
 	{ name: "a step waits for an OK", on: { stepAsks: true }, words: { mac: "Sending a message denies the step above", windows: "Sending a message denies the step above", touch: "Sending denies the step above" } },
 	{ name: "it writes, thinks or runs a step", on: { answering: true }, words: { mac: "Queue a message, ⌘↵ sends now", windows: "Queue a message, Ctrl+Enter sends now", touch: "Queue a message" } },
 	{ name: "nothing running", on: {}, words: { mac: "Ask Atlas…", windows: "Ask Atlas…", touch: "Ask Atlas…" } },
@@ -45,6 +47,12 @@ for (const keys of ["mac", "windows", "touch"] as const) {
 		}
 	}
 	for (const hint of ROWS.map((row) => composerHint({ ...idle(keys), ...row.on }))) assert(!/working/i.test(hint), `${keys}: the box never says Working, got ${JSON.stringify(hint)}`);
+	// A room on the box's label: where the hint names this room, it names that one; every other row says what it says.
+	for (const row of ROWS) {
+		const labelled = composerHint({ ...idle(keys), ...row.on, asking: "Bid for Client X" });
+		const expected = row.words[keys] === "Ask Atlas…" ? "Ask Bid for Client X…" : row.words[keys];
+		assert(labelled === expected, `${keys}, ${row.name}, with Bid for Client X on the label: got ${JSON.stringify(labelled)}`);
+	}
 }
 console.log(`ok composer hint: ${ROWS.length} rows, each in the Mac, Windows and touch forms, first match wins`);
 console.log("composer-hint smoke: ok");

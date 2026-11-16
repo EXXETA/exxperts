@@ -13,16 +13,25 @@
 //          their extension via createRoomScopedMcpExtension, the only door,
 //          specialists cannot even be granted the mcp tool, and the isolated
 //          worker (consults, maintain flows) runs with no extensions and no
-//          tools at all.
+//          tools at all;
+//  ASK   - a tool runs by itself only when the connection that will run it
+//          marks it read-only, or it is a resource read; anything else stops
+//          on the card, on every call path, counted at a real connector;
+//  ROOM  - Allow for this room: offered and kept only for a web connector's
+//          tool the live connection lists and doesn't mark destructive, only
+//          from the computer, pinned to the address, dropped by every change
+//          that takes it back, and never on a shared server.
 //
 // Offline, isolated HOME + agent dir + agents root - set BEFORE any import
 // that reads them.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
+import { markedConnector } from "./smoke-marked-connector.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-mcp-scope-home-"));
 const tempAgentsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-mcp-scope-root-"));
@@ -88,6 +97,8 @@ function signInConnector(): { server: http.Server; hits: () => number; url: () =
 	return { server, hits: () => count, url: () => `${origin()}/mcp` };
 }
 const signInRecorder = signInConnector();
+
+const askConnector = markedConnector();
 
 // Minimal ExtensionAPI stand-in: captures tools/commands/handlers the way the
 // runtime would hold them.
@@ -219,7 +230,7 @@ try {
 	assert(JSON.parse(fs.readFileSync(path.join(isolatedMigrationRoot, "corrupt-era-room", "runtime", "mcp-settings.json"), "utf-8")).grantedConnectors.join(",") === "alpha,beta", "the healed migration must grant the full list");
 	fs.rmSync(isolatedMigrationRoot, { recursive: true, force: true });
 
-	const { writePersistentRoomMcpSettings } = await import("../src/persistent-room-mcp-settings.js");
+	const { readPersistentRoomMcpSettings, writePersistentRoomMcpSettings } = await import("../src/persistent-room-mcp-settings.js");
 	writePersistentRoomMcpSettings(roomId, ["alpha"]);
 
 	// A legacy room on the DEFAULT agents root: the extension's room-scoped
@@ -459,7 +470,7 @@ try {
 	assert(fooRecorder.hits() === 0, "a revoked direct tool must not touch its server");
 	writePersistentRoomMcpSettings(fooOwnerRoomId, ["foo"]);
 	await piOwner.tools.get("foo_bar_baz").execute("smoke-direct", {}, undefined, undefined, fakeCtx);
-	assert(fooRecorder.hits() > 0, "a granted direct tool call must reach its real server");
+	assert(fooRecorder.hits() > 0, "a granted direct tool's connection must reach its real server");
 	await shutdownSession(piOwner);
 
 	// toolPrefix "none": direct tools keep working for granted connectors (the
@@ -513,6 +524,624 @@ try {
 	await shutdownSession(piSignInCached);
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: servers }, null, 2));
 
+	// ── A tool not marked read-only asks first ───────────────────────────────
+	await new Promise<void>((resolve) => askConnector.server.listen(0, "127.0.0.1", resolve));
+	await askConnector.proxyHere();
+	const readOnly = { readOnlyHint: true };
+	askConnector.tools = [
+		{ name: "list_projects", annotations: readOnly },
+		{ name: "delete_project" },
+		{ name: "archive-project", annotations: { readOnlyHint: false } },
+		{ name: "wipe_cache", annotations: { readOnlyHint: true, destructiveHint: true } },
+		{ name: "stale_mark", annotations: { readOnlyHint: true, destructiveHint: false } },
+		{ name: "create_note" },
+		{ name: "drop_board", annotations: { destructiveHint: true } },
+	];
+	const askServers = { asana: { url: askConnector.webUrl() } };
+	const askConfig = { mcpServers: askServers };
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	const askCacheEntry = (tools: Array<Record<string, unknown>>) => ({ version: 1, servers: { asana: { configHash: cacheMod.computeServerHash(askServers.asana), cachedAt: Date.now(), resources: [{ uri: "smoke://notes", name: "notes" }], tools } } });
+	const savedAskTools = askConnector.tools.map(({ name }) => ({ name, description: name }));
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(savedAskTools), null, 2));
+	const askRoomId = "mcp-scope-smoke-ask-room";
+	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
+
+	// A person at the room's real bridge (web-ui-context.ts): each question is held until the row answers it.
+	// true is Allow this time and false Not now, as the page sends them; the clock moves on between frames, so
+	// no answer meets the floor unless a row holds it still. `closed`: the closing frames, with the yes in the
+	// room's file as it stood when each was sent.
+	const { createWebUiContext } = await import("../src/web-ui-context.js");
+	type Answer = boolean | "once" | "room" | "decline";
+	type Asked = { title: string; card: any; answer: (value: Answer, answeredBy?: "computer" | "phone") => void; refuse: (message: string) => void };
+	const valueOf = (value: Answer) => (value === true ? "once" : value === false ? "decline" : value);
+	function person(from: "computer" | "phone" = "computer", clock: { now?: () => number } = {}): { ctx: unknown; asked: Asked[]; closed: Array<{ frame: any; allowedThen: unknown }>; again: () => number; ui: any } {
+		const asked: Asked[] = [];
+		const closed: Array<{ frame: any; allowedThen: unknown }> = [];
+		let again = 0;
+		let at = 0;
+		const ui = createWebUiContext((frame: any) => {
+			if (frame.type === "ui_request" && frame.kind === "connector" && frame.again) again += 1;
+			else if (frame.type === "ui_request" && frame.kind === "connector") asked.push({ title: frame.title, card: frame, answer: (value, answeredBy = from) => ui.resolveResponse(frame.id, valueOf(value), answeredBy), refuse: (words) => ui.declineOpenQuestions(words) });
+			if (frame.type === "ui_request_closed") closed.push({ frame, allowedThen: readPersistentRoomMcpSettings(askRoomId).allowedTools.asana ?? [] });
+		}, undefined, from, { now: clock.now ?? (() => (at += 60_000)) });
+		return { ctx: { ...fakeCtx, ui }, asked, closed, again: () => again, ui };
+	}
+	// For a row that expects no card: one that comes anyway is answered Not now at once, so the row fails on its count.
+	function nobodyAsked(): { ctx: unknown; asked: Asked[] } {
+		const asked: Asked[] = [];
+		const ui = createWebUiContext((frame: any) => {
+			if (frame.type !== "ui_request" || frame.kind !== "connector") return;
+			asked.push({ title: frame.title, card: frame, answer: () => {}, refuse: () => {} });
+			ui.resolveResponse(frame.id, "decline", "computer");
+		});
+		return { ctx: { ...fakeCtx, ui }, asked };
+	}
+	const askedYet = async (asked: Asked[], count: number, label: string) => {
+		const deadline = Date.now() + 15_000;
+		while (asked.length < count) {
+			if (Date.now() > deadline) throw new Error(`${label}: no card came`);
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+	};
+	const call = (pi: FakePi, ctx: unknown, params: Record<string, unknown>) => pi.tools.get("mcp").execute("smoke-ask", params, undefined, undefined, ctx);
+	const textOf = (result: any) => String(result?.content?.[0]?.text ?? "");
+	const callsOf = (name: string) => askConnector.called.filter((called) => called === name).length;
+
+	const piAsk = makeFakePi();
+	await createRoomScopedMcpExtension(askRoomId)(piAsk);
+	await startSession(piAsk);
+
+	// Marked runs with no card; unmarked stops on one, and only a yes reaches the connector, once.
+	const marked = nobodyAsked();
+	const ranMarked = await call(piAsk, marked.ctx, { tool: "asana_list_projects", args: "{}" });
+	assert(textOf(ranMarked) === "ran list_projects" && marked.asked.length === 0 && callsOf("list_projects") === 1, `a marked tool runs with no card, got ${textOf(ranMarked)}, ${marked.asked.length} cards`);
+	const unmarked = person();
+	const yes = call(piAsk, unmarked.ctx, { tool: "asana_delete_project", args: JSON.stringify({ project: "Q3" }) });
+	await askedYet(unmarked.asked, 1, "unmarked");
+	assert(unmarked.asked[0].title === "Use Delete project in Asana?", `the card's title, got ${unmarked.asked[0].title}`);
+	assert(callsOf("delete_project") === 0, "a call waiting on its card has not reached the connector");
+	unmarked.asked[0].answer(true);
+	assert(textOf(await yes) === "ran delete_project" && callsOf("delete_project") === 1, "a yes reaches the connector once");
+
+	const decline = person();
+	const no = call(piAsk, decline.ctx, { tool: "asana_delete_project", args: "{}" });
+	await askedYet(decline.asked, 1, "decline");
+	decline.asked[0].answer(false);
+	const declined = await no;
+	assert(declined.isError === true && declined.details.error === "connector_call_declined" && textOf(declined).startsWith("You declined this, so nothing changed in Asana."), `a decline says so, got ${JSON.stringify(declined)}`);
+	// The page names the step by what its card asked; the model's text never carries it.
+	assert(declined.details.use === "Delete project in Asana" && !textOf(declined).includes("Delete project"), `a decline keeps what its card asked to use, for the page only, got ${JSON.stringify(declined)}`);
+	assert(callsOf("delete_project") === 1, "a decline reaches nothing");
+
+	// A rejected card (Stop, leaving, a scheduled run) is refused with its own words first, and reaches nothing.
+	const stopped = person();
+	const stopping = call(piAsk, stopped.ctx, { tool: "asana_delete_project", args: "{}" });
+	await askedYet(stopped.asked, 1, "stop");
+	stopped.asked[0].refuse("The person pressed Stop before answering, so this was not done.");
+	const refusedByStop = await stopping;
+	assert(refusedByStop.isError === true && refusedByStop.details.error === "connector_call_unanswered" && textOf(refusedByStop).startsWith("The person pressed Stop before answering, so this was not done."), `a rejected card is refused, got ${JSON.stringify(refusedByStop)}`);
+	assert(refusedByStop.details.use === "Delete project in Asana" && !textOf(refusedByStop).includes("Delete project"), `a rejected card keeps what it asked to use, for the page only, got ${JSON.stringify(refusedByStop)}`);
+	assert(callsOf("delete_project") === 1, "a rejected card reaches nothing");
+
+	// No way to ask at all refuses too.
+	const noUi = await call(piAsk, fakeCtx, { tool: "asana_delete_project", args: "{}" });
+	assert(noUi.details.error === "connector_call_unanswered" && callsOf("delete_project") === 1, `with no way to ask the call is refused, got ${JSON.stringify(noUi.details)}`);
+
+	// Every call path passes the gate, each beside its marked neighbour: with a
+	// server, by saved owner, by prefix, with a dash spelling.
+	for (const [label, unmarkedParams, markedParams] of [
+		["with a server", { tool: "asana_delete_project", server: "asana" }, { tool: "asana_list_projects", server: "asana" }],
+		["by saved owner", { tool: "asana_delete_project" }, { tool: "asana_list_projects" }],
+		["with a dash spelling", { tool: "asana-delete-project" }, { tool: "asana-list-projects" }],
+	] as const) {
+		const before = person();
+		const asking = call(piAsk, before.ctx, unmarkedParams);
+		await askedYet(before.asked, 1, label);
+		before.asked[0].answer(false);
+		const stoppedAt = await asking;
+		assert(stoppedAt.details.error === "connector_call_declined" && stoppedAt.details.use === "Delete project in Asana", `${label}: the unmarked tool stops at the gate, named as its card names it, got ${JSON.stringify(stoppedAt.details)}`);
+		const free = nobodyAsked();
+		assert(textOf(await call(piAsk, free.ctx, markedParams)) === "ran list_projects" && free.asked.length === 0, `${label}: the marked tool passes with no card`);
+	}
+	// By prefix: with no saved list to name an owner, the granted prefix finds it.
+	fs.rmSync(path.join(agentDir, "mcp-cache.json"), { force: true });
+	const byPrefix = person();
+	const prefixed = call(piAsk, byPrefix.ctx, { tool: "asana_delete_project" });
+	await askedYet(byPrefix.asked, 1, "by prefix");
+	byPrefix.asked[0].answer(false);
+	assert((await prefixed).details.error === "connector_call_declined", "by prefix: the unmarked tool stops at the gate");
+	assert(callsOf("delete_project") === 1, "no path reached the connector past a decline");
+	const prefixFree = nobodyAsked();
+	assert(textOf(await call(piAsk, prefixFree.ctx, { tool: "asana_list_projects" })) === "ran list_projects" && prefixFree.asked.length === 0, "by prefix: the marked tool passes with no card, with no saved list at all");
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(savedAskTools), null, 2));
+
+	// What marks count. A saved mark is never read: the saved list here says
+	// read-only for every tool, and the live connection decides.
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(askConnector.tools.map(({ name }) => ({ name, description: name, annotations: readOnly }))), null, 2));
+	for (const [label, tool] of [
+		["no mark on the live connection", "asana_delete_project"],
+		["marked false", "asana_archive_project"],
+		["read-only plus destructive", "asana_wipe_cache"],
+	] as const) {
+		const before = person();
+		const asking = call(piAsk, before.ctx, { tool });
+		await askedYet(before.asked, 1, label);
+		before.asked[0].answer(false);
+		assert((await asking).details.error === "connector_call_declined", `${label} gives a card`);
+	}
+	const destructiveFalse = nobodyAsked();
+	assert(textOf(await call(piAsk, destructiveFalse.ctx, { tool: "asana_stale_mark" })) === "ran stale_mark" && destructiveFalse.asked.length === 0, "read-only and marked not destructive runs with no card");
+	const resource = nobodyAsked();
+	const readingResource = await call(piAsk, resource.ctx, { tool: "asana_get_notes" });
+	assert(textOf(readingResource) === "the notes" && resource.asked.length === 0 && askConnector.resourceReads() === 1, `a resource read gives no card, got ${textOf(readingResource)}`);
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(savedAskTools), null, 2));
+
+	// A concurrent Test connection and a second room's session both see the
+	// connector mark delete_project read-only, and save that. This session's
+	// connection, the one that will run the tool, never said so.
+	const { testMcpServer } = await import("../src/mcp-admin.js");
+	const unmarkedList = askConnector.tools;
+	askConnector.tools = unmarkedList.map((tool) => (tool.name === "delete_project" ? { ...tool, annotations: readOnly } : tool));
+	assert((await testMcpServer("asana")).ok, "the Test connection really connects");
+	const piSecondRoom = makeFakePi();
+	await createRoomScopedMcpExtension(askRoomId)(piSecondRoom);
+	await startSession(piSecondRoom);
+	const secondRoom = nobodyAsked();
+	assert(textOf(await call(piSecondRoom, secondRoom.ctx, { tool: "asana_delete_project" })) === "ran delete_project" && secondRoom.asked.length === 0, "the second session judges by its own connection");
+	await shutdownSession(piSecondRoom);
+	askConnector.called.length = 0;
+	const judged = person();
+	const stillAsks = call(piAsk, judged.ctx, { tool: "asana_delete_project" });
+	await askedYet(judged.asked, 1, "a refresh elsewhere");
+	judged.asked[0].answer(false);
+	assert((await stillAsks).details.error === "connector_call_declined" && callsOf("delete_project") === 0, "a Test connection or a second room's refresh can't change the marks a call is judged by");
+	askConnector.tools = unmarkedList;
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(savedAskTools), null, 2));
+
+	// A permission withdrawn while the card waits refuses the call after a yes:
+	// the room's grant, and the tool switched off on the connector.
+	const withdrawn = person();
+	const waitingOnGrant = call(piAsk, withdrawn.ctx, { tool: "asana_delete_project" });
+	await askedYet(withdrawn.asked, 1, "withdrawn grant");
+	writePersistentRoomMcpSettings(askRoomId, []);
+	withdrawn.asked[0].answer(true);
+	assert((await waitingOnGrant).details.error === "connector_not_enabled" && callsOf("delete_project") === 0, "a grant withdrawn while the card waits refuses after a yes");
+	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
+	const excluded = person();
+	const waitingOnTool = call(piAsk, excluded.ctx, { tool: "asana_delete_project" });
+	await askedYet(excluded.asked, 1, "withdrawn tool");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { ...askServers.asana, excludeTools: ["delete_project"] } } }, null, 2));
+	excluded.asked[0].answer(true);
+	assert((await waitingOnTool).details.error === "connector_tool_withdrawn" && callsOf("delete_project") === 0, "a tool switched off while the card waits refuses after a yes");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	const notWithdrawn = person();
+	const allowedAfter = call(piAsk, notWithdrawn.ctx, { tool: "asana_delete_project" });
+	await askedYet(notWithdrawn.asked, 1, "not withdrawn");
+	notWithdrawn.asked[0].answer(true);
+	assert(textOf(await allowedAfter) === "ran delete_project" && callsOf("delete_project") === 1, "with nothing withdrawn the yes runs");
+
+	// Two calls at once, answered in the other order and differently: each
+	// answer reaches its own tool.
+	askConnector.called.length = 0;
+	const both = person();
+	const first = call(piAsk, both.ctx, { tool: "asana_delete_project", args: JSON.stringify({ project: "Q3" }) });
+	await askedYet(both.asked, 1, "first of two");
+	const second = call(piAsk, both.ctx, { tool: "asana_create_note", args: JSON.stringify({ text: "hello" }) });
+	await askedYet(both.asked, 2, "second of two");
+	assert(both.asked[0].title === "Use Delete project in Asana?" && both.asked[1].title === "Use Create note in Asana?", "each call asks by its own name");
+	both.asked[1].answer(true);
+	both.asked[0].answer(false);
+	const [firstDone, secondDone] = await Promise.all([first, second]);
+	assert(firstDone.details.error === "connector_call_declined" && textOf(secondDone) === "ran create_note", `each answer reaches its own tool, got ${textOf(firstDone)} and ${textOf(secondDone)}`);
+	assert(JSON.stringify(askConnector.called) === JSON.stringify(["create_note"]), `only the allowed tool reached the connector, got ${JSON.stringify(askConnector.called)}`);
+
+	// The card shows what's sent: the connector by its name, hidden characters
+	// written out, and how much was cut from the end.
+	const carded = person();
+	const hidden = call(piAsk, carded.ctx, { tool: "asana_delete_project", args: JSON.stringify({ project: "Q3\u200b\u202e\u0085\u{e0041}", note: "a\nb" }) });
+	await askedYet(carded.asked, 1, "hidden characters");
+	carded.asked[0].answer(false);
+	await hidden;
+	const shownCard = carded.asked[0].card;
+	assert(shownCard.connector === "Asana" && shownCard.sent === String.raw`{"project":"Q3[U+200B][U+202E][U+0085][U+E0041]","note":"a\nb"}` && shownCard.cut === 0, `the card's fields, got ${JSON.stringify(shownCard)}`);
+	const longCard = person();
+	const long = call(piAsk, longCard.ctx, { tool: "asana_delete_project", args: JSON.stringify({ text: "x".repeat(5000) }) });
+	await askedYet(longCard.asked, 1, "cut");
+	longCard.asked[0].answer(false);
+	await long;
+	assert(longCard.asked[0].card.sent.length === 1200 && longCard.asked[0].card.cut === 3811, `a long call is cut, and says by how much, got ${longCard.asked[0].card.sent.length} / ${longCard.asked[0].card.cut}`);
+	const shortCard = person();
+	const short = call(piAsk, shortCard.ctx, { tool: "asana_delete_project" });
+	await askedYet(shortCard.asked, 1, "nothing sent");
+	shortCard.asked[0].answer(false);
+	await short;
+	assert(shortCard.asked[0].card.sent === "{}" && shortCard.asked[0].card.cut === 0, `a call that sends nothing shows {} and no cut, got ${JSON.stringify(shortCard.asked[0].card)}`);
+	await shutdownSession(piAsk);
+
+	// Through the direct wrapper, each beside its marked neighbour. The saved
+	// list also holds an old entry the live connection no longer lists.
+	process.env.MCP_DIRECT_TOOLS = "asana";
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry([...savedAskTools, { name: "old_tool", description: "gone since", annotations: readOnly }]), null, 2));
+	const piDirect = makeFakePi();
+	await createRoomScopedMcpExtension(askRoomId)(piDirect);
+	await startSession(piDirect);
+	askConnector.called.length = 0;
+	const direct = (ctx: unknown, name: string) => piDirect.tools.get(name).execute("smoke-direct-ask", {}, undefined, undefined, ctx);
+	const directMarked = nobodyAsked();
+	assert(textOf(await direct(directMarked.ctx, "asana_list_projects")) === "ran list_projects" && directMarked.asked.length === 0, "direct: the marked tool runs with no card");
+	const directUnmarked = person();
+	const directAsking = direct(directUnmarked.ctx, "asana_delete_project");
+	await askedYet(directUnmarked.asked, 1, "direct");
+	directUnmarked.asked[0].answer(false);
+	assert((await directAsking).details.error === "connector_call_declined" && callsOf("delete_project") === 0, "direct: the unmarked tool stops at the gate");
+	const directYes = person();
+	const directAllowed = direct(directYes.ctx, "asana_delete_project");
+	await askedYet(directYes.asked, 1, "direct yes");
+	directYes.asked[0].answer(true);
+	assert(textOf(await directAllowed) === "ran delete_project" && callsOf("delete_project") === 1, "direct: a yes reaches the connector once");
+	const oldEntry = person();
+	const oldAsking = direct(oldEntry.ctx, "asana_old_tool");
+	await askedYet(oldEntry.asked, 1, "an old entry");
+	oldEntry.asked[0].answer(false);
+	assert((await oldAsking).details.error === "connector_call_declined" && callsOf("old_tool") === 0, "an old entry the live connection doesn't list gives a card, whatever it was saved with");
+	await shutdownSession(piDirect);
+	delete process.env.MCP_DIRECT_TOOLS;
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(savedAskTools), null, 2));
+
+	// A connection with no list, and the text "true". The library refuses a list
+	// holding text in a mark, so the next row has the connector say it for real;
+	// here a stand-in for the adapter hands the gate what it never would.
+	const { connectorPlacesReader, roomScopedMcpToolRegistration } = await import("../../../pi-package/extensions/mcp/room-scope.js");
+	for (const [label, liveTool, asks] of [
+		["no entry on the connection", undefined, true],
+		["an entry with no marks", {}, true],
+		["null marks", { annotations: null }, true],
+		["the text true", { annotations: { readOnlyHint: "true" } }, true],
+		["the text false for destructive", { annotations: { readOnlyHint: true, destructiveHint: "false" } }, true],
+		["read-only", { annotations: { readOnlyHint: true } }, false],
+	] as const) {
+		const standIn = await roomScopedMcpToolRegistration(askRoomId, {
+			name: "mcp",
+			asksBeforeConnectorCalls: true,
+			execute: async (_id, _params, _signal, _onUpdate, gate: any) => (await gate({ server: "asana", toolName: "delete_project", liveTool, resourceRead: false, args: {} })) ?? { content: [{ type: "text", text: "ran" }] },
+		});
+		const before = asks ? person() : nobodyAsked();
+		const asking = standIn!.execute("smoke-marks", { tool: "delete_project", server: "asana" }, undefined, undefined, before.ctx);
+		if (asks) {
+			await askedYet(before.asked, 1, label);
+			before.asked[0].answer(false);
+			assert((await asking).details?.error === "connector_call_declined", `${label} gives a card`);
+		} else {
+			assert((await asking).content[0].text === "ran" && before.asked.length === 0, `${label} gives none`);
+		}
+	}
+	const textMarkTools = askConnector.tools;
+	askConnector.tools = [{ name: "text_mark", annotations: { readOnlyHint: "true" } }];
+	const piTextMark = makeFakePi();
+	await createRoomScopedMcpExtension(askRoomId)(piTextMark);
+	await startSession(piTextMark);
+	askConnector.called.length = 0;
+	const textMark = nobodyAsked();
+	const textMarkAnswer = await call(piTextMark, textMark.ctx, { tool: "asana_delete_project", server: "asana" });
+	assert(textMarkAnswer.isError === true && askConnector.called.length === 0, `a connector saying the text "true" runs nothing, got ${JSON.stringify(textMarkAnswer)}`);
+	await shutdownSession(piTextMark);
+	askConnector.tools = textMarkTools;
+
+	// ── Allow for this room ──────────────────────────────────────────────────
+	const settingsStore = await import("../src/persistent-room-mcp-settings.js");
+	const { changeMcpServerAddress } = await import("../src/mcp-admin.js");
+	const { declinedQuestionNoteText } = await import("../src/thread-items-by-id.js");
+	const allowedIn = (roomId: string) => (readPersistentRoomMcpSettings(roomId).allowedTools.asana ?? []).map((entry: { tool: string }) => entry.tool);
+	// The gate as the adapter calls it, with the live tool a row needs (listed with no marks, unless the row says), in a session connected from the settings as they are now; the call goes through the room's proxy as any other.
+	const readConnectorPlaces = await connectorPlacesReader();
+	const gateCall = async (roomId: string, ctx: unknown, server: string, toolName: string, live: { liveTool: unknown } = { liveTool: {} }): Promise<any> => {
+		const { liveTool } = live;
+		const connectedPlaces = readConnectorPlaces(undefined);
+		const standIn = await roomScopedMcpToolRegistration(roomId, { name: "mcp", asksBeforeConnectorCalls: true, execute: async (_id, _params, _signal, _onUpdate, gate: any) => (await gate({ server, toolName, liveTool, resourceRead: false, args: {} })) ?? { content: [{ type: "text", text: "ran" }] } }, { connectedPlaces: () => connectedPlaces });
+		return standIn!.execute("smoke-room-yes", { tool: toolName, server }, undefined, undefined, ctx);
+	};
+	const piAllow = makeFakePi();
+	await createRoomScopedMcpExtension(askRoomId)(piAllow);
+	await startSession(piAllow);
+	askConnector.called.length = 0;
+	/** Asks for delete_project at the computer and answers Allow for this room once the floor has passed: the yes it stores. */
+	const allowForRoom = async (roomId = askRoomId, pi = piAllow) => {
+		const at = person();
+		const asking = call(pi, at.ctx, { tool: "asana_delete_project", server: "asana" });
+		await askedYet(at.asked, 1, "allow for this room");
+		at.asked[0].answer("room");
+		assert(textOf(await asking) === "ran delete_project", "Allow for this room runs the call it answered");
+		return at;
+	};
+
+	// At the computer a web connector's unmarked tool offers Allow for this room; one it marks destructive doesn't, and a room sent anyway counts this time.
+	const offered = person();
+	const offeredCall = call(piAllow, offered.ctx, { tool: "asana_delete_project", server: "asana" });
+	await askedYet(offered.asked, 1, "offered");
+	assert(offered.asked[0].card.lasting === true, `an unmarked tool of a web connector offers the room yes, got ${JSON.stringify(offered.asked[0].card)}`);
+	offered.asked[0].answer(false);
+	await offeredCall;
+	const destructive = person();
+	const destructiveCall = call(piAllow, destructive.ctx, { tool: "asana_drop_board", server: "asana" });
+	await askedYet(destructive.asked, 1, "destructive");
+	assert(destructive.asked[0].card.lasting === false, "a tool marked destructive offers no room yes");
+	destructive.asked[0].answer("room");
+	assert(textOf(await destructiveCall) === "ran drop_board" && destructive.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0, `a room yes sent anyway for a destructive tool counts this time and stores nothing, got ${JSON.stringify(destructive.closed)}`);
+
+	// A full phone sees two answers, and its room yes counts this time.
+	const phone = person("phone");
+	const phoneCall = call(piAllow, phone.ctx, { tool: "asana_delete_project", server: "asana" });
+	await askedYet(phone.asked, 1, "phone");
+	assert(phone.asked[0].card.lasting === false, "a phone is never offered the room yes");
+	phone.asked[0].answer("room");
+	assert(textOf(await phoneCall) === "ran delete_project" && phone.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0, `a phone's room yes runs once and stores nothing, got ${JSON.stringify(phone.closed)}`);
+
+	// A room yes within the floor is asked again and stores nothing; after it, it is stored before the question says answered.
+	let stillAt = 0;
+	const quick = person("computer", { now: () => stillAt });
+	const quickCall = call(piAllow, quick.ctx, { tool: "asana_delete_project", server: "asana" });
+	await askedYet(quick.asked, 1, "floor");
+	quick.asked[0].answer("room");
+	assert(quick.again() === 1 && quick.closed.length === 0 && allowedIn(askRoomId).length === 0, `a room yes too soon is asked again, got ${quick.again()} again, ${JSON.stringify(quick.closed)}`);
+	stillAt = 60_000;
+	quick.asked[0].answer("room");
+	assert(textOf(await quickCall) === "ran delete_project", "the room yes runs the call");
+	assert(quick.closed[0].frame.taken === "room" && JSON.stringify(quick.closed[0].allowedThen) === JSON.stringify([{ tool: "delete_project", addressPin: settingsStore.connectorAddressPin(askConnector.webUrl()) }]), `stored with the address's pin before the question said answered, got ${JSON.stringify(quick.closed)}`);
+	assert(!fs.readFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), "utf-8").includes(askConnector.webUrl()), "the room's file never holds the address itself");
+	quick.ui.detach("The user left the room.");
+	quick.ui.attach("computer");
+	assert((quick.closed.length as number) === 2 && quick.closed[1].frame.id === quick.closed[0].frame.id && quick.closed[1].frame.taken === "room", `a device that comes back is told the room yes again, got ${JSON.stringify(quick.closed.map((entry) => entry.frame))}`);
+
+	// The stored yes runs that tool with no question, at the computer and with nobody there; other tools, rooms and addresses still ask.
+	const noQuestion = nobodyAsked();
+	assert(textOf(await call(piAllow, noQuestion.ctx, { tool: "asana_delete_project", server: "asana" })) === "ran delete_project" && noQuestion.asked.length === 0, "a stored yes runs with no question");
+	const awayNotes: Array<{ title: string; lasting?: boolean }> = [];
+	const away = createWebUiContext(() => {}, (question: { title: string; lasting?: boolean }) => awayNotes.push(question));
+	away.detach("The user left the room.");
+	assert(textOf(await call(piAllow, { ...fakeCtx, ui: away }, { tool: "asana_delete_project", server: "asana" })) === "ran delete_project" && awayNotes.length === 0, "a stored yes runs with nobody there");
+	const otherTool = person();
+	const otherCall = call(piAllow, otherTool.ctx, { tool: "asana_create_note", server: "asana" });
+	await askedYet(otherTool.asked, 1, "another tool");
+	otherTool.asked[0].answer(false);
+	assert((await otherCall).details.error === "connector_call_declined", "another tool of the connector still asks");
+	const otherRoomId = "mcp-scope-smoke-ask-room-2";
+	writePersistentRoomMcpSettings(otherRoomId, ["asana"]);
+	const otherRoom = person();
+	const otherRoomCall = gateCall(otherRoomId, otherRoom.ctx, "asana", "delete_project");
+	await askedYet(otherRoom.asked, 1, "another room");
+	otherRoom.asked[0].answer(false);
+	assert((await otherRoomCall).details.error === "connector_call_declined", "the same tool in another room still asks");
+	const movedUrl = askConnector.webUrl("/mcp-moved");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { url: movedUrl } } }, null, 2));
+	const moved = person();
+	const movedCall = gateCall(askRoomId, moved.ctx, "asana", "delete_project");
+	await askedYet(moved.asked, 1, "another address");
+	moved.asked[0].answer(false);
+	assert((await movedCall).details.error === "connector_call_declined", "the same tool at another address still asks");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+
+	// Nobody there: the note names Allow for this room only where it would be offered.
+	await call(piAllow, { ...fakeCtx, ui: away }, { tool: "asana_create_note", server: "asana" });
+	await call(piAllow, { ...fakeCtx, ui: away }, { tool: "asana_drop_board", server: "asana" });
+	assert(JSON.stringify(awayNotes) === JSON.stringify([{ kind: "connector", title: "Use Create note in Asana?", lasting: true }, { kind: "connector", title: "Use Drop board in Asana?", lasting: false }]), `the away notes, got ${JSON.stringify(awayNotes)}`);
+	assert(declinedQuestionNoteText("Use Create note in Asana?", true) === "Create note in Asana wasn't used because nobody was there to allow it. To let this room use it when you're away, choose Allow for this room at your computer the next time it asks.", "the note names the way on where it was offered");
+	assert(declinedQuestionNoteText("Use Drop board in Asana?", false) === "Drop board in Asana wasn't used because nobody was there to allow it.", "and only there");
+
+	// Each change that takes it back drops it, and the tool asks again.
+	// The sweeps reach every room, which a room's own record marks.
+	for (const roomId of [askRoomId, otherRoomId]) fs.writeFileSync(path.join(path.dirname(path.dirname(settingsStore.persistentRoomMcpSettingsPath(roomId))), "agent.json"), "{}");
+	const asksAgain = async (label: string, roomId = askRoomId) => {
+		const again = person();
+		const asking = gateCall(roomId, again.ctx, "asana", "delete_project");
+		await askedYet(again.asked, 1, label);
+		again.asked[0].answer(false);
+		assert((await asking).details.error === "connector_call_declined", `${label}: the tool asks again`);
+	};
+	writePersistentRoomMcpSettings(askRoomId, []);
+	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
+	assert(allowedIn(askRoomId).length === 0, "switched off for the room, the yes is dropped");
+	await asksAgain("switched off and on");
+	await allowForRoom();
+	settingsStore.revokeMcpConnectorFromAllRooms("asana");
+	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
+	assert(allowedIn(askRoomId).length === 0, "removed from the app, the yes is dropped");
+	await asksAgain("removed and added again");
+	await allowForRoom();
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { ...askServers.asana, excludeTools: ["delete_project"] } } }, null, 2));
+	const excludedYes = person();
+	const excludedCall = gateCall(askRoomId, excludedYes.ctx, "asana", "delete_project");
+	await askedYet(excludedYes.asked, 1, "excluded");
+	assert(excludedYes.asked[0].card.lasting === false, "an excluded tool offers no room yes");
+	excludedYes.asked[0].answer("room");
+	assert((await excludedCall).details.error === "connector_tool_withdrawn", "a stored yes for an excluded tool lets nothing run");
+	assert(allowedIn(askRoomId).length === 0, `excluded, the yes is dropped, got ${JSON.stringify(allowedIn(askRoomId))}`);
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	await asksAgain("excluded, then included again");
+	await allowForRoom();
+	// Only a reading call meets the connector while the tool is excluded: it drops the yes too.
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { ...askServers.asana, excludeTools: ["delete_project"] } } }, null, 2));
+	assert(textOf(await gateCall(askRoomId, person().ctx, "asana", "list_projects", { liveTool: { annotations: { readOnlyHint: true } } })) === "ran", "a reading call runs with no question");
+	assert(allowedIn(askRoomId).length === 0, `excluded and met by a reading call, the yes is dropped, got ${JSON.stringify(allowedIn(askRoomId))}`);
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	await asksAgain("excluded, read, then included again");
+	await allowForRoom();
+	for (const [label, liveTool] of [["marked destructive later", { annotations: { destructiveHint: true } }], ["not listed by the live connection", undefined]] as const) {
+		const later = person();
+		const laterCall = gateCall(askRoomId, later.ctx, "asana", "delete_project", { liveTool });
+		await askedYet(later.asked, 1, label);
+		assert(later.asked[0].card.lasting === false, `${label}: no room yes offered`);
+		later.asked[0].answer(false);
+		assert((await laterCall).details.error === "connector_call_declined", `${label}: the stored yes isn't read, and it asks`);
+	}
+	settingsStore.allowPersistentRoomMcpTool(otherRoomId, "asana", "delete_project", settingsStore.connectorAddressPin(askConnector.webUrl()));
+	const movedAway = await changeMcpServerAddress("asana", { url: movedUrl });
+	assert(movedAway.sameSite && allowedIn(askRoomId).length === 0 && allowedIn(otherRoomId).length === 0 && readPersistentRoomMcpSettings(askRoomId).grantedConnectors.includes("asana"), "moved to another address, its yeses go in every room and the grant stays");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	settingsStore.allowPersistentRoomMcpTool(askRoomId, "asana", "delete_project", settingsStore.connectorAddressPin(askConnector.webUrl()));
+	await changeMcpServerAddress("asana", { url: askConnector.url() });
+	assert(allowedIn(askRoomId).length === 0, "moved to this computer's own address, its yes goes too");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	await asksAgain("moved and back");
+	await allowForRoom();
+	assert(settingsStore.forgetPersistentRoomMcpTool(askRoomId, "asana", "delete_project").ok && allowedIn(askRoomId).length === 0, "Remove takes the yes back");
+	await asksAgain("removed in Room settings");
+
+	// Answered after the connector was switched off: nothing stored, and refused as withdrawn.
+	const late = person();
+	const lateCall = call(piAllow, late.ctx, { tool: "asana_delete_project", server: "asana" });
+	await askedYet(late.asked, 1, "switched off while it waited");
+	writePersistentRoomMcpSettings(askRoomId, []);
+	late.asked[0].answer("room");
+	assert((await lateCall).details.error === "connector_not_enabled" && late.closed[0].frame.taken === "once" && readPersistentRoomMcpSettings(askRoomId).allowedTools.asana === undefined, `switched off while it waited: nothing stored, refused, got ${JSON.stringify(late.closed)}`);
+	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
+
+	// Moved to another address while it waited: nothing stored, and refused as withdrawn, whichever yes was given.
+	for (const yes of ["room", true] as const) {
+		const movedLate = person();
+		const movedLateCall = call(piAllow, movedLate.ctx, { tool: "asana_delete_project", server: "asana" });
+		await askedYet(movedLate.asked, 1, `moved while it waited (${yes})`);
+		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { url: movedUrl } } }, null, 2));
+		movedLate.asked[0].answer(yes);
+		const movedLateResult = await movedLateCall;
+		assert(movedLateResult.details.error === "connector_moved" && movedLate.closed[0].frame.taken === "once" && readPersistentRoomMcpSettings(askRoomId).allowedTools.asana === undefined, `moved while it waited (${yes}): nothing stored, refused, got ${JSON.stringify(movedLateResult)} ${JSON.stringify(movedLate.closed)}`);
+		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	}
+	assert(callsOf("delete_project") === 9, `only the answered and allowed calls reached the connector, got ${callsOf("delete_project")}`);
+	await shutdownSession(piAllow);
+
+	// An open room keeps the connection it made: the adapter connects, and
+	// reconnects, from the settings it read when the session started. Moved in
+	// the app while the room is open, the connector asks with two answers, a
+	// room yes counts this time, and a yes kept for the new address isn't read,
+	// until a session that starts after the move: it reaches the new address,
+	// honours that yes and offers three answers.
+	const reachedLast = () => askConnector.calledAt[askConnector.calledAt.length - 1];
+	for (const [label, from, to] of [
+		["from this computer's address to a web name", askConnector.url(), askConnector.webUrl()],
+		["from one web address to another", askConnector.webUrl("/a"), askConnector.webUrl("/b")],
+	] as const) {
+		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { url: from } } }, null, 2));
+		fs.rmSync(path.join(agentDir, "mcp-cache.json"), { force: true });
+		const piOpen = makeFakePi();
+		await createRoomScopedMcpExtension(askRoomId)(piOpen);
+		await startSession(piOpen);
+		const first = person();
+		const firstCall = call(piOpen, first.ctx, { tool: "asana_delete_project", server: "asana" });
+		await askedYet(first.asked, 1, `${label}: before the move`);
+		first.asked[0].answer(true);
+		assert(textOf(await firstCall) === "ran delete_project" && reachedLast() === from, `${label}: before the move the call reaches ${from}, got ${reachedLast()}`);
+		await changeMcpServerAddress("asana", { url: to });
+		const after = person();
+		const afterCall = call(piOpen, after.ctx, { tool: "asana_delete_project", server: "asana" });
+		await askedYet(after.asked, 1, `${label}: after the move`);
+		assert(after.asked[0].card.lasting === false, `${label}: the open room offers no room yes after the move`);
+		after.asked[0].answer("room");
+		assert(textOf(await afterCall) === "ran delete_project" && after.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0, `${label}: a room yes counts this time and stores nothing, got ${JSON.stringify(after.closed)} ${JSON.stringify(allowedIn(askRoomId))}`);
+		assert(reachedLast() === from, `${label}: the open room's call still reaches ${from}, got ${reachedLast()}`);
+		settingsStore.allowPersistentRoomMcpTool(askRoomId, "asana", "delete_project", settingsStore.connectorAddressPin(to));
+		const byHand = person();
+		const byHandCall = call(piOpen, byHand.ctx, { tool: "asana_delete_project", server: "asana" });
+		await askedYet(byHand.asked, 1, `${label}: a yes kept for the new address`);
+		byHand.asked[0].answer(false);
+		assert((await byHandCall).details.error === "connector_call_declined", `${label}: the open room doesn't read a yes kept for the new address`);
+		await shutdownSession(piOpen);
+		const piReopened = makeFakePi();
+		await createRoomScopedMcpExtension(askRoomId)(piReopened);
+		await startSession(piReopened);
+		const reopened = nobodyAsked();
+		assert(textOf(await call(piReopened, reopened.ctx, { tool: "asana_delete_project", server: "asana" })) === "ran delete_project" && reopened.asked.length === 0 && reachedLast() === to, `${label}: opened again, the room honours the yes and reaches ${to}, got ${reopened.asked.length} cards, ${reachedLast()}`);
+		assert(settingsStore.forgetPersistentRoomMcpTool(askRoomId, "asana", "delete_project").ok, `${label}: the yes is taken back`);
+		const offeredAgain = person();
+		const offeredAgainCall = call(piReopened, offeredAgain.ctx, { tool: "asana_delete_project", server: "asana" });
+		await askedYet(offeredAgain.asked, 1, `${label}: opened again`);
+		assert(offeredAgain.asked[0].card.lasting === true, `${label}: opened again, the room offers Allow for this room`);
+		offeredAgain.asked[0].answer("room");
+		assert(textOf(await offeredAgainCall) === "ran delete_project" && offeredAgain.closed[0].frame.taken === "room" && allowedIn(askRoomId).length === 1, `${label}: opened again, a room yes is kept, got ${JSON.stringify(offeredAgain.closed)}`);
+		await shutdownSession(piReopened);
+		writePersistentRoomMcpSettings(askRoomId, []);
+		writePersistentRoomMcpSettings(askRoomId, ["asana"]);
+	}
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(savedAskTools), null, 2));
+
+	// A yes written by hand for a connector that is a program on this computer lets nothing run, and it offers none.
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { ...askServers, local: { command: "node", args: ["-e", ""] } } }, null, 2));
+	fs.writeFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), JSON.stringify({ schemaVersion: 1, grantedConnectors: ["asana", "local"], allowedTools: { local: [{ tool: "write_file", addressPin: settingsStore.connectorAddressPin("node") }] }, updatedAt: "" }));
+	const local = person();
+	const localCall = gateCall(askRoomId, local.ctx, "local", "write_file");
+	await askedYet(local.asked, 1, "a local program");
+	assert(local.asked[0].card.lasting === false, "a local program's tool offers no room yes");
+	local.asked[0].answer("room");
+	assert(textOf(await localCall) === "ran" && local.closed[0].frame.taken === "once", "a local program's room yes counts this time");
+	const localAgain = person();
+	const localAgainCall = gateCall(askRoomId, localAgain.ctx, "local", "write_file");
+	await askedYet(localAgain.asked, 1, "a local program, a yes by hand");
+	localAgain.asked[0].answer(false);
+	assert((await localAgainCall).details.error === "connector_call_declined", "a yes written by hand for a local program's tool lets nothing run");
+	// An entry that names a command and a web address too is a program the adapter starts: two answers, and a yes written by hand for its address lets nothing run.
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { command: "node", args: ["-e", ""], url: askConnector.webUrl() } } }, null, 2));
+	fs.writeFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), JSON.stringify({ schemaVersion: 1, grantedConnectors: ["asana"], allowedTools: { asana: [{ tool: "delete_project", addressPin: settingsStore.connectorAddressPin(askConnector.webUrl()) }] }, updatedAt: "" }));
+	const commandAndUrl = person();
+	const commandAndUrlCall = gateCall(askRoomId, commandAndUrl.ctx, "asana", "delete_project");
+	await askedYet(commandAndUrl.asked, 1, "a command with a web address");
+	assert(commandAndUrl.asked[0].card.lasting === false, "a command with a web address offers no room yes");
+	commandAndUrl.asked[0].answer(false);
+	assert((await commandAndUrlCall).details.error === "connector_call_declined", "a yes written by hand for a command with a web address lets nothing run");
+
+	// A connector at this computer's own address is a program here too, in any spelling: two answers, a room yes counts this time, and a yes written by hand still asks.
+	const writeAsanaAt = (url: string, allowed: unknown[] = []) => {
+		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { url } } }, null, 2));
+		fs.writeFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), JSON.stringify({ schemaVersion: 1, grantedConnectors: ["asana"], allowedTools: allowed.length ? { asana: allowed } : {}, updatedAt: "" }));
+	};
+	// This computer's own network name, with and without .local, in any letter case.
+	const ownName = os.hostname().replace(/\.local\.?$/i, "");
+	for (const url of ["http://127.0.0.1:9/mcp", "http://127.1:9/mcp", "http://localhost:9/mcp", "http://LOCALHOST.:9/mcp", "http://desk.localhost/mcp", "http://[::1]:9/mcp", "http://0.0.0.0:9/mcp", "http://[::]:9/mcp", "http://[::ffff:127.0.0.1]:9/mcp", "http://[::ffff:7f00:1]:9/mcp", "http://localhost.localdomain:9/mcp", "http://ip6-localhost:9/mcp", "http://IP6-Loopback/mcp", `http://${ownName.toLowerCase()}:9/mcp`, `http://${ownName.toUpperCase()}.local:9/mcp`, `http://${ownName}.Local./mcp`]) {
+		writeAsanaAt(url, [{ tool: "delete_project", addressPin: settingsStore.connectorAddressPin(url) }]);
+		const here = person();
+		const hereCall = gateCall(askRoomId, here.ctx, "asana", "delete_project");
+		await askedYet(here.asked, 1, `this computer at ${url}`);
+		assert(here.asked[0].card.lasting === false, `${url}: no room yes offered`);
+		here.asked[0].answer("room");
+		assert(textOf(await hereCall) === "ran" && here.closed[0].frame.taken === "once", `${url}: a yes by hand still asks, and a room yes counts this time, got ${JSON.stringify(here.closed)}`);
+	}
+	// Another computer, on the person's network or the company's, is a web connector.
+	for (const url of ["http://10.1.2.3/mcp", "http://192.168.1.5:8080/mcp", "http://projects.corp.internal/mcp", `http://${ownName}.example.test/mcp`, "http://localhost.localdomain.example.test/mcp"]) {
+		writeAsanaAt(url);
+		const there = person();
+		const thereCall = gateCall(askRoomId, there.ctx, "asana", "delete_project");
+		await askedYet(there.asked, 1, `another computer at ${url}`);
+		assert(there.asked[0].card.lasting === true, `${url}: Allow for this room offered`);
+		there.asked[0].answer(false);
+		assert((await thereCall).details.error === "connector_call_declined", `${url}: declined`);
+	}
+	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+
+	// A tool that doesn't say it stops at the gate is never offered to a room.
+	assert(await roomScopedMcpToolRegistration(askRoomId, { name: "mcp", execute: async () => ({ content: [] }) }) === null, "an adapter without the gate offers a room nothing");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: servers }, null, 2));
+
+	// ── The patcher fails the install when its anchor is gone ────────────────
+	const adapterFolder = path.dirname(fileURLToPath(import.meta.resolve("pi-mcp-adapter/package.json")));
+	const patcher = path.resolve(scriptDir, "..", "..", "..", "scripts", "patch-mcp-adapter.mjs");
+	for (const [file, anchor] of [
+		["proxy-modes.ts", "const refused = await beforeConnectorCall({"],
+		["direct-tools.ts", "const refused = await beforeConnectorCall({"],
+		["index.ts", "executeCall(state, params.tool, parsedArgs, params.server, getPiTools, beforeConnectorCall)"],
+	]) {
+		const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-mcp-scope-patch-"));
+		const scratch = path.join(scratchRoot, "node_modules", "pi-mcp-adapter");
+		fs.cpSync(adapterFolder, scratch, { recursive: true });
+		const aiCopy = path.join(scratchRoot, "node_modules", "@earendil-works", "pi-ai");
+		fs.cpSync(path.resolve(adapterFolder, "..", "@earendil-works", "pi-ai"), aiCopy, { recursive: true, dereference: true });
+		const source = fs.readFileSync(path.join(scratch, file), "utf-8");
+		assert(source.includes(anchor), `the installed ${file} holds the patch`);
+		fs.writeFileSync(path.join(scratch, file), source.replace(anchor, "const refused = undefined; ({"));
+		const run = spawnSync(process.execPath, [patcher, "--adapter-dir", scratch], { encoding: "utf8" });
+		assert(run.status === 1 && /patch 12 .*a room's connector calls would run without asking/.test(run.stderr), `a lost anchor in ${file} fails the install, got ${run.status}: ${run.stderr}`);
+		fs.rmSync(scratchRoot, { recursive: true, force: true });
+	}
+
 	// ── Specialists: the template floor cannot even grant the mcp tool ───────
 	const { assertSpecialistTemplateTools } = await import("../src/specialist-templates.js");
 	let specialistRefused = false;
@@ -522,6 +1151,60 @@ try {
 		specialistRefused = /forbidden/.test((error as Error).message);
 	}
 	assert(specialistRefused, "a specialist template granting the mcp tool must be rejected as forbidden");
+
+	// ── Room settings, Connectors, and a shared server ───────────────────────
+	// The pane's answer lists each allowed tool by its words and keeps the pin on the server; Remove counts from the next call.
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	await import("../src/room-settings-routes.js");
+	const { app, AUTH_HEADER_NAME, AUTH_TOKEN } = await import("../src/server-app.js");
+	app.log.level = "silent";
+	const agents = await import("../src/persistent-agents.js");
+	const paneRoom = String(agents.createPersistentAgentFromScaffoldInput({ displayName: "Pane Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId);
+	const paneUrl = `/api/persistent-agents/${paneRoom}/mcp-connectors`;
+	const pane = async (method: "GET" | "PUT", payload?: Record<string, unknown>) => {
+		const answer = await app.inject({ method, url: paneUrl, headers: { [AUTH_HEADER_NAME]: AUTH_TOKEN }, ...(payload ? { payload } : {}) });
+		return { status: answer.statusCode, body: answer.json() };
+	};
+	assert((await pane("PUT", { action: "grant", name: "asana" })).status === 200, "the pane turns the connector on");
+	const paneStore = await import("../src/persistent-room-mcp-settings.js");
+	const pin = paneStore.connectorAddressPin(askConnector.webUrl());
+	paneStore.allowPersistentRoomMcpTool(paneRoom, "asana", "delete_project", pin);
+	paneStore.allowPersistentRoomMcpTool(paneRoom, "asana", "createTask", pin);
+	assert(paneStore.allowPersistentRoomMcpTool(paneRoom, "asana", "x".repeat(201), pin) === false, "a yes the file can't hold is never answered as stored");
+	const listed = await pane("GET");
+	assert(JSON.stringify(listed.body.allowedTools) === JSON.stringify({ asana: [{ tool: "createTask", shown: "Create Task" }, { tool: "delete_project", shown: "Delete project" }] }) && !JSON.stringify(listed.body).includes(pin) && !("allowedTools" in listed.body.settings), `the pane lists each allowed tool and never its pin, got ${JSON.stringify(listed.body)}`);
+	// A connector may be named like an object's own members: the pane still reads, and lists no yes it doesn't hold.
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { ...askServers, constructor: { url: askConnector.webUrl("/other") } } }, null, 2));
+	assert((await pane("PUT", { action: "grant", name: "constructor" })).status === 200, "a connector named constructor is turned on");
+	const namedLikeMembers = await pane("GET");
+	assert(namedLikeMembers.status === 200 && !Object.hasOwn(namedLikeMembers.body.allowedTools, "constructor"), `a connector named constructor leaves the pane readable, got ${namedLikeMembers.status} ${JSON.stringify(namedLikeMembers.body)}`);
+	assert((await pane("PUT", { action: "revoke", name: "constructor" })).status === 200, "and is turned off");
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
+	const forgot = await pane("PUT", { action: "forget-tool", name: "asana", tool: "delete_project" });
+	assert(forgot.status === 200 && JSON.stringify(forgot.body.allowedTools) === JSON.stringify({ asana: [{ tool: "createTask", shown: "Create Task" }] }), `Remove takes back that tool alone, got ${JSON.stringify(forgot.body)}`);
+	const removedAsks = person();
+	const removedCall = gateCall(paneRoom, removedAsks.ctx, "asana", "delete_project");
+	await askedYet(removedAsks.asked, 1, "after Remove");
+	removedAsks.asked[0].answer(false);
+	assert((await removedCall).details.error === "connector_call_declined", "after Remove the tool asks on its next call");
+	const stillFree = nobodyAsked();
+	assert((await gateCall(paneRoom, stillFree.ctx, "asana", "createTask")).content[0].text === "ran" && stillFree.asked.length === 0, "the tool not removed still runs with no question");
+
+	// A shared server keeps no yes: none read, none offered or stored, none listed, and Remove is no action, the file left byte for byte.
+	const { registerServerHooks } = await import("../src/server-hooks.js");
+	registerServerHooks({});
+	const sharedFile = paneStore.persistentRoomMcpSettingsPath(paneRoom);
+	const sharedBytes = fs.readFileSync(sharedFile, "utf-8");
+	const sharedAsks = person();
+	const sharedCall = gateCall(paneRoom, sharedAsks.ctx, "asana", "createTask");
+	await askedYet(sharedAsks.asked, 1, "a shared server");
+	assert(sharedAsks.asked[0].card.lasting === false, "a shared server offers no room yes");
+	sharedAsks.asked[0].answer("room");
+	assert((await sharedCall).content[0].text === "ran" && sharedAsks.closed[0].frame.taken === "once", "on a shared server a stored yes isn't read, and a room yes counts this time");
+	const sharedList = await pane("GET");
+	assert(sharedList.status === 200 && !("allowedTools" in sharedList.body), `a shared server lists no allowed tools, got ${JSON.stringify(sharedList.body)}`);
+	const sharedForget = await pane("PUT", { action: "forget-tool", name: "asana", tool: "createTask" });
+	assert(sharedForget.status === 400 && fs.readFileSync(sharedFile, "utf-8") === sharedBytes, `a shared server refuses Remove and writes nothing, got ${sharedForget.status}`);
 
 	fs.rmSync(tempHome, { recursive: true, force: true });
 	fs.rmSync(tempAgentsRoot, { recursive: true, force: true });
@@ -536,4 +1219,5 @@ try {
 	fooRecorder.server.close();
 	fooBarRecorder.server.close();
 	signInRecorder.server.close();
+	askConnector.server.close();
 }

@@ -126,6 +126,25 @@ export function writeRoomModels(agentIdRaw: string, patch: Partial<Record<RoomMo
 	return next;
 }
 
+/**
+ * A model picked in a room's chat, once the conversation runs on it, is the
+ * room's conversation model from then on: Room settings shows it, new
+ * conversations and scheduled runs start on it. A room on the default stays
+ * on it when the pick is the model the default resolves to. The Memory row is
+ * left as it is, so a models file that is there but cannot be read is never
+ * written over: what it holds is unknown, not empty. Callers come here only
+ * after the pick fully took effect.
+ */
+export function keepChatPickAsRoomModel(agentId: string, pick: PersistentAgentModelLock, catalog: RoomModelCatalog, options: RoomModelsStorageOptions = {}): void {
+	const record = readRoomModels(agentId, options);
+	if (!record && fs.existsSync(roomModelsPath(agentId, options))) return;
+	const own = record?.conversation;
+	const aiDefault = own ? null : resolveAiDefault("conversation", catalog);
+	const current = own ?? aiDefault?.effective ?? aiDefault?.chosen;
+	if (current && persistentAgentModelLocksEqual(current, pick)) return;
+	writeRoomModels(agentId, { conversation: pick }, options);
+}
+
 // --- Defaults for new rooms -------------------------------------------------------
 
 function readProfileStateFile(): Record<string, unknown> {
@@ -367,15 +386,28 @@ export function resolveAiDefault(task: RoomModelTask, catalog: RoomModelCatalog 
 }
 
 /**
+ * Each task's AI default, resolved once for the caller to hand to every room
+ * it answers for in the same request (a room list). Kept by that caller only:
+ * a save between two requests shows in the next one. When nothing was ever
+ * chosen, every room in that one list gets the first ready model as
+ * "fallback"; the default it stored shows from the next request on.
+ */
+export function resolveAiDefaults(catalog: RoomModelCatalog = createRoomModelCatalog()): Record<RoomModelTask, RoomModelResolution> {
+	return { conversation: resolveAiDefault("conversation", catalog), memory: resolveAiDefault("memory", catalog) };
+}
+
+/**
  * The model a room runs a task on: its own pick, else the default, and only
  * when it can run. A pick or a default that cannot run leaves the row with no
  * effective model and the reason: the room waits for it rather than run on
- * another. The stored pick is reported either way.
+ * another. The stored pick is reported either way. `aiDefault` is the task's
+ * default already resolved in this request (resolveAiDefaults); without it the
+ * default is resolved here.
  */
-export function resolveRoomModel(agentId: string, task: RoomModelTask, catalog: RoomModelCatalog = createRoomModelCatalog(), options: RoomModelsStorageOptions = {}): RoomModelResolution {
+export function resolveRoomModel(agentId: string, task: RoomModelTask, catalog: RoomModelCatalog = createRoomModelCatalog(), options: RoomModelsStorageOptions = {}, aiDefault?: RoomModelResolution): RoomModelResolution {
 	const stored = readRoomModels(agentId, options)?.[task] ?? null;
 	if (!stored) {
-		const byDefault = resolveAiDefault(task, catalog);
+		const byDefault = aiDefault ?? resolveAiDefault(task, catalog);
 		return { stored: null, chosen: byDefault.chosen, effective: byDefault.effective, source: byDefault.source, ...(byDefault.reason ? { reason: byDefault.reason } : {}) };
 	}
 	const available = catalog.availability(stored, task);
@@ -533,12 +565,13 @@ export function memoryModelHoldsBudget(lock: PersistentAgentModelLock, budgetTok
 /**
  * The refusal for this room's Memory model ("room"), for this room going back
  * to a default too small for it ("default"), or for the AI defaults, naming a
- * room on the default whose own pick is the other way out.
+ * room on the default whose own pick is the other way out, or naming none when
+ * the one asking cannot see that room.
  */
-export function memoryModelTooSmallSentence(model: string, of: "room" | "maintenance" | "default" | { room: string } = "room"): string {
+export function memoryModelTooSmallSentence(model: string, of: "room" | "maintenance" | "default" | { room?: string } = "room"): string {
 	// On a shared server the defaults are the admin's.
 	if (of === "default") return `The default, ${model}, is too small for this room's memory. Keep this room's own Memory model, or ${isSharedServer() ? "ask your admin for a larger default" : "choose a larger default in Settings, AI setup"}.`;
-	if (typeof of === "object") return `${model} is too small for ${of.room}'s memory. Choose a larger default, or give ${of.room} its own Memory model in its Room settings.`;
+	if (typeof of === "object") return of.room === undefined ? `${model} is too small for the memory of a room that uses the default. Choose a larger default.` : `${model} is too small for ${of.room}'s memory. Choose a larger default, or give ${of.room} its own Memory model in its Room settings.`;
 	// Memorize, Remember and Review say it outside Room settings, so they say where the budget is.
 	return `${model} is too small for this room's memory. Choose another Memory model, or lower the memory budget in ${of === "maintenance" ? "Room settings, Memory" : "Memory"}.`;
 }

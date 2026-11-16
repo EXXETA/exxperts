@@ -1,9 +1,9 @@
 /* Consult MR-4 — the DelegationCard family: the docked consult card and the
    folded pill (variant A). Ported from the mockup (consult-ui-mockups.html)
-   with the real --exx-shadow-popover token. The button / spinner / caret
-   classes are scoped to the consult containers so they never collide with the
-   global .btn-primary / .spin definitions; the spin keyframe is reused, blink
-   and pulse are namespaced. */
+   with the real --exx-shadow-popover token. Its buttons are the family's
+   (01-base.css). The spinner and caret classes are scoped to the consult
+   containers so they never collide with the global .spin definition; the spin
+   keyframe is reused, blink and pulse are namespaced. */
 .consult-dock {
 	margin: 0 26px 10px;
 	max-width: 780px;
@@ -21,11 +21,20 @@
 /* The minimize control is pinned to the top right, so it never drops to a
    line of its own; the source line sits beside the chip while there is room
    and wraps to a full row of its own when the card is narrow or the name long. */
-.consult-card .head-row { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; position: relative; padding-right: 34px; }
+.consult-card .head-row { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; position: relative; padding-right: calc(var(--exx-btn-h) + 6px); }
 /* The chip stays one line: the source line beside or under it names the room in full. */
 .consult-card .head-row .consult-chip { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .consult-card .head-row .consult-sub { flex: 1 1 14em; min-width: 0; overflow-wrap: anywhere; }
 .consult-card .head-row .head-tools { position: absolute; top: 0; right: 0; }
+/* Minimize keeps the place of its 24 x 19 px box on the chip's line at any
+   size of the button: the larger box reaches past it, up and out. Moved
+   rather than pulled by margins, since a margin would narrow its holder and
+   the family caps a button at its holder's width. */
+.consult-card .head-tools .mini-btn {
+	position: relative;
+	top: calc((19px - var(--btn-h)) / 2);
+	right: calc((24px - var(--btn-h)) / 2);
+}
 .consult-chip {
 	display: inline-flex;
 	align-items: center;
@@ -40,16 +49,6 @@
 }
 .consult-sub { font-size: 12px; color: var(--exx-text-muted); }
 .consult-card .head-tools { margin-left: auto; display: flex; gap: 6px; }
-.consult-card .mini-btn {
-	border: 0;
-	background: transparent;
-	color: var(--exx-text-muted);
-	font-size: 13px;
-	cursor: pointer;
-	padding: 2px 8px;
-	border-radius: 6px;
-}
-.consult-card .mini-btn:hover { background: var(--exx-surface-hover); color: var(--exx-text); }
 .consult-q { font-size: 13.5px; color: var(--exx-text-soft); margin: 8px 0 2px; }
 .consult-q .q-label {
 	color: var(--exx-text-muted);
@@ -87,27 +86,6 @@
 }
 .consult-foot .meta { font-size: 11.5px; color: var(--exx-text-muted); font-family: var(--exx-font-sans); font-variant-numeric: tabular-nums; }
 .consult-actions { margin-left: auto; display: flex; gap: 8px; }
-.consult-foot .btn {
-	font: inherit;
-	font-size: 13px;
-	border-radius: 8px;
-	padding: 6px 14px;
-	cursor: pointer;
-	border: 1px solid var(--exx-border-soft);
-	background: transparent;
-	color: var(--exx-text-soft);
-	text-transform: none;
-	letter-spacing: 0;
-}
-.consult-foot .btn:not(.btn-primary):hover { background: var(--exx-surface-hover); }
-.consult-foot .btn-primary {
-	background: var(--exx-paper);
-	color: var(--exx-ink);
-	border-color: transparent;
-	font-weight: 700;
-}
-:root[data-theme="light"] .consult-foot .btn-primary { background: var(--exx-ink); color: var(--exx-paper-soft); }
-.consult-foot .btn:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 1px; }
 .consult-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--exx-text-muted); }
 .consult-status .spin,
 .fold-pill .spin {
@@ -262,27 +240,17 @@
 	font-size: 13.5px;
 	border: 1px solid var(--exx-border-soft);
 	border-radius: 8px;
-	padding: 7px 12px;
+	/* As tall as "Ask a follow-up" beside it, a finger's size included. */
+	box-sizing: border-box;
+	height: var(--exx-btn-h);
+	padding: 0 12px;
 	background: var(--exx-surface-raised);
 	color: var(--exx-text);
 }
 .consult-followup-input:disabled { opacity: 0.55; }
 .consult-followup-input:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 1px; }
-.consult-followup .btn {
-	/* "Ask a follow-up" stays one line; the box beside it gives up the room. */
-	flex: none;
-	white-space: nowrap;
-	font: inherit;
-	font-size: 13px;
-	border-radius: 8px;
-	padding: 7px 14px;
-	cursor: pointer;
-	border: 1px solid var(--exx-border-soft);
-	background: transparent;
-	color: var(--exx-text-soft);
-}
-.consult-followup .btn:hover:not(:disabled) { background: var(--exx-surface-hover); }
-.consult-followup .btn:disabled { opacity: .5; cursor: default; }
+/* "Ask a follow-up" keeps its width; the box beside it gives up the room. */
+.consult-followup .btn { flex: none; }
 /* Thread item: numbered exchanges stack with a little separation. */
 .consult-exchange + .consult-exchange { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--exx-border-soft); }
 /* §8.3: the visible composer rejection when a card is docked. */
@@ -294,4 +262,15 @@
 	padding: 4px 10px;
 	background: color-mix(in srgb, var(--exx-plan) 6%, transparent);
 	border-radius: 0 6px 6px 0;
+}
+/* A queued question to another room names that room as the box's label did, smaller and with no ×. */
+.bubble-asking {
+	display: inline-block;
+	margin-bottom: 6px;
+	padding: 1px 8px;
+	border: 1px solid color-mix(in srgb, var(--exx-plan) 55%, transparent);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--exx-plan) 14%, transparent);
+	font-size: 12.5px;
+	color: var(--fg);
 }

@@ -15,6 +15,8 @@ const commandResultCache = new Map<string, string | undefined>();
  * - Otherwise checks environment variable first, then treats as literal (not cached)
  */
 export function resolveConfigValue(config: string): string | undefined {
+	// A shared server takes a value as typed: no command, no environment lookup.
+	if (process.env.EXXPERTS_SHARED_SERVER === "1") return config;
 	if (config.startsWith("!")) {
 		return executeCommand(config);
 	}
@@ -89,6 +91,8 @@ function executeCommand(commandConfig: string): string | undefined {
  * Resolve all header values using the same resolution logic as API keys.
  */
 export function resolveConfigValueUncached(config: string): string | undefined {
+	// A shared server takes a value as typed: no command, no environment lookup.
+	if (process.env.EXXPERTS_SHARED_SERVER === "1") return config;
 	if (config.startsWith("!")) {
 		return executeCommandUncached(config);
 	}

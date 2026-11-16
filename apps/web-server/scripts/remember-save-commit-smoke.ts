@@ -71,19 +71,28 @@ function pass(label: string): void {
 
 const realWriteFileSync = fs.writeFileSync;
 const realRenameSync = fs.renameSync;
+const realOpenSync = fs.openSync;
 function crashOnWrite(pattern: RegExp, options: { torn?: boolean } = {}): { restore(): void; hit(): boolean } {
 	let fired = false;
-	const strike = (target: unknown, data?: unknown) => {
+	// The safe write writes through a file handle, so the handle is what names the file.
+	const handles = new Map<number, string>();
+	const strike = (file: unknown, data?: unknown) => {
+		const target = typeof file === "number" ? handles.get(file) : file;
 		if (fired || pattern.test(String(target))) {
-			if (!fired && options.torn && typeof data === "string") realWriteFileSync(target as string, data.slice(0, Math.floor(data.length / 2)));
+			if (!fired && options.torn && typeof data === "string") (realWriteFileSync as any)(file, data.slice(0, Math.floor(data.length / 2)));
 			fired = true;
 			throw new Error(`injected crash writing ${path.basename(String(target))}`);
 		}
 	};
+	(fs as any).openSync = (file: any, ...rest: any[]) => {
+		const handle = (realOpenSync as any)(file, ...rest);
+		handles.set(handle, String(file));
+		return handle;
+	};
 	(fs as any).writeFileSync = (file: any, ...rest: any[]) => { strike(file, rest[0]); return (realWriteFileSync as any)(file, ...rest); };
 	(fs as any).renameSync = (from: any, to: any) => { strike(to); return realRenameSync(from, to); };
 	return {
-		restore() { (fs as any).writeFileSync = realWriteFileSync; (fs as any).renameSync = realRenameSync; },
+		restore() { (fs as any).writeFileSync = realWriteFileSync; (fs as any).renameSync = realRenameSync; (fs as any).openSync = realOpenSync; },
 		hit: () => fired,
 	};
 }
@@ -441,8 +450,8 @@ try {
 	});
 
 	// --- 6c. A row moved into the archive is there before it leaves the core --
-	// A write that archives a row writes the archive first, then the core. A
-	// crash between the two costs a duplicate, never the row.
+	// A write that archives a row writes the core first; the rows ride in its
+	// intent, and the archive follows. A crash between the two never costs the row.
 	for (const step of [
 		{ name: "the archive", pattern: /[\\/]archive[\\/]entries\.md/ },
 		{ name: "the core file", pattern: /[\\/]L1b[\\/]current\.md/ },
@@ -472,6 +481,84 @@ try {
 		const inArchive = readArchive(room.agentId).some((entry) => entry.id === row.id);
 		assert(inCore || inArchive, `a write that archives a row crashed at ${step.name} lost the row: it is in neither the core nor the archive`);
 		assert(!fs.existsSync(path.join(room.instance.rootDir, "runtime", "commit", "memory.json")), `no memory write is left pending after a crash at ${step.name}`);
+	});
+
+	await section("a save cut after its core, then the core changed by hand", async () => {
+		const room = await roomWithProposal("archive after another writer");
+		const doc = loadMemoryDocument(room.agentId).doc;
+		const topic = doc.topics[0]!;
+		const row = { ...(topic.entries[0] ?? {}), id: "E-MOVING-2", text: "A note the archive still owes." } as any;
+		topic.entries.push(row);
+		writeMemoryDocument(room.agentId, doc, { why: "edit", snapshotLabel: "edit" } as any);
+		const moved = loadMemoryDocument(room.agentId).doc;
+		const movedTopic = moved.topics[0]!;
+		const leaving = movedTopic.entries.find((entry) => entry.id === row.id)!;
+		movedTopic.entries = movedTopic.entries.filter((entry) => entry.id !== row.id);
+		const crash = crashOnWrite(/[\\/]archive[\\/]entries\.md/);
+		try {
+			writeMemoryDocument(room.agentId, moved, { why: "edit", snapshotLabel: "edit", archiveAppend: [{ entry: leaving, why: "user", topic: movedTopic.title, section: movedTopic.section }] } as any);
+		} finally {
+			crash.restore();
+		}
+		assert(crash.hit() && fs.existsSync(path.join(room.instance.rootDir, "runtime", "commit", "memory.json")), "the save landed with its archive rows still owed");
+		const core = path.join(room.instance.rootDir, "L1b", "current.md");
+		fs.writeFileSync(core, `${fs.readFileSync(core, "utf-8")}\n`);
+		nextRequest(room.agentId);
+		assert(readArchive(room.agentId).some((entry) => entry.id === row.id), "the row the core gave up reaches the archive");
+	});
+
+	for (const step of [
+		{ name: "its core", pattern: /[\\/]L1b[\\/]current\.md/, landed: false },
+		{ name: "its archive write", pattern: /[\\/]archive[\\/]entries\.md/, landed: true },
+	]) await section(`a restore from the archive cut at ${step.name}, then the core changed by hand`, async () => {
+		const room = await roomWithProposal(`restore by hand ${step.name}`);
+		const doc = loadMemoryDocument(room.agentId).doc;
+		const topic = doc.topics[0]!;
+		const row = { ...(topic.entries[0] ?? {}), id: "E-ARCHIVED-2", text: "A note on its way back from the archive." } as any;
+		appendArchive(room.agentId, [{ entry: row, why: "user", topic: topic.title, section: topic.section }]);
+		const crash = crashOnWrite(step.pattern);
+		try {
+			topic.entries.push(row);
+			writeMemoryDocument(room.agentId, doc, { why: "edit", snapshotLabel: "edit", archiveRemoveIds: [row.id] } as any);
+		} catch {
+			// the injected crash
+		} finally {
+			crash.restore();
+		}
+		assert(crash.hit(), `the crash struck at ${step.name}`);
+		const core = path.join(room.instance.rootDir, "L1b", "current.md");
+		fs.writeFileSync(core, `${fs.readFileSync(core, "utf-8")}\n`);
+		nextRequest(room.agentId);
+		const inArchive = readArchive(room.agentId).some((entry) => entry.id === row.id);
+		assert(memoryOf(room.instance).includes(row.text) === step.landed, `the core ${step.landed ? "holds" : "does not hold"} the note`);
+		assert(inArchive !== step.landed, `the note is in one file only: in the archive ${inArchive}`);
+	});
+
+	await section("a save cut before its core, then the core changed by hand", async () => {
+		const room = await roomWithProposal("cut before the core");
+		const doc = loadMemoryDocument(room.agentId).doc;
+		const topic = doc.topics[0]!;
+		const row = { ...(topic.entries[0] ?? {}), id: "E-MOVING-3", text: "A note that never left the core." } as any;
+		topic.entries.push(row);
+		writeMemoryDocument(room.agentId, doc, { why: "edit", snapshotLabel: "edit" } as any);
+		const moved = loadMemoryDocument(room.agentId).doc;
+		const movedTopic = moved.topics[0]!;
+		const leaving = movedTopic.entries.find((entry) => entry.id === row.id)!;
+		movedTopic.entries = movedTopic.entries.filter((entry) => entry.id !== row.id);
+		const crash = crashOnWrite(/[\\/]L1b[\\/]current\.md/);
+		try {
+			writeMemoryDocument(room.agentId, moved, { why: "edit", snapshotLabel: "edit", archiveAppend: [{ entry: leaving, why: "user", topic: movedTopic.title, section: movedTopic.section }] } as any);
+		} catch {
+			// the injected crash
+		} finally {
+			crash.restore();
+		}
+		assert(crash.hit(), "the crash struck at the core");
+		const core = path.join(room.instance.rootDir, "L1b", "current.md");
+		fs.writeFileSync(core, `${fs.readFileSync(core, "utf-8")}\n`);
+		nextRequest(room.agentId);
+		assert(memoryOf(room.instance).includes(row.text), "the note stays in the core");
+		assert(!readArchive(room.agentId).some((entry) => entry.id === row.id), "a save that never landed adds nothing to the archive");
 	});
 
 	// --- 7. Forget: closing the conversation is the commit point -------------
@@ -511,6 +598,29 @@ try {
 			assert(mementoRecords(room.instance) === 1, `a Forget crashed at ${step.name} is finished: one memento record, got ${mementoRecords(room.instance)}`);
 		}
 		assert(!fs.existsSync(path.join(room.instance.rootDir, "runtime", "commit", "forget.json")), `no Forget is left pending after a crash at ${step.name}`);
+	});
+
+	await section("a Forget whose session rewrite leftover could not go at once", async () => {
+		const room = await roomWithProposal("forget held leftover");
+		const sessions = path.join(room.instance.rootDir, "runtime", "pi-sessions");
+		fs.mkdirSync(sessions, { recursive: true });
+		const leftover = path.join(sessions, `${room.threadId}.jsonl.tmp-1-2`);
+		fs.writeFileSync(leftover, "a conversation's words\n");
+		const realRmSync = fs.rmSync;
+		(fs as any).rmSync = (file: any, ...rest: any[]) => {
+			if (String(file) === leftover) throw Object.assign(new Error("EBUSY: resource busy or locked, rm"), { code: "EBUSY" });
+			return (realRmSync as any)(file, ...rest);
+		};
+		try {
+			writePersistentAgentMementoBoundary(room.agentId, room.threadId, new Date(), { runtimeCwd: tempCwd });
+		} catch {
+			// the held file
+		} finally {
+			(fs as any).rmSync = realRmSync;
+		}
+		nextRequest(room.agentId);
+		assert(!fs.existsSync(leftover), "the next request erases the leftover");
+		assert(!fs.existsSync(path.join(room.instance.rootDir, "runtime", "commit", "forget.json")), "no Forget is left pending");
 	});
 
 	assert(failures.length === 0, `remember save commit smoke failed:\n${failures.join("\n")}`);

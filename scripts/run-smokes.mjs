@@ -12,6 +12,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { noFlushNodeOptions } from "../apps/web-server/scripts/smoke-no-flush-preload.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const smokeDir = path.join(repoRoot, "apps", "web-server", "scripts");
@@ -105,9 +106,12 @@ const bundledToolsDir = process.env.EXXETA_BUNDLED_TOOLS_DIR || (fs.existsSync(r
 // Windows), still never writes into the real one. The data-folder settings
 // that win over the home go too, as in smokeHomeEnv
 // (apps/web-server/scripts/smoke-server-process.ts). A smoke that reads the
-// real rooms, read-only, finds them under SMOKE_LOGIN_HOME.
-function smokeEnv(home) {
+// real rooms, read-only, finds them under SMOKE_LOGIN_HOME. The drive flush
+// is skipped but for a few smokes (smoke-no-flush-preload.mjs says why).
+function smokeEnv(home, name) {
 	const env = { ...process.env, HOME: home, USERPROFILE: home, SMOKE_LOGIN_HOME: os.homedir() };
+	const nodeOptions = noFlushNodeOptions(process.env.NODE_OPTIONS, name, os.tmpdir());
+	if (nodeOptions) env.NODE_OPTIONS = nodeOptions;
 	if (browsersPath) env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
 	if (bundledToolsDir) env.EXXETA_BUNDLED_TOOLS_DIR = bundledToolsDir;
 	delete env.EXXPERTS_DATA_DIR;
@@ -122,7 +126,7 @@ function runSmoke(name) {
 		const home = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-smoke-home-"));
 		const child = spawn(process.execPath, ["--import", tsxLoader, path.join(smokeDir, name)], {
 			cwd: repoRoot,
-			env: smokeEnv(home),
+			env: smokeEnv(home, name),
 			stdio: ["ignore", "pipe", "pipe"],
 			...(process.platform === "win32" ? {} : { detached: true }),
 		});
@@ -188,13 +192,15 @@ function skipLines(output) {
 	return output.split("\n").map((line) => line.trim()).filter((line) => /\bsmoke\b.*\bskipped\b/i.test(line) || line.startsWith("SKIPPED:"));
 }
 
-// A part that only another system can run (its reason says "only Windows" or
-// "macOS only") is no gap in this run: that system's CI job runs it. It is
-// still listed under its smoke, but only the other skips count as SKIPPED,
-// which the GitHub sync's check refuses (scripts/check-public-copy.mjs).
+// A part that only another system can run (its reason says "only Windows",
+// "macOS only" or "only on Linux") is no gap in this run: that system's CI
+// job runs it. It is still listed under its smoke, but only the other skips
+// count as SKIPPED, which the GitHub sync's check refuses
+// (scripts/check-public-copy.mjs).
 const ONLY_ON = [
 	{ platform: "win32", words: /\bonly (?:on )?Windows\b|\(Windows only\)/i },
 	{ platform: "darwin", words: /\bonly (?:on )?macOS\b|\(macOS only\)/i },
+	{ platform: "linux", words: /\bonly (?:on )?Linux\b|\(Linux only\)/i },
 ];
 function forAnotherSystem(line) {
 	return ONLY_ON.some((rule) => rule.platform !== process.platform && rule.words.test(line));

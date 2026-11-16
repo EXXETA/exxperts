@@ -402,10 +402,10 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 					</span>
 					{!readOnly && editingId !== entry.id && movingId !== entry.id && confirmDeleteId !== entry.id && (
 						<span className="memory-entry-tools">
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => startEdit(entry)}>Edit</button>
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => void togglePin(entry)}>{entry.pinned ? "Unpin" : "Pin"}</button>
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => startMove(entry)}>Move</button>
-							<button className="rs-quiet rs-quiet-danger" type="button" disabled={busy} onClick={() => setConfirmDeleteId(entry.id)}>Delete</button>
+							<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={busy} onClick={() => startEdit(entry)}>Edit</button>
+							<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={busy} onClick={() => void togglePin(entry)}>{entry.pinned ? "Unpin" : "Pin"}</button>
+							<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={busy} onClick={() => startMove(entry)}>Move</button>
+							<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" disabled={busy} onClick={() => setConfirmDeleteId(entry.id)}>Delete</button>
 						</span>
 					)}
 				</div>
@@ -427,8 +427,8 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 				{confirmDeleteId === entry.id && (
 					<div className="memory-entry-confirm">
 						<span>{DELETE_NOTE_QUESTION}</span>
-						<button className="rs-quiet" type="button" disabled={busy} onClick={() => setConfirmDeleteId(null)}>Keep it</button>
-						<button className="rs-quiet rs-quiet-danger" type="button" disabled={busy} onClick={() => void confirmDelete(entry)}>{busy ? "Deleting…" : "Delete"}</button>
+						<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={busy} onClick={() => setConfirmDeleteId(null)}>Keep it</button>
+						<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" disabled={busy} onClick={() => void confirmDelete(entry)}>{busy ? "Deleting…" : "Delete"}</button>
 					</div>
 				)}
 			</li>
@@ -544,13 +544,13 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 								{!readOnly && confirmArchiveDeleteId === entry.id ? (
 									<div className="memory-entry-confirm">
 										<span>{DELETE_ARCHIVED_NOTE_TITLE} {DELETE_ARCHIVED_NOTE_BODY}</span>
-										<button className="rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(null)}>{KEEP_IT_LABEL}</button>
-										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => void deleteForGood(entry)}>{busyId === entry.id ? "Deleting…" : DELETE_ARCHIVED_NOTE_LABEL}</button>
+										<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(null)}>{KEEP_IT_LABEL}</button>
+										<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => void deleteForGood(entry)}>{busyId === entry.id ? "Deleting…" : DELETE_ARCHIVED_NOTE_LABEL}</button>
 									</div>
 								) : !readOnly && (
 									<div className="memory-entry-actions">
-										{archivedEntryRestorable(entry) && <button className="rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => void restore(entry)}>{busyId === entry.id ? "Restoring…" : "Restore"}</button>}
-										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(entry.id)}>{DELETE_ARCHIVED_NOTE_LABEL}</button>
+										{archivedEntryRestorable(entry) && <button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => void restore(entry)}>{busyId === entry.id ? "Restoring…" : "Restore"}</button>}
+										<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(entry.id)}>{DELETE_ARCHIVED_NOTE_LABEL}</button>
 									</div>
 								)}
 							</li>
@@ -657,10 +657,10 @@ export function RoomMemoryHistorySection({ status, onUndone, reloadKey }: { stat
 						<span className="memory-history-what">{row.words}</span>
 						{row.undone && <span className="memory-history-undone">{HISTORY_UNDONE_MARK}</span>}
 						{undoable && undoable.key === row.key && !blocked && (
-							<button className="rs-quiet" type="button" disabled={undoing} onClick={() => void undo(row)}>{undoing ? "Undoing…" : HISTORY_UNDO_LABEL}</button>
+							<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" disabled={undoing} onClick={() => void undo(row)}>{undoing ? "Undoing…" : HISTORY_UNDO_LABEL}</button>
 						)}
 						{row.diffable && (
-							<MemoryChangeFold roomId={status.id} row={row} quiet="rs-quiet" open={changeOpen === row.key} onToggle={() => setChangeOpen((open) => (open === row.key ? null : row.key))} />
+							<MemoryChangeFold roomId={status.id} row={row} quiet="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" open={changeOpen === row.key} onToggle={() => setChangeOpen((open) => (open === row.key ? null : row.key))} />
 						)}
 					</li>
 				))}

@@ -3,8 +3,8 @@
 // "exxperts"; a room whose name is only invisible characters reads "Unnamed
 // room" wherever its name shows; Rename's Save is never greyed without a
 // reason (an empty name says why, the name left as it is closes the field and
-// saves nothing); and Enter in Room settings' Folder box accepts the folder and
-// keeps the editor open, so nothing is saved until Save changes is clicked.
+// saves nothing); and where the computer can't open a folder window, Room
+// settings' Folder pane takes a typed path, and Enter there is Use this folder.
 // Offline: a synthetic model that is never called. Throwaway HOME.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
+import { CHANGE_FOLDER, LOCATION, TYPE_THE_PATH, USE_THIS_FOLDER } from "../src/room-box/card-text.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -211,23 +212,27 @@ try {
 			console.log("  ok  Rename's Save: the name left as it is closes the field and saves nothing; an empty name greys Save and says why");
 		}
 
-		// 2. Enter in the folder box accepts the folder and keeps the editor open; Save changes saves.
+		// 2. Where no folder window opens, the path is typed; Enter in its box saves it, as Use this folder does.
 		if (!only || only === "enter") {
 			await card.locator(".card-gear-btn").click();
 			await page.waitForSelector(".settings-dialog", { timeout: 10_000 });
 			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 			const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
-			await pane.getByRole("button", { name: "Edit", exact: true }).click();
-			const folder = pane.getByLabel("Folder path");
+			await page.route("**/api/system/choose-folder", (route) => route.fulfill({ status: 501, contentType: "application/json", body: JSON.stringify({ error: "No folder window here.", code: "unsupported_platform", supported: false, cancelled: false }) }));
+			try {
+				await pane.getByRole("button", { name: CHANGE_FOLDER }).click();
+				await pane.getByText(TYPE_THE_PATH, { exact: true }).waitFor({ timeout: 10_000 });
+			} finally {
+				await page.unroute("**/api/system/choose-folder");
+			}
+			assert(await pane.getByRole("button", { name: USE_THIS_FOLDER }).isDisabled(), "Use this folder waits for a path");
+			assert(await savedRoot() === "client-a", "a folder window that can't open saves nothing");
+			const folder = pane.getByRole("textbox", { name: LOCATION });
 			await folder.fill(clientB);
 			await folder.press("Enter");
-			await page.waitForTimeout(800);
-			assert(await pane.getByRole("button", { name: "Save changes" }).isVisible(), "the editor stays open after Enter");
-			assert(await folder.inputValue() === clientB, `the typed folder stays in the box, got ${await folder.inputValue()}`);
-			assert(await savedRoot() === "client-a", "Enter saves nothing: client-a is still the room's folder");
-			await pane.getByRole("button", { name: "Save changes" }).click();
-			await waitUntil(async () => (await savedRoot()) === "client-b", "Save changes saves client-b");
-			console.log("  ok  Enter in the folder box keeps the editor open; Save changes saves");
+			await waitUntil(async () => (await savedRoot()) === "client-b", "Enter saves client-b");
+			await pane.getByText(TYPE_THE_PATH, { exact: true }).waitFor({ state: "detached", timeout: 10_000 });
+			console.log("  ok  where no folder window opens, a typed path saves on Enter");
 		}
 	} finally {
 		await browser.close();

@@ -150,6 +150,31 @@ check("a listing by command counts as listing a folder on the folded line", look
 	check("a question after a finished step whose own step is not drawn: its own row", same(after, ["r:-", "ask:r-h"]), after);
 	const answered = owners([{ kind: "tool", id: "r", name: "read", args: { path: "a.ts" }, status: "done" }, { ...handOff, done: "Approve" }]);
 	check("answered, it keeps its own row, so the answer stays on the card", same(answered, ["r:-", "ask:r-h"]), answered);
+	// A room's folder and commands cards belong to their ask steps, also once those steps have ended.
+	const askStep = (id: string, name: string) => ({ kind: "tool", id, name, args: {}, status: "done", result: "x", details: { askOutcome: "not-now" } });
+	const roomCard = (id: string, uiKind: string) => ({ kind: "approval", id: `q-${id}`, requestId: `r-${id}`, uiKind, title: "This room needs access to another folder.", done: "Not now" });
+	const ended = owners([askStep("f", "ask_for_folder"), roomCard("f", "folder")]);
+	check("an answered folder card whose step has ended: in that step's row, not a row of its own", same(ended, ["f:r-f"]), ended);
+	// "Run this command?" carries its command whole, hidden characters written out: it finds its step by the whole command.
+	const run = (id: string, text: string, extra: Record<string, unknown> = {}) => ({ kind: "approval", id: `q-${id}`, requestId: `r-${id}`, uiKind: "run", title: "Run this command?", command: text, folder: "/work", ...extra });
+	const runTwo = owners([command("a", "ls src"), command("b", "rm -rf build"), run("a", "ls src"), run("b", "rm -rf build")]);
+	check("run question: two commands in one message, each question in its own command's row", same(runTwo, ["a:r-a", "b:r-b"]), runTwo);
+	const veryLong = `echo ${"x".repeat(9_000)}`;
+	const runLong = owners([command("a", veryLong), run("a", veryLong)]);
+	check("run question: a command far past the old cut finds its row", same(runLong, ["a:r-a"]), runLong);
+	const sameHead = owners([command("a", `${"y".repeat(300)} first`), command("b", `${"y".repeat(300)} second`), run("b", `${"y".repeat(300)} second`)]);
+	check("run question: two commands that share their first 300 characters, the question in the one it names whole", same(sameHead, ["a:-", "b:r-b"]), sameHead);
+	const hidden = owners([command("a", "echo safe\u202E; rm notes.txt"), run("a", "echo safe⟦U+202E⟧; rm notes.txt")]);
+	check("run question: a command with a hidden character finds its row, the character written out on the question's side only", same(hidden, ["a:r-a"]), hidden);
+	const runStray = owners([command("a", "ls src"), run("x", "cat secrets.txt")]);
+	check("run question: one no step on the card asks keeps its own row, never another command's", same(runStray, ["a:-", "ask:r-x"]), runStray);
+	const outsideStep = owners([{ ...command("a", "git push"), name: "run_outside_box" }, run("a", "git push")]);
+	check("run question: a run-outside step with the same command never takes it", same(outsideStep, ["a:-", "ask:r-a"]), outsideStep);
+	const runDone = owners([command("a", "npm test", "done"), run("a", "npm test", { done: "Run once" })]);
+	const runNo = owners([{ ...command("a", "rm x", "error"), result: "The user declined this command. Do not run it or retry variants of it unless the user asks." }, run("a", "rm x", { done: "Decline" })]);
+	check("run question: answered, after Run once or Not now, it stays in its command's row", same(runDone, ["a:r-a"]) && same(runNo, ["a:r-a"]), [runDone, runNo]);
+	const mixed = owners([askStep("f1", "ask_for_folder"), askStep("c1", "ask_for_commands"), askStep("f2", "ask_for_folder"), roomCard("f1", "folder"), roomCard("c1", "commands"), roomCard("f2", "folder")]);
+	check("two folder asks and a commands ask: each card in its own ask's row, in order", same(mixed, ["f1:r-f1", "c1:r-c1", "f2:r-f2"]), mixed);
 }
 
 // --- A finished turn of several stretches folds into the card one stretch folds into.
@@ -168,6 +193,25 @@ check("a listing by command counts as listing a folder on the folded line", look
 	};
 	const head = (html: string) => /<button[^>]*class="wk-head"[\s\S]*?<\/button>/.exec(html)?.[0] ?? "";
 	const words = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+	const notNow = stretch([tool("f", "ask_for_folder", { access: "read" }, { details: { askOutcome: "not-now" } }), { kind: "approval", id: "q-f", requestId: "r-f", uiKind: "folder", title: "This room needs access to another folder.", done: "Not now" }]);
+	check("after a Not now the card of that one ask says Not now once, where its time would be, with no \"You chose\" row", !words(notNow).includes("You chose") && (words(notNow).match(/Not now/g) ?? []).length === 1, words(notNow));
+	// "Run this command?": while it waits the step's row is the panel questions' quiet row; after an answer the command's row alone says what came of it.
+	const runAsk = (extra: Record<string, unknown> = {}) => ({ kind: "approval", id: "q-run", requestId: "r-run", uiKind: "run", title: "Run this command?", command: "rm notes.txt", folder: "/work", ...extra });
+	const live = (items: Record<string, any>[]) => {
+		const error = console.error;
+		console.error = (...args: unknown[]) => { if (!String(args[0]).includes("useLayoutEffect does nothing on the server")) error(...args); };
+		try {
+			return renderToStaticMarkup(createElement(workCard.WorkStretch, { items, live: true, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined }));
+		} finally {
+			console.error = error;
+		}
+	};
+	const waiting = live([tool("c", "bash", { command: "rm notes.txt" }, { status: "running", result: undefined, endedAt: undefined }), runAsk()]);
+	check("run question waiting: the card's head says Waiting for your OK, with no amber, and the step's row is one quiet row with the question and no answers", words(head(waiting)).startsWith("Waiting for your OK") && !waiting.includes("wk-card waiting") && (waiting.match(/data-s="waiting"/g) ?? []).length === 1 && !waiting.includes("wk-ask") && !/Allow|Deny/.test(words(waiting)) && words(waiting).includes("Run this command?"), words(waiting));
+	const ranOnce = stretch([tool("c", "bash", { command: "rm notes.txt" }, { result: "", details: { commandRan: true } }), runAsk({ done: "Run once" })]);
+	check("after Run once: one row, the command's, and none for the question", !words(ranOnce).includes("Run this command?") && !words(ranOnce).includes("You chose") && (ranOnce.match(/class="wk-row"/g) ?? []).length <= 1, words(ranOnce));
+	const saidNo = stretch([tool("c", "bash", { command: "rm notes.txt" }, { status: "error", result: "The user declined this command. Do not run it or retry variants of it unless the user asks." }), runAsk({ done: "Decline" })]);
+	check("after Not now: one row, the command's, saying it did not run because you said no, and none for the question", words(saidNo).includes("you said no") && !words(saidNo).includes("Run this command?") && (saidNo.match(/class="wk-row"/g) ?? []).length <= 1, words(saidNo));
 	const steps = [tool("a", "ls", { path: "src" }), tool("b", "read", { path: "notes.md" })];
 	const folded = turn(steps);
 	check("a folded turn is a bordered card, not a line", folded.includes('class="wk-card wk-turn"') && !folded.includes("wk-worked"), folded);

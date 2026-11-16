@@ -135,19 +135,34 @@
 
 import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
 import { createAgentSession, getAgentDir, DefaultResourceLoader, SessionManager } from "@exxeta/exxperts-runtime";
+import { RoomBox } from "./room-box/box-session.js";
+import { roomBoxComputer, roomBoxSettled } from "./room-box/box-available.js";
+import { fileToolsWait } from "./room-box/windows/folder-wait.js";
+import { windowsBoxModelLine } from "./room-box/windows/model-lines.js";
+import { windowsSiteDecision } from "./room-box/windows/site-decision.js";
+import { conversationFolder, WindowsRoomBox, windowsSkillFolder } from "./room-box/windows/windows-engine.js";
+import { persistentRoomProtection, protectionJudgesFolder, unprotectedByRoom } from "./persistent-room-protection.js";
+import { addAlsoAllowedFolder, AnswerSites, readAlsoAllowed } from "./room-box/also-allowed.js";
+import { boxModelLine, type FolderAskAccess, FREE_READER_LINE, RUN_OUTSIDE_BOX_TOOL_NAME } from "./room-box/card-text.js";
+import { createRoomCommandTools, type RoomCommandTools } from "./room-command-tool.js";
 import { createWebUiContext } from "./web-ui-context.js";
 import { type AnswerNote, serverStopNote, shownPart, withAnswerNote } from "./cut-answer-note.js";
 import { answerPhase, bubbleIdOf, readShownChars, readSteerRequest, steerWay, type SteerRequest, type SteerRouted } from "./steer-route.js";
 import { createTurnFrameCoalescer } from "./turn-frame-coalescer.js";
 import { dropHeldMessages, holdMessages, readHeldMessageList, readHeldMessages } from "./held-messages-store.js";
+import { addTakenSteer, dropKeptLanding, dropTakenSteers, keepAnswerNoteFor, type KeyedLanding, readAnswerNote, readKeptLanding, readTakenSteers, type TakenSteer, writeKeptLanding } from "./turn-pieces-store.js";
 import { STOPPED_BEFORE_ANSWER_SENTENCE, type TurnEndedBy } from "./turn-ended-by.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { createPersistentAgentInstance, parsePersistentAgentL1aMarker, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, assertPersistentAgentAcceptsSession, RECENT_CONTEXT_BLOCK_CAP, getPersistentAgentThread, getPersistentAgentActiveTurnState, clearPersistentAgentUnseenLandedAnswerForBind, markPersistentAgentTurnCancelling, writePersistentAgentThread, recordPersistentAgentUnseenLandedAnswer, switchPersistentAgentThreadModel, createPersistentRoomAutoDeclinedQuestionLog, refreshEmptyPersistentAgentThreadModel, persistentAgentThreadFollowsConversationPick, persistentAgentThreadIsEmpty, refreshEmptyPersistentAgentThreadBootSnapshot, buildPersistentAgentCurrentIdentitySection, fingerprintPersistentAgentBootContextInstructions, buildPersistentRoomCurrentWorkspaceSection, buildPersistentAgentBootContext, readPersistentAgentBootPromptSnapshot, assertPersistentAgentBootPromptFitsWindow, openPersistentAgentPiSessionManager, PersistentAgentMemoryOverflowError, emptyPersistentAgentThreadModelTarget, beginPersistentAgentTurn, clearPersistentAgentThreadPendingHandoffs, finishPersistentAgentTurn, buildConsultAnswer } from "./persistent-agents.js";
+import { createPersistentAgentInstance, parsePersistentAgentL1aMarker, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, assertPersistentAgentAcceptsSession, RECENT_CONTEXT_BLOCK_CAP, getPersistentAgentThread, getPersistentAgentActiveTurnState, clearPersistentAgentUnseenLandedAnswerForBind, clearPersistentAgentUnseenLandedAnswerLoaded, getPersistentAgentUnseenLandedAnswer, markPersistentAgentTurnCancelling, writePersistentAgentThread, recordPersistentAgentUnseenLandedAnswer, switchPersistentAgentThreadModel, createPersistentRoomAutoDeclinedQuestionLog, refreshEmptyPersistentAgentThreadModel, persistentAgentThreadFollowsConversationPick, persistentAgentThreadIsEmpty, refreshEmptyPersistentAgentThreadBootSnapshot, buildPersistentAgentCurrentIdentitySection, fingerprintPersistentAgentBootContextInstructions, buildPersistentRoomCurrentWorkspaceSection, buildPersistentAgentBootContext, readPersistentAgentBootPromptSnapshot, assertPersistentAgentBootPromptFitsWindow, openPersistentAgentPiSessionManager, PersistentAgentMemoryOverflowError, emptyPersistentAgentThreadModelTarget, beginPersistentAgentTurn, clearPersistentAgentThreadPendingHandoffs, finishPersistentAgentTurn, buildConsultAnswer } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import { getPersistentRoomToolPolicy, persistentRoomBlockedToolLeaks } from "./persistent-room-tool-policy.js";
-import { persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, resolvePersistentRoomEffectiveWorkspacePolicy, persistentRoomSettingsNotAppliedFrame } from "./persistent-room-workspace-policy.js";
+import { persistentRoomCommandsCanRun, persistentRoomCommandsSwitchedOff, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, resolvePersistentRoomEffectiveWorkspacePolicy, persistentRoomSettingsNotAppliedFrame } from "./persistent-room-workspace-policy.js";
+import { chooseLocalFolder, folderPickerPrompt } from "./local-folder-picker.js";
+import { roomFence } from "./room-files.js";
+import { AnswerFolders, commandOffLine, commandsAskState, createReasonKeeper, createRoomAsks, NotNowCount, removeAskedFolder, roomAsksOffered, type RoomAskView, setRoomCommands } from "./room-box/folder-question.js";
 import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashApprovalGuard } from "./persistent-room-bash-approval.js";
-import { readPersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
+import { createRoomWebReaderExtension } from "./room-web-reader.js";
+import { commandRunsWithoutAsking, roomReachesFreely, unprotectedRoomOnAuto } from "./persistent-room-bash-settings.js";
 import { createPersistentRoomShellMissingExtension } from "./persistent-room-shell-missing.js";
 import { createTurnStepLog, landedTextAfter, withFrameIds } from "./persistent-room-turn-steps.js";
 import { RoomModelUnavailableError, createRoomModelCatalog, resolveRoomModel } from "./room-models.js";
@@ -185,11 +200,11 @@ import { resolveNativeProviderSearchDecision, shouldRegisterClientWebSearch, cre
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import toolResultAgingExt, { readAgedToolResultMarker } from "../../../pi-package/extensions/tool-result-aging/index.js";
 import { agentSkillsDir } from "./skills-store.js";
-import { emptyAnswer, answerlessCallMovedNothing, resolveUsageAuthType } from "./usage-log.js";
+import { emptyAnswer, answerlessCallMovedNothing, modelCallMetadata, resolveUsageAuthType } from "./usage-log.js";
 import { keptBeforeNextMessage, markAppPrompt, notEditableMessageId, notUndoneLine, readEditFrame, replacedItemIds, stepBackForEdit, withEditNote, type NotUndoneLine } from "./edit-last-message.js";
 import { keepAppTurnFailure, stepBackFromFailedPrompt, lastShownUserText, returnedPromptOf, type ReturnedPrompt, settleReturnedPrompt } from "./failed-prompt-step-back.js";
-import { lastUserItemIsScheduledPrompt } from "./persistent-room-background-execution.js";
-import { credentialKeyOf, failureCodesOf, failedTurnCredential, noteKeyOutcome, turnFailureOf, answerStarted, retryFailureOf, failedMessageError, quotaWayOf, compactionFailureOf, notOnAccountLine, notOfferedLine, failureWords } from "./model-call-causes.js";
+import { clearPersistentRoomSettings, lastUserItemIsScheduledPrompt } from "./persistent-room-background-execution.js";
+import { credentialKeyOf, failureCodesOf, failedTurnCredential, noteKeyOutcome, turnFailureOf, answerStarted, retryFailureOf, failedMessageError, quotaWayOf, compactionFailureOf, notOnAccountLine, notOfferedLine, providerFailureLogFields } from "./model-call-causes.js";
 import { serverHooks, isSharedServer } from "./server-hooks.js";
 import { STOP_CUT_ANSWER_SENTENCE, trackLiveConnection, STOP_QUESTIONS_SENTENCE, answerAlreadyEnded, serverStopping, SERVER_STOPPING_SENTENCE, SERVER_STOPPING_CODE, trackRunningWork } from "./server-stop.js";
 import { REPO_ROOT, roomLock, roomLockBusyInstruction, roomLockBusyStatus } from "./server-install-root.js";
@@ -203,13 +218,14 @@ import { isLocalPromptDiagnosticsRequest, isPromptDiagnosticsEnabled, remoteRoom
 import { recordPersistentRoomPromptDiagnostics, safeDiagnosticIdPart } from "./room-prompt-diagnostics.js";
 import { getPersistentAgentStatusForMaintenance, getUsablePersistentAgentStatusForNormalUse } from "./room-status.js";
 import { threadItemsCarryAssistantText } from "./room-thread-routes.js";
-import { assertPersistentAgentTurnCanBegin, latestTurnKey, recentTurnKeys, rememberRemovedIds, removedIdsOf } from "./persistent-agent-turns.js";
+import { assertPersistentAgentTurnCanBegin, keepRunningTurn, latestTurnKey, recentTurnKeys, rememberRemovedIds, removedIdsOf } from "./persistent-agent-turns.js";
 import { acceptAnswerCut, removeEditedAwayItems } from "./persistent-agent-threads.js";
 import { type AwayLimit, awayLimitLine, cutAnswerPart, endsOnAwayLimitStop, declinedNoticeIdPrefix, failureLineId, isAnswerPartId, isEmptyCut, keyOfId, landTurnItems, partialLineId, readShownPrompt, readTurnKey, type ShownPrompt, type ThreadItem } from "./thread-items-by-id.js";
 import { requestGetsLocalPaths } from "./room-settings-routes.js";
 import { applyRoomEffortToSession, contextHealthForSession, getWebChatModelRegistry, initialContextHealthForSession, modelContextWindow, modelStatusPayload, recordConversationEffortChoice, roomEffortStatusPayload, roomModelRefusal, webChatModelLabel } from "./ai-models.js";
 import { CONSULT_TRIGGER_PROMPT, consultModelWindow, resolveConsultModel, resolvePersistentAgentBindModel, roomMemoryModelSelection } from "./ai-profile-models.js";
-import { resolveExecutableSkillFiles, resolveLibrarySkillManifest, skillLibraryFingerprint } from "./skills-library.js";
+import { resolveLibrarySkillManifest, skillLibraryFingerprint } from "./skills-library.js";
+import { approvedSkills } from "./skills-executable.js";
 import { logProviderCallFailed, recordUsage, recordWorkerUsage, safeConversationId } from "./usage-recording.js";
 
 // Rooms that were written before the current constitution template keep the
@@ -232,14 +248,6 @@ const PERSISTENT_ROOM_INSTALLATION_SECTION = persistentAgentInstallationSection(
 	version: readAppVersion(REPO_ROOT),
 	developmentBuild: fs.existsSync(path.join(REPO_ROOT, ".git")),
 });
-// The note the next message of a conversation carries after its answer was
-// cut or stopped, by room and conversation: the window that sends the next
-// message may not be the one whose session ran the stopped answer.
-const answerNotes = new Map<string, AnswerNote>();
-// A keyed turn whose message the room offered back lands only once the page
-// says it kept the message above (returned_prompt_handled), from whichever
-// window answers; by room and conversation. A restart forgets it.
-const pendingKeptLandings = new Map<string, (kept: boolean) => void>();
 /** Under an answer that failed while nobody was in the room: some of it was written, or none. */
 const AWAY_PARTIAL_SENTENCE = "This response could not be fully finished after you left the room. Send the message again if something is missing.";
 const AWAY_FAILURE_SENTENCE = "The response could not be finished after you left the room. Send the message again to retry.";
@@ -248,12 +256,11 @@ const DECLINED_FOR_MESSAGE_SENTENCE = "The person declined this step and sent a 
 // The most messages one answer holds for its next step: it bounds what one socket can hold. Past it a message is refused, and the page sends it as the next turn.
 const MAX_WAITING_STEERS = 20;
 // The messages the last turn of a conversation took while it answered, or
-// that the person took back out of it (`withdrawn`), by room and
-// conversation, so a window that comes back (a reload, a second window)
-// learns which of its messages are settled and keeps none of them, and puts
-// back in the box one it asked to edit. The newest
-// TAKEN_STEERS_KEPT only: it bounds what one conversation holds in memory.
-const takenSteers = new Map<string, Array<{ id: string; withdrawn?: true }>>();
+// that the person took back out of it, are kept in its room's folder
+// (turn-pieces-store.ts), so a window that comes back (a reload, a second
+// window, a restart) learns which of its messages are settled and keeps none
+// of them, and puts back in the box one it asked to edit. The newest
+// TAKEN_STEERS_KEPT only: it bounds what one conversation holds.
 const TAKEN_STEERS_KEPT = 50;
 // How long a message sent the moment an answer ended waits for that turn to close before the running-turn guard answers it.
 const TURN_WINDING_DOWN_WAIT_MS = 1500;
@@ -392,6 +399,7 @@ function earlierTurnsAnchorItemId(items: readonly unknown[], startAnchorItemId: 
 // No HEAD route: Fastify adds one for every GET, and the websocket plugin
 // leaves it alone, so HEAD /ws would run this handler without a socket.
 app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) => {
+	serverHooks().connectionOpened?.(req, socket);
 	const rawUrl = (req as any).url ?? (req as any).raw?.url ?? "";
 	const params = new URLSearchParams(rawUrl.split("?")[1] ?? "");
 	const conversationId = safeConversationId(params.get("conversationId") || "");
@@ -464,7 +472,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// stays open as an observer for server-pushed events). The main
 		// message handler below additionally drops these frames silently, so
 		// the held-frame replay cannot act on them either.
-		socket.on("message", () => {
+		socket.on("message", (raw: Buffer) => {
+			try { if (JSON.parse(raw.toString()).type === "conversation_seen") return; } catch {}
 			try { socket.send(JSON.stringify({ type: "error", message: "This device is set to viewing only. Change it on the computer to interact remotely.", code: "remote_read_only" })); } catch {}
 		});
 	}
@@ -519,6 +528,11 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// then PERSIST the duplicated transcript over the clean landing write; such
 	// clients keep the older room_cooking bounce they understand.
 	const clientSupportsReattach = params.get("reattach") === "1";
+	// Only a page in front of its person says so on the connect URL; any other
+	// bind (a hidden tab's reconnect, an older bundle) leaves the "Response
+	// ready" mark, so "seen" means the person has looked.
+	const bindIsSeen = params.get("visible") === "1";
+	let unseenLandingAtBind: ReturnType<typeof getPersistentAgentUnseenLandedAnswer> = null;
 	{
 		// A detached turn still cooking for THIS conversation no longer bounces
 		// the connection: the session claims it here and adopts it
@@ -572,12 +586,15 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			try { socket.close(); } catch {}
 		});
 		roomLockHeartbeat = setInterval(() => roomLock.heartbeat(persistentAgentIdForSession, roomLockOwner), 30_000);
-		// A session is binding to this room: whatever landed unseen in THIS
+		// A page in view is binding to this room: whatever landed unseen in THIS
 		// conversation is about to be seen in the transcript, so its marker's
 		// job is done (the away-notice clear). A badge
 		// for an answer waiting in another conversation of this room survives a
 		// bind that never opens it.
-		try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {}
+		if (bindIsSeen) try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {}
+		// A hidden page loads what has landed as it binds: the landing it may
+		// clear later, when it comes into view (conversation_seen).
+		else try { unseenLandingAtBind = getPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession); } catch {}
 		// Register release immediately so the lock is freed even if later session
 		// setup throws or the connection drops before the main close handler.
 		// A turn detached by the disconnect keeps the lock — the
@@ -717,8 +734,9 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (event?.type === "tool_execution_start" && event.toolCallId) turnProgress.toolsRunning.add(event.toolCallId);
 		else if (event?.type === "tool_execution_end" && event.toolCallId) turnProgress.toolsRunning.delete(event.toolCallId);
 	};
-	// Armed by the close handler when the turn detaches, cleared when someone
-	// steps back in or the turn settles. One pair per connection, and a room
+	// Armed by the close handler when the turn detaches, and by a command or page
+	// let through with nobody there to stop it while none count; cleared when someone
+	// steps back in (`attachQuestions`) or the turn settles. One pair per connection, and a room
 	// cooks on exactly one connection, so several cooking rooms each carry
 	// their own limits.
 	let awaySilenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -959,17 +977,24 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	};
 	// A message's text as the page counts it while it reveals: as written, untrimmed and unjoined.
 	const revealedTextOf = (content: unknown): string => Array.isArray(content) ? content.filter((part: any) => part?.type === "text" && typeof part.text === "string").map((part: any) => part.text).join("") : "";
-	const answerNoteKey = (): string => `${persistentAgentIdForSession}\u0000${persistentConversationId}`;
+	// The conversation's pieces in its room's folder (turn-pieces-store.ts): the window that sends the next
+	// message may not be the one whose session ran the turn, nor in the same process. A failed write costs that piece, never the turn.
+	const keepPiece = (what: string, write: () => void): void => {
+		try { write(); } catch (error) { app.log.warn({ err: error }, `saving the conversation's ${what} failed`); }
+	};
+	// A closed conversation takes no next message, and one Forget closed must keep none of its words.
+	const conversationClosed = (): boolean => getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.state === "closed";
+	const setAnswerNote = (note: AnswerNote | undefined): void => keepPiece("answer note", () => keepAnswerNoteFor(persistentAgentIdForSession, persistentConversationId, note && !conversationClosed() ? note : undefined));
+	const addTaken = (steer: TakenSteer): void => keepPiece("taken messages", () => addTakenSteer(persistentAgentIdForSession, persistentConversationId, steer, TAKEN_STEERS_KEPT));
 	// What the person saw of an answer their cut or Stop ended, for the next message; any other end leaves no note.
 	const keepAnswerNote = (turn: ActivePersistentWebTurn | null): void => {
-		const key = answerNoteKey();
-		answerNotes.delete(key);
+		setAnswerNote(undefined);
 		// A Stop that names no count says nothing about what was on screen, so it tells the model nothing.
 		if (!turn || turn.terminalReason !== "cancelled" || turn.stoppedByServer || turn.shownAtStop === undefined || !session) return;
 		const last = session.agent.state.messages.at(-1) as { role?: string; stopReason?: string; content?: unknown } | undefined;
 		if (last?.role !== "assistant" || last.stopReason !== "aborted") return;
 		const shown = shownPart(revealedTextOf(last.content), turn.shownAtStop);
-		if (shown) answerNotes.set(key, { kind: turn.stoppedForNext ? "cut" : "stop", shown });
+		if (shown) setAnswerNote({ kind: turn.stoppedForNext ? "cut" : "stop", shown });
 	};
 	// Stop after the model finished, while the page still showed the rest: the landing that guards the answer
 	// against a lost save keeps only the words shown, and the next message tells the model what the person saw.
@@ -987,7 +1012,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			// Nothing of the answer left: the landing still guards the turn's prompt and steps, with no answer.
 			settledTurnLandingSnapshot = { ...snapshot, finalAssistantText: kept };
 		}
-		if (shown) answerNotes.set(answerNoteKey(), { kind: "stop", shown });
+		if (shown) setAnswerNote({ kind: "stop", shown });
 	};
 	// The page's turn can end before the server's settles: the cut then waits for the settle.
 	let revealCutAtSettle: number | undefined;
@@ -1039,7 +1064,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		}
 		// The next message tells the model what the person saw of the answer.
 		const kept = cutLandedPart(partId, shown);
-		if (kept) answerNotes.set(answerNoteKey(), { kind: "stop", shown: kept });
+		if (kept) setAnswerNote({ kind: "stop", shown: kept });
 	};
 	// Messages the person sent into the running answer, oldest first: the
 	// runtime takes all of them at its next check, in the order they came.
@@ -1098,7 +1123,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (!session || !turnTakesSteers() || steerIntake.runtime !== steerIntake.heard || !pendingSteers.some((steer) => steer.id === id)) return false;
 		const rest = pendingSteers.filter((steer) => steer.id !== id);
 		pendingSteers = [];
-		takenSteers.set(answerNoteKey(), [...(takenSteers.get(answerNoteKey()) ?? []), { id, withdrawn: true as const }].slice(-TAKEN_STEERS_KEPT));
+		addTaken({ id, withdrawn: true });
 		try {
 			session.clearQueue();
 		} catch (error) {
@@ -1141,6 +1166,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	const routeSteer = async (request: SteerRequest): Promise<SteerRouted> => {
 		const refused = { type: "steer_refused" as const, id: request.id };
 		if (!request.id || !request.text.trim() || !turnTakesSteers() || !session) return refused;
+		roomCommandTools?.personSpoke();
+		roomAsks?.personSpoke();
 		const state = session.agent.state;
 		const phase = answerPhase({ questionOpen: uiContext.hasOpenQuestions(), pendingToolCalls: state.pendingToolCalls.size, retrying: ((session as any).retryAttempt ?? 0) > 0, providerTools: providerToolsRunning.size, streaming: state.streamingMessage as any, last: state.messages.at(-1) as any });
 		const way = steerWay(phase, request);
@@ -1301,7 +1328,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (watched) return;
 		// Slice 3: nobody was connected to see this landing — record the unseen
 		// marker (away-notice shape) so a fresh session's Home can still badge
-		// the room. Cleared when a session next binds to the room. Best-effort:
+		// the room. Cleared when a page in view shows this conversation. Best-effort:
 		// the landed answer above must never be lost to marker bookkeeping.
 		try {
 			recordPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession, {
@@ -1314,21 +1341,26 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		}
 	};
 
-	/**
-	 * A keyed turn's landing, by id (thread-items-by-id.ts), built at its
-	 * settle and answered as the write to run: now, or once the page says it
-	 * kept a message the room offered back. Every keyed turn lands, watched or
-	 * not: its question as the bubble showed it, its parts, steps and taken
-	 * messages, its declined notices by the card rule, and its lines only when
-	 * nobody watched it end.
-	 */
-	const keyedLandingOf = (turnId: string, turn: KeyedTurn, terminalReason: PersistentWebTurnTerminalReason, options: { watched: boolean; stopCut: boolean; awayLimit?: AwayLimit }): (() => void) => {
-		const { key } = turn;
+	/** What a keyed turn lands before its answer: the edit's line, and its question as the bubble showed it. */
+	const keyedTurnFirstItems = (turn: KeyedTurn): ThreadItem[] => {
 		const own: ThreadItem[] = [];
 		if (turn.editLine) own.push({ kind: "system", id: turn.editLine.id, text: turn.editLine.text, level: "info" });
 		const question = turn.shown?.text ?? turn.strippedText;
 		const files = turn.shown?.files ?? [];
-		if (!turn.continued && (question.trim() || files.length > 0)) own.push({ kind: "user", id: key, text: question, ...(files.length ? { attachments: files } : {}), ...(typeof turn.startedAt === "number" ? { ts: turn.startedAt } : {}) });
+		if (!turn.continued && (question.trim() || files.length > 0)) own.push({ kind: "user", id: turn.key, text: question, ...(files.length ? { attachments: files } : {}), ...(typeof turn.startedAt === "number" ? { ts: turn.startedAt } : {}) });
+		return own;
+	};
+	/**
+	 * A keyed turn's landing, by id (thread-items-by-id.ts), built at its
+	 * settle and landed now, or kept in the room's folder until the page says
+	 * it kept a message the room offered back. Every keyed turn lands, watched
+	 * or not: its question as the bubble showed it, its parts, steps and taken
+	 * messages, its declined notices by the card rule, and its lines only when
+	 * nobody watched it end.
+	 */
+	const keyedLandingItemsOf = (turn: KeyedTurn, terminalReason: PersistentWebTurnTerminalReason, options: { watched: boolean; stopCut: boolean; awayLimit?: AwayLimit }): KeyedLanding => {
+		const { key } = turn;
+		const own: ThreadItem[] = keyedTurnFirstItems(turn);
 		const made: ThreadItem[] = turn.steps.keyedItems().map((item) => ({ ...item }));
 		own.push(...made);
 		if (terminalReason === "failed" && !options.watched) {
@@ -1342,33 +1374,36 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			app.log.warn({ err: error }, "failed to add auto-declined question notes to the keyed landing");
 		}
 		const gone = made.flatMap((item) => (item.kind === "assistant" && isEmptyCut(item) ? [String(item.id)] : []));
-		return () => {
-			const current = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
-			if (!current || current.state === "closed") return;
-			// A part Stop cut to nothing stays out of later saves too.
-			rememberRemovedIds(persistentAgentIdForSession, persistentConversationId, gone);
-			const items = landTurnItems(current.items ?? [], own, { key, continued: turn.continued, startAnchorId: turn.startAnchorId, recentKeys: recentTurnKeys(persistentAgentIdForSession, persistentConversationId) }, removedIdsOf(persistentAgentIdForSession, persistentConversationId));
-			writePersistentAgentThread(persistentAgentIdForSession, persistentConversationId, {
-				state: options.watched ? current.state : "standby",
-				origin: current.origin,
-				model: current.model,
-				items,
-			}, { allowInactiveProfileModel: true, keepRuntimeIfMoved: true });
-			// The next message of an adopting window starts after the turn's last item.
-			const ownIds = new Set(own.map((item) => String(item.id)));
-			const last = [...items].reverse().find((item) => ownIds.has(String(item.id ?? "")));
-			landedThroughItemId = last ? String(last.id) : undefined;
-			if (options.watched) return;
-			try {
-				recordPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession, {
-					threadId: persistentConversationId,
-					turnId: turnId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 96),
-					terminalReason: terminalReason === "completed" ? "completed" : "failed",
-				});
-			} catch (error) {
-				app.log.warn({ err: error }, "failed to record unseen landed-answer marker");
-			}
-		};
+		return { key, continued: turn.continued, ...(turn.startAnchorId ? { startAnchorId: turn.startAnchorId } : {}), own, gone };
+	};
+	/** `unseen`: nobody watched the turn end, so the conversation waits in standby and the room's badge names it. */
+	const landKeyed = (landing: KeyedLanding, unseen: { turnId: string; terminalReason: PersistentWebTurnTerminalReason } | null): void => {
+		const { key, own, gone } = landing;
+		const current = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
+		if (!current || current.state === "closed") return;
+		// A part Stop cut to nothing stays out of later saves too.
+		rememberRemovedIds(persistentAgentIdForSession, persistentConversationId, gone);
+		const items = landTurnItems(current.items ?? [], own, { key, continued: landing.continued, startAnchorId: landing.startAnchorId, recentKeys: recentTurnKeys(persistentAgentIdForSession, persistentConversationId) }, removedIdsOf(persistentAgentIdForSession, persistentConversationId));
+		writePersistentAgentThread(persistentAgentIdForSession, persistentConversationId, {
+			state: unseen ? "standby" : current.state,
+			origin: current.origin,
+			model: current.model,
+			items,
+		}, { allowInactiveProfileModel: true, keepRuntimeIfMoved: true });
+		// The next message of an adopting window starts after the turn's last item.
+		const ownIds = new Set(own.map((item) => String(item.id)));
+		const last = [...items].reverse().find((item) => ownIds.has(String(item.id ?? "")));
+		landedThroughItemId = last ? String(last.id) : undefined;
+		if (!unseen) return;
+		try {
+			recordPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession, {
+				threadId: persistentConversationId,
+				turnId: unseen.turnId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 96),
+				terminalReason: unseen.terminalReason === "completed" ? "completed" : "failed",
+			});
+		} catch (error) {
+			app.log.warn({ err: error }, "failed to record unseen landed-answer marker");
+		}
 	};
 
 	// Expose this live session to lifecycle endpoints (Memento force-close).
@@ -1686,7 +1721,99 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// The stop tells the model its own sentence; the away log is for a person who left, before the stop or during it.
 	let declinedByStop = false;
 	// Questions follow the turn to whoever watches it, so a person who came back answers them.
-	const uiContext = createWebUiContext(sendToWatcher, (question) => { if (!declinedByStop) autoDeclinedQuestions.note(question); });
+	const uiContext = createWebUiContext(sendToWatcher, (question) => { if (!declinedByStop) autoDeclinedQuestions.note(question); }, remoteDeviceForSession ? "phone" : "computer");
+	// Whether the room's own folder ask is offered here, for the box and the file tools; each also checks that someone is there to answer it.
+	const folderAskOffered = () => roomAsks !== null && roomAsksOffered(!remoteDeviceForSession);
+	// The folders the running answer was given this time: a new holder as each answer starts, ended with it, Stop included. A message sent mid-answer joins the answer, and so keeps them; a page that leaves and comes back doesn't end the answer.
+	let answerFolders = new AnswerFolders();
+	answerFolders.end();
+	const runningAnswerFolders = () => answerFolders;
+	// The sites the running answer was given, which its commands and its pages share, held and ended the same way.
+	let answerSites = new AnswerSites();
+	answerSites.end();
+	const runningAnswerSites = () => answerSites;
+	// Whether the running answer reaches public websites without asking (`roomReachesFreely`), read as it starts: its box, its pages and its lines hold it to the end.
+	let answerFree = false;
+	const runningAnswerFree = () => answerFree;
+	// The turn's box lives with the connection, not the session: a rebind inside a turn keeps it. Never built where commands don't run in a box.
+	// The Mac's serves the file tools too; Windows' is built at the first bind that finds it (`commandBoxForBind`), for commands alone.
+	/** What the room allows its boxed commands right now, read at each command: changing files, and its approved skills' folders. */
+	const boxRights = () => {
+		const names = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentIdForSession, persistentConversationId)?.allowedToolNames ?? [];
+		return { canChangeFiles: names.includes("write") || names.includes("edit"), skillFolders: approvedSkills(persistentAgentIdForSession).map((skill) => skill.skillDir) };
+	};
+	const roomBox = roomBoxComputer() === "mac" ? new RoomBox({
+		roomId: persistentAgentIdForSession,
+		conversationId: () => persistentConversationId,
+		questions: uiContext,
+		rights: boxRights,
+		warn: (detail, message) => app.log.warn(detail, message),
+		folderAsk: { offered: folderAskOffered },
+		answer: runningAnswerFolders,
+		sites: runningAnswerSites,
+		free: runningAnswerFree,
+	}) : null;
+	let windowsBox: WindowsRoomBox | null = null;
+	/** The box a bind gives the room's commands where protection is on: the Mac's, or Windows' where its check didn't say off (broken runs nothing). */
+	const commandBoxForBind = (): RoomBox | WindowsRoomBox | null => {
+		if (roomBox) return roomBox;
+		if (roomBoxComputer() !== "windows") return null;
+		windowsBox ??= new WindowsRoomBox({
+			roomId: persistentAgentIdForSession,
+			conversationId: () => persistentConversationId,
+			rights: boxRights,
+			answer: runningAnswerFolders,
+			warn: (detail, message) => app.log.warn(detail, message),
+			sites: windowsSiteDecision({ roomId: persistentAgentIdForSession, questions: uiContext, sites: runningAnswerSites, free: runningAnswerFree }),
+			asks: () => folderAskOffered() && uiContext.watcher() !== "none",
+		});
+		return windowsBox;
+	};
+	/** This conversation's folder as Windows' box gets it, which its protection judges there, and nowhere else. */
+	const conversationFolderNow = () => (protectionJudgesFolder() ? conversationFolder(persistentAgentIdForSession, persistentConversationId) : undefined);
+	let roomCommandTools: RoomCommandTools | null = null;
+	// The room's protection as the last bind found it: the box goes to its command tools only where it was on, and the asks read it, never whether the box exists. The Mac's file tools keep its box either way.
+	let boundProtection = persistentRoomProtection(persistentAgentIdForSession);
+	let boundCommandBox: RoomBox | WindowsRoomBox | null = null;
+	const boundBoxed = () => boundCommandBox !== null && boundProtection.state === "on";
+	/** Whether the room is on Auto without protection in the state the last bind found (`unprotectedRoomOnAuto`), read at each command and each page; an unreadable setting reads as no. */
+	const unprotectedOnAutoNow = (): boolean => {
+		try {
+			return unprotectedRoomOnAuto(persistentAgentIdForSession, persistentConversationId, boundProtection, conversationFolderNow());
+		} catch {
+			return false;
+		}
+	};
+	/** Whether the running answer's pages open without asking: the answer's own Auto, or the room's Auto without protection now. */
+	const pagesOpenFreely = () => runningAnswerFree() || unprotectedOnAutoNow();
+	/**
+	 * The Auto without protection, read where it lets a command run or a page open: with nobody attached who can stop
+	 * the answer and no limit counting, as after the room went on Auto under a viewing-only phone, the away limits start.
+	 * Detached questions say nobody can stop it: the person left, or only a viewing-only device watches. Not
+	 * `detachedFromClient`, which stays set after the computer's window steps back in, so the reading holds whatever
+	 * its caller asked first. A server stop detaches them too, and ends the answer itself.
+	 */
+	const unprotectedAutoLetsThrough = (): boolean => {
+		const lets = unprotectedOnAutoNow();
+		if (lets && uiContext.watcher() === "none" && !serverStopping() && awayTotalTimer === null) armAwayLimits();
+		return lets;
+	};
+	// The Not nows the room's cards share, and the reasons only a card may see: both belong to the running answer.
+	const roomNotNow = new NotNowCount();
+	const reasonKeeper = createReasonKeeper();
+	let roomAsks: ReturnType<typeof createRoomAsks> | null = null;
+	/** The room as its asks see it now, read from its settings at each ask. */
+	const roomAskView = (): RoomAskView => {
+		const live = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentIdForSession, persistentConversationId);
+		const folder = live.policy && live.workspaceToolsEnabled ? roomFence(live.policy, () => []).room?.path ?? null : null;
+		const commands = commandsAskState({ on: live.bashEnabled, atComputer: !remoteDeviceForSession, folder, fullAccess: live.workspaceAccessMode === "localFiles" && live.policy !== null && persistentRoomCommandsCanRun(live.policy), switchedOff: () => persistentRoomCommandsSwitchedOff(persistentAgentIdForSession, persistentConversationId) });
+		return { folder, canChangeFiles: live.allowedToolNames.includes("write") || live.allowedToolNames.includes("edit"), commands, boxed: boundBoxed(), unprotected: unprotectedByRoom(boundProtection) };
+	};
+	/** What the bash tool answers while the room's commands are off, or null while they're on. */
+	const commandsOffLine = (): string | null => commandOffLine(roomAskView().commands);
+	const pickRoomFolder = (signal: AbortSignal, startAt?: string) => chooseLocalFolder({ prompt: folderPickerPrompt("room-asks"), timeoutMs: null, signal, startAt });
+	/** The folders Remove took off the room's list on this connection, with their access: what Undo may put back. */
+	const removedHere = new Map<string, FolderAskAccess>();
 	const LEFT_ROOM_QUESTIONS_SENTENCE = "The user left the room while this response was being written, so interactive questions cannot be answered right now. Proceed with your best judgment and finish the task; anything that strictly needs the user's approval must be left undone and mentioned in your answer.";
 	// A server stop (server-stop.ts) tells this connection once, ends its running turn
 	// marked as the stop's, and closes it with 1001. Released at the close, or, for a
@@ -1716,9 +1843,6 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	socket.on("close", () => { if (!turnKeepsCookingOnClose()) releaseLiveConnectionForStop(); });
 
 	const bindSession = async () => {
-		// Rooms set the active-agent marker to the room id; the permissions
-		// extension reads it to scope tool gating.
-		process.env.EXXETA_ACTIVE_AGENT = persistentAgentIdForSession;
 		const persistentAgentId = persistentAgentIdForSession;
 		// An empty conversation (the one Remember or Forget prepared) boots on
 		// the room's conversation model as it is now, and while that cannot run
@@ -1747,15 +1871,30 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (!webChatModel) throw new Error("persistent-agent model could not be resolved");
 		const persistentRoomModel = { provider: webChatModel.provider, model: webChatModel.id, label: webChatModelLabel(webChatModel.provider, webChatModel) };
 		promptDiagnosticsCurrentModel = persistentRoomModel;
+		// On Windows the check at start may still run: a bind waits for its answer, so no command runs in Git Bash first.
+		await roomBoxSettled();
+		boundProtection = persistentRoomProtection(persistentAgentId, { folder: conversationFolderNow() });
+		boundCommandBox = commandBoxForBind();
+		const boundBox = boundBoxed() ? boundCommandBox : null;
+		const windowsBoxed = boundBox instanceof WindowsRoomBox;
 		const persistentRoomEffectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId);
 		const persistentRoomCapabilityPolicy = persistentRoomEffectiveWorkspacePolicy?.policy ?? null;
 		const persistentRoomWorkspaceToolsEnabled = persistentRoomEffectiveWorkspacePolicy?.workspaceToolsEnabled === true;
+		// Asked at the computer only. Where commands could come on, the bash tool is there from the start and runs nothing until they do.
+		const asksAtBind = roomAskView();
+		// A folder on the list is opened through the room's own, so a room with none isn't offered the folder ask.
+		const asksOffered = roomAsksOffered(!remoteDeviceForSession) && asksAtBind.folder !== null;
+		const commandsAskOffered = asksAtBind.commands === "may-ask";
+		const bashOffered = persistentRoomEffectiveWorkspacePolicy?.bashEnabled === true || commandsAskOffered;
 		const persistentRoomToolPolicy = getPersistentRoomToolPolicy(persistentAgentId, {
 			workspaceToolsEnabled: persistentRoomWorkspaceToolsEnabled,
 			workspaceToolNames: persistentRoomEffectiveWorkspacePolicy?.allowedToolNames ?? [],
 			workspaceAccessMode: persistentRoomEffectiveWorkspacePolicy?.workspaceAccessMode,
-			bashEnabled: persistentRoomEffectiveWorkspacePolicy?.bashEnabled === true,
+			bashEnabled: bashOffered,
 			bashRuntimeAllowed: true,
+			// A live turn at the computer, where a box runs and commands are on: a phone's connection is never offered the way out.
+			outsideToolOffered: boundBox !== null && !remoteDeviceForSession && persistentRoomEffectiveWorkspacePolicy?.bashEnabled === true,
+			asks: { folder: asksOffered, commands: commandsAskOffered },
 		});
 		// Full access with the terminal on right now, the pair the bash tool's own
 		// gate reads; asked on every call, so turning either off closes the next one.
@@ -1769,11 +1908,17 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		};
 		const persistentRoomCustomTools = persistentRoomWorkspaceToolsEnabled && persistentRoomCapabilityPolicy
 			// Full access file tools resolve paths against the same cwd the session
-			// itself binds with below.
+			// itself binds with below. On a Mac each call reads and writes inside the
+			// connection's box, so a job a command left can't swap a path under it.
 			? createPersistentRoomWorkspaceTools(persistentRoomCapabilityPolicy, {
+				...(roomBox ? { box: roomBox } : {}),
+				// On Windows the file tools run in the server, behind the fence, and wait for boxed commands on the same folders, another room's included. No shared server gets the wait.
+				folderWait: fileToolsWait(),
 				localFilesCwd: persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT),
 				skillsFolder: () => (persistentRoomTerminalOn() ? agentSkillsDir() : null),
 				terminalOn: persistentRoomTerminalOn,
+				answer: runningAnswerFolders,
+				asks: () => folderAskOffered() && uiContext.watcher() !== "none",
 			})
 			: [];
 		if (persistentRoomWorkspaceToolsEnabled) {
@@ -1844,6 +1989,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// the room's LIVE enabled set (hash-verified) on every call.
 		const persistentRoomSkillTools = [createReadSkillTool({
 			agentId: persistentAgentId,
+			// A protected Windows room's commands run a skill's files only from a folder its protection was given, so its text says how, or that they can't.
+			windowsBox: windowsBoxed,
 			// The tool verifies the pinned manifest hash and returns the defanged
 			// body; both come from one manifest read, so verified and served bytes
 			// can never diverge.
@@ -1864,18 +2011,16 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 				// bash itself (which they also never get). It must NOT be re-derived
 				// from EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT here: that env var
 				// exists only inside the extension-install bracket (set, snapshotted
-				// by the permissions extension, restored on install completion), so a
+				// by the permissions extension, cleared on install completion), so a
 				// live read at tool-call time always saw it unset and the gate could
 				// never open.
 				if (!persistentRoomTerminalOn()) return null;
 				// The room must hold an execution approval for this skill, pinned
 				// to the EXACT files on disk right now — a drifted file set is an
 				// approval that no longer exists.
-				const pinned = readPersistentRoomSkillSettings(persistentAgentId).enabledSkills.find((skill) => skill.name === name);
-				if (!pinned?.executeApproval) return null;
-				const executable = resolveExecutableSkillFiles(name);
-				if (!executable || executable.filesSha256 !== pinned.executeApproval.filesSha256) return null;
-				return { skillDir: executable.skillDir, files: executable.files };
+				const approved = approvedSkills(persistentAgentId).find((skill) => skill.name === name);
+				if (!approved) return null;
+				return { skillDir: approved.skillDir, files: approved.files, ...(windowsBoxed ? { windowsRuns: windowsSkillFolder(approved.skillDir) !== undefined } : {}) };
 			},
 		})];
 		// The shelf pair (files core slice): default-on for every room, fenced to
@@ -1931,7 +2076,10 @@ ${lines.join("\n")}`;
 					: persistentRoomBootContext ? fingerprintPersistentAgentBootContextInstructions(persistentRoomBootContext) : undefined;
 				let workspace: string | null = null;
 				try {
-					workspace = buildPersistentRoomCurrentWorkspaceSection(resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId));
+					const livePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId);
+					const free = runningAnswerFree();
+					const boxLine = boundBox && livePolicy.workspaceToolsEnabled && livePolicy.capability?.bashEnabled ? (windowsBoxed ? windowsBoxModelLine : boxModelLine)(readAlsoAllowed(persistentAgentId), asksOffered, free) : "";
+					workspace = `${buildPersistentRoomCurrentWorkspaceSection(livePolicy, asksOffered ? { asks: { commands: roomAskView().commands } } : {})}${boxLine}${pagesOpenFreely() ? FREE_READER_LINE : ""}`;
 				} catch (error) {
 					app.log.warn({ err: (error as Error).message }, "current workspace section build failed");
 				}
@@ -2027,42 +2175,20 @@ ${lines.join("\n")}`;
 			},
 		})];
 		const permissionsExtForSession = async (pi: any) => {
-			const previousPersistentRoomSession = process.env.EXXETA_PERSISTENT_ROOM_SESSION;
-			const previousPersistentRoomAgent = process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-			const previousPersistentRoomWorkspaceAccessMode = process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE;
-			const previousPersistentRoomWorkspaceTools = process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS;
-			const previousPersistentRoomBashEnabled = process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
-			const previousPersistentRoomExecutionContext = process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
 			if (persistentRoomWorkspaceToolsEnabled) {
 				process.env.EXXETA_PERSISTENT_ROOM_SESSION = "1";
 				process.env.EXXETA_PERSISTENT_ROOM_AGENT = persistentAgentId;
 				process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE = persistentRoomEffectiveWorkspacePolicy?.workspaceAccessMode ?? "bounded";
 				process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = (persistentRoomEffectiveWorkspacePolicy?.allowedToolNames ?? []).join(",");
-				process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED = persistentRoomEffectiveWorkspacePolicy?.bashEnabled === true ? "1" : "";
+				process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED = bashOffered ? "1" : "";
 				process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT = "manual";
 			} else {
-				delete process.env.EXXETA_PERSISTENT_ROOM_SESSION;
-				delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-				delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE;
-				delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS;
-				delete process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
-				delete process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
+				clearPersistentRoomSettings();
 			}
 			try {
 				await (permissionsExt as any)(pi);
 			} finally {
-				if (previousPersistentRoomSession === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_SESSION;
-				else process.env.EXXETA_PERSISTENT_ROOM_SESSION = previousPersistentRoomSession;
-				if (previousPersistentRoomAgent === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-				else process.env.EXXETA_PERSISTENT_ROOM_AGENT = previousPersistentRoomAgent;
-				if (previousPersistentRoomWorkspaceAccessMode === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE;
-				else process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE = previousPersistentRoomWorkspaceAccessMode;
-				if (previousPersistentRoomWorkspaceTools === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS;
-				else process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = previousPersistentRoomWorkspaceTools;
-				if (previousPersistentRoomBashEnabled === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
-				else process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED = previousPersistentRoomBashEnabled;
-				if (previousPersistentRoomExecutionContext === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
-				else process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT = previousPersistentRoomExecutionContext;
+				clearPersistentRoomSettings();
 			}
 		};
 		// Per-room MCP: the wrapper reports the grants fingerprint its manifest
@@ -2082,11 +2208,13 @@ ${lines.join("\n")}`;
 		const registerClientWebSearchAtBind = shouldRegisterClientWebSearch(nativeSearchDecisionAtBind);
 		const nativeProviderSearchAtBind = nativeSearchDecisionAtBind.active;
 		const extensionFactories = [
+			// First, so no other extension, listener or save sees the room's reason on an ask.
+			reasonKeeper.extension as any,
 			contentPolicyExt as any,
 			permissionsExtForSession as any,
 			// Per-command bash approval (workspace reshape slice e): a live
-			// Full-access session pauses every bash call on an approval card in
-			// the chat unless the room's auto-approve setting is on. Ordered
+			// Full-access session pauses every bash call on a question in the
+			// panel above the message box unless the room's auto-approve setting is on. Ordered
 			// after the permissions extension so a room that has no bash at all
 			// is refused before anyone is asked to approve anything. Built only
 			// here, in the live web bind: background, scheduled, and specialist
@@ -2096,13 +2224,18 @@ ${lines.join("\n")}`;
 				// gate): flipping the room's auto-approve setting applies to the
 				// very next command, no rebind. An unreadable file asks.
 				isAutoApproved: () => {
+					// Commands off: no card, the bash tool answers that nothing ran,
+					// unless the guard has already refused because nobody is there.
+					if (commandsOffLine() !== null) return true;
 					try {
-						return readPersistentRoomBashSettings(persistentAgentId).autoApprove === true;
+						return commandRunsWithoutAsking(persistentAgentId, boundProtection, {}, conversationFolderNow());
 					} catch {
 						return false;
 					}
 				},
-			})) as any,
+				boxed: () => boundBox !== null,
+				runsWhileAway: unprotectedAutoLetsThrough,
+			}), (toolCallId) => roomCommandTools?.started(toolCallId) ?? true) as any,
 			// A command that finds no shell (Windows without Git) answers the
 			// person and the model with one plain line; the raw text is logged.
 			createPersistentRoomShellMissingExtension((raw) => app.log.warn({ detail: raw }, "shell commands: no shell found")) as any,
@@ -2119,6 +2252,8 @@ ${lines.join("\n")}`;
 			// Carries the decision this session bound with, so every round trip of
 			// every turn asks for the same thing the tool registry was built for.
 			createNativeProviderSearchExtension(nativeSearchDecisionAtBind) as any,
+			// Before the tool: an address the person didn't give asks first.
+			createRoomWebReaderExtension({ roomId: persistentAgentId, questions: uiContext, answer: runningAnswerSites, free: () => runningAnswerFree() || unprotectedAutoLetsThrough() }) as any,
 			fetchUrlExt as any,
 			liveRoomStateExtForSession as any,
 			// Ages the room's own bulky tool results out of the replayed context.
@@ -2128,6 +2263,30 @@ ${lines.join("\n")}`;
 			...(promptDiagnosticsEnabledForConnection && persistentRoomModel ? [persistentRoomPromptDiagnosticsExt(persistentRoomModel) as any] : []),
 		];
 		const sessionRuntimeCwd = persistentRoomRuntimeCwd;
+		roomCommandTools = createRoomCommandTools(sessionRuntimeCwd, boundBox ? {
+			box: boundBox,
+			outside: {
+				questions: uiContext,
+				setOffered: (offered) => {
+					const active = session?.getActiveToolNames() ?? [];
+					const others = active.filter((name) => name !== RUN_OUTSIDE_BOX_TOOL_NAME);
+					if (persistentRoomToolPolicy?.allowedToolNames.includes(RUN_OUTSIDE_BOX_TOOL_NAME)) session?.setActiveToolsByName(offered ? [...others, RUN_OUTSIDE_BOX_TOOL_NAME] : others);
+				},
+				notNow: roomNotNow,
+			},
+		} : undefined, commandsOffLine);
+		const asks = createRoomAsks({
+			roomId: persistentAgentId,
+			reasonOf: reasonKeeper.take,
+			folderOf: reasonKeeper.takeFolder,
+			questions: uiContext,
+			room: roomAskView,
+			pickFolder: pickRoomFolder,
+			turnOnCommands: () => setRoomCommands(persistentAgentId, persistentConversationId, true),
+			notNow: roomNotNow,
+			answer: runningAnswerFolders,
+		});
+		roomAsks = asks;
 		const loader = new DefaultResourceLoader({
 			cwd: sessionRuntimeCwd,
 			agentDir: getAgentDir(),
@@ -2148,6 +2307,8 @@ ${lines.join("\n")}`;
 			modelRegistry: webChatModelRegistry,
 			model: webChatModel,
 			cacheRetention: callCacheRetention("chat", webChatModel),
+			// Whose calls these are: the person this room's chat rows name.
+			metadata: modelCallMetadata(persistentAgentIdForSession, "chat"),
 			...(persistentRoomRawSystemPrompt ? { rawSystemPrompt: persistentRoomRawSystemPrompt } : {}),
 			// read_skill rides beside the workspace tools: appended
 			// AFTER the workspace-policy mismatch check (they are not workspace
@@ -2158,7 +2319,9 @@ ${lines.join("\n")}`;
 			// appended AFTER the workspace-policy mismatch check (they are not
 			// workspace tools); their names are already in the policy allowlist
 			// (default-on lane).
-			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomShelfTools.length + persistentRoomMemoryTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomShelfTools, ...persistentRoomMemoryTools] } : {}),
+			// The room's bash replaces the built-in; the allowlist above keeps it
+			// out of a session whose policy has no bash.
+			customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomShelfTools, ...persistentRoomMemoryTools, ...roomCommandTools.tools, ...asks.tools],
 		});
 		session = created.session;
 		// Steers go in all at once: messages the person sent while one step ran
@@ -2227,7 +2390,7 @@ ${lines.join("\n")}`;
 				turnPromptMessageSeen = true;
 				if (taken) {
 					turnSteps.tookMessage(bubbleIdOf(taken.id), taken.text);
-					takenSteers.set(answerNoteKey(), [...(takenSteers.get(answerNoteKey()) ?? []), { id: taken.id }].slice(-TAKEN_STEERS_KEPT));
+					addTaken({ id: taken.id });
 					sendTurnFrame({ type: "steer_taken", id: taken.id, text: taken.text });
 				}
 			}
@@ -2301,15 +2464,15 @@ ${lines.join("\n")}`;
 			}
 			if (event.type === "compaction_end" && (event as any).errorMessage) {
 				const compactionError = String((event as any).errorMessage);
-				app.log.warn({ agentId: persistentAgentIdForSession, reason: (event as any).reason, err: compactionError }, "auto-compaction failed");
-				// The runtime's words stay in the log. A turn may try to condense twice
-				// (before and after); the line is said once per turn.
-				if (lastCompactionNoticeCause !== undefined) return;
-				lastCompactionNoticeCause = compactionError;
 				const compactionModel = (session as any)?.model;
 				const compactionProvider = String(compactionModel?.provider ?? "");
 				// The summary call's own cause: a size problem keeps the room's words, any other cause (a rate limit, a lost connection) the chat's line for it.
 				const read = compactionFailureOf(compactionError, compactionProvider);
+				// The log keeps the codes only: the provider's words go to the page's Details.
+				app.log.warn({ agentId: persistentAgentIdForSession, reason: (event as any).reason, ...read.log, ...(read.summaryCut ? { summaryCut: true } : {}) }, "auto-compaction failed");
+				// A turn may try to condense twice (before and after); the line is said once per turn.
+				if (lastCompactionNoticeCause !== undefined) return;
+				lastCompactionNoticeCause = compactionError;
 				sendTurnFrame({
 					type: "ui_request",
 					kind: "notify",
@@ -2491,7 +2654,8 @@ ${lines.join("\n")}`;
 		const reattachingTurn = claimedCookingTurn;
 		// The newest message's bubble, when it cannot be edited: the page shows no pencil on it.
 		const notEditable = notEditableMessageId(session as any, threadItemsAtOpen, !!returnedAtOpen || lastUserItemIsScheduledPrompt(threadItemsAtOpen));
-		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, persistentConversationId, session), ...(returnedAtOpen ? { returnedPrompt: returnedAtOpen } : {}), ...(notEditable ? { notEditable } : {}), waiting: reattachingTurn?.waiting(connectionId) ?? [], taken: (takenSteers.get(answerNoteKey()) ?? []).map((steer) => steer.id), withdrawn: (takenSteers.get(answerNoteKey()) ?? []).filter((steer) => steer.withdrawn).map((steer) => steer.id), reattaching: reattachingTurn !== null, held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) });
+		const takenAtOpen = readTakenSteers(persistentAgentIdForSession, persistentConversationId);
+		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, persistentConversationId, session), ...(returnedAtOpen ? { returnedPrompt: returnedAtOpen } : {}), ...(notEditable ? { notEditable } : {}), waiting: reattachingTurn?.waiting(connectionId) ?? [], taken: takenAtOpen.map((steer) => steer.id), withdrawn: takenAtOpen.filter((steer) => steer.withdrawn).map((steer) => steer.id), reattaching: reattachingTurn !== null, held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) });
 	} catch (e) {
 		if (e instanceof PersistentAgentMemoryOverflowError || e instanceof RoomModelUnavailableError || (e as { code?: unknown })?.code === "provider_signed_out") {
 			// Named so the client can stand its reconnect loop down: redialing
@@ -2624,7 +2788,7 @@ ${lines.join("\n")}`;
 			send({ type: "turn_reattach_replay_done", turnId: cooking.turnId });
 			if (adopted) {
 				// After the replay window, so a question asked again shows as a live card.
-				cooking.attachQuestions(connectionId, !remoteReadOnlySession);
+				cooking.attachQuestions(connectionId, !remoteReadOnlySession, remoteDeviceForSession ? "phone" : "computer");
 				app.log.info({ agentId: persistentAgentIdForSession, turnId: cooking.turnId }, "session stepped back into a cooking turn; replayed the stream so far");
 			} else {
 				// The landing beat this bind: the frames above carried the whole
@@ -2636,9 +2800,9 @@ ${lines.join("\n")}`;
 				// The settled replay above was the buffer's last possible use.
 				cooking.releaseReplayBuffer();
 				// Bind-scoped: this session watched THIS conversation's answer
-				// land; a still-unseen scheduled answer in another thread keeps
-				// its badge.
-				try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {}
+				// land, if its page is in view; a still-unseen scheduled answer
+				// in another thread keeps its badge.
+				if (bindIsSeen) try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {}
 				scheduleAdoptedSessionRebind();
 				app.log.info({ agentId: persistentAgentIdForSession, turnId: cooking.turnId }, "cooking turn settled while the session was binding; replayed the finished stream");
 			}
@@ -2684,6 +2848,15 @@ ${lines.join("\n")}`;
 		let msg: any;
 		try { msg = JSON.parse(raw.toString()); } catch { return; }
 		streamTrace.frameIn(msg);
+		if (serverHooks().frameRefusal?.(req, persistentAgentIdForSession, msg, socket)) return;
+		// The page came into view on this conversation: it clears the "Response
+		// ready" mark it loaded as it bound, for this conversation only; a
+		// landing after the bind came from another window, which this page never
+		// showed. Looking is no interaction, so a viewing-only device says it too.
+		if (msg.type === "conversation_seen") {
+			if (unseenLandingAtBind) try { clearPersistentAgentUnseenLandedAnswerLoaded(persistentAgentIdForSession, persistentConversationId, unseenLandingAtBind); } catch {}
+			return;
+		}
 		// A read-only device's socket is observe-only: EVERY inbound frame is
 		// dropped here (the early listener attached at connection start
 		// already answered it with the refusal frame). A capability check,
@@ -2725,8 +2898,30 @@ ${lines.join("\n")}`;
 		if (testPromptStartDelayMs > 0 && (msg.type === "prompt" || msg.type === "continue")) await new Promise((resolve) => setTimeout(resolve, testPromptStartDelayMs));
 		if (msg.type === "ui_response") {
 			// A turn this connection took over asked the question, not this connection's own session.
-			if (claimedCookingTurn) claimedCookingTurn.answerQuestion(connectionId, msg.id, msg.value);
-			else uiContext.resolveResponse(msg.id, msg.value);
+			const answeredBy = remoteDeviceForSession ? "phone" : "computer";
+			if (claimedCookingTurn) claimedCookingTurn.answerQuestion(connectionId, msg.id, msg.value, answeredBy);
+			else uiContext.resolveResponse(msg.id, msg.value, answeredBy);
+			return;
+		}
+		// The ways back after the room's asks, at the computer only: each takes access away, or puts back what this connection took.
+		if (msg.type === "room_folder_remove" || msg.type === "room_folder_restore" || msg.type === "room_commands_off") {
+			if (remoteDeviceForSession || !roomAsksOffered(true)) return;
+			if (msg.type === "room_folder_remove") {
+				const folder = typeof msg.path === "string" ? msg.path : "";
+				const access = folder !== "" ? removeAskedFolder(persistentAgentIdForSession, folder, answerFolders) : null;
+				if (access) removedHere.set(folder, access);
+				send({ type: "room_folder_removed", path: folder, removed: access !== null });
+			} else if (msg.type === "room_folder_restore") {
+				// Undo puts back only a folder this connection removed, with the access it had: a path from the page alone adds nothing.
+				const folder = typeof msg.path === "string" ? msg.path : "";
+				const access = removedHere.get(folder);
+				removedHere.delete(folder);
+				if (access) addAlsoAllowedFolder(persistentAgentIdForSession, folder, access);
+				send({ type: "room_folder_restored", path: folder, restored: access !== undefined });
+			} else {
+				setRoomCommands(persistentAgentIdForSession, persistentConversationId, false);
+				send({ type: "room_commands_turned_off" });
+			}
 			return;
 		}
 		// A frame that lands while a workspace rebind is in flight waits for that
@@ -2930,7 +3125,7 @@ ${lines.join("\n")}`;
 				editLine = notUndoneLine(readTurnKey(msg.id) ?? `edit-${Date.now().toString(36)}`, stepped.ran);
 				try { editedAwayIds = replacedItemIds(getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items ?? [], edit.replaces); } catch {}
 				// The replaced answer's Stop or cut note went with it.
-				answerNotes.delete(answerNoteKey());
+				setAnswerNote(undefined);
 			}
 			let persistentTurnId: string | undefined;
 			let returnedPrompt: ReturnedPrompt | undefined;
@@ -2949,6 +3144,15 @@ ${lines.join("\n")}`;
 				turnProgress.toolsRunning.clear();
 				// The last turn's Stop answered its questions; this turn asks again.
 				uiContext.reopen();
+				answerFolders = new AnswerFolders();
+				answerSites = new AnswerSites();
+				try {
+					answerFree = boundBoxed() && roomReachesFreely(persistentAgentIdForSession, persistentConversationId, boundProtection, conversationFolderNow());
+				} catch {
+					answerFree = false;
+				}
+				roomCommandTools?.personSpoke();
+				roomAsks?.personSpoke();
 				// A new turn owns the anchor from here on: the previous turn's
 				// post-stream landing snapshot must not fire against it.
 				settledTurnLandingSnapshot = null;
@@ -2957,7 +3161,9 @@ ${lines.join("\n")}`;
 				resetTurnTrace();
 				turnSteps = createTurnStepLog(turnKey);
 				pendingSteers = [];
-				takenSteers.delete(answerNoteKey());
+				// The last turn's pieces end here: its taken messages, and a landing the page never answered for.
+				keepPiece("taken messages", () => dropTakenSteers(persistentAgentIdForSession, persistentConversationId));
+				keepPiece("kept landing", () => dropKeptLanding(persistentAgentIdForSession, persistentConversationId));
 				// A continued turn sends no message of its own: its first user message is already a steer.
 				turnPromptMessageSeen = continuing;
 				// A fresh turn owns a fresh replay buffer, and records the
@@ -2986,6 +3192,7 @@ ${lines.join("\n")}`;
 				keyedTurn = turnKey
 					? { key: turnKey, continued: continuing, ...(continuing ? {} : { shown: readShownPrompt(msg.shown) }), strippedText: continuing ? "" : userAuthoredPromptText(String(msg.text ?? "")), startAnchorId: turnStartAnchorItemId, ...(typeof startedTurn.startedAt === "number" ? { startedAt: startedTurn.startedAt } : {}), steps: turnSteps, ...(editLine ? { editLine } : {}) }
 					: null;
+				if (keyedTurn) keepRunningTurn(persistentAgentIdForSession, persistentConversationId, { turnId: persistentTurnId, key: keyedTurn.key, startedAt: startedTurn.startedAt ?? Date.now(), continued: keyedTurn.continued, ...(keyedTurn.startAnchorId ? { startAnchorId: keyedTurn.startAnchorId } : {}), own: keyedTurnFirstItems(keyedTurn) });
 				const sessionAtPromptStart = session;
 				// Reasoning effort for this turn. `effort` on a prompt frame behaves
 				// exactly like the effort frame: the raw level is stored for this
@@ -3026,14 +3233,16 @@ ${lines.join("\n")}`;
 				// message runs on it. One file read per message.
 				try { session!.modelRegistry.authStorage.reload(); } catch (error) { app.log.warn({ err: error }, "reading the sign-ins before the turn failed"); }
 				leafBeforePrompt = (session as any).sessionManager?.getLeafId?.();
+				// The sites the person names count from this message on; a carried-on turn's first message is already in, so its last one alone counts.
+				if (!continuing && leafBeforePrompt !== undefined) answerSites.startsAfter(leafBeforePrompt);
 				if (continuing) await session!.continueAfterFailure();
 				else {
 					// The note goes only to the model: the consent text above and the bubble keep the person's words.
 					// After a server stop, only while the model was told nothing since: its own history still ends on the stopped answer,
 					// also after a refused message went back to the box, and after another restart. The file may not hold the last exchange yet.
 					const stoppedLast = session!.agent.state.messages.at(-1) as { role?: string; stopReason?: string } | undefined;
-					sentNote = answerNotes.get(answerNoteKey()) ?? (stoppedLast?.role === "assistant" && stoppedLast.stopReason === "aborted" ? serverStopNoteAtArrival ?? undefined : undefined);
-					answerNotes.delete(answerNoteKey());
+					sentNote = readAnswerNote(persistentAgentIdForSession, persistentConversationId) ?? (stoppedLast?.role === "assistant" && stoppedLast.stopReason === "aborted" ? serverStopNoteAtArrival ?? undefined : undefined);
+					setAnswerNote(undefined);
 					// Before the answer's first frame: the page takes the replaced message and answer out, and says what was not undone.
 					if (edit && editTaken) sendTurnFrame({ type: "edit_applied", replaces: edit.replaces, ...(editLine ? { line: editLine } : {}) });
 					// What an edit's step back left done, for the edited message and for the same text sent again after a failed attempt.
@@ -3097,9 +3306,14 @@ ${lines.join("\n")}`;
 					const turn = activePersistentWebTurn?.turnId === persistentTurnId ? activePersistentWebTurn : null;
 					if (turn) turn.promptSettled = true;
 					try { finishPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { turnId: persistentTurnId, terminalReason: turn?.terminalReason ?? "failed" }); } catch {}
+					answerFolders.end();
+					answerSites.end();
+					answerFree = false;
+					void roomBox?.endTurn();
+					void windowsBox?.endTurn();
 					if (turnWindingDown?.turnId === persistentTurnId) { turnWindingDown.finish(); turnWindingDown = null; }
 					// Handed back unanswered, the message carries its note again when it is sent again.
-					if (returnedPrompt && sentNote) answerNotes.set(answerNoteKey(), sentNote);
+					if (returnedPrompt && sentNote) setAnswerNote(sentNote);
 					// After the finish, so the message it hands back can be sent at once.
 					if (returnedPrompt) sendTurnFrame({ type: "prompt_returned", ...returnedPrompt });
 					if (returnedPrompt && lastPromptTurnStart) lastPromptTurnStart.promptKept = false;
@@ -3135,17 +3349,19 @@ ${lines.join("\n")}`;
 							keyedSettle.steps.cutLastMessage(revealCutAtSettle);
 							applyRevealCut(revealCutAtSettle);
 						}
-						if (partRevealNoteAtSettle) answerNotes.set(answerNoteKey(), { kind: "stop", shown: partRevealNoteAtSettle });
+						if (partRevealNoteAtSettle) setAnswerNote({ kind: "stop", shown: partRevealNoteAtSettle });
 						partRevealNoteAtSettle = undefined;
 						try {
 							// A message the room offered back lands once the page says it kept it above; one refused before it reached the conversation lands nothing.
+							// Kept in the room's folder, so the window that answers may be another one, after a restart too.
 							if (returnedPrompt?.id !== undefined) {
-								const land = keyedLandingOf(persistentTurnId, keyedSettle, turn?.terminalReason ?? "failed", { watched: true, stopCut: false });
-								pendingKeptLandings.set(answerNoteKey(), (kept) => { if (kept) land(); });
+								if (!conversationClosed()) writeKeptLanding(persistentAgentIdForSession, persistentConversationId, keyedLandingItemsOf(keyedSettle, turn?.terminalReason ?? "failed", { watched: true, stopCut: false }));
 							} else if (returnedPrompt === undefined) {
 								// A server stop's cut says so in the file, as the close-time landing of an old-style turn does: the page's own line may never be saved.
 								const stopCut = turn?.stoppedByServer === true;
-								keyedLandingOf(persistentTurnId, keyedSettle, turn?.terminalReason ?? "failed", { watched: (!detachedFromClient && !stopCut) || watchedByAdopter, stopCut, awayLimit: turn?.awayLimit })();
+								const watched = (!detachedFromClient && !stopCut) || watchedByAdopter;
+								const terminalReason = turn?.terminalReason ?? "failed";
+								landKeyed(keyedLandingItemsOf(keyedSettle, terminalReason, { watched, stopCut, awayLimit: turn?.awayLimit }), watched ? null : { turnId: persistentTurnId, terminalReason });
 							}
 						} catch (error) {
 							app.log.warn({ err: error }, "failed to land keyed persistent-room turn");
@@ -3223,10 +3439,13 @@ ${lines.join("\n")}`;
 		} else if (msg.type === "returned_prompt_handled") {
 			// The page keeps the message where it was when the box holds other text.
 			if (msg.kept === true && lastPromptTurnStart) lastPromptTurnStart.promptKept = true;
-			const keptLanding = pendingKeptLandings.get(answerNoteKey());
+			// The offer is answered, kept or not: its landing ends here. It lands before it goes, and lands alike if a kill makes it land twice.
+			const keptLanding = readKeptLanding(persistentAgentIdForSession, persistentConversationId);
 			if (keptLanding) {
-				pendingKeptLandings.delete(answerNoteKey());
-				try { keptLanding(msg.kept === true); } catch (error) { app.log.warn({ err: error }, "failed to land the kept persistent-room turn"); }
+				try {
+					if (msg.kept === true) landKeyed(keptLanding, null);
+					dropKeptLanding(persistentAgentIdForSession, persistentConversationId);
+				} catch (error) { app.log.warn({ err: error }, "failed to land the kept persistent-room turn"); }
 			}
 			if (session && getPersistentAgentActiveTurnState(persistentAgentIdForSession, persistentConversationId).state === "idle") await settleReturnedPrompt(session as any, msg.kept === true);
 		} else if (msg.type === "abort") {
@@ -3271,6 +3490,10 @@ ${lines.join("\n")}`;
 			// state without string-matching the message. The stop's refusal carries
 			// its own code; other errors carry none.
 			const consultError = (message: string, code?: string) => send({ type: "consult_error", consultId, message, ...(code ? { code } : {}) });
+			// Awaited only when it answers later, so that a Stop read with its consult still finds it.
+			const answer = serverHooks().roomRefusal?.(req, String(msg.targetRoomId ?? "").trim());
+			const refused = answer instanceof Promise ? await answer : answer;
+			if (refused) return consultError(refused.message, refused.code);
 			// A consult queued behind the answer is sent the moment it ends: it waits for that turn to wind down, as a message does.
 			const windingDown = windingDownForThisWindow();
 			if (windingDown) {
@@ -3315,6 +3538,7 @@ ${lines.join("\n")}`;
 							resolveExpectedModel: resolveConsultModel,
 							workerLabel: "consult worker",
 							callKind: "consult",
+							attribution: { agent: persistentAgentIdForSession, kind: "consult" },
 							emptyTextError: "consult worker produced no text",
 							cwd: REPO_ROOT,
 							agentDir: getAgentDir(),
@@ -3356,9 +3580,9 @@ ${lines.join("\n")}`;
 					// "no longer fits" state instead of a generic failure.
 					consultError((e as Error).message, "prompt_overflow");
 				} else {
-					// The consulted room's Memory model not on this account, or no longer served: the plain line, the provider's words to the log.
+					// The consulted room's Memory model not on this account, or no longer served: the plain line, the codes to the log.
 					const refused = consulted && (notOnAccountLine(e, consulted.model, { room: consulted.room }) ?? notOfferedLine(e, consulted.model, { room: consulted.room }));
-					if (refused) app.log.warn({ err: failureWords(e) }, "the provider refused the consulted room's Memory model");
+					if (refused) app.log.warn({ ...providerFailureLogFields(e, consulted?.model.provider) }, "the provider refused the consulted room's Memory model");
 					consultError(refused || (e as Error).message);
 				}
 			} finally {
@@ -3520,9 +3744,6 @@ ${lines.join("\n")}`;
 					adopterOnSettled = hooks.onSettled;
 					adopterOnDisplaced = hooks.onDisplaced;
 					detachedCookingRooms.delete(persistentAgentIdForSession);
-					// Somebody is watching again and Stop is reachable: the
-					// away limits stand down.
-					clearAwayLimits();
 					return true;
 				},
 				redetach: (claimant) => {
@@ -3542,17 +3763,24 @@ ${lines.join("\n")}`;
 					detachedCookingRooms.add(persistentAgentIdForSession);
 					// Memento must still be able to quiesce the re-detached turn.
 					persistentRoomLiveSessions.set(persistentAgentIdForSession, liveSessionHandle);
-					armAwayLimits();
+					// Limits a viewing-only device left running keep counting from the person's own leave.
+					if (awayTotalTimer === null) armAwayLimits();
 				},
-				attachQuestions: (claimant, canAnswer) => {
-					if (handle.settled || handle.adopterConnectionId !== claimant || serverStopping()) return;
+				attachQuestions: (claimant, canAnswer, authority) => {
+					if (handle.settled || handle.adopterConnectionId !== claimant) return;
+					// Somebody is watching again: the away limits stand down, except where a viewing-only device, which can't
+					// stop the answer, watches a room on Auto without protection, whose commands go on with nobody to stop them:
+					// there they keep counting, or start again where someone who could stop it stood them down.
+					if (canAnswer || !unprotectedOnAutoNow()) clearAwayLimits();
+					else if (awayTotalTimer === null) armAwayLimits();
+					if (serverStopping()) return;
 					// Every frame a viewing-only device sends is dropped, so a card there would wait for nobody.
-					if (canAnswer) uiContext.attach();
+					if (canAnswer) uiContext.attach(authority);
 					else uiContext.detach(LEFT_ROOM_QUESTIONS_SENTENCE);
 				},
-				answerQuestion: (claimant, id, value) => {
+				answerQuestion: (claimant, id, value, answeredBy) => {
 					if (handle.adopterConnectionId !== claimant) return;
-					uiContext.resolveResponse(id, value);
+					uiContext.resolveResponse(id, value, answeredBy);
 				},
 				stop: (claimant, shown, forNext = false) => {
 					// Claimant-checked exactly like adopt/redetach: a displaced

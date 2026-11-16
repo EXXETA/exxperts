@@ -4,8 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
+import { ANSWER_FLOOR_MS } from "../src/room-box/card-text.js";
 
 // Stop while the command card waits, in a reply that asks for bash and then
 // read_file on a PDF in one step. The card is asked in the runtime's prepare
@@ -166,7 +167,7 @@ class WsHarness {
 	}
 }
 
-const isCard = (frame: Frame) => frame.type === "ui_request" && frame.kind === "confirm";
+const isCard = (frame: Frame) => frame.type === "ui_request" && frame.kind === "run";
 const isTurnEnd = (frame: Frame) => frame.type === "event" && frame.event?.type === "agent_end";
 const stepText = (frames: Frame[], toolName: string): string | null => {
 	const end = frames.find((frame) => frame.type === "event" && frame.event?.type === "tool_execution_end" && frame.event.toolName === toolName);
@@ -216,11 +217,14 @@ try {
 	const agentId = String(room.body?.agent?.id ?? "");
 	assert(agentId, "room creation should return an agent id");
 	// Full access with the terminal on, so the room asks before it runs a command.
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(tempHome, "workspace");
 	fs.mkdirSync(workspaceRoot, { recursive: true });
 	fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "notes\n");
 	const workspace = await requestJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: workspaceRoot, displayLabel: "Batch Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }) });
 	assert(workspace.status === 200, `Full access with the terminal on, got ${workspace.status}: ${JSON.stringify(workspace.body).slice(0, 300)}`);
+	// A new room's commands start in Run without asking where the room's protection runs: this smoke chooses Ask before each command, as the chip does.
+	const askFirst = await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/bash-settings`, false);
+	assert(askFirst.status === 200, `the room asks before each command, got ${askFirst.status}`);
 	// A PDF in the room's Attachments that has never been read: reading it means extracting it.
 	const { persistentRoomShelfDirPath, persistentRoomReadingCacheDirPath } = await import("../src/persistent-room-shelf.js");
 	const shelfDir = persistentRoomShelfDirPath(agentId);
@@ -256,6 +260,8 @@ try {
 	const framesAtNext = ws.frames.length;
 	ws.send({ type: "prompt", text: `Again, please. ${TURN_TOKEN}` });
 	const card = ws.frames[await ws.waitFor(isCard, "the next turn's command card", framesAtNext, 30_000)];
+	// A floor later, as a person reads first: a yes sooner is asked again.
+	await new Promise((resolve) => setTimeout(resolve, ANSWER_FLOOR_MS + 50));
 	ws.send({ type: "ui_response", id: card.id, value: true });
 	const nextEnd = ws.frames[await ws.waitFor(isTurnEnd, "the next turn's end", framesAtNext, 30_000)];
 	assert(nextEnd.event.endedBy === undefined, `a turn that ran to its end carries no endedBy, got ${JSON.stringify(nextEnd.event.endedBy)}`);

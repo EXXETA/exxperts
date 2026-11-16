@@ -215,6 +215,37 @@ try {
 	assert(!readAuth()[KEY_PROVIDER] && JSON.stringify(readAuth().anthropic) === JSON.stringify(SIGN_IN), "the refused token is stored nowhere");
 	pass("the environment never sets the key provider up, and a pasted sign-in token is refused");
 
+	// The save refuses the same token under the sign-in's own provider, where it would go out as a subscription.
+	const NOT_A_KEY = "This doesn't look like an API key: it's too long or holds a line break or other hidden character. Copy the key again and paste only the key.";
+	const authBytes = () => fs.readFileSync(path.join(agentDir, "auth.json"));
+	const refusedAndKept = async (provider: string, key: string, status: number, error: string, label: string) => {
+		const before = authBytes();
+		const checksBefore = keyChecks.length;
+		const answer = await api("/api/auth/api-key", { method: "POST", body: JSON.stringify({ provider, key }) });
+		assert(answer.status === status && answer.body?.error === error, `${label}: got ${answer.status} ${String(answer.body?.error).slice(0, 80)}`);
+		assert(before.equals(authBytes()), `${label}: auth.json's bytes changed`);
+		assert(keyChecks.length === checksBefore, `${label}: the refused key was sent to Anthropic`);
+		assert(!serverOutput.join("").includes(key), `${label}: the key reached the server's output`);
+	};
+	await refusedAndKept("anthropic", "sk-ant-oat01-synthetic-pasted-token", 400, "This looks like a Claude sign-in token, not an API key. Create an API key at console.anthropic.com.", "a sign-in token under anthropic");
+	pass("a pasted sign-in token is refused under the sign-in's own provider too, auth.json's bytes unchanged");
+
+	// A key over 8 KiB or holding a control character is no key, under any provider, and is sent nowhere.
+	for (const provider of [KEY_PROVIDER, "anthropic", "openai"]) {
+		await refusedAndKept(provider, "k".repeat(8 * 1024 + 1), 400, NOT_A_KEY, `a key over 8 KiB under ${provider}`);
+		await refusedAndKept(provider, "synthetic\nkey", 400, NOT_A_KEY, `a key holding a line break under ${provider}`);
+		await refusedAndKept(provider, "synthetic\u0007key", 400, NOT_A_KEY, `a key holding a control character under ${provider}`);
+	}
+	await refusedAndKept(KEY_PROVIDER, "synthetic\u2028key", 400, NOT_A_KEY, "a key holding a line separator");
+	for (const provider of ["openai-codex", "github-copilot"]) await refusedAndKept(provider, "synthetic-subscription-key", 400, `Provider does not support API-key sign-in: ${provider}`, `a key under ${provider}`);
+	// The neighbours: exactly 8 KiB, and a line break the trim takes away, are stored as typed.
+	for (const [typed, stored, label] of [["k".repeat(8 * 1024), "k".repeat(8 * 1024), "a key of exactly 8 KiB"], ["synthetic-trimmed-key\n", "synthetic-trimmed-key", "a key with a line break after it"]]) {
+		const answer = await api("/api/auth/api-key", { method: "POST", body: JSON.stringify({ provider: "openai", key: typed }) });
+		assert(answer.status === 200 && readAuth().openai?.key === stored, `${label} is saved, got ${answer.status}`);
+		assert((await api("/api/auth/logout", { method: "POST", body: JSON.stringify({ provider: "openai" }) })).status === 200 && !readAuth().openai, `${label} is removed again`);
+	}
+	pass("a key over 8 KiB or holding a control character is refused under any provider and sent nowhere, the two subscriptions are refused, and a key of exactly 8 KiB or with a line break after it is saved");
+
 	// The key is checked with Anthropic before it is saved.
 	const tryKey = async (mode: typeof keyCheck, key: string) => {
 		keyCheck = mode;

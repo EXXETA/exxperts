@@ -92,36 +92,6 @@
 	font-size: 13px;
 }
 .att-spacer { flex: 1; }
-.att-icon {
-	flex: none;
-	width: 30px;
-	height: 30px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	border: 1px solid transparent;
-	border-radius: var(--exx-radius-control);
-	background: none;
-	color: var(--fg-soft);
-	cursor: pointer;
-}
-.att-icon:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
-.att-add {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	padding: 6px 12px;
-	border: 1px solid var(--border);
-	border-radius: var(--exx-radius-control);
-	background: transparent;
-	color: var(--fg-soft);
-	font: inherit;
-	font-size: 13px;
-	cursor: pointer;
-	white-space: nowrap;
-}
-.att-add:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 .att-grid {
 	flex: 1;
 	min-height: 0;
@@ -271,30 +241,32 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.att-more {
+/* ⋯ sits over the file's preview: its holder is the surface under it, so the
+   mark reads over any picture. With a mouse it shows on the card's hover, on
+   keyboard focus and while its menu is open. */
+.att-more-holder {
 	position: absolute;
 	z-index: 2;
 	top: 7px;
 	right: 7px;
-	width: 28px;
-	height: 28px;
-	padding: 0;
-	border: 1px solid var(--border-soft);
+	display: flex;
 	border-radius: var(--exx-radius-control);
 	background: var(--exx-surface);
-	color: var(--fg-soft);
-	font-size: 15px;
-	line-height: 1;
-	cursor: pointer;
+	box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 @media (hover: hover) {
-	.att-more { opacity: 0; transition: opacity 120ms ease; }
-	.att-card:hover .att-more,
-	.att-more:focus-visible,
-	.att-more[aria-expanded="true"] { opacity: 1; }
+	.att-more-holder { opacity: 0; transition: opacity 120ms ease; }
+	.att-card:hover .att-more-holder,
+	.att-more-holder:has(:focus-visible),
+	.att-more-holder:has([aria-expanded="true"]) { opacity: 1; }
 }
-.att-more:hover,
-.att-more[aria-expanded="true"] { background: var(--exx-surface-raised); color: var(--fg); }
+/* Over a picture the focus ring would fall on the picture itself, lost on one
+   of its own tone: while focused, the holder's surface reaches past the ring
+   (2 px out, 2 px wide), so the ring reads over any picture. On a phone's
+   width ⋯ sits in the card's foot instead (38-phone.css). */
+@media (hover: hover) and (min-width: 761px) {
+	.att-more-holder:has(:focus-visible) { box-shadow: inset 0 0 0 1px var(--border-soft), 0 0 0 6px var(--exx-surface); }
+}
 .att-menu {
 	position: absolute;
 	right: 44px;
@@ -422,6 +394,9 @@
 }
 .asset-viewer-footer { display: flex; flex-direction: column; gap: 8px; }
 .asset-viewer-footer-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* The foot's last button ends on its right edge (--exx-btn-inset-sm), as far
+   as the foot's 14 px padding leaves its 4 px focus ring. */
+.asset-viewer-footer-row > .rs-btn:last-child { margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 14px - 4px)); }
 .asset-viewer-iterate { display: flex; gap: 8px; }
 .asset-viewer-iterate-input {
 	flex: 1;
@@ -481,7 +456,7 @@
 	color: var(--fg);
 }
 .task-store-gc-meta { flex: none; color: var(--muted); font-size: 11px; }
-.asset-viewer-delete { color: var(--danger, #d33); margin-left: auto; }
+.asset-viewer-delete { margin-left: auto; }
 
 /* ── Connection lost (exception only) ─────────────────────────────────────
    Anchored to the window, not to a screen: the condition belongs to the whole
@@ -523,6 +498,8 @@
 	align-items: center;
 	justify-content: center;
 	gap: 16px;
+	padding: 0 16px;
+	text-align: center;
 	background: var(--bg);
 	color: var(--fg);
 }

@@ -60,7 +60,19 @@ async function expectReject(fn: () => unknown | Promise<unknown>, tmp: string, l
 	throw new Error(`${label}: expected rejection`);
 }
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-workspace-tools-"));
+// A refusal that names the absolute path the model itself gave: only its code is checked.
+async function expectCode(fn: () => unknown | Promise<unknown>, code: string, label: string): Promise<void> {
+	try {
+		await fn();
+	} catch (error) {
+		assert(error instanceof PersistentRoomWorkspaceToolError && error.code === code, `${label}: expected ${code}, got ${(error as Error).message}`);
+		return;
+	}
+	throw new Error(`${label}: expected rejection`);
+}
+
+// In the home: a room's folder in the shared temp is one no room may use.
+const tmp = fs.mkdtempSync(path.join(os.homedir(), "exxperts-workspace-tools-"));
 
 try {
 	const repoRoot = path.join(tmp, "repo");
@@ -131,7 +143,8 @@ try {
 		now: new Date("2026-05-27T00:05:00.000Z"),
 	});
 	const localFilesTools = createPersistentRoomWorkspaceTools(localFilesPolicy, { localFilesCwd: workspaceRoot });
-	assert(localFilesTools.map((tool: any) => tool.name).join(",") === "ls,find,grep,read,write,edit" && localFilesTools.every((tool: any) => tool.label === tool.name), "local-files mode should register the six native file tools, wrapped, never the curated workspace tools");
+	assert(localFilesTools.map((tool: any) => tool.name).join(",") === "ls,find,grep,read,write,edit", "Full access should register the six file tools");
+	assert(localFilesTools.every((tool: any) => tool.parameters === tools.get(tool.name)?.parameters), "Full access and Bounded rooms get the same fenced tools");
 	const localFilesNoSpreadsheetPolicy = createPersistentRoomCapabilityPolicy({
 		agentId: agentId,
 		conversationId: "c_workspace_tools_local_files_no_spreadsheet_smoke",
@@ -150,10 +163,10 @@ try {
 	assert(lsRoot.includes("README.md"), "ls . should include safe file");
 	assert(lsRoot.includes("docs/"), "ls . should suffix directories with slash");
 	const lsRootLines = lsRoot.split("\n");
-	assert(!lsRootLines.includes(".git") && !lsRootLines.includes(".git/"), "ls . must omit .git");
+	assert(lsRootLines.includes(".git/"), "ls . lists .git");
 	assert(lsRootLines.includes(".gitignore"), "ls . should list the plain .gitignore file");
 	assert(!lsRoot.includes(".exxeta"), "ls . must omit .exxeta");
-	assert(!lsRoot.includes("node_modules"), "ls . must omit node_modules");
+	assert(lsRootLines.includes("node_modules/"), "ls . lists node_modules");
 	assert(!lsRoot.includes(".env"), "ls . must omit .env files");
 	assert(!lsRoot.includes("private.pem") && !lsRoot.includes("deploy.key") && !lsRoot.includes("id_rsa"), "ls . must omit secret-looking filenames");
 
@@ -161,7 +174,11 @@ try {
 	assert(findMarkdown.includes("README.md"), "find should include root markdown files");
 	assert(findMarkdown.includes("docs/plan.md"), "find should include nested safe markdown files");
 	assert(!findMarkdown.includes(workspaceRoot), "find output must not include absolute workspace root");
-	assert(!findMarkdown.includes(".git") && !findMarkdown.includes(".exxeta") && !findMarkdown.includes("node_modules"), "find must skip denied directories");
+	const foundFiles = findMarkdown.split("\n\n")[0]!.split("\n");
+	assert(!foundFiles.some((line) => line.includes(".git") || line.includes(".exxeta") || line.includes("node_modules")), "find must skip closed folders, and .git and node_modules unless it starts in one");
+	assert(findMarkdown.includes("were not searched"), "find says it skipped .git and node_modules");
+	fs.writeFileSync(path.join(workspaceRoot, "node_modules", "README.md"), "# vendored\n");
+	assert((await execute(tools, "find", { pattern: "*.md", path: "node_modules" }, tmp)).includes("node_modules/README.md"), "find started inside node_modules searches it");
 	assert(!findMarkdown.includes(".env") && !findMarkdown.includes("private.pem") && !findMarkdown.includes("deploy.key") && !findMarkdown.includes("id_rsa"), "find must skip secret-looking files");
 	assert(!findMarkdown.includes("outside"), "find must not follow symlinked directories or expose outside paths");
 
@@ -186,12 +203,14 @@ try {
 	const overwriteResult = await executeResult(tools, "write", { path: "notes/test.md", content: "# Replacement\n", overwrite: true }, tmp);
 	assert(overwriteResult.details?.created === false && overwriteResult.details?.overwritten === true, "overwrite details should report overwritten metadata");
 	assert(fs.readFileSync(path.join(workspaceRoot, "notes", "test.md"), "utf-8") === "# Replacement\n", "overwrite should replace existing Markdown file");
-	await expectReject(() => execute(tools, "write", { path: path.join(workspaceRoot, "abs.md"), content: "no" }, tmp), tmp, "write absolute path");
+	await executeResult(tools, "write", { path: path.join(workspaceRoot, "abs.md"), content: "yes" }, tmp);
+	assert(fs.readFileSync(path.join(workspaceRoot, "abs.md"), "utf-8") === "yes", "an absolute path inside the room's folder takes a write");
 	await expectReject(() => execute(tools, "write", { path: "~/test.md", content: "no" }, tmp), tmp, "write home path");
 	await expectReject(() => execute(tools, "write", { path: "../escape.md", content: "no" }, tmp), tmp, "write parent escape");
-	await expectReject(() => execute(tools, "write", { path: ".git/test.md", content: "no" }, tmp), tmp, "write denied .git");
+	await expectReject(() => execute(tools, "write", { path: ".git/config", content: "no", overwrite: true }, tmp), tmp, "write git settings");
 	await expectReject(() => execute(tools, "write", { path: ".exxeta/test.md", content: "no" }, tmp), tmp, "write denied .exxeta");
-	await expectReject(() => execute(tools, "write", { path: "node_modules/test.md", content: "no" }, tmp), tmp, "write denied node_modules");
+	await execute(tools, "write", { path: "node_modules/test.md", content: "yes" }, tmp);
+	assert(fs.existsSync(path.join(workspaceRoot, "node_modules", "test.md")), "node_modules takes a write");
 	await expectReject(() => execute(tools, "write", { path: "existing-dir.md", content: "no" }, tmp), tmp, "write existing directory");
 	if (fs.existsSync(path.join(workspaceRoot, "outside-link.md"))) {
 		await expectReject(() => execute(tools, "write", { path: "outside-link.md", content: "no", overwrite: true }, tmp), tmp, "write symlink target");
@@ -199,7 +218,8 @@ try {
 	if (fs.existsSync(path.join(workspaceRoot, "outside-dir-link"))) {
 		await expectReject(() => execute(tools, "write", { path: "outside-dir-link/escape.md", content: "no" }, tmp), tmp, "write parent symlink escape");
 	}
-	await expectReject(() => execute(tools, "write", { path: "too-large.md", content: "x".repeat(128 * 1024 + 1) }, tmp), tmp, "write oversized content");
+	await execute(tools, "write", { path: "large.md", content: "x".repeat(128 * 1024 + 1) }, tmp);
+	assert(fs.statSync(path.join(workspaceRoot, "large.md")).size === 128 * 1024 + 1, "a write over 128 KiB goes through");
 
 	fs.mkdirSync(path.join(workspaceRoot, "private"), { recursive: true });
 	fs.writeFileSync(path.join(workspaceRoot, "private", "x.txt"), "custom-denied\n");
@@ -235,7 +255,8 @@ try {
 		assert(grepLimited.details?.matchLimitReached === 5, `${label}: grep details should report the match limit`);
 		await expectReject(() => execute(tools, "grep", { pattern: "a".repeat(513) }, tmp), tmp, `${label} grep overlong pattern`);
 		await expectReject(() => execute(tools, "grep", { pattern: "x", path: "../outside" }, tmp), tmp, `${label} grep outside path`);
-		await expectReject(() => execute(tools, "grep", { pattern: "x", path: ".git" }, tmp), tmp, `${label} grep denied directory`);
+		await expectReject(() => execute(tools, "grep", { pattern: "x", path: ".exxeta" }, tmp), tmp, `${label} grep denied directory`);
+		assert(toolOutput(await executeResult(tools, "grep", { pattern: "secret", path: ".git" }, tmp)).includes(".git/config:1: [secret]"), `${label}: grep started in .git searches it`);
 	};
 
 	const ripgrepPath = getToolPath("rg");
@@ -266,9 +287,8 @@ try {
 	assert(overwriteAnyResult.details?.overwritten === true, "write overwrite=true should replace existing file");
 	await expectReject(() => execute(tools, "write", { path: "sub/.env", content: "TOKEN=x" }, tmp), tmp, "write deny-listed filename");
 	await expectReject(() => execute(tools, "write", { path: "sub/secrets.pem", content: "x" }, tmp), tmp, "write secret-looking filename");
-	await expectReject(() => execute(tools, "write", { path: path.join(workspaceRoot, "abs.txt"), content: "x" }, tmp), tmp, "write absolute non-md path");
+	await expectCode(() => execute(tools, "write", { path: path.join(outsideRoot, "abs.txt"), content: "x" }, tmp), "outside_workspace", "write absolute path outside");
 	await expectReject(() => execute(tools, "write", { path: "../escape.txt", content: "x" }, tmp), tmp, "write parent escape non-md");
-	await expectReject(() => execute(tools, "write", { path: "too-large.txt", content: "x".repeat(128 * 1024 + 1) }, tmp), tmp, "write oversized non-md content");
 	if (fs.existsSync(path.join(workspaceRoot, "outside-link.txt"))) {
 		await expectReject(() => execute(tools, "write", { path: "outside-link.txt", content: "x", overwrite: true }, tmp), tmp, "write symlink target non-md");
 	}
@@ -294,7 +314,8 @@ try {
 	await executeResult(tools, "edit", { path: "data/fuzzy.txt", edits: [{ oldText: "it's fine", newText: "it is fine" }] }, tmp);
 	assert(fs.readFileSync(path.join(workspaceRoot, "data", "fuzzy.txt"), "utf-8").includes("it is fine"), "fuzzy matching should tolerate smart-quote differences");
 	await execute(tools, "write", { path: "data/grow.txt", content: "seed\n" }, tmp);
-	await expectReject(() => execute(tools, "edit", { path: "data/grow.txt", edits: [{ oldText: "seed", newText: "x".repeat(128 * 1024) }] }, tmp), tmp, "edit oversized result");
+	await execute(tools, "edit", { path: "data/grow.txt", edits: [{ oldText: "seed", newText: "x".repeat(128 * 1024) }] }, tmp);
+	assert(fs.statSync(path.join(workspaceRoot, "data", "grow.txt")).size > 128 * 1024, "an edit that grows a file past 128 KiB goes through");
 	await expectReject(() => execute(tools, "edit", { path: "missing.txt", edits: [{ oldText: "a", newText: "b" }] }, tmp), tmp, "edit missing file");
 	await expectReject(() => execute(tools, "edit", { path: ".env", edits: [{ oldText: "TOKEN", newText: "T" }] }, tmp), tmp, "edit deny-listed file");
 	await expectReject(() => execute(tools, "edit", { path: "../outside/outside.txt", edits: [{ oldText: "outside", newText: "x" }] }, tmp), tmp, "edit parent escape");
@@ -302,12 +323,13 @@ try {
 		await expectReject(() => execute(tools, "edit", { path: "outside-link.txt", edits: [{ oldText: "outside", newText: "x" }] }, tmp), tmp, "edit symlink target");
 	}
 
-	await expectReject(() => execute(tools, "read", { path: path.join(workspaceRoot, "README.md") }, tmp), tmp, "absolute path");
+	assert((await execute(tools, "read", { path: path.join(workspaceRoot, "README.md") }, tmp)).includes("Safe file."), "an absolute path inside the room's folder reads");
+	await expectCode(() => execute(tools, "read", { path: path.join(outsideRoot, "outside.txt") }, tmp), "outside_workspace", "absolute path outside");
 	await expectReject(() => execute(tools, "read", { path: "~/README.md" }, tmp), tmp, "home path");
 	await expectReject(() => execute(tools, "read", { path: "../outside/outside.txt" }, tmp), tmp, "parent escape");
-	await expectReject(() => execute(tools, "read", { path: ".git/config" }, tmp), tmp, ".git read");
+	assert((await execute(tools, "read", { path: ".git/config" }, tmp)).includes("[secret]"), ".git reads");
 	await expectReject(() => execute(tools, "read", { path: ".exxeta/state.json" }, tmp), tmp, ".exxeta read");
-	await expectReject(() => execute(tools, "read", { path: "node_modules/package.json" }, tmp), tmp, "node_modules read");
+	assert((await execute(tools, "read", { path: "node_modules/package.json" }, tmp)).includes("{}"), "node_modules reads");
 	await expectReject(() => execute(tools, "read", { path: ".env" }, tmp), tmp, ".env read");
 	await expectReject(() => execute(tools, "read", { path: ".env.local" }, tmp), tmp, ".env.* read");
 	await expectReject(() => execute(tools, "read", { path: "private.pem" }, tmp), tmp, "pem read");
@@ -327,12 +349,14 @@ try {
 	await expectReject(() => resolvePersistentRoomWorkspacePath(policy, "../outside/outside.txt", "read"), tmp, "direct guard traversal");
 
 	const tamperedHashPolicy = { ...policy, roots: [{ ...policy.roots[0]!, pathHash: { algorithm: "sha256" as const, value: "0".repeat(64) } }] };
-	assert(createPersistentRoomWorkspaceTools(tamperedHashPolicy).length === 0, "policy with mismatched root pathHash must not activate workspace tools");
+	// A folder that no longer matches the one chosen: the room still binds with its tools, and each call says so.
+	const tamperedTools = new Map(createPersistentRoomWorkspaceTools(tamperedHashPolicy).map((tool: any) => [tool.name, tool]));
+	assert(tamperedTools.size === 6, "a room whose folder moved still gets its six tools");
 	try {
-		resolvePersistentRoomWorkspacePath(tamperedHashPolicy, "README.md", "read");
-		throw new Error("tampered pathHash: expected workspace_unavailable rejection");
+		await executeResult(tamperedTools, "read", { path: "README.md" }, tmp);
+		throw new Error("tampered pathHash: expected folder_moved rejection");
 	} catch (error) {
-		assert(error instanceof PersistentRoomWorkspaceToolError && error.code === "workspace_unavailable", "tampered pathHash should report workspace unavailable");
+		assert(error instanceof PersistentRoomWorkspaceToolError && error.code === "folder_moved" && /moved or replaced/.test(error.message), "a moved folder's call says the folder moved");
 	}
 
 	const swapWorkspace = path.join(tmp, "swap-workspace");
@@ -366,15 +390,18 @@ try {
 	if (swapLinked) {
 		try {
 			await executeResult(swapTools, "read", { path: "keep.md" }, tmp);
-			throw new Error("symlink swap: expected workspace_unavailable rejection");
+			throw new Error("symlink swap: expected folder_moved rejection");
 		} catch (error) {
-			assert(error instanceof PersistentRoomWorkspaceToolError && error.code === "workspace_unavailable", "symlink-swapped workspace root should report workspace unavailable");
+			assert(error instanceof PersistentRoomWorkspaceToolError && error.code === "folder_moved", "symlink-swapped workspace root should say the folder moved");
 		}
 	}
 
 	await expectReject(() => execute(customDenyTools, "read", { path: "private/x.txt" }, tmp), tmp, "custom denySegments read");
 	await expectReject(() => execute(customDenyTools, "read", { path: "extra.secretx" }, tmp), tmp, "custom deny glob read");
-	await expectReject(() => execute(customDenyTools, "read", { path: ".git/config" }, tmp), tmp, "default .git deny must survive custom denySegments");
+	await expectReject(() => execute(customDenyTools, "read", { path: ".exxeta/state.json" }, tmp), tmp, "the app's data stays closed beside custom denySegments");
+	// A stored policy that still lists .git and node_modules, as every saved one does: the fence opens them anyway.
+	assert(policy.denySegments.includes(".git") && policy.denySegments.includes("node_modules"), "the stored policy still lists .git and node_modules");
+	assert((await execute(customDenyTools, "read", { path: ".git/config" }, tmp)).includes("[secret]"), ".git reads on a policy that lists it");
 	await expectReject(() => execute(customDenyTools, "read", { path: ".env" }, tmp), tmp, "default .env deny must survive custom deny globs");
 
 	const noWorkspaceResolution = resolvePersistentRoomCapabilityPolicy(agentId, "c_workspace_tools_no_default", { persistentAgentsRoot });

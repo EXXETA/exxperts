@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Page, type WebSocketRoute } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 import { waitForTurnSettled } from "./smoke-turn-settle.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -216,7 +217,7 @@ try {
 		const send = async (page: Page, text: string) => {
 			const composer = page.locator("textarea").first();
 			await composer.fill(text);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => (await page.locator(".bubble-row.user").filter({ hasText: text }).count()) > 0, `"${text}" is sent`);
 			await waitUntil(() => open !== null, "the gated answer has begun");
 		};

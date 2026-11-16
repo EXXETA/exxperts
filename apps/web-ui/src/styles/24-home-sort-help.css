@@ -1,7 +1,6 @@
 /* Home hero "+ New room" --------------------------------------- */
 .landing-hero-head {
 	display: flex;
-	align-items: flex-end;
 	justify-content: space-between;
 	gap: 16px;
 }
@@ -16,13 +15,37 @@
 	flex: 0 0 auto;
 }
 /* The arrange line is long: where it does not fit beside the title (a phone,
-   a narrow window) it takes its own row and its hint wraps, so Save and
-   Cancel stay on screen. */
+   a narrow window) it takes its own row and its hint wraps, so Done stays
+   on screen. */
 .landing-hero-head.is-arranging { flex-wrap: wrap; }
 .landing-hero-head.is-arranging .landing-hero-actions {
 	flex: 1 1 auto;
 	min-width: 0;
 	justify-content: flex-end;
+}
+/* Sort and Arrange's words sit on the subtitle's last line, and so do the
+   arrange line's hint and Done: the head lines up the two sides' last
+   baselines, not their boxes' bottoms, so Done takes Arrange's place and
+   the cards below stay where they are. */
+.landing-hero-head { align-items: last baseline; }
+/* On a phone, Sort and Arrange at a finger's size would squeeze the subtitle
+   to three lines: they take a line of their own under it, at its right, as
+   the arrange line does. */
+@media (max-width: 760px) {
+	.landing-hero-head { flex-wrap: wrap; }
+	.landing-hero-head .landing-hero-actions {
+		flex: 1 1 auto;
+		justify-content: flex-end;
+	}
+	/* The line takes the 28 px a mouse's buttons do, so the cards start not
+	   much lower: the finger's 44 px reach 4 px into the gap above, never
+	   into the subtitle, where a pressed wash would touch its words, and the
+	   rest into the air below. A read-only Sort is a word, not a button, and
+	   needs no pull. */
+	.landing-hero-head:not(.is-arranging) { row-gap: 6px; }
+	.landing-hero-head:not(.is-arranging) .room-sort:has(.room-sort-btn) {
+		margin-block: -4px calc(28px - var(--exx-btn-h) + 4px);
+	}
 }
 .room-sort {
 	position: relative;
@@ -31,12 +54,16 @@
 	align-items: flex-end;
 	min-width: 0;
 }
+/* Sort and Arrange are quiet words: the row reaches past the head's end by
+   the small inset, so "Arrange" keeps the text edge and the hover fill hangs
+   outside, but no further than Home's 16 px side on a phone leaves the 4 px
+   focus ring. */
 .room-sort-row {
 	display: flex;
 	align-items: center;
 	gap: 2px;
+	margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 12px));
 }
-.room-sort-btn,
 .room-sort-current {
 	display: inline-flex;
 	align-items: center;
@@ -52,21 +79,12 @@
 	line-height: 1.2;
 	white-space: nowrap;
 }
-.room-sort-btn { cursor: pointer; }
-.room-sort-btn:hover,
-.room-sort-btn:focus-visible,
-.room-sort-btn[aria-expanded="true"] {
-	color: var(--fg);
-	background: color-mix(in srgb, var(--fg) 10%, transparent);
-	outline: none;
-}
-.room-sort-btn:focus-visible {
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
-}
-.room-sort-caret { font-size: 10px; }
+/* Its own line height, so the small caret never makes the button's line taller. */
+.room-sort-caret { font-size: 10px; line-height: 1; }
+/* 4 px under the trigger's row, whatever its height (32 px, 44 px on a phone). */
 .room-sort-menu {
 	position: absolute;
-	top: 32px;
+	top: calc(100% + 4px);
 	right: 0;
 	min-width: 176px;
 	max-width: min(280px, calc(100vw - 32px));
@@ -144,27 +162,8 @@
 	align-items: center;
 	gap: 8px;
 	flex: 0 0 auto;
-	/* The height of a status pill, pill or not, so every card's rows line up. */
-	min-height: 22px;
-}
-.card-gear-btn {
-	background: transparent;
-	border: 0;
-	color: var(--muted);
-	border-radius: 7px;
-	width: 28px;
-	height: 28px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	cursor: pointer;
-}
-.card-gear-btn:hover,
-.card-gear-btn:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	color: var(--fg);
-	outline: none;
+	/* The head's line, gear or not, so every card's name and rows line up. */
+	min-height: var(--card-head-line);
 }
 
 /* Help modal --------------------------------------------------- */
@@ -392,3 +391,12 @@
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-soft); }
 ::-webkit-scrollbar-track { background: transparent; }
 
+
+/* The guide's closer keeps its place in the head (a 33 x 26 px box) at a
+   finger's 44 px: it reaches past the head's end and lines. */
+@media (hover: none), (max-width: 760px) {
+	.help-head > .rs-btn-icon {
+		margin-block: calc((26px - var(--exx-btn-h)) / 2);
+		margin-right: calc((33px - var(--exx-btn-h)) / 2);
+	}
+}

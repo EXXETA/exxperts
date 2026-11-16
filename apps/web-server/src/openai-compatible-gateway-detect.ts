@@ -37,6 +37,7 @@ const PROBE_TIMEOUT_MS = 10_000;
 // an endless stream fill this process's memory while we wait for the timeout.
 const PROBE_MAX_BYTES = 5 * 1024 * 1024;
 
+import { withoutKey } from "@exxeta/exxperts-ai";
 import { GATEWAY_EFFORT_INTENSITIES, type GatewayEffortIntensity, type GatewayModelCost, type GatewayThinkingLevel, type GatewayThinkingLevels } from "./openai-compatible-gateways.js";
 
 export type GatewayModelDetection = {
@@ -167,7 +168,8 @@ const REFUSAL_REASON_MAX_CHARS = 300;
  * read: the message of an OpenAI- or LiteLLM-style error ("Budget has been
  * exceeded! …"), a FastAPI detail, or plain text. JSON with none of those,
  * JSON that does not parse, or a page of HTML says nothing a person can use,
- * so there is no reason. A gateway that echoes the key gets it masked.
+ * so there is no reason. A gateway that echoes the key gets it masked, by
+ * the rule a turn's error follows.
  */
 function refusalReason(raw: string, key: string): string | undefined {
 	const text = raw.replace(/^﻿/, "").trim();
@@ -184,7 +186,7 @@ function refusalReason(raw: string, key: string): string | undefined {
 	}
 	if (typeof said !== "string") return undefined;
 	let line = said.replace(/\s+/g, " ").trim();
-	if (key.length >= 8) line = line.split(key).join("…");
+	line = withoutKey(line, key, "…");
 	if (!line || /<\/?[a-z!][^>]*>/i.test(line)) return undefined;
 	// LiteLLM's budget refusal carries a member id and costs to many places:
 	// said plainly, the two amounts rounded (draft).

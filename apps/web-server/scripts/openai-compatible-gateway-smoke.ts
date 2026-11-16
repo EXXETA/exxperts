@@ -1,9 +1,9 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-openai-compatible-gateway-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +44,53 @@ function assertNoLeak(value: unknown, label: string, blockedValues: string[]): v
 			assert(!serialized.includes(normalized), `${label}: response must not leak ${normalized}`);
 		}
 	}
+}
+
+// The runtime loads a provider's code only when a model call needs it, so a
+// start that makes no call loads neither the OpenAI provider nor its client
+// library. A module log records every module a process loads: a preload,
+// passed by NODE_OPTIONS, registers a load hook in the one process whose entry
+// is MODULE_LOG_ENTRY (npx and tsx's own processes see the option too).
+const serverEntry = path.join(webServerDir, "src", "index.ts");
+const moduleLogHooks = path.join(tempHome, "module-log-hooks.mjs");
+const moduleLogPreload = path.join(tempHome, "module-log.mjs");
+
+function writeModuleLog(): void {
+	fs.writeFileSync(
+		moduleLogHooks,
+		[
+			'import fs from "node:fs";',
+			"let out;",
+			"export function initialize(data) { out = data.out; }",
+			"export async function load(url, context, next) { fs.appendFileSync(out, url + \"\\n\"); return next(url, context); }",
+		].join("\n"),
+	);
+	fs.writeFileSync(
+		moduleLogPreload,
+		[
+			'import { register } from "node:module";',
+			"const same = (a, b) => (process.platform === \"win32\" ? a?.toLowerCase() === b?.toLowerCase() : a === b);",
+			"if (process.env.MODULE_LOG && same(process.argv[1], process.env.MODULE_LOG_ENTRY)) {",
+			`	register(${JSON.stringify(pathToFileURL(moduleLogHooks).href)}, { data: { out: process.env.MODULE_LOG } });`,
+			"}",
+		].join("\n"),
+	);
+}
+
+function moduleLogEnv(logFile: string, entry: string): NodeJS.ProcessEnv {
+	return {
+		NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(moduleLogPreload).href}`].filter(Boolean).join(" "),
+		MODULE_LOG: logFile,
+		MODULE_LOG_ENTRY: entry,
+	};
+}
+
+function assertNoProviderLoaded(logFile: string, row: string, what: string): void {
+	const loaded = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").split("\n").filter(Boolean) : [];
+	// The control: the log is written, and the key cut came from its own module.
+	assert(loaded.some((url) => /\/utils\/without-key\.(js|ts)$/.test(url)), `[${row}] ${what} should load the key cut's own module; the module log holds ${loaded.length} modules`);
+	const provider = loaded.filter((url) => /\/providers\/openai-completions\.(js|ts)$/.test(url) || /\/node_modules\/openai\//.test(url));
+	assert(provider.length === 0, `[${row}] ${what} should load neither the OpenAI provider nor the openai package before a model call, got ${provider.slice(0, 3).join(", ")}`);
 }
 
 function providerStatus(authStatus: any, providerId: string): any {
@@ -145,11 +192,26 @@ try {
 		{ mode: 0o600 },
 	);
 
+	writeModuleLog();
+	// M1: the gateway detection module alone, as the server imports it.
+	const detectLog = path.join(tempHome, "detect-modules.log");
+	const detectEntry = path.join(tempHome, "load-detect.mjs");
+	fs.writeFileSync(detectEntry, `await import(${JSON.stringify(pathToFileURL(path.join(webServerDir, "src", "openai-compatible-gateway-detect.ts")).href)});\n`);
+	const detect = spawnSync(process.execPath, ["--import", "tsx/esm", detectEntry], {
+		cwd: webServerDir,
+		env: { ...smokeEnv(), ...moduleLogEnv(detectLog, detectEntry) },
+		encoding: "utf8",
+	});
+	assert(detect.status === 0, `[M1] loading the gateway detection module should succeed, got ${detect.status}: ${detect.stderr}`);
+	assertNoProviderLoaded(detectLog, "M1", "loading the gateway detection module");
+
+	// M2: the shared start, with no edition hooks, as the desktop app starts it.
+	const serverLog = path.join(tempHome, "server-modules.log");
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
 		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 		cwd: webServerDir,
-		env: smokeEnv(),
+		env: { ...smokeEnv(), ...moduleLogEnv(serverLog, serverEntry) },
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
@@ -223,6 +285,8 @@ try {
 		syntheticGatewayKey,
 		syntheticGatewayBaseUrl,
 	]);
+
+	assertNoProviderLoaded(serverLog, "M2", "the server's start, with the gateway's status, profile and model choices read");
 
 	console.log("openai-compatible gateway smoke passed");
 } catch (error) {

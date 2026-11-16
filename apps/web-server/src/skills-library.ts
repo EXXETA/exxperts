@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listPersistentAgents } from "./persistent-agents.js";
-import { readPersistentRoomSkillSettings, isValidSkillName } from "./persistent-room-skill-settings.js";
-import { sharedAgentsSkillsDir, agentSkillsDir, readSkillProvenance, computeSkillFilesDigest } from "./skills-store.js";
+import { listPersistentAgents, type RoomViewer } from "./persistent-agents.js";
+import { readPersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
+import { agentSkillsDir, readSkillProvenance } from "./skills-store.js";
 import { type InvisibleUnicodeFinding, scanInvisibleUnicode, filterRepoScanSkillFiles } from "./skills-import.js";
 import { parseSkillFrontmatter as parseFrontmatter, registerCheckout } from "./skills-repo-fetch.js";
 import JSZip from "jszip";
-import { PKG, REPO_ROOT } from "./server-install-root.js";
+import { frontmatterFlagTrue, resolveExecutableSkillFiles, resolveLibrarySkillManifest, skillDirs } from "./skills-executable.js";
 import { remoteRoomExposure } from "./request-checks.js";
 
 // --- discovery endpoints used by the UI sidebar -------------------------
@@ -34,18 +34,6 @@ interface SkillInfo {
 	disableModelInvocation: boolean;
 }
 
-/** True when a frontmatter value (a raw string from the skill's YAML) reads as an
- *  affirmative boolean. Skill authors write `disable-model-invocation: true`. */
-function frontmatterFlagTrue(value: string | undefined): boolean {
-	if (typeof value !== "string") return false;
-	// The frontmatter parser hands plain scalars over with trailing comments
-	// intact; in YAML a `#` preceded by whitespace starts a comment, so
-	// `disable-model-invocation: true # why` must still read as true. A flag
-	// misread as off fails OPEN (the skill becomes model-invocable), which is
-	// the wrong direction to fail in.
-	const scalar = value.split(/\s#/)[0];
-	return ["true", "yes", "1", "on"].includes(scalar.trim().toLowerCase());
-}
 
 /** A not-yet-saved skill returned by the upload endpoint for the review screen (spec §3).
  *  The web UI's review component consumes exactly this shape (its clean seam), so an
@@ -70,6 +58,9 @@ interface SkillUploadCandidate {
 	token?: string;
 	/** Names of bundled scripts in the package. They are NEVER run — the review says so. */
 	bundledScripts: string[];
+	/** The author marked it `disable-model-invocation`. Accept writes a new SKILL.md
+	 *  from the candidate, so the mark comes back with it. */
+	disableModelInvocation: boolean;
 }
 
 /** Hard ceiling on a decoded upload (spec §7 / hard rule: enforce size limits). */
@@ -84,25 +75,6 @@ const MAX_SKILL_ARCHIVE_ENTRIES = 4096;
 /** Extensions we treat as bundled scripts to flag ("instructions only" — never executed). */
 const SKILL_SCRIPT_EXTENSIONS = new Set([".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".ps1", ".bat", ".cmd", ".php", ".rs", ".go"]);
 
-// Frontmatter parsing is unified on skills-repo-fetch's YAML-subset parser
-// (imported below as parseFrontmatter) so the library, the room index, and
-// repo import all read a manifest identically.
-
-function skillDirs(): { dir: string; source: string }[] {
-	return [
-		{ dir: path.join(PKG, "skills"), source: "builtin" },
-		// The cross-tool shared directory (~/.agents/skills). Read-only from our
-		// side: skills there are listed but never edited, deleted, or given
-		// provenance sidecars — other tools own that directory. It sits BELOW the
-		// user store so a name the user explicitly put in the exxperts store wins
-		// over the ambient shared one.
-		{ dir: sharedAgentsSkillsDir(), source: "shared" },
-		// The canonical user store is the Pi loader's user dir (spec §1) — a skill
-		// written here is visible to the CLI and vice versa.
-		{ dir: agentSkillsDir(), source: "user" },
-		{ dir: path.join(REPO_ROOT, ".exxeta", "skills"), source: "project" },
-	];
-}
 
 function listSkills(): SkillInfo[] {
 	const byName = new Map<string, SkillInfo>();
@@ -139,12 +111,12 @@ interface SkillRoomRef {
 	name: string;
 }
 
-/** Which rooms enable each library skill, by skill name, read from every room's
- *  skill settings. A remote device never sees a hidden room here either. */
-function skillRoomsByName(req: unknown): Map<string, SkillRoomRef[]> {
+/** Which of the viewer's rooms enable each library skill, by skill name, read
+ *  from each room's skill settings. A remote device never sees a hidden room here either. */
+function skillRoomsByName(viewer: RoomViewer, req: unknown): Map<string, SkillRoomRef[]> {
 	const remote = Boolean((req as any)?.exxRemoteDevice);
 	const byName = new Map<string, SkillRoomRef[]>();
-	for (const room of listPersistentAgents()) {
+	for (const room of listPersistentAgents(viewer)) {
 		if (remote && remoteRoomExposure.isHidden(room.id)) continue;
 		const ref = { id: room.id, name: room.displayName?.trim() || room.id };
 		for (const skill of readPersistentRoomSkillSettings(room.id).enabledSkills) {
@@ -185,39 +157,6 @@ function skillExistsAnySource(id: string): boolean {
  * pins — and mismatch detection re-derives — `sha256` server-side from the
  * canonical store, never from client input.
  */
-/**
- * Resolve a library skill's full SKILL.md manifest + parsed parts by name,
- * matching listSkills' source precedence (builtin < user < project, last wins).
- * The FINGERPRINT is `sha256(manifest)` — the whole SKILL.md, frontmatter
- * included — so a description/license/name edit trips re-review just like a body
- * edit (skills MR-5 hardening: the L2 index injects the description, so it must
- * be inside the pinned region — spec §7 must 2). read_skill still returns only
- * the (defanged) body; the manifest is the integrity unit, not the output.
- */
-function resolveLibrarySkillManifest(name: string): { manifest: string; body: string; description: string; disableModelInvocation: boolean } | null {
-	let match: { manifest: string; body: string; description: string; disableModelInvocation: boolean } | null = null;
-	for (const { dir } of skillDirs()) {
-		let entries: fs.Dirent[];
-		try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-		for (const entry of entries) {
-			// Symlinked skill dirs and manifests fingerprint like regular ones (the
-			// shared ~/.agents/skills root is commonly populated by symlinks). The
-			// hash pin is content-based, so a retargeted link is just a changed
-			// manifest: the room flips to re-review, same as any edit.
-			if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-			const file = path.join(dir, entry.name, "SKILL.md");
-			let manifest: string;
-			try {
-				manifest = fs.readFileSync(file, "utf-8");
-			} catch { continue; }
-			const { fm, body } = parseFrontmatter(manifest);
-			const skillName = (fm.name || entry.name).trim();
-			if (skillName !== name) continue;
-			match = { manifest, body, description: (fm.description || "").trim(), disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]) }; // last source wins, mirroring listSkills
-		}
-	}
-	return match;
-}
 
 /** The enablement fingerprint source (spec §7 must 2): the full SKILL.md manifest
  *  by name, or null when the skill is gone. enablePersistentRoomSkill hashes it. */
@@ -234,34 +173,6 @@ function skillLibraryFingerprint(name: string): string | null {
 	return resolveLibrarySkillManifest(name)?.manifest ?? null;
 }
 
-/**
- * The execution side of the library (executable skills): a skill's on-disk
- * location and whole-content digest, or null when the skill is not
- * execution-capable AT ALL, regardless of any room's approval. Only the
- * canonical user store qualifies — shared (~/.agents/skills, writable by any
- * local agent), builtin and project skills never do. The user-store copy must
- * also be the copy the library actually serves for that name (a project-store
- * shadow disqualifies it: what the model reads must be what was approved), it
- * must carry its provenance sidecar, and its manifest must be free of invisible
- * unicode — hidden characters make it instructions-only forever.
- */
-function resolveExecutableSkillFiles(name: string): { skillDir: string; filesSha256: string; files: string[] } | null {
-	if (!isValidSkillName(name)) return null;
-	const skillDir = path.join(agentSkillsDir(), name);
-	const digest = computeSkillFilesDigest(skillDir);
-	if (!digest) return null;
-	let manifest: string;
-	try {
-		manifest = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf-8");
-	} catch {
-		return null;
-	}
-	const served = resolveLibrarySkillManifest(name);
-	if (!served || served.manifest !== manifest) return null;
-	if (!readSkillProvenance(skillDir)) return null;
-	if (scanInvisibleUnicode(manifest).findings.length > 0) return null;
-	return { skillDir, filesSha256: digest.filesSha256, files: digest.files.map((f) => f.path).filter((p) => p !== "SKILL.md") };
-}
 
 function getUserSkillFile(id: string): string | null {
 	const safeId = slugifySkillId(id);
@@ -286,12 +197,14 @@ function frontmatterScalar(value: string): string {
 	return value;
 }
 
-function buildUserSkillMarkdown(input: { id: string; displayName: string; description: string; instructions: string }): string {
+function buildUserSkillMarkdown(input: { id: string; displayName: string; description: string; instructions: string; disableModelInvocation?: boolean }): string {
 	return [
 		"---",
 		`name: ${input.id}`,
 		`displayName: ${input.displayName.trim()}`,
 		`description: ${frontmatterScalar(input.description.trim())}`,
+		// Only when marked, so an unmarked skill's manifest and its fingerprint stay as they were.
+		...(input.disableModelInvocation ? ["disable-model-invocation: true"] : []),
 		"---",
 		"",
 		input.instructions.trim(),
@@ -476,8 +389,9 @@ async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): 
 		// Scan body AND description — the description reaches the system prompt too.
 		scanFindings: scanInvisibleUnicode(`${instructions}\n${description}`).findings,
 		bundledScripts,
+		disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]),
 		...(token ? { token } : {}),
 	};
 }
 
-export { MAX_SKILL_UPLOAD_BYTES, buildSkillCandidateFromUpload, buildUserSkillMarkdown, getUserSkillFile, librarySkillView, listSkills, resolveExecutableSkillFiles, resolveLibrarySkillManifest, skillExistsAnySource, skillLibraryFingerprint, skillRoomsByName, slugifySkillId, validateSkillWritePayload, withSkillDisplayNames };
+export { MAX_SKILL_UPLOAD_BYTES, buildSkillCandidateFromUpload, buildUserSkillMarkdown, frontmatterFlagTrue, getUserSkillFile, librarySkillView, listSkills, resolveExecutableSkillFiles, resolveLibrarySkillManifest, skillExistsAnySource, skillLibraryFingerprint, skillRoomsByName, slugifySkillId, validateSkillWritePayload, withSkillDisplayNames };

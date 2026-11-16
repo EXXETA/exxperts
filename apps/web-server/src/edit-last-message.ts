@@ -76,7 +76,7 @@ export function changedThingOf(name: string, args: unknown, end: StepEnd): strin
 	if (name === "write") return `wrote ${named("path") || "a file"}`;
 	if (name === "edit") return `edited ${named("path") || "a file"}`;
 	if (name === "artifact_write" || name === "artifact_write_html_deck") return `wrote ${named("name") || named("path") || named("title") || "an artifact"}`;
-	if (name === "bash") return `ran ${named("command") || "a command"}`;
+	if (name === "bash" || name === "run_outside_box") return `ran ${named("command") || "a command"}`;
 	// Only a connector's own tool acts; listing, searching and describing its tools read.
 	if (name === "mcp" && named("tool")) return `used ${named("tool")}${named("server") ? ` (${named("server")})` : ""}`;
 	if (name === "delegate_task") return "started a helper";
@@ -211,6 +211,11 @@ export function keptBeforeNextMessage(session: Pick<EditingSession, "sessionMana
 		at = at.parentId ? manager.getEntry(at.parentId) : undefined;
 	}
 	return [];
+}
+
+/** Whether a saved entry is the mark that the prompt after it is the server's own, not the person's. */
+export function isAppPromptMark(entry: { type?: string; customType?: string }): boolean {
+	return entry.type === "custom" && entry.customType === APP_PROMPT;
 }
 
 /** Marks the next prompt as the server's own, so an edit after it goes to the person's message before it. */

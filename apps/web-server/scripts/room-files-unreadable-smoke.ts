@@ -14,7 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -183,7 +183,7 @@ try {
 			const bubbles = (text: string) => page.locator(".bubble-row.user", { hasText: text }).count();
 			const send = async (text: string) => {
 				await composer.fill(text);
-				await composer.press("Enter");
+				await sendFromBox(page);
 			};
 			// The page saves the conversation after each change, which writes both files again: its saves wait while a file is unreadable.
 			const saves: { held: boolean; waiting: Array<() => void> } = { held: false, waiting: [] };

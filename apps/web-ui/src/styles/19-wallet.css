@@ -150,24 +150,6 @@
 .seg-plan { background: var(--exx-plan); fill: var(--exx-plan); }
 .seg-unattributed { background: var(--border); fill: var(--border); }
 
-.export-btn {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	border: 1px solid var(--border);
-	border-radius: 7px;
-	padding: 4px 11px;
-	color: var(--fg-soft);
-	font-family: var(--exx-font-display);
-	font-size: 11px;
-	font-weight: 700;
-	letter-spacing: 0.06em;
-	text-decoration: none;
-	cursor: pointer;
-}
-.export-btn:hover { border-color: var(--fg); color: var(--fg); }
-.export-btn svg { display: block; }
-.export-btn:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: 2px; }
 
 .source-splitbar {
 	display: flex;

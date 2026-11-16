@@ -72,6 +72,8 @@ button.wk-head:hover:not(:disabled) { color: var(--exx-text-soft); }
 }
 .wk-card.waiting .wk-head { color: var(--exx-warning); }
 .wk-card.waiting .wk-dot { background: var(--exx-warning); animation: none; }
+/* Waiting on the room's question above the message box: the head stays quiet, its dot still. */
+.wk-card.asks .wk-dot { background: var(--exx-text-muted); animation: none; }
 .wk-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 280ms cubic-bezier(.2, 0, 0, 1), opacity 200ms; }
 .wk-card[data-open="0"] .wk-body { grid-template-rows: 0fr; opacity: 0; }
 .wk-in { overflow: hidden; min-height: 0; }
@@ -96,16 +98,23 @@ button.wk-head:hover:not(:disabled) { color: var(--exx-text-soft); }
 	animation: wk-rise 200ms cubic-bezier(.2, 0, 0, 1);
 }
 .wk-row-ic { display: inline-flex; flex: none; color: var(--exx-text-muted); }
+/* A row whose words take several lines keeps its icon and mark by the first line: each is as tall as one line of words, its icon in the middle. */
+.wk-row:not(.wk-ask) { align-items: flex-start; }
+.wk-row:not(.wk-ask) > .wk-row-ic, .wk-row:not(.wk-ask) > .wk-mk { height: calc(13.5px * var(--exx-line-height)); align-items: center; }
 .wk-tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wk-tx b { font-weight: 400; color: var(--exx-text); }
 /* A sentence that says why, such as an old hand-off card's, takes the lines it needs rather than being cut. */
 .wk-tx.wk-wrap { white-space: normal; }
+/* On a phone an opened card's rows take the lines they need, as its folded head does, so a row keeps its action and what it acts on. */
+@media (max-width: 760px) {
+	.wk-row .wk-tx { white-space: normal; overflow-wrap: anywhere; }
+}
 /* A command named by itself, in the opened row's command style (.wk-command). The words' space before it is narrower than
    the code's own, so a little margin keeps the verb from reading as pinched against the command. */
 .wk-code { margin-left: 0.15em; font-family: var(--exx-font-mono); font-size: 12px; color: var(--exx-text); }
 button.wk-tx { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 button.wk-tx:hover { color: var(--exx-text); }
-.wk-row[data-s="running"] .wk-tx, .wk-row[data-s="writing"] .wk-tx { color: var(--exx-text-muted); }
+.wk-row[data-s="running"] .wk-tx, .wk-row[data-s="writing"] .wk-tx, .wk-row[data-s="waiting"] .wk-tx { color: var(--exx-text-muted); }
 .wk-row[data-s="denied"] .wk-tx, .wk-row[data-s="denied"] .wk-tx b, .wk-row[data-s="denied"] .wk-code, .wk-row[data-s="stopped"] .wk-tx, .wk-row[data-s="stopped"] .wk-tx b, .wk-row[data-s="stopped"] .wk-code { color: var(--exx-text-muted); }
 .wk-row[data-s="failed"] .wk-row-ic { color: var(--exx-danger); }
 .wk-meta { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -176,28 +185,8 @@ button.wk-tx:hover { color: var(--exx-text); }
 .wk-ask-facts { color: var(--exx-text-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wk-ask-input { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--exx-border); border-radius: var(--exx-radius-control); background: var(--exx-surface-inset); color: var(--exx-text); font: inherit; font-size: 13px; resize: vertical; }
 .wk-ask-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-self: end; }
-.wk-btn {
-	display: inline-flex;
-	align-items: center;
-	gap: 7px;
-	padding: 4px 10px;
-	border: 1px solid var(--exx-border);
-	border-radius: var(--exx-radius-control);
-	background: transparent;
-	color: var(--exx-text-soft);
-	font: inherit;
-	font-size: 13px;
-	cursor: pointer;
-	transition: transform 120ms, background-color 120ms;
-}
-.wk-btn:hover { background: var(--exx-surface-hover); }
-.wk-btn:active { transform: scale(0.95); }
-.wk-btn.primary { border-color: transparent; background: var(--exx-action-primary-bg); color: var(--exx-action-primary-fg); }
-/* Where the row shows no keys (a touch screen, a phone-width window), an answer is a finger's size. */
-@media (hover: none), (max-width: 720px) {
-	.wk-ask .wk-btn { min-height: 40px; padding-inline: 14px; }
-}
-.wk-btn kbd { padding: 1px 5px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font-family: inherit; font-size: 11px; line-height: 1.2; opacity: 0.6; animation: wk-fade 150ms both; }
+/* An answer's key sits after its word, the gap the words of a row keep. */
+.wk-btn kbd { margin-inline-start: 7px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font-family: inherit; font-size: 11px; line-height: 1.2; opacity: 0.7; animation: wk-fade 150ms both; }
 
 /* Thinking with no steps beside it: one line, opening to the whole thought. */
 .wk-thought { display: grid; gap: 2px; animation: wk-rise 200ms cubic-bezier(.2, 0, 0, 1); }
@@ -236,8 +225,17 @@ button.wk-tx:hover { color: var(--exx-text); }
 	.wk-dot, .wk-spin { animation: none; }
 	.wk-card, .wk-row, .wk-thought, .wk-lbl, .wk-out, .wk-ask, .wk-full, .wk-ok, .wk-btn kbd { animation-duration: 120ms; animation-name: wk-fade; }
 	.wk-body, .wk-caret { transition-duration: 120ms; }
-	.wk-btn { transition: none; }
 }
 .wk-out .raw-result, .wk-out .md-result { margin: 0; padding: 0; border: 0; background: none; max-height: none; }
 /* The person started typing after this step asked: their message says no to it. */
 .wk-ask-denies { margin-top: 4px; color: var(--muted); font-size: 12.5px; animation: wk-fade 200ms both; }
+
+/* The lines under a yes stand outside the card, so they stay in sight when it folds. */
+.bubble-row:has(> .box-room-after-lines) { flex-wrap: wrap; }
+.box-room-after-lines { display: grid; gap: 2px; margin-top: 4px; flex-basis: 100%; }
+.box-room-after { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 0 12px; overflow-wrap: anywhere; }
+/* With a touch-sized button a line seldom has room beside it, so each button stands under its own line, and the lines keep apart so it reads as that line's. */
+@media (hover: none), (max-width: 720px) {
+	.box-room-after-lines { gap: 12px; }
+	.box-room-after { flex-direction: column; align-items: flex-start; }
+}

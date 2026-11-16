@@ -27,7 +27,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -235,7 +235,7 @@ try {
 		assert(await connectedAgain() === 0, `a sign-in brings no "Connected again.", it showed ${await connectedAgain()} time(s)`);
 		const composer = page.locator("textarea").first();
 		await composer.fill("Back on GPT.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
 		assert(requests[requests.length - 1]?.model === "gpt-fake", "the conversation continues on its provider");
 
@@ -246,7 +246,7 @@ try {
 		acceptedGptKey = "synthetic-gpt-renewed";
 		const requestsBefore = requests.length;
 		await composer.fill("Still there?");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await banner.waitFor({ timeout: 20000 });
 		assert((await banner.innerText()).includes("Fake GPT did not accept the saved key. Replace the key to continue this conversation.") && (await banner.getByRole("button", { name: "Replace key" }).count()) === 1 && (await banner.getByRole("button", { name: "Choose another model" }).count()) === 1, `a turn that fails on the sign-in shows the one notice, got ${JSON.stringify(await banner.innerText())}`);
 		assert((await page.getByText(/could not respond|Incorrect API key/).count()) === 0, "no raw error on the face");
@@ -262,7 +262,7 @@ try {
 		// The failed turn has settled on the server before the person sends
 		// again (signing in takes a person longer than that).
 		await waitUntil(async () => (await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/status`)).json())?.activeThread?.inFlight === false, "the failed turn settled");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from gpt-fake.").nth(1).waitFor({ timeout: 20000 });
 		assert(requests.length === requestsBefore + 1, "the message was answered on the new sign-in");
 		const askedAgain = requests[requests.length - 1]!.userTexts.filter((text) => text.includes("Still there?")).length;
@@ -277,7 +277,7 @@ try {
 			acceptedGptKey = "synthetic-gpt-renewed-again";
 			const keyComposer = keyPage.locator("textarea").first();
 			await keyComposer.fill("Refused again?");
-			await keyComposer.press("Enter");
+			await sendFromBox(keyPage);
 			await keyBanner.waitFor({ timeout: 20000 });
 			const words = await keyBanner.innerText();
 			assert(words.includes("Fake GPT did not accept the saved key. Replace the key to continue this conversation.") && (await keyBanner.getByRole("button", { name: "Replace key" }).count()) === 1, `without the sign-in status, a turn refused for its key still says so with Replace key, got ${JSON.stringify(words)}`);

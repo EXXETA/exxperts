@@ -22,7 +22,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import type { GoogleThinkingLevel } from "./google-shared.js";
+import { type GoogleThinkingLevel, getGemini4ThinkingLevel, isGemini4Model } from "./google-shared.js";
 import {
 	convertMessages,
 	convertTools,
@@ -296,6 +296,13 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
 	const effort = (clampedReasoning === "off" ? "high" : clampedReasoning) as ClampedThinkingLevel;
 	const googleModel = model as Model<"google-generative-ai">;
 
+	if (isGemini4Model(googleModel)) {
+		return streamGoogle(model, context, {
+			...base,
+			thinking: { enabled: true, level: getGemini4ThinkingLevel(clampedReasoning) },
+		} satisfies GoogleOptions);
+	}
+
 	if (isGemini3ProModel(googleModel) || isGemini3FlashModel(googleModel) || isGemma4Model(googleModel)) {
 		return streamGoogle(model, context, {
 			...base,
@@ -421,6 +428,9 @@ function getDisabledThinkingConfig(model: Model<"google-generative-ai">): Thinki
 	}
 	if (isGemma4Model(model)) {
 		return { thinkingLevel: "MINIMAL" as any };
+	}
+	if (isGemini4Model(model)) {
+		return { thinkingLevel: "LOW" as any };
 	}
 
 	// Gemini 2.x supports disabling via thinkingBudget = 0.

@@ -11,7 +11,7 @@ interface Props {
 	/** The specialist's summary — the done-card's "Details" disclosure, relocated
 	 * here when the card was retired. */
 	summary?: string;
-	/** Save…: export a snapshot to a folder the user picks. Absent = not saveable (legacy store rows). */
+	/** Save: export a snapshot to a folder the user picks. Absent = not saveable (legacy store rows). */
 	onSaveTo?: () => void;
 	/** Orphan rows only (contract §4): manual per-task delete of the files. */
 	onDelete?: () => void;
@@ -24,7 +24,7 @@ export function fileDownloadUrl(routeUrl: string): string {
 
 /**
  * The viewer's action footer: the quiet take-away actions, right-aligned.
- * Download and Save… are SNAPSHOTS (the Google-Docs export rule: nothing
+ * Download and Save are SNAPSHOTS (the Google-Docs export rule: nothing
  * syncs back), then Details. Changes to a file are asked for in the chat:
  * specialists, which once revised a file from here, are switched off.
  * Add to conversation and Save to workspace are gone: the room has eyes on
@@ -33,7 +33,7 @@ export function fileDownloadUrl(routeUrl: string): string {
  * header, where chrome belongs.
  */
 export function AssetViewerFooter({ taskId, artifact, roomId, summary, onSaveTo, onDelete }: Props) {
-	// Save… opens a native folder dialog on the computer; hidden for remote
+	// Save opens a native folder dialog on the computer; hidden for remote
 	// devices (Download remains the take-away there).
 	const remoteClient = useRemoteClientContext();
 	const [detailsOpen, setDetailsOpen] = useState(false);
@@ -55,21 +55,21 @@ export function AssetViewerFooter({ taskId, artifact, roomId, summary, onSaveTo,
 		<div className="asset-viewer-footer">
 			<div className="asset-viewer-footer-row">
 				<span className="asset-viewer-footer-spacer" aria-hidden="true" />
-				<button type="button" className="artifact-viewer-quiet" disabled={!downloadUrl} onClick={downloadSnapshot} title="Download a snapshot of this file to your Downloads folder">
-					<DownloadIcon size={14} /> Download
+				<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm artifact-viewer-quiet" disabled={!downloadUrl} onClick={downloadSnapshot} title="Download a snapshot of this file to your Downloads folder">
+					<DownloadIcon size={14} />Download
 				</button>
 				{onSaveTo && showsComputerOnlyControls(remoteClient) && (
-					<button type="button" className="artifact-viewer-quiet" onClick={onSaveTo} title="Save a snapshot of this file into a folder you pick">
-						<SaveIcon size={14} /> Save…
+					<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm artifact-viewer-quiet" onClick={onSaveTo} title="Save a snapshot of this file into a folder you pick">
+						<SaveIcon size={14} />Save
 					</button>
 				)}
 				{onDelete && (
-					<button type="button" className="artifact-viewer-quiet asset-viewer-delete" onClick={onDelete} title="Delete this task's files from the store">
+					<button type="button" className="rs-btn rs-btn-danger rs-btn-sm asset-viewer-delete" onClick={onDelete} title="Delete this task's files from the store">
 						Delete
 					</button>
 				)}
 				{summary && (
-					<button type="button" className="artifact-viewer-quiet asset-viewer-details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)} title="What the specialist said it made">
+					<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm asset-viewer-details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)} title="What the specialist said it made">
 						{detailsOpen ? "Hide details" : "Details"}
 					</button>
 				)}

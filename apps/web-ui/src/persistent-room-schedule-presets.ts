@@ -178,13 +178,18 @@ export function scheduleCanRun(job: Pick<PersistentRoomScheduleJob, "type" | "sc
 	return job.type !== "cron" || detectSimpleDailyCronSchedule(job.type, job.schedule) !== null || detectWeeklyCronSchedule(job.type, job.schedule) !== null;
 }
 
-/** "Every Monday and Friday at 08:30": the weekly draft's days and time, without an ending. */
-export function formatWeeklyDaysAtTime(weekly: ScheduleWeeklyRecurrenceDraft): string | null {
+/** "every Monday and Friday at 08:30": the weekly draft's days and time, the words every weekly sentence ends its own way. */
+function weeklyDaysAtTime(weekly: ScheduleWeeklyRecurrenceDraft): string | null {
 	const days = normalizeWeeklyDays(weekly.days);
 	const time = formatNativeTimeSummary(weekly.time);
-	if (!days || !time) return null;
-	const phrase = describeDaySelection(days);
-	return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)} at ${time}`;
+	return days && time ? `${describeDaySelection(days)} at ${time}` : null;
+}
+
+/** The weekly row's sentence: it names a shared server's time zone, and on the desktop, where there is none, this computer's time. */
+export function formatWeeklyTimeLine(weekly: ScheduleWeeklyRecurrenceDraft, serverZone: string | null): string {
+	const phrase = weeklyDaysAtTime(weekly);
+	if (!phrase) return "Choose the days this task should run.";
+	return serverZone ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}, in ${serverZone} time.` : `Runs ${phrase}, in this computer's time.`;
 }
 
 export function generateOneTimeInSchedule(countValue: string, unit: ScheduleOneTimeDelayUnit): string | null {
@@ -366,10 +371,8 @@ export function formatScheduleRecurrenceDraftSummary(draft: ScheduleRecurrenceDr
 			return time ? `Runs every day at ${time}.` : null;
 		}
 		case "weekly": {
-			const days = normalizeWeeklyDays(draft.weekly.days);
-			const time = formatNativeTimeSummary(draft.weekly.time);
-			if (!days || !time) return null;
-			return `Runs ${describeDaySelection(days)} at ${time}.`;
+			const phrase = weeklyDaysAtTime(draft.weekly);
+			return phrase ? `Runs ${phrase}.` : null;
 		}
 		case "oneTime": {
 			if (draft.oneTime.mode === "in") {

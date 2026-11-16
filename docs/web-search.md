@@ -36,6 +36,11 @@ which is also the name of the app's own tool, and sending both in one request
 is ambiguous at best. So when a room searches through its provider, the app's
 own `web_search` stands down for that room. `fetch_url` is unaffected either
 way: opening a page you handed the room is a different job from finding one.
+It asks before it opens an address you didn't give the room, unless it is a
+search result, on a site you named or already allowed in that answer, or on a
+site listed for the room. In a room on Auto it opens any public address without
+asking ([Folders, commands and protection](workspace-and-bash.md#websites)).
+A message with an @ in it, such as an e-mail address, names no site.
 
 **Privacy note:** the search runs on the provider's infrastructure, so the
 model's search terms are handled by the provider under the same agreement as

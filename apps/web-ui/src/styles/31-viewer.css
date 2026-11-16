@@ -87,68 +87,6 @@
 	align-items: center;
 	gap: var(--exx-sp-2);
 }
-.artifact-viewer-action {
-	background: transparent;
-	border: 1px solid var(--border);
-	color: var(--fg);
-	border-radius: var(--exx-radius-sm);
-	padding: 5px 11px;
-	font-size: 12px;
-	font-weight: 700;
-	white-space: nowrap;
-	cursor: pointer;
-}
-.artifact-viewer-action:hover:not(:disabled),
-.artifact-viewer-action:focus-visible:not(:disabled) {
-	background: var(--fg);
-	color: var(--bg);
-	border-color: var(--fg);
-	outline: none;
-}
-.artifact-viewer-action-primary {
-	background: var(--exx-action-primary-bg);
-	color: var(--exx-action-primary-fg);
-	border-color: var(--exx-action-primary-bg);
-}
-.artifact-viewer-action-primary:hover:not(:disabled),
-.artifact-viewer-action-primary:focus-visible:not(:disabled) {
-	/* Brand Lila on hover ties the pane's one primary to the accent; the ink
-	 * is themed with the accent since light mode darkens the Lila. */
-	background: var(--exx-plan);
-	color: var(--exx-plan-ink);
-	border-color: var(--exx-plan);
-}
-.artifact-viewer-action:disabled {
-	opacity: 0.5;
-	cursor: default;
-}
-/* Quiet footer/header actions: one primary
- * per state, everything else steps back until hover. Same affordance language
- * as the room-settings rs-quiet controls. */
-.artifact-viewer-quiet {
-	background: transparent;
-	border: 1px solid transparent;
-	color: var(--muted);
-	border-radius: var(--exx-radius-sm);
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	padding: 5px 11px;
-	font-size: 12px;
-	font-weight: 600;
-	white-space: nowrap;
-	cursor: pointer;
-}
-.artifact-viewer-quiet:hover:not(:disabled),
-.artifact-viewer-quiet:focus-visible:not(:disabled) {
-	color: var(--fg);
-	border-color: var(--border);
-	background: var(--exx-surface, transparent);
-}
-.artifact-viewer-quiet:disabled {
-	opacity: 0.5;
-	cursor: default;
-}
 .asset-viewer-details {
 	margin-left: auto;
 }
@@ -166,8 +104,8 @@
 .asset-viewer-delete:has(+ .asset-viewer-details) {
 	margin-left: 0;
 }
-.artifact-viewer-icon,
-.artifact-viewer-close {
+/* The maximize toggle (aria-pressed) stays out of the button family. */
+.artifact-viewer-icon {
 	background: transparent;
 	border: 1px solid transparent;
 	color: var(--muted);
@@ -181,9 +119,7 @@
 	cursor: pointer;
 }
 .artifact-viewer-icon:hover,
-.artifact-viewer-icon:focus-visible,
-.artifact-viewer-close:hover,
-.artifact-viewer-close:focus-visible {
+.artifact-viewer-icon:focus-visible {
 	color: var(--fg);
 	border-color: var(--border);
 	background: var(--exx-surface, transparent);
@@ -322,6 +258,9 @@
 	border: 1px solid var(--border);
 	box-shadow: var(--exx-shadow-popover);
 }
+/* The action ends the toast's line on its right edge (--exx-btn-inset-sm), as
+   far as the toast's 16 px padding leaves its 4 px focus ring. */
+.room-toast > .room-toast-action { margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 16px - 4px)); }
 .room-toast.success { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
 .room-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
 /* The two lines are a deliberate hierarchy (fact, then the nuance the fact
@@ -337,18 +276,6 @@
 	color: var(--muted);
 	font-size: 12px;
 }
-.room-toast-action {
-	border: none;
-	background: none;
-	padding: 2px 4px;
-	font: 600 13px/1 inherit;
-	color: var(--exx-plan);
-	cursor: pointer;
-	border-radius: 6px;
-	white-space: nowrap;
-}
-.room-toast-action:hover { text-decoration: underline; }
-.room-toast-action:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
 
 /* The run view (the viewer chrome's RUNNING state): the live mono stream,
    pinned to the newest line by the component. */
@@ -390,3 +317,19 @@
 	overflow-y: auto;
 }
 
+
+/* The viewer's and the Attachments panel's head keep their marks where they
+   were at a finger's 44 px: the closer (28 px) reaches past the head's end,
+   the back arrow (30 px) past its start, and neither pushes the head taller. */
+@media (hover: none), (max-width: 760px) {
+	.artifact-viewer-close {
+		--touch-pull: calc((28px - var(--exx-btn-h)) / 2);
+		margin-block: var(--touch-pull);
+		margin-right: var(--touch-pull);
+	}
+	.artifact-viewer-back {
+		--touch-pull: calc((30px - var(--exx-btn-h)) / 2);
+		margin-block: var(--touch-pull);
+		margin-left: var(--touch-pull);
+	}
+}

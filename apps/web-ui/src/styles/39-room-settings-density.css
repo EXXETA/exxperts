@@ -42,7 +42,7 @@
    app's filled-selection treatment from the base rules. */
 .rs-shell .room-schedules-day-chip {
 	background: transparent;
-	font-weight: 500;
+	font-weight: 400;
 }
 .rs-shell .room-schedules-day-chip.active {
 	background: var(--fg);

@@ -21,19 +21,10 @@
 .workspaces-room-header .persistent-agent-header h2 {
 	font-size: 20px;
 }
-.workspaces-room-body,
-.workspaces-policy-summary,
-.workspaces-default-form {
+.workspaces-room-body {
 	display: flex;
-	gap: 8px;
-}
-.workspaces-room-body,
-.workspaces-policy-summary,
-.workspaces-default-form {
 	flex-direction: column;
-}
-.workspaces-policy-summary {
-	gap: 6px;
+	gap: 8px;
 }
 .workspaces-root-title {
 	display: grid;
@@ -53,68 +44,6 @@
 	margin: 0;
 }
 .workspaces-root-title span {
-}
-/* The folder row of the workspace editor: the box takes the row's width on
-   its own line under Folder and its sentence, so a long path shows as much as
-   the pane allows; the buttons sit at its end, and a line about the folder
-   sits under the box and its buttons, as wide as they are together. */
-.settings-row:has(> .workspace-folder-field) {
-	flex-wrap: wrap;
-	row-gap: 10px;
-}
-.workspace-folder-field {
-	flex: 1 0 100%;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
-}
-.workspace-folder-controls {
-	min-width: 0;
-}
-/* The line takes the width of the box and buttons, never widens them. */
-.workspace-folder-line {
-	width: 0;
-	min-width: 100%;
-	text-wrap: pretty;
-	overflow-wrap: anywhere;
-}
-.workspace-folder-path-input {
-	flex: 1 1 220px;
-	min-width: 140px;
-	font-family: var(--exx-font-mono, monospace);
-	font-size: 12.5px;
-}
-.workspace-unsaved-hint {
-	color: var(--warning);
-	font-size: 12px;
-	font-weight: 600;
-}
-/* The workspace pane's buttons, with the line about them right under them:
-   a wait in the muted colour, a refusal in red. The line wraps at the
-   buttons' width instead of widening the header. */
-.workspace-buttons {
-	display: flex;
-	flex-direction: column;
-	align-items: flex-end;
-	gap: 6px;
-}
-.workspace-buttons-row {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-.workspace-buttons-line {
-	width: 0;
-	min-width: 100%;
-	color: var(--muted);
-	font-size: 13px;
-	line-height: 1.45;
-	text-align: right;
-	text-wrap: balance;
-}
-.workspace-buttons-refusal {
-	color: var(--error);
 }
 .workspaces-tool-switch {
 	appearance: none;
@@ -163,9 +92,6 @@
 	border-color: var(--border-soft);
 	box-shadow: 0 1px 0 color-mix(in srgb, var(--fg) 5%, transparent);
 }
-:root[data-theme="light"] .workspaces-page .workspaces-default-form {
-	border-top-color: var(--border-soft);
-}
 :root[data-theme="light"] .workspaces-page .launcher-path-input {
 	background: var(--bg-2);
 	border-color: var(--border-soft);
@@ -176,7 +102,7 @@
 	font-size: 12px;
 	color: var(--muted);
 	margin: 0;
-	font-weight: 500;
+	font-weight: 400;
 }
 /* A path or a folder named in a row, in the code face as a quiet chip. */
 .settings-chip {
@@ -211,13 +137,13 @@
 }
 /* Native radios render as dark filled discs in this theme, which reads as a
    third state beside the chosen one: empty is empty, chosen is a dot. */
-.settings-row-choice input[type="radio"] {
+:is(.settings-row-choice, .connector-form-kind) input[type="radio"] {
 	appearance: none;
 	-webkit-appearance: none;
 	position: relative;
 	width: 16px;
 	height: 16px;
-	/* on the label's first line, whatever the subline below does */
+	/* on the label's first line, whatever the subline below does; the connector form's centred row resets it */
 	margin: 3px 0 0;
 	border-radius: 50%;
 	border: 1.5px solid color-mix(in srgb, var(--fg) 38%, transparent);
@@ -225,21 +151,21 @@
 	flex-shrink: 0;
 	cursor: pointer;
 }
-.settings-row-choice input[type="radio"]:checked {
+:is(.settings-row-choice, .connector-form-kind) input[type="radio"]:checked {
 	border-color: var(--fg);
 }
-.settings-row-choice input[type="radio"]:checked::after {
+:is(.settings-row-choice, .connector-form-kind) input[type="radio"]:checked::after {
 	content: "";
 	position: absolute;
 	inset: 3px;
 	border-radius: 50%;
 	background: var(--fg);
 }
-.settings-row-choice input[type="radio"]:focus-visible {
+:is(.settings-row-choice, .connector-form-kind) input[type="radio"]:focus-visible {
 	outline: 2px solid var(--exx-focus);
 	outline-offset: 2px;
 }
-.settings-row-choice input[type="radio"]:disabled {
+:is(.settings-row-choice, .connector-form-kind) input[type="radio"]:disabled {
 	cursor: default;
 	opacity: 0.6;
 }
@@ -418,26 +344,9 @@
 	gap: 10px;
 	padding-top: 2px;
 }
-.create-room-actions .landing-action,
-.create-room-section .create-room-actions .inline-action,
-.create-room-card .create-room-actions .inline-action {
-	font-size: 12px;
-	line-height: 1;
-	padding: 11px 16px;
-}
+/* Wide enough for "Creating…", so the row does not jump on a click. */
 .create-room-actions .landing-action {
 	min-width: 132px;
-	text-align: center;
-}
-.create-room-section .create-room-actions .inline-action,
-.create-room-card .create-room-actions .inline-action {
-	color: var(--muted);
-}
-.create-room-section .create-room-actions .inline-action:hover,
-.create-room-section .create-room-actions .inline-action:focus-visible,
-.create-room-card .create-room-actions .inline-action:hover,
-.create-room-card .create-room-actions .inline-action:focus-visible {
-	color: var(--fg);
 }
 .create-room-open-action {
 	margin-top: 2px;
@@ -599,11 +508,6 @@
 }
 .ai-setup-command-block .cli-copy-action {
 	min-width: min(360px, 100%);
-}
-.ai-setup-section .inline-action {
-	font-size: 11px;
-	line-height: 1;
-	padding: 8px 12px;
 }
 .ai-setup-advanced {
 	display: grid;

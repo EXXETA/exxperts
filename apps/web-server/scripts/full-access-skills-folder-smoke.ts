@@ -10,13 +10,13 @@ import { waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(50);
 
-// A live Full access room with the terminal on reads and writes the person's
-// skills folder again, through the file tools the live session really gets:
-// a real server, a synthetic gateway that plays the model and calls the
+// A room reads the folder of a skill the person approved to run, and nothing
+// else of the skills folder, through the file tools the live session really
+// gets: a real server, a synthetic gateway that plays the model and calls the
 // tools, and each tool's result read back from the next completion request.
-// The rest of the app's data stays closed, provenance.json stays unwritable,
-// the version pins still catch a room's edits, and bash off, a bounded room,
-// a background run and a data profile behave as they must. Throwaway HOME.
+// No room changes a skill, the rest of the app's data stays closed, a changed
+// skill closes again, and bash off, a bounded room, a background run and a
+// data profile follow the same rule. Throwaway HOME.
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -31,15 +31,13 @@ const repoRoot = path.resolve(webServerDir, "..", "..");
 // real ones, as they can on a person's machine.
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skills-folder-"));
 const home = path.join(tempRoot, "home");
-const workspaceRoot = path.join(tempRoot, "workspace");
+const workspaceRoot = path.join(home, "workspace");
 fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
 
 const REFUSED = "so rooms don't open it";
 const READ_ONLY = "can be read but not changed by rooms";
-const SKILLS_FOLDER_CLOSED = "is in the person's own skills folder, which opens to this room only while its terminal (Bash) is on. Tell the person; they can turn Bash on for this room in Room settings, Workspace, Edit workspace.";
-const SKILLS_FOLDER_READ_ONLY = "is in the person's own skills folder: rooms can read it only while Bash is on, and never change it. Tell the person.";
-const SKILLS_FOLDER_BACKGROUND = "is in the person's own skills folder, which a background run can't open. Tell the person.";
-const TERMINAL_ADVICE = "terminal command";
+const LINK = "this room doesn't follow links";
+const OUTSIDE = "is outside this room's folder and the folders allowed for it";
 const REFERENCE = "REFERENCE-NEEDLE: the guide's reference text.";
 const OTHER = "OTHER-NEEDLE: a second skill's notes.";
 const SECRET = "SECRET-NEEDLE";
@@ -288,11 +286,14 @@ class LiveServer {
 }
 
 function opened(result: string, needle: string, what: string): void {
-	assert(!result.includes(REFUSED) && result.includes(needle), `${what} must open, got: ${result.slice(0, 500)}`);
+	assert(!result.includes(REFUSED) && !result.includes(OUTSIDE) && result.includes(needle), `${what} must open, got: ${result.slice(0, 500)}`);
 }
 
+// Outside the fence, the app's data says it's closed; a skill folder that isn't
+// approved is the app's data. No refusal offers a command.
 function refused(result: string, what: string): void {
-	assert(result.includes(REFUSED) || result.includes(READ_ONLY), `${what} must be refused by the floor, got: ${result.slice(0, 500)}`);
+	assert(result.includes(REFUSED) || result.includes(READ_ONLY) || result.includes(LINK) || result.includes(OUTSIDE), `${what} must be refused, got: ${result.slice(0, 500)}`);
+	assert(!/command/i.test(result) && !result.includes(REFERENCE) && !result.includes(OTHER) && !result.includes(AUTH), `${what}: the refusal must offer no command and show nothing, got: ${result.slice(0, 500)}`);
 }
 
 // A secret name can be stopped earlier, by the content policy, before the floor.
@@ -334,179 +335,160 @@ try {
 	const approved = await server.skillAction(room, "approve-execution", "guide");
 	assert((approved?.skills ?? []).find((s: any) => s.name === "guide")?.executeState === "approved", "the guide skill must report its execution approved");
 
-	// 1. Reading: every path form that lands in the skills folder opens; the
-	// first call is the one origin/main refuses.
+	// 1. Reading the approved skill's folder: every path form that lands in it
+	// opens; the folder of a skill that isn't approved, and the skills folder
+	// around them, don't.
 	const readCalls = [
 		read(path.join(guide, "reference.md")),
 		read("~/.exxperts/agent/skills/guide/reference.md"),
 		read(path.relative(workspaceRoot, path.join(guide, "reference.md"))),
 		read(literal(main.store, "guidebook", "..", "guide", "reference.md")),
 		read(path.join(fs.realpathSync.native(guide), "reference.md")),
-		read(path.join(main.store, "guidebook", "notes.md")),
 		read(path.join(guide, "provenance.json")),
 		ls(guide),
-		ls(main.store),
 		find("*.md", guide),
-		grep("NEEDLE", main.store),
+		grep("NEEDLE", guide),
 		readSkill("guide"),
+		read(path.join(main.store, "guidebook", "notes.md")),
+		ls(main.store),
+		find("*.md", main.store),
+		grep("NEEDLE", main.store),
 	];
 	const r1 = await server.runTurn(room, "conv-read", readCalls);
-	opened(r1[0], REFERENCE, "reading a skill's file by its absolute path");
+	opened(r1[0], REFERENCE, "reading an approved skill's file by its absolute path");
 	opened(r1[1], REFERENCE, "the ~ form");
-	opened(r1[2], REFERENCE, "a path relative to the session's folder");
-	opened(r1[3], REFERENCE, "a .. form that lands inside the skills folder");
+	opened(r1[2], REFERENCE, "a path relative to the room's folder");
+	opened(r1[3], REFERENCE, "a .. form that lands inside the approved skill's folder");
 	opened(r1[4], REFERENCE, "the folder's real path");
-	opened(r1[5], OTHER, "another skill's file");
-	opened(r1[6], "\"source\"", "reading provenance.json");
-	opened(r1[7], "reference.md", "ls of a skill folder");
-	assert(!r1[7].includes(".env"), `ls must leave out the secret file, got: ${r1[7]}`);
-	opened(r1[8], "guidebook", "ls of the skills folder");
-	opened(r1[9], "reference.md", "find started inside a skill folder");
-	opened(r1[10], REFERENCE, "grep started at the skills folder");
-	assert(r1[10].includes(OTHER), `grep over the skills folder must see every skill, got: ${r1[10]}`);
-	assert(!r1[10].includes(SECRET) && !r1[10].includes(AUTH), `grep must leave out secrets and the auth file, got: ${r1[10]}`);
-	assert(r1[11].includes(guide) && r1[11].includes("Read them with the read tool"), `read_skill must hand over the approved folder and say it can be read, got: ${r1[11].slice(-900)}`);
+	opened(r1[5], "\"source\"", "reading provenance.json");
+	opened(r1[6], "reference.md", "ls of the approved skill's folder");
+	assert(!r1[6].includes(".env"), `ls must leave out the secret file, got: ${r1[6]}`);
+	opened(r1[7], "reference.md", "find started inside the approved skill's folder");
+	opened(r1[8], REFERENCE, "grep started at the approved skill's folder");
+	assert(!r1[8].includes(SECRET) && !r1[8].includes(AUTH), `grep must leave out secrets and the auth file, got: ${r1[8]}`);
+	assert(r1[9].includes(guide) && r1[9].includes("Read them with the read tool"), `read_skill must hand over the approved folder and say it can be read, got: ${r1[9].slice(-900)}`);
+	refused(r1[10], "a skill that isn't approved");
+	refused(r1[11], "ls of the skills folder");
+	refused(r1[12], "find over the skills folder");
+	refused(r1[13], "grep over the skills folder");
 
-	// 2. What stays closed in the same live session.
+	// 2. What stays closed in the same live session: no room changes a skill.
 	const closedCalls = [
 		read(path.join(guide, ".env")),
 		read(literal(main.store, "..", "auth.json")),
 		read(path.join(main.agentDir, "auth.json")),
 		read(path.join(main.appRoot, "persistent-agent-ai-profile.json")),
-		read(path.join(home, ".EXXPERTS", "agent", "skills", "guide", "reference.md")),
-		read(path.join(path.dirname(main.store), "Skills", "guide", "reference.md")),
 		find("*.md", home),
 		grep("NEEDLE", home),
+		write(path.join(guide, "reference.md"), "changed\n"),
+		edit(path.join(guide, "scripts", "hello.sh"), "echo hello", "echo changed"),
 		write(path.join(guide, "provenance.json"), "{}\n"),
-		edit(path.join(guide, "provenance.json"), "upload", "local"),
-		write(path.join(main.store, "made-here", "provenance.json"), "{}\n"),
+		write(path.join(main.store, "made-here", "SKILL.md"), "---\nname: made-here\ndescription: Written by a room\n---\n\nHello.\n"),
 		write(literal(main.store, "..", "auth.json"), "{}\n"),
-		write(path.join(guide, ".git"), "gitdir: /elsewhere\n"),
-		write(literal(guide, "provenance.json", "."), "{}\n"),
 		write(main.store, "x\n"),
-		find("**/.exxperts/**/*.md", home),
-		{ name: "grep", args: { pattern: "NEEDLE", path: home, glob: "**/.exxperts/**" } },
 		...(linksAllowed ? [read(path.join(guide, "link-to-auth")), write(path.join(guide, "link-to-auth"), "{}\n")] : []),
 	];
 	const r2 = await server.runTurn(room, "conv-closed", closedCalls);
-	secretRefused(r2[0], "a secret file inside a skill folder");
+	secretRefused(r2[0], "a secret file inside the approved skill's folder");
 	refused(r2[1], "skills/../auth.json");
 	refused(r2[2], "the auth file beside the skills folder");
 	refused(r2[3], "the rest of the app's data");
-	refused(r2[4], "the path to the skills folder spelled in another case");
-	refused(r2[5], "the skills folder spelled in another case");
-	assert(!r2[6].includes("reference.md") && !r2[6].includes("notes.md"), `find started above the app's data must leave it out, got: ${r2[6].slice(0, 500)}`);
-	assert(!r2[7].includes(REFERENCE) && !r2[7].includes(AUTH), `grep started above the app's data must leave it out, got: ${r2[7].slice(0, 500)}`);
+	refused(r2[4], "find started above the room's folder");
+	refused(r2[5], "grep started above the room's folder");
+	refused(r2[6], "writing a file in the approved skill's folder");
+	refused(r2[7], "editing the approved skill's script");
 	refused(r2[8], "writing a skill's provenance.json");
-	refused(r2[9], "editing a skill's provenance.json");
-	refused(r2[10], "writing provenance.json into a new skill");
-	refused(r2[11], "writing skills/../auth.json");
-	assert(r2[11].includes(TERMINAL_ADVICE), `with the terminal on a refusal may offer a command the person approves, got: ${r2[11].slice(0, 500)}`);
-	refused(r2[12], "writing a .git file into a skill folder");
-	refused(r2[13], "writing provenance.json with a trailing .");
-	refused(r2[14], "writing the skills folder itself");
-	assert(!r2[15].includes("reference.md") && !r2[15].includes("notes.md"), `a find glob naming the app's data from above must still leave it out, got: ${r2[15].slice(0, 500)}`);
-	assert(!r2[16].includes(REFERENCE) && !r2[16].includes(AUTH) && !r2[16].includes(SECRET), `a grep glob naming the app's data from above must still leave it out, got: ${r2[16].slice(0, 500)}`);
+	refused(r2[9], "writing a new skill");
+	refused(r2[10], "writing skills/../auth.json");
+	refused(r2[11], "writing the skills folder itself");
 	if (linksAllowed) {
-		refused(r2[17], "a link inside a skill folder that points at the auth file");
-		refused(r2[18], "writing through that link");
+		refused(r2[12], "a link inside the approved skill's folder that points at the auth file");
+		refused(r2[13], "writing through that link");
 	}
 	assert(fs.readFileSync(path.join(main.agentDir, "auth.json"), "utf8").includes(AUTH), "the auth file must be untouched");
-	assert(!fs.existsSync(path.join(main.store, "made-here", "provenance.json")), "no provenance.json may be written by a room");
+	assert(fs.readFileSync(path.join(guide, "reference.md"), "utf8") === `${REFERENCE}\n` && fs.readFileSync(path.join(guide, "scripts", "hello.sh"), "utf8") === "echo hello\n", "the approved skill's files must be untouched");
+	assert(!fs.existsSync(path.join(main.store, "made-here")), "no room may write a skill");
 	const shortGuide = shortName(guide);
 	if (shortGuide) {
 		const [short] = await server.runTurn(room, "conv-short", [read(path.join(shortGuide, "reference.md"))]);
-		refused(short, "the folder's 8.3 short name");
+		opened(short, REFERENCE, "the folder's 8.3 short name, which names the same folder");
 	} else {
 		console.log(process.platform === "win32" ? "SKIPPED: the 8.3 case (this volume has no short names)" : "SKIPPED: the 8.3 case (short names exist only on Windows)");
 	}
 
-	// 3. Writing opens, and the version pins catch what a room changed: a new
-	// script voids the run approval, a new SKILL.md needs the person's review.
-	const writeCalls = [
-		write(path.join(main.store, "made-here", "SKILL.md"), "---\nname: made-here\ndescription: Written by a room\n---\n\nHello.\n"),
-		edit(path.join(guide, "scripts", "hello.sh"), "echo hello", "echo changed"),
-		readSkill("guide"),
-		edit(path.join(guide, "SKILL.md"), "then run scripts/hello.sh.", "then run scripts/hello.sh twice."),
-		readSkill("guide"),
-	];
-	const r3 = await server.runTurn(room, "conv-write", writeCalls);
-	assert(!r3[0].includes(REFUSED) && fs.existsSync(path.join(main.store, "made-here", "SKILL.md")), `writing a new skill must open, got: ${r3[0].slice(0, 300)}`);
-	assert(!r3[1].includes(REFUSED) && fs.readFileSync(path.join(guide, "scripts", "hello.sh"), "utf8").includes("changed"), `editing a skill's script must open, got: ${r3[1].slice(0, 300)}`);
-	assert(r3[2].includes("Read reference.md") && !r3[2].includes(guide), `a changed script must void the run approval, got: ${r3[2].slice(-600)}`);
-	assert(!r3[3].includes(REFUSED) && fs.readFileSync(path.join(guide, "SKILL.md"), "utf8").includes("twice"), `editing a skill's SKILL.md must open, got: ${r3[3].slice(0, 300)}`);
-	assert(r3[4].includes("changed since the user enabled it") && !r3[4].includes("twice"), `a changed SKILL.md must need review, got: ${r3[4].slice(0, 400)}`);
-	assert(!fs.existsSync(path.join(main.store, "made-here", "provenance.json")), "a skill a room wrote must have no provenance");
-	const library = await server.json("/api/skills");
-	assert(library.status === 200 && Array.isArray(library.body), `the Skills list: expected 200 and a list, got ${library.status}`);
-	assert(library.body.some((skill: any) => skill?.name === "made-here"), `a skill a room wrote must appear in the Skills list, got: ${JSON.stringify(library.body.map((skill: any) => skill?.name))}`);
-
-	// 4. Closed again on the next call once the terminal is off, and never
-	// open in a bounded room.
+	// 3. The terminal doesn't decide it: with Bash off the approved folder still
+	// opens for reading only. A bounded room follows the same rule.
 	await server.setWorkspace(room, "localFiles", false);
-	const r4 = await server.runTurn(room, "conv-bash-off", [read(path.join(guide, "reference.md")), write(path.join(main.store, "made-off", "SKILL.md"), "x\n"), ls(main.store), read(path.join(main.agentDir, "auth.json")), write(path.join(guide, "provenance.json"), "{}\n"), read(path.join(guide, "server.key")), write(main.store, "x\n"), write(path.join(guide, ".mcp.json"), "{}\n"), write(path.join(guide, ".husky", "pre-commit"), "x\n")]);
-	// The skills folder says it opens with the terminal on; nothing offers a command the room cannot run.
-	for (const [index, what] of ["reading", "writing", "ls"].entries()) {
-		assert(r4[index].includes(SKILLS_FOLDER_CLOSED) && !r4[index].includes(TERMINAL_ADVICE), `${what} the skills folder with the terminal off must say it opens with Bash on, got: ${r4[index].slice(0, 500)}`);
-	}
-	assert(r4[3].includes(REFUSED) && !r4[3].includes(TERMINAL_ADVICE) && !r4[3].includes(AUTH), `the app's data with the terminal off is refused with no command offered, got: ${r4[3].slice(0, 500)}`);
-	// What stays unwritable with the terminal on says it opens for reading only then.
-	assert(r4[4].includes(SKILLS_FOLDER_READ_ONLY) && !r4[4].includes(TERMINAL_ADVICE), `a skill's provenance.json with the terminal off says it can be read only with Bash on and never changed, got: ${r4[4].slice(0, 500)}`);
-	assert(r4[5].includes(REFUSED) && !r4[5].includes(SKILLS_FOLDER_CLOSED) && !r4[5].includes(TERMINAL_ADVICE), `a secret file in a skill with the terminal off says it stays closed, got: ${r4[5].slice(0, 500)}`);
-	for (const [index, what] of [[6, "the skills folder itself"], [7, "a skill's .mcp.json"], [8, "a skill's .husky hook"]] as const) {
-		assert(r4[index].includes(SKILLS_FOLDER_READ_ONLY) && !r4[index].includes(TERMINAL_ADVICE), `writing ${what} with the terminal off says it can be read only with Bash on and never changed, got: ${r4[index].slice(0, 500)}`);
-	}
-	assert(!fs.existsSync(path.join(main.store, "made-off")), "nothing may be written with the terminal off");
+	const r3 = await server.runTurn(room, "conv-bash-off", [read(path.join(guide, "reference.md")), write(path.join(guide, "reference.md"), "x\n"), read(path.join(main.store, "guidebook", "notes.md"))]);
+	opened(r3[0], REFERENCE, "the approved skill's folder with Bash off");
+	refused(r3[1], "writing the approved skill's folder with Bash off");
+	refused(r3[2], "a skill that isn't approved, with Bash off");
 	const bounded = await server.createRoom("Bounded Room");
 	await server.setWorkspace(bounded, "bounded", false);
-	const [boundedRead] = await server.runTurn(bounded, "conv-bounded", [read(path.join(guide, "reference.md"))]);
-	assert(!boundedRead.includes(REFERENCE), `a bounded room must never read the skills folder, got: ${boundedRead.slice(0, 300)}`);
+	const [boundedBefore] = await server.runTurn(bounded, "conv-bounded-before", [read(path.join(guide, "reference.md"))]);
+	refused(boundedBefore, "a skill this bounded room never had approved");
+	await server.skillAction(bounded, "enable", "guide");
+	await server.skillAction(bounded, "approve-execution", "guide");
+	const boundedAfter = await server.runTurn(bounded, "conv-bounded-after", [read(path.join(guide, "reference.md")), write(path.join(guide, "reference.md"), "x\n")]);
+	opened(boundedAfter[0], REFERENCE, "the approved skill's folder in a bounded room");
+	refused(boundedAfter[1], "writing the approved skill's folder from a bounded room");
 	await server.setWorkspace(room, "localFiles", true);
 	await server.stop();
 
-	// 5. A background run of the same room, terminal on, through the real
-	// background run: its file tools never open the skills folder.
+	// 4. A background run of the same room, through the real background run:
+	// the same fence. Then the person changes the skill's script, the approval
+	// no longer matches its files, and the folder closes on the next call.
 	delete process.env.EXXPERTS_STATE_HOME;
 	delete process.env.EXXPERTS_DATA_DIR;
 	Object.assign(process.env, { HOME: home, USERPROFILE: home, EXXPERTS_CODING_AGENT_DIR: main.agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: main.agentsRoot, EXXETA_HOME: repoRoot });
 	const { executePersistentRoomBackgroundPrompt } = await import("../src/persistent-room-background-execution.js");
-	script = [read(path.join(guide, "reference.md")), write(path.join(workspaceRoot, ".mcp.json"), "{}\n")];
-	turnResults = null;
-	await executePersistentRoomBackgroundPrompt({
-		roomId: room,
-		target: { kind: "fresh-thread", model: { provider: "openai-compatible", model: "room-model" } },
-		prompt: "Please use the guide skill.",
-		executionId: "skills-folder-background",
-		cwd: workspaceRoot,
-		agentDir: main.agentDir,
-	} as any);
-	const backgroundResults = turnResults as string[] | null;
-	assert(backgroundResults && backgroundResults.length === 2, `the background run must call read and write once each, got ${JSON.stringify(backgroundResults)}`);
-	// A background run has no bash tool and never opens the skills folder: the person's own skill
-	// is named as such, never "a secret file or the app's own data", and no command is offered.
-	assert(!backgroundResults[0].includes(REFERENCE), "a background run never reads the skills folder");
-	assert(backgroundResults[0].includes(SKILLS_FOLDER_BACKGROUND) && !backgroundResults[0].includes(REFUSED) && !backgroundResults[0].includes(TERMINAL_ADVICE) && !backgroundResults[0].includes(SKILLS_FOLDER_CLOSED), `a background run's read of a skill says a background run can't open it, got: ${backgroundResults[0].slice(0, 500)}`);
-	assert(backgroundResults[1].includes(READ_ONLY) && !backgroundResults[1].includes(TERMINAL_ADVICE), `a background run's refused write offers no command, got: ${backgroundResults[1].slice(0, 500)}`);
+	const runInBackground = async (executionId: string, calls: ScriptedCall[]): Promise<string[]> => {
+		script = calls;
+		turnResults = null;
+		await executePersistentRoomBackgroundPrompt({
+			roomId: room,
+			target: { kind: "fresh-thread", model: { provider: "openai-compatible", model: "room-model" } },
+			prompt: "Please use the guide skill.",
+			executionId,
+			cwd: workspaceRoot,
+			agentDir: main.agentDir,
+		} as any);
+		const results = turnResults as string[] | null;
+		assert(results && results.length === calls.length, `the background run must call each tool once, got ${JSON.stringify(results)}`);
+		return results;
+	};
+	const outsideFile = path.join(tempRoot, "outside.md");
+	fs.writeFileSync(outsideFile, `${OTHER}\n`);
+	const background = await runInBackground("skills-folder-background", [read(path.join(guide, "reference.md")), write(path.join(guide, "reference.md"), "x\n"), write(path.join(workspaceRoot, ".mcp.json"), "{}\n"), read(outsideFile)]);
+	opened(background[0], REFERENCE, "the approved skill's folder in a background run");
+	refused(background[1], "writing the approved skill's folder in a background run");
+	assert(background[2].includes(READ_ONLY) && !/command/i.test(background[2]), `a background run's refused write offers no command, got: ${background[2].slice(0, 500)}`);
+	assert(background[3].includes(OUTSIDE) && !background[3].includes(OTHER), `a background run stops at the room's folder too, got: ${background[3].slice(0, 500)}`);
+	fs.writeFileSync(path.join(guide, "scripts", "hello.sh"), "echo changed by the person\n", { mode: 0o700 });
+	const [afterChange] = await runInBackground("skills-folder-background-changed", [read(path.join(guide, "reference.md"))]);
+	refused(afterChange, "a skill whose files changed since the person approved them");
 
-	// 6. A data profile: the store under <home>/.exxperts-work opens the same
-	// way, found from the profile, and its auth file stays closed.
+	// 5. A data profile: the approved skill under <home>/.exxperts-work opens
+	// the same way, found from the profile; the main store's skill and the
+	// profile's auth file don't.
 	await plantState(profile, gatewayPort);
 	const profileGuide = path.join(profile.store, "guide");
 	await server.start({ ...smokeHomeEnv(home), EXXPERTS_STATE_HOME: profile.stateRoot, EXXETA_PERSISTENT_AGENTS_ROOT: profile.agentsRoot });
 	const profileRoom = await server.createRoom("Profile Room");
 	await server.setWorkspace(profileRoom, "localFiles", true);
-	const r6 = await server.runTurn(profileRoom, "conv-profile", [
+	await server.skillAction(profileRoom, "enable", "guide");
+	await server.skillAction(profileRoom, "approve-execution", "guide");
+	const r5 = await server.runTurn(profileRoom, "conv-profile", [
 		read(path.join(profileGuide, "reference.md")),
 		write(path.join(profile.store, "made-in-profile", "SKILL.md"), "---\nname: made-in-profile\ndescription: x\n---\n\nx\n"),
 		read(path.join(profile.agentDir, "auth.json")),
 		read(path.join(main.store, "guide", "reference.md")),
 	]);
-	opened(r6[0], REFERENCE, "the profile's skills folder");
-	assert(!r6[1].includes(REFUSED) && fs.existsSync(path.join(profile.store, "made-in-profile", "SKILL.md")), `writing into the profile's skills folder must open, got: ${r6[1].slice(0, 300)}`);
-	refused(r6[2], "the profile's auth file");
-	refused(r6[3], "the skills folder outside the loaded profile");
-	const profileLibrary = await server.json("/api/skills");
-	assert(Array.isArray(profileLibrary.body) && profileLibrary.body.some((skill: any) => skill?.name === "made-in-profile"), `a skill a room wrote in a profile must appear in that profile's Skills list, got: ${JSON.stringify(profileLibrary.body)?.slice(0, 300)}`);
+	opened(r5[0], REFERENCE, "the profile's approved skill");
+	refused(r5[1], "writing into the profile's skills folder");
+	assert(!fs.existsSync(path.join(profile.store, "made-in-profile")), "no room may write a skill in a profile");
+	refused(r5[2], "the profile's auth file");
+	refused(r5[3], "the skill folder outside the loaded profile");
 
 	console.log("full-access-skills-folder-smoke: OK");
 } catch (error) {

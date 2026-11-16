@@ -1,12 +1,12 @@
 // Keyboard hints only where there is a keyboard. On a touch screen (no hover)
-// the command question's Allow and Deny show no keys and the @ list no
+// the command question's Not now and Run once show no keys and the @ list no
 // "↑↓ choose · Enter select · Esc dismiss", while the list's "The room's
 // memory is read, never changed" stays; with a mouse both hints show. The @
 // list also shows each room's full name, with "remembered …" on its own line
 // under it, at phone width as well.
 //
 // Offline: the model is a synthetic gateway on this machine that asks to run
-// one command, so the room asks about it in its work card.
+// one command, so the room asks about it in the panel above the message box.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -14,8 +14,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContextOptions } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer, putRunWithoutAsking } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
+import { NOT_NOW, OUTSIDE_RUN_ONCE } from "../src/room-box/card-text.js";
+import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../src/room-approval-titles.js";
 
 const waitUntil = waitEvery(150);
 
@@ -128,7 +130,7 @@ try {
 	await waitForServer(server, baseUrl, 30_000);
 
 	// Full access with the terminal on, so each room asks before it runs a command.
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(tempHome, "workspace");
 	fs.mkdirSync(workspaceRoot, { recursive: true });
 	fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "notes\n");
 	for (const roomId of [mouseRoomId, touchRoomId]) {
@@ -138,6 +140,9 @@ try {
 			body: JSON.stringify({ root: workspaceRoot, displayLabel: "Hint Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }),
 		});
 		assert(workspace.status === 200, `full access with the terminal on, got ${workspace.status}`);
+		// A new room's commands start in Run without asking where the room's protection runs: this smoke chooses Ask before each command, as the chip does.
+		const askFirst = await putRunWithoutAsking(`${baseUrl}/api/persistent-agents/${encodeURIComponent(roomId)}/bash-settings`, false);
+		assert(askFirst.ok, `the room asks before each command, got ${askFirst.status}`);
 	}
 
 	const browser = await chromium.launch();
@@ -200,29 +205,23 @@ async function checkDevice(browser: Browser, device: string, roomName: string, o
 		await composer.fill("");
 		await waitUntil(async () => (await list.count()) === 0, "the @ list closes once the @ is gone");
 
-		// The command question: Allow and Deny show their keys only with a mouse.
+		// The command question, in the panel above the box: Not now and Run once show their keys only with a mouse.
 		await composer.fill(ASK_FOR_COMMAND);
 		await page.locator("button.send-btn").click();
-		const deny = page.locator(".wk-ask .wk-btn").filter({ hasText: /^Deny/ });
-		const allow = page.locator(".wk-ask .wk-btn.primary").filter({ hasText: /^Allow/ });
-		await deny.waitFor({ timeout: 20000 });
-		const keys = async (button: typeof deny) => (await button.locator("kbd").allInnerTexts()).map((key) => key.trim());
+		const question = page.locator(".ask-panel").filter({ hasText: PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE });
+		const notNow = question.getByRole("button", { name: NOT_NOW });
+		const runOnce = question.locator(".rs-btn-primary").filter({ hasText: OUTSIDE_RUN_ONCE });
+		await notNow.waitFor({ timeout: 20000 });
+		const keys = async (button: typeof notNow) => (await button.locator("kbd").allInnerTexts()).map((key) => key.trim());
 		if (touch) {
-			const shown = [...(await keys(allow)), ...(await keys(deny))];
+			const shown = [...(await keys(runOnce)), ...(await keys(notNow))];
 			assert(shown.length === 0, `the command question shows no keys on a ${device}, got ${JSON.stringify(shown)}`);
-			// At phone width the question's card spans the column, as the message box does.
-			const width = await page.locator(".wk-card").filter({ has: page.locator(".wk-ask") }).last().evaluate((card) => {
-				const column = card.parentElement!;
-				const style = getComputedStyle(column);
-				return { card: card.getBoundingClientRect().width, column: column.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
-			});
-			assert(width.card >= width.column - 1, `the command question's card spans the phone's column: ${JSON.stringify(width)}`);
 		} else {
-			await waitUntil(async () => (await keys(allow)).length > 0, "Allow shows its key", 3000);
-			assert(["↵", "Enter"].includes((await keys(allow))[0]) && (await keys(deny)).includes("Esc"), `with a mouse Allow shows Enter and Deny shows Esc, got ${JSON.stringify({ allow: await keys(allow), deny: await keys(deny) })}`);
+			await waitUntil(async () => (await keys(runOnce)).length > 0, "Run once shows its key", 3000);
+			assert(["⌘↵", "Ctrl+Enter"].includes((await keys(runOnce))[0]) && (await keys(notNow)).includes("Esc"), `with a mouse Run once shows the chord and Not now shows Esc, got ${JSON.stringify({ runOnce: await keys(runOnce), notNow: await keys(notNow) })}`);
 		}
 		console.log(`  ok  ${device}: the command question ${touch ? "shows no keys" : "names its keys"}`);
-		await deny.click();
+		await question.locator('.ask-actions .rs-btn:not(.rs-btn-primary)[aria-disabled="false"]').click();
 		await page.locator("button.send-btn").waitFor({ timeout: 20000 });
 	} finally {
 		await ctx.close();

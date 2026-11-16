@@ -1,4 +1,5 @@
 import { bubbleIdOf } from "../../web-server/src/steer-route";
+import { ANOTHER_ROOM } from "./mention-popover";
 
 /**
  * Messages the person sent while the room answers, until the room has them.
@@ -6,9 +7,9 @@ import { bubbleIdOf } from "../../web-server/src/steer-route";
  * where it goes (steer-route.ts), in after the running step or after the
  * answer it thinks or writes. Cmd/Ctrl+Enter or Send now stops the answer at
  * the words on screen and that message goes as the next one, alone; the
- * others queued with it wait for the new answer as queued messages do. "@Room question"
- * typed while the room answers waits here, and goes to that room as a consult
- * once the answer ends.
+ * others queued with it wait for the new answer as queued messages do. A
+ * question to the room on the box's label, sent while the room answers, waits
+ * here, and goes to that room as a consult once the answer ends.
  *
  * A message no answer will take stays as a held message (the server keeps it
  * on disk, held-messages-store.ts): nothing sends it by itself; the person
@@ -26,7 +27,7 @@ export type OutgoingState =
 	| "routing"
 	/** The running answer holds it for its next step or its end. */
 	| "waiting"
-	/** "@Room question": the page holds it until the answer ends, then asks that room. */
+	/** A question to another room: the page holds it until the answer ends, then asks that room. */
 	| "consult"
 	/** The answer stopped for it, or no answer ran to take it: it goes as the next message once the turn has ended. */
 	| "next"
@@ -35,12 +36,19 @@ export type OutgoingState =
 	/** No answer will take it: it waits for the person, on disk. */
 	| "held";
 
+/** A question to another room, which it goes to by its id. */
+export interface Consult {
+	roomId: string;
+	question: string;
+}
+
 export interface OutgoingMessage {
 	id: string;
+	/** What the server keeps; a consult's is `consultText`. */
 	text: string;
 	state: OutgoingState;
-	/** A "consult" message's room and question. */
-	consult?: { roomId: string; question: string };
+	/** A "consult" message's room and question; null for one the page sent to this room; absent for one the server listed. */
+	consult?: Consult | null;
 	/** A consult Send now chose: it goes before the messages left waiting behind it. */
 	first?: true;
 }
@@ -52,7 +60,7 @@ export interface ListedMessage {
 }
 
 export type OutgoingAction =
-	| { type: "add"; id: string; text: string; state: "routing" | "next" | "later" | "consult"; consult?: { roomId: string; question: string } }
+	| { type: "add"; id: string; text: string; state: "routing" | "next" | "later" | "consult"; consult?: Consult }
 	/** The server's steer_waiting. */
 	| { type: "waiting"; id: string }
 	/** The answer stops for them, or no answer ran to take them: they go next. */
@@ -88,7 +96,7 @@ export function reduceOutgoing(list: readonly OutgoingMessage[], action: Outgoin
 	switch (action.type) {
 		case "add":
 			if (!action.text.trim() || list.some((message) => message.id === action.id)) return [...list];
-			return [...list, { id: action.id, text: action.text.trim(), state: action.state, ...(action.consult ? { consult: action.consult } : {}) }];
+			return [...list, { id: action.id, text: action.text.trim(), state: action.state, consult: action.consult ?? null }];
 		case "waiting":
 			return move([action.id], "waiting", ["routing"]);
 		case "next":
@@ -154,10 +162,42 @@ export function heldFromPage(list: readonly OutgoingMessage[], ready: { waiting:
 
 export { bubbleIdOf };
 
+/**
+ * A consult's text as the server keeps it, which holds only words: the room's
+ * id, then the question. The page reads it back with `consultOf`, only for a
+ * held message the server lists after a reload.
+ */
+export function consultText(consult: Consult): string {
+	return `@${consult.roomId} ${consult.question}`;
+}
+
+/** A message's consult: what the page sent it as, or for one the server listed, read from its text when that names one of the person's other `rooms`. */
+export function consultOf(message: { text: string; consult?: Consult | null }, rooms: { has(roomId: string): boolean }): Consult | null {
+	if (message.consult !== undefined) return message.consult;
+	const stored = /^@(\S+)\s+(\S[\s\S]*)$/.exec(message.text);
+	return stored && rooms.has(stored[1]) ? { roomId: stored[1], question: stored[2].trim() } : null;
+}
+
+/** What the message box holds: its text, and the room on its label by id, or null for this room. */
+export interface BoxDraft {
+	text: string;
+	asking: string | null;
+}
+
+export const EMPTY_BOX: BoxDraft = { text: "", asking: null };
+
+/** Words for this room alone, with no room on the label. */
+export function plainBox(text: string): BoxDraft {
+	return { text, asking: null };
+}
+
 /** A bubble under the answer: its words and what the person can do with it. */
 export interface QueuedBubble {
 	id: string;
+	/** The words; a consult's question alone. */
 	text: string;
+	/** A consult's room, by its name. */
+	asking?: string;
 	held: boolean;
 	/** It can go back into the box or be removed: nothing is sending it right now. */
 	takeBack: boolean;
@@ -173,9 +213,12 @@ export interface QueuedBubble {
 const TAKE_BACK_STATES: readonly OutgoingState[] = ["held", "waiting", "later", "consult"];
 
 /** The bubbles under the answer: every message the room has not taken, oldest first. */
-export function queuedBubbles(list: readonly OutgoingMessage[]): QueuedBubble[] {
+export function queuedBubbles(list: readonly OutgoingMessage[], rooms: ReadonlyMap<string, string>): QueuedBubble[] {
 	const first = queuedForAnswer(list)[0]?.id;
-	return list.map((message) => ({ id: message.id, text: message.text, held: message.state === "held", takeBack: TAKE_BACK_STATES.includes(message.state), chord: message.id === first }));
+	return list.map((message) => {
+		const consult = consultOf(message, rooms);
+		return { id: message.id, text: consult ? consult.question : message.text, ...(consult ? { asking: rooms.get(consult.roomId) ?? ANOTHER_ROOM } : {}), held: message.state === "held", takeBack: TAKE_BACK_STATES.includes(message.state), chord: message.id === first };
+	});
 }
 
 /** Waiting for a new answer, oldest first. */
@@ -210,16 +253,45 @@ export function queuedForAnswer(list: readonly OutgoingMessage[]): OutgoingMessa
 	return list.filter((message) => message.state !== "held");
 }
 
-/** Stop or Esc: every message queued for the answer goes back into the box, oldest first, joined. */
-export function handBackAll(list: readonly OutgoingMessage[]): { ids: string[]; text: string } {
-	const back = queuedForAnswer(list);
-	return { ids: back.map((message) => message.id), text: back.map((message) => message.text).join("\n\n") };
+/**
+ * Messages going back into the box, oldest first, above what is typed there,
+ * joined by blank lines; the cursor goes at the end. One goes in only where
+ * the box's message goes: an ordinary one into a box with no room on its
+ * label, a consult into a box asking its room, and either into an empty box,
+ * which then goes where the first one went. The others (`held`) stay out, so
+ * no message goes to another room than the one it was sent to.
+ */
+export function boxWithHandBack(handed: ReadonlyArray<{ id: string; text: string; consult: Consult | null }>, box: BoxDraft): { box: BoxDraft; taken: string[]; held: string[] } {
+	let goes = boxGoes(box);
+	const taken: string[] = [];
+	const held: string[] = [];
+	const texts: string[] = [];
+	for (const message of handed) {
+		const to = message.consult?.roomId ?? null;
+		if (goes === undefined) goes = to;
+		if (to !== goes) {
+			held.push(message.id);
+			continue;
+		}
+		taken.push(message.id);
+		texts.push((message.consult?.question ?? message.text).trim());
+	}
+	return { box: { text: [...texts, box.text.trim()].filter(Boolean).join("\n\n"), asking: goes ?? null }, taken, held };
 }
 
-/** The box's text with the handed-back messages above it, joined by blank lines; the cursor goes at the end. */
-export function boxWithHandBack(handed: string, box: string): string {
-	return [handed.trim(), box.trim()].filter(Boolean).join("\n\n");
+/** Where the box's message goes: the room on its label, null for this room, or undefined for an empty box, which goes where what comes into it goes. */
+function boxGoes(box: BoxDraft): string | null | undefined {
+	return box.text.trim() || box.asking ? box.asking : undefined;
 }
+
+/** Whether Edit can put the message in the box, as `boxWithHandBack` would: an empty box, or one whose message goes where it goes. */
+export function boxTakes(message: { consult: Consult | null }, box: BoxDraft): boolean {
+	const goes = boxGoes(box);
+	return goes === undefined || (message.consult?.roomId ?? null) === goes;
+}
+
+/** The line above the box when Edit finds it holding a message that goes elsewhere. */
+export const EDIT_NEEDS_BOX = "To edit it, send or clear what's in the box first.";
 
 /** Under each bubble the room has not taken. */
 export const WAITING_CAPTION = "Queued";

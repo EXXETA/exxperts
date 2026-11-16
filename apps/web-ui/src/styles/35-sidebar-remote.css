@@ -1,4 +1,5 @@
-.sidebar-toggle {
+.sidebar-toggle,
+.history-arrow {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -12,7 +13,9 @@
 	cursor: pointer;
 }
 .sidebar-toggle:hover,
-.sidebar-toggle:focus-visible {
+.sidebar-toggle:focus-visible,
+.history-arrow:hover,
+.history-arrow:focus-visible {
 	background: color-mix(in srgb, var(--fg) 8%, transparent);
 	color: var(--fg);
 }
@@ -35,20 +38,80 @@
 }
 /* The mac app: on the window-button row, right of the traffic lights (x 18
    to 78, centre y 25, in window points), above the drag strip and out of it.
-   The lights keep their size and place under page zoom, so the spot is set in
-   window points too: as far right of the green light as the lights are apart
-   (9), centred on its row, never above the window's top edge. What sits on
-   the toggle's row takes its spot from --mac-toggle-left and --mac-toggle-top. */
+   The lights keep their size and place under page zoom, so the spot and the
+   button's size are set in window points too: as far right of the green light
+   as the lights are apart (9), centred on its row. Fullscreen takes the lights
+   away, so the button slides left until its 16-point glyph, 6 points inside
+   its box, starts on the line the logo and the lists start on. What sits on
+   the toggle's row takes its spot from --mac-toggle-left and --mac-toggle-top;
+   the back and forward arrows follow it, and --mac-row-buttons-end is where
+   the three end, the one width the rest of the row clears. */
 html.desktop-app-mac {
-	--mac-toggle-left: calc(87px / var(--window-zoom, 1));
-	--mac-toggle-top: max(0px, calc(25px / var(--window-zoom, 1) - 14px));
+	--mac-toggle-size: calc(28 * var(--mac-point));
+	--mac-toggle-left: calc(87 * var(--mac-point));
+	--mac-toggle-top: calc(11 * var(--mac-point));
+	--mac-arrow-gap: calc(2 * var(--mac-point));
+	--mac-row-buttons-end: calc(var(--mac-toggle-left) + 3 * var(--mac-toggle-size) + 2 * var(--mac-arrow-gap));
+	--mac-row-buttons-bottom: calc(var(--mac-toggle-top) + var(--mac-toggle-size));
+}
+html.desktop-app-mac.mac-fullscreen {
+	--mac-toggle-left: calc(var(--sidebar-text-left) - 6 * var(--mac-point));
 }
 html.desktop-app-mac .sidebar-header .sidebar-toggle,
 html.desktop-app-mac .product-sidebar-header .sidebar-toggle,
 html.desktop-app-mac .sidebar-toggle-floating {
 	top: var(--mac-toggle-top);
 	left: var(--mac-toggle-left);
+	width: var(--mac-toggle-size);
+	height: var(--mac-toggle-size);
+	border-radius: calc(7 * var(--mac-point));
 	-webkit-app-region: no-drag;
+}
+html.desktop-app-mac .sidebar-toggle svg,
+html.desktop-app-mac .history-arrow svg {
+	width: calc(16 * var(--mac-point));
+	height: calc(16 * var(--mac-point));
+}
+/* Under the dialogs' backdrops, as the floating toggle is. The Windows app:
+   on the sidebar button's line, 2px apart as on the mac's row, right after
+   the button while the sidebar is hidden; with it open they end its top line,
+   as far in from its right edge (the 260px column, 02-sidebar.css and
+   04-home-shell.css) as the button is from its left. */
+.history-arrows {
+	position: fixed;
+	top: 8px;
+	left: 40px;
+	z-index: 39;
+	display: flex;
+	gap: 2px;
+	-webkit-app-region: no-drag;
+}
+html:not(.desktop-app-mac):not(.sidebar-collapsed):has(.sidebar, .product-sidebar) .history-arrows {
+	left: calc(260px - 10px - 2 * 28px - 2px);
+}
+/* A sharp screen lifts the sidebar button by half a pixel (02-sidebar.css);
+   the arrows keep its line. */
+@media (min-resolution: 2dppx) and (min-width: 761px) {
+	html:not(.desktop-app-mac) .history-arrows {
+		translate: 0 -0.5px;
+	}
+}
+/* The mac app: the same place with the sidebar open and closed, so a run of
+   clicks stays on one spot. */
+html.desktop-app-mac .history-arrows {
+	top: var(--mac-toggle-top);
+	left: calc(var(--mac-toggle-left) + var(--mac-toggle-size) + var(--mac-arrow-gap));
+	gap: var(--mac-arrow-gap);
+}
+html.desktop-app-mac .history-arrow {
+	width: var(--mac-toggle-size);
+	height: var(--mac-toggle-size);
+	border-radius: calc(7 * var(--mac-point));
+}
+.history-arrow:disabled {
+	background: transparent;
+	color: color-mix(in srgb, var(--muted) 45%, transparent);
+	cursor: default;
 }
 html:not(:has(.sidebar, .product-sidebar)) .sidebar-toggle-floating {
 	display: none;
@@ -65,20 +128,32 @@ html.sidebar-collapsed .product-sidebar {
 }
 /* Collapsed in the browser, the content edge moves under the fixed toggle;
    clear it (the desktop app gets its own traffic-light clearance in the
-   drag-strip block in 34-desktop-app.css). */
+   drag-strip block in 34-desktop-app.css). The Windows app clears the arrows
+   after it too, by the same air. */
 html.sidebar-collapsed:not(.desktop-app-mac) .topbar {
 	padding-left: max(52px, var(--topbar-column-edge));
 }
 html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .landing) {
 	padding-left: 56px;
 }
+html.desktop-app.sidebar-collapsed:not(.desktop-app-mac) .topbar {
+	padding-left: max(112px, var(--topbar-column-edge));
+}
+@media (min-width: 761px) {
+	html.desktop-app.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .landing) {
+		padding-left: 116px;
+	}
+}
 /* A maximized pane takes the chat column's place, and its header the top
-   left: it clears the toggle, and in the mac app the traffic lights too. */
+   left: it clears the toggle, and in the mac app the whole row of buttons. */
 html.sidebar-collapsed .workbench.artifact-pane-maximized .artifact-viewer-head {
 	padding-left: 52px;
 }
+html.desktop-app.sidebar-collapsed:not(.desktop-app-mac) .workbench.artifact-pane-maximized .artifact-viewer-head {
+	padding-left: 112px;
+}
 html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artifact-viewer-head {
-	padding-left: calc(var(--mac-toggle-left) + 42px);
+	padding-left: calc(var(--mac-row-buttons-end) + 14px);
 }
 
 
@@ -100,24 +175,6 @@ html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artif
 /* The config menu anchors to the footer controls, not the gear's own box. */
 .sidebar-footer-controls .sidebar-config {
 	position: static;
-}
-.sidebar-config-gear {
-	border: 0;
-	background: transparent;
-	width: 28px;
-	height: 28px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	color: var(--muted);
-	border-radius: 7px;
-}
-.sidebar-config-gear:hover,
-.sidebar-config-gear:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	color: var(--fg);
-	border-color: transparent;
 }
 
 /* Remote access (Settings page + sidebar indicator) */
@@ -214,8 +271,9 @@ html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artif
 .remote-on-pill.paused .remote-on-dot {
 	background: var(--muted);
 }
-/* Who is signed in, on a shared server: the footer's left slot, name over the
-   sign-out link. A long name is cut, never wrapped over the gear. */
+/* Who is signed in, on a shared server: the footer's left slot, name over
+   Sign out and the line on what it ends. A long name is cut, never wrapped
+   over the gear; the lines under it wrap. */
 .signed-in-as {
 	display: flex;
 	flex-direction: column;
@@ -244,15 +302,60 @@ html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artif
 	padding: 0 6px;
 	font-size: var(--exx-font-size-xs);
 }
-.signed-in-as-out {
-	align-self: flex-start;
-	color: var(--muted);
-	text-decoration: underline;
+.signed-in-as-out-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 8px;
+	row-gap: 2px;
+	min-width: 0;
 }
-.signed-in-as-out:hover,
+.signed-in-as-out {
+	background: none;
+	border: 0;
+	padding: 0;
+	font: inherit;
+	color: var(--muted);
+	text-align: start;
+	text-decoration: underline;
+	text-wrap: pretty;
+	cursor: pointer;
+}
+/* A finger needs a target about 44 px. The target reaches past the text, so
+   the lines keep the gaps they have under a mouse. */
+@media (pointer: coarse) {
+	.signed-in-as-out {
+		min-height: 44px;
+		margin-block: -14px;
+		display: inline-flex;
+		align-items: center;
+	}
+}
+/* Pressed, its request out: plain and faded, so the press shows even
+   without a cursor (a phone). */
+.signed-in-as-out:disabled {
+	cursor: progress;
+	text-decoration: none;
+	opacity: 0.75;
+}
+.signed-in-as-out:not(:disabled):hover,
 .signed-in-as-out:focus-visible {
 	color: var(--fg);
 	outline: none;
+}
+.signed-in-as-scope {
+	min-width: 0;
+	color: var(--muted);
+	text-wrap: pretty;
+}
+.signed-in-as-out-failed {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.signed-in-as-out-failed > .signed-in-as-scope {
+	color: var(--fg-soft);
 }
 .menu-item-state {
 	color: var(--muted);
@@ -357,11 +460,15 @@ html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artif
 .remote-device-armed {
 	color: var(--error);
 }
+/* Revoke, the row's last button, ends on its right edge (--exx-btn-inset-sm),
+   or as near as the rows' box leaves the focus ring whole: 16 px less the
+   4 px ring. On a phone the row stacks and Revoke meets no edge. */
 .remote-device-actions {
 	display: flex;
 	gap: 14px;
 	align-items: center;
 	flex-shrink: 0;
+	margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 12px));
 }
 /* While remote access is off or not serving, the room names read as
    waiting; the choices keep full contrast, since they still work. */
@@ -399,6 +506,10 @@ html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artif
 	   buttons. */
 	html.desktop-app-mac .product-sidebar {
 		padding-top: 48px;
+	}
+	/* The Windows app: the bar starts 8px under the back and forward arrows. */
+	html.desktop-app:not(.desktop-app-mac) .product-sidebar {
+		padding-top: 44px;
 	}
 	html.desktop-app-mac .product-sidebar-header {
 		min-height: 0;
@@ -440,6 +551,18 @@ html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artif
 		flex: 0 1 auto;
 		min-width: 0;
 		max-width: 60%;
+	}
+	/* With Sign out and its scope line, the footer takes a row of its own under
+	   the bar: its lines get the whole width, and the tabs keep theirs. */
+	.product-sidebar.with-sign-out {
+		flex-wrap: wrap;
+	}
+	.product-sidebar.with-sign-out .product-sidebar-footer {
+		flex: 1 0 100%;
+		max-width: none;
+		margin-left: 0;
+		padding: 4px 10px 6px 14px;
+		border-top: 1px solid var(--exx-divider);
 	}
 	/* The top bar stays even while "collapsed": hiding the only navigation
 	   behind a floating toggle helps nobody on a phone, and the bar is slim.

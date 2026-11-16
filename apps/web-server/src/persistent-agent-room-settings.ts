@@ -4,6 +4,7 @@ import type { PersistentAgentModelLock, PersistentAgentStatus, PersistentRoomBac
 import { activePersistentRoomLock, assertPersistentRoomNotHeldByAnotherProcess, createPersistentAgentInstance, isPersistentAgentArchived, PERSISTENT_AGENTS_ROOT } from "./persistent-agent-store.js";
 import { getPersistentAgentThread } from "./persistent-agent-threads.js";
 import { getPersistentAgentStatus } from "./persistent-agent-status.js";
+import { serverHooks } from "./server-hooks.js";
 
 export function getPersistentRoomInstructions(agentIdRaw: string): PersistentRoomInstructions {
 	const instance = createPersistentAgentInstance(agentIdRaw);
@@ -128,6 +129,8 @@ export function classifyPersistentRoomBackgroundRunTarget(agentIdRaw: string, op
 			warnings,
 		};
 	}
+	const paused = serverHooks().scheduledRunPause?.(roomId, status.unseenLandedAnswer);
+	if (paused) return { status: "blocked", reason: "owner_paused", target: noneTarget, message: paused, warnings };
 	if (activePersistentRoomLock(roomId, options)) {
 		return {
 			status: "deferred",

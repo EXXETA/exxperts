@@ -702,11 +702,11 @@ export function MermaidDiagram({ chart }: { chart: string }) {
 								<h2>Diagram</h2>
 								<div className="mermaid-viewer-actions">
 									<button className="icon-btn" type="button" aria-pressed={viewerCode} onClick={toggleViewerCode} title="The diagram's code">Code</button>
-									<button className="icon-btn" type="button" onClick={() => setViewerZoom((value) => stepZoom(value, -1))} disabled={viewerCode || viewerZoom <= ZOOM_MIN} aria-label="Zoom out" title="Zoom out (−)">−</button>
-									<button className="icon-btn mermaid-viewer-zoom-value" type="button" onClick={() => setViewerZoom(1)} disabled={viewerCode} aria-label="Actual size" title="Actual size (0)">{zoomPercent}%</button>
-									<button className="icon-btn" type="button" onClick={() => setViewerZoom((value) => stepZoom(value, 1))} disabled={viewerCode || viewerZoom >= ZOOM_MAX} aria-label="Zoom in" title="Zoom in (+)">+</button>
-									<button className="icon-btn" type="button" onClick={() => fitViewer(viewerNatural)} disabled={viewerCode || !viewerNatural} aria-label="Fit to window" title="Fit to window (f)">Fit</button>
-									<button className="icon-btn" type="button" onClick={() => setViewerOpen(false)} aria-label="Close" title="Close (Esc)">✕</button>
+									<button className="rs-btn rs-btn-icon rs-btn-sm" type="button" onClick={() => setViewerZoom((value) => stepZoom(value, -1))} disabled={viewerCode || viewerZoom <= ZOOM_MIN} aria-label="Zoom out" title="Zoom out (−)">−</button>
+									<button className="rs-btn rs-btn-quiet rs-btn-sm mermaid-viewer-zoom-value" type="button" onClick={() => setViewerZoom(1)} disabled={viewerCode} aria-label="Actual size" title="Actual size (0)">{zoomPercent}%</button>
+									<button className="rs-btn rs-btn-icon rs-btn-sm" type="button" onClick={() => setViewerZoom((value) => stepZoom(value, 1))} disabled={viewerCode || viewerZoom >= ZOOM_MAX} aria-label="Zoom in" title="Zoom in (+)">+</button>
+									<button className="rs-btn rs-btn-sm" type="button" onClick={() => fitViewer(viewerNatural)} disabled={viewerCode || !viewerNatural} aria-label="Fit to window" title="Fit to window (f)">Fit</button>
+									<button className="rs-btn rs-btn-icon rs-btn-sm" type="button" onClick={() => setViewerOpen(false)} aria-label="Close" title="Close (Esc)">✕</button>
 								</div>
 							</div>
 							<div className="mermaid-viewer-body" ref={viewerBodyRef}>

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
 import { streamAnthropic, streamSimpleAnthropic } from "../src/providers/anthropic.js";
-import type { Context } from "../src/types.js";
+import type { Context, Model } from "../src/types.js";
 
-// Claude Fable 5.1, Mythos 5.1 and Opus 5.5 bind every thinking block to the
+// Claude Fable 5.1 and 5.2, Mythos 5.1 and the 5.5 models bind every thinking block to the
 // exact prefix it was produced under, and this app rebuilds the system prompt with
 // live room state on every turn. The provider opts those models into the
 // documented remedy (drop the stale block, answer anyway) and records what the
@@ -112,6 +112,23 @@ describe("thinking-block binding on the models that enforce it", () => {
 		expect(beta).toContain("oauth-2025-04-20");
 	});
 
+	it("claude-fable-5-2 asks the API to drop a block bound to a different prefix (API key path)", async () => {
+		const { params, beta } = await requestWithReasoning("claude-fable-5-2", API_KEY);
+		expect(params.thinking.type).toBe("adaptive");
+		expect(params.thinking.block_binding).toEqual({ prefix_mismatch_behavior: "drop_block" });
+		expect(beta).toContain(BINDING_BETA);
+	});
+
+	it("claude-fable-5-2 carries the same field and beta on the subscription (OAuth) path", async () => {
+		const { params, beta } = await requestWithReasoning("claude-fable-5-2", OAUTH_KEY);
+		expect(params.thinking.block_binding).toEqual({ prefix_mismatch_behavior: "drop_block" });
+		expect(beta).toContain(BINDING_BETA);
+		expect(beta).toContain("oauth-2025-04-20");
+		// The subscription refuses Fable 5.2 below this Claude Code version.
+		const headers = (mockState.constructorOpts?.defaultHeaders ?? {}) as Record<string, string>;
+		expect(headers["user-agent"]).toBe("claude-cli/2.1.290");
+	});
+
 	it("claude-opus-5-5 asks the API to drop a block bound to a different prefix (API key path)", async () => {
 		const { params, beta } = await requestWithReasoning("claude-opus-5-5", API_KEY);
 		expect(params.thinking.type).toBe("adaptive");
@@ -161,6 +178,27 @@ describe("thinking-block binding on the models that enforce it", () => {
 		expect(params.thinking.type).toBe("adaptive");
 		expect(params.thinking.block_binding).toBeUndefined();
 		expect(beta).not.toContain(BINDING_BETA);
+	});
+
+	// Fable 5.2 through a gateway that speaks the Messages API stays free of
+	// both: the gateway may not forward the beta. Copilot serves it over the
+	// chat completions API and Bedrock through its own provider, so neither
+	// reaches this rule.
+	it.each([
+		["cloudflare-ai-gateway", "claude-fable-5.2"],
+		["opencode", "claude-fable-5-2"],
+	] as const)("%s's %s carries neither the field nor the beta", async (provider, modelId) => {
+		const row = getModel(provider, modelId as never) as Model<"anthropic-messages">;
+		expect(row?.api, `${provider}/${modelId}`).toBe("anthropic-messages");
+		// A concrete address in place of the account placeholders in Cloudflare's.
+		const model = { ...row, baseUrl: "https://gateway.invalid/anthropic" };
+		const s = streamSimpleAnthropic(model, makeContext(), { apiKey: API_KEY, reasoning: "high" });
+		for await (const event of s) {
+			if (event.type === "error") break;
+		}
+		const headers = (mockState.constructorOpts?.defaultHeaders ?? {}) as Record<string, string>;
+		expect((mockState.createParams as any).thinking.block_binding).toBeUndefined();
+		expect(headers["anthropic-beta"] ?? "").not.toContain(BINDING_BETA);
 	});
 });
 

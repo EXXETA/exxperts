@@ -1,18 +1,20 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
-import { approvalAsking, confirmApprovalLabels } from "./Approval";
+import { approvalAsking, keyboardAnswers } from "./Approval";
 import { BubbleEditor, ConsultThreadItem, Message, QueuedBubbles, TaskThreadItem, type FailureLineActions, type MessageAttachmentAccess, type QueuedBubbleActions } from "./Message";
 import type { QueuedBubble } from "../outgoing-messages";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
 import { escapeLayerOpen, useEscapeKey } from "./use-escape-key";
 import { foldChoiceOf, TurnCard, WorkStretch } from "./work-card";
+import { RunningAnswerSteps } from "./box-ask-rows";
+import { askPanelChord, askPanelEscape, useBoxChord } from "./ask-panel";
 import { isThoughtOpen } from "../thinking-text-store";
 import { isWorkItem, workPieces } from "../work-look";
 import { enterReachesQuestion, isTextField, setComposerEmpty } from "../question-keys";
 import { SidebarDrawerBackdrop, usePhoneWidth } from "../sidebar-collapse";
 import type { ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem, ContextHealthStatus } from "../types";
-import { completeMention, detectMentionQuery, filterMentionCandidates, resolveLeadingMention, type MentionCandidateRoom } from "../mention-popover";
+import { ANOTHER_ROOM, askHint, askingWords, detectMentionQuery, draftAfterPick, filterMentionCandidates, labelAtFirstSpace, laterMentionRoom, listedRoom, ROOM_GONE, TYPE_QUESTION, type MentionCandidateRoom } from "../mention-popover";
 import { replyCopyTargets } from "../reply-copy";
 import { chordHeld } from "../platform";
 import { formatModelWithProvider } from "../model-names";
@@ -78,8 +80,8 @@ export interface InRoomChatShellViewProps {
 	onSendNow?: (text: string) => boolean;
 	/** Cmd/Ctrl+Enter in an empty box: the first queued message goes now. */
 	onSendQueuedNow?: () => boolean;
-	/** While the room answers: why the box cannot queue this text, or null; Send greys with it as its hover. */
-	queueRefusal?: (text: string) => string | null;
+	/** While the room answers: why the box cannot queue this text (`asking`: to the room on its label, by id), or null; Send greys with it as its hover. */
+	queueRefusal?: (text: string, asking: string | null) => string | null;
 	/** Esc while the room answers, nothing else taking it: true when it stopped the answer. */
 	onEscapeStop?: () => boolean;
 	/** Messages the room has not taken, drawn as "Queued" bubbles under the answer. */
@@ -89,7 +91,13 @@ export interface InRoomChatShellViewProps {
 	composerPlaceholder: string;
 	sendUnavailable?: boolean;
 	initialDraftValue?: string;
+	/** The room on the box's label when the box is filled again (draftResetKey), by its id. */
+	initialAsking?: string | null;
 	draftResetKey?: string | number;
+	/** Told the room on the box's label, by its id, or null, on each change. */
+	onAskingChange?: (roomId: string | null) => void;
+	/** A line above the box about what the person just tried (ComposerInput's `notice`). */
+	composerNotice?: { key: number; words: string } | null;
 	mention?: MentionSupport;
 	onResolveApproval: (requestId: string, value: any, label: string) => void;
 	onApprovalPreview?: (preview: ApprovalPreviewData) => void;
@@ -449,12 +457,12 @@ function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: {
 					{stopped.failed ? <span>{stopped.line}</span> : stopped.line}
 				</span>
 				<div className="room-workspace-nudge-actions">
-					{stopped.onChooseModel && <button type="button" className="rs-btn" onClick={stopped.onChooseModel}>Choose another model</button>}
-					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onSignIn}>{stopped.signInLabel ?? "Sign in"}</button>}
-					{stopped.onReturnHome && <button type="button" className="rs-btn" onClick={stopped.onReturnHome}>Return Home</button>}
-					{stopped.onMemorize && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onMemorize}>Memorize</button>}
-					{stopped.onReload && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onReload}>Reload</button>}
-					{stopped.onOpenHere && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onOpenHere}>Open here</button>}
+					{stopped.onChooseModel && <button type="button" className="rs-btn rs-btn-sm" onClick={stopped.onChooseModel}>Choose another model</button>}
+					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onSignIn}>{stopped.signInLabel ?? "Sign in"}</button>}
+					{stopped.onReturnHome && <button type="button" className="rs-btn rs-btn-sm" onClick={stopped.onReturnHome}>Return Home</button>}
+					{stopped.onMemorize && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onMemorize}>Memorize</button>}
+					{stopped.onReload && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onReload}>Reload</button>}
+					{stopped.onOpenHere && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onOpenHere}>Open here</button>}
 				</div>
 			</div>
 		);
@@ -464,7 +472,7 @@ function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: {
 	return (
 		<div className="connection-banner" role="status">
 			<span>Connection lost.</span>
-			{onReconnect && <button type="button" className="connection-banner-action" onClick={onReconnect}>Reconnect</button>}
+			{onReconnect && <button type="button" className="rs-btn rs-btn-sm connection-banner-action" onClick={onReconnect}>Reconnect</button>}
 		</div>
 	);
 }
@@ -562,6 +570,24 @@ function renderTranscript(
 	return foldLongTurns(items, rendered, busy);
 }
 
+/**
+ * The steps of the answer the room is running: those after the person's last
+ * message, since one sent while the room answers joins that answer, and after
+ * a failure line, since Try again under it starts a new answer with no
+ * message. None while the room is idle. Each line under a yes asks by its own
+ * step, since a card or a folded turn can hold steps of two answers.
+ */
+function runningAnswerSteps(items: ChatItem[], busy: boolean): ReadonlySet<string> {
+	const steps = new Set<string>();
+	if (!busy) return steps;
+	for (let at = items.length - 1; at >= 0; at--) {
+		const item = items[at];
+		if ((item.kind === "user" && item.steered !== true) || (item.kind === "system" && item.level === "error")) break;
+		if (item.kind === "tool") steps.add(item.id);
+	}
+	return steps;
+}
+
 /** A finished turn's cards, and the notes between them, as one card above its answer, when it had more than one card. */
 function foldLongTurns(items: ChatItem[], nodes: IndexedNode[], busy: boolean): IndexedNode[] {
 	const out: IndexedNode[] = [];
@@ -607,7 +633,7 @@ function foldLongTurns(items: ChatItem[], nodes: IndexedNode[], busy: boolean): 
  * The newest failure line: the last one, with nothing the person sent or the
  * model answered after it. Every other failure line folds.
  */
-function newestFailureLineId(items: ChatItem[]): string | null {
+export function newestFailureLineId(items: ChatItem[]): string | null {
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
 		if (item.kind !== "system") return null;
@@ -619,8 +645,9 @@ function newestFailureLineId(items: ChatItem[]): string | null {
 /**
  * The one pending yes/no card the composer may answer by keyboard: Enter
  * approves and Escape declines while the composer is empty. With two cards
- * pending, or a card that asks for a choice or an answer, the keys keep
- * their usual meaning. Only the current turn is looked at (back to the last
+ * pending, a card that asks for a choice or an answer, or a question in the
+ * panel above the box (which takes no Enter), the keys keep their usual
+ * meaning. Only the current turn is looked at (back to the last
  * user message), so the scan stays a few items long on every render.
  */
 function soleKeyboardApproval(items: ChatItem[]): Extract<ChatItem, { kind: "approval" }> | null {
@@ -746,11 +773,12 @@ const TranscriptItems = memo(function TranscriptItems({
 		</div>
 	) : null;
 	const trailing = thinking || queuedSlot ? <>{thinking}{queuedSlot}</> : null;
+	const runningSteps = useMemo(() => runningAnswerSteps(items, busy), [items, busy]);
 	if (empty) return <>{emptySlot ?? null}{trailing}</>;
 	const nodes: IndexedNode[] = renderItem
 		? items.map((it, index) => ({ index, node: renderItem(it, index, items) }))
 		: renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess, failureLineActions, answerDrawnAtOnceId, stepsElsewhere, edit, queuedSlot !== null);
-	return <>{groupIntoTurns(items, nodes, trailing, reservedTurnId, edit)}</>;
+	return <RunningAnswerSteps.Provider value={runningSteps}>{groupIntoTurns(items, nodes, trailing, reservedTurnId, edit)}</RunningAnswerSteps.Provider>;
 });
 
 interface ComposerInputProps {
@@ -765,7 +793,11 @@ interface ComposerInputProps {
 	/** Tooltip of the Send button (says why it is waiting when it is). */
 	sendTitle?: string;
 	initialDraftValue?: string;
+	/** The room on the box's label when the box is filled again (draftResetKey), by its id. */
+	initialAsking?: string | null;
 	draftResetKey?: string | number;
+	/** Told the room on the box's label, by its id, or null, on each change. */
+	onAskingChange?: (roomId: string | null) => void;
 	mention?: MentionSupport;
 	statusSlot?: ReactNode;
 	rightActions?: ReactNode;
@@ -779,42 +811,17 @@ interface ComposerInputProps {
 	keyboardApproval?: { approve: () => void; decline: () => void } | null;
 	onSendNow?: (text: string) => boolean;
 	onSendQueuedNow?: () => boolean;
-	queueRefusal?: (text: string) => string | null;
+	queueRefusal?: (text: string, asking: string | null) => string | null;
 	onEscapeStop?: () => boolean;
-	/** Whether the box holds text, which Cmd/Ctrl+Enter sends instead of the first queued message; told on each change. */
-	onBoxTextChange?: (hasText: boolean) => void;
+	/** Whether the box holds words or a room on its label, so Cmd/Ctrl+Enter is the box's and not the first queued message's; told on each change. */
+	onBoxHoldsChange?: (holds: boolean) => void;
+	/** A line above the box about what the person just tried; it goes once the box changes. `key` tells one try from the next. */
+	notice?: { key: number; words: string } | null;
 }
 
 /** Something else on the page takes Esc first: a dialog, a menu, a viewer. */
 function otherLayerOpen(): boolean {
 	return escapeLayerOpen() || !!document.querySelector('[aria-modal="true"], [role="menu"], [role="listbox"], .diagram-zoom-overlay');
-}
-
-// What the layer over the message box copies from the box, so each letter it
-// draws sits where the box would draw it: whatever rule sizes the box, the
-// phone's larger type included.
-const MIRRORED_STYLES = [
-	"fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant", "fontStretch", "fontKerning", "fontFeatureSettings",
-	"lineHeight", "letterSpacing", "wordSpacing", "textTransform", "textIndent", "tabSize",
-	"whiteSpace", "wordBreak", "overflowWrap", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-] as const;
-
-// Who draws the message box's text while it starts with a known room's name:
-// the layer, so the name shows coloured; the box itself while text is
-// selected, so the selection keeps the system's colours; both while an input
-// method composes, the box keeping the composing word's underline (a Gboard
-// phone composes every word) and the layer adding only the name over it.
-type BoxText = "box" | "layer" | "box-and-name";
-
-function alignMirror(box: HTMLTextAreaElement, mirror: HTMLElement): void {
-	const style = box.ownerDocument.defaultView!.getComputedStyle(box);
-	for (const name of MIRRORED_STYLES) mirror.style[name] = style[name];
-	// The box's inner size leaves out its scrollbar, so the layer wraps at the same width.
-	mirror.style.left = `${box.clientLeft}px`;
-	mirror.style.top = `${box.clientTop}px`;
-	mirror.style.width = `${box.clientWidth}px`;
-	mirror.style.height = `${box.clientHeight}px`;
-	mirror.scrollTop = box.scrollTop;
 }
 
 /** The room's message box. Exported so a smoke can type into it and press its keys. */
@@ -829,7 +836,9 @@ export function ComposerInput({
 	sendUnavailable = false,
 	sendTitle = "Send",
 	initialDraftValue,
+	initialAsking,
 	draftResetKey,
+	onAskingChange,
 	mention,
 	statusSlot,
 	rightActions,
@@ -841,14 +850,26 @@ export function ComposerInput({
 	onSendQueuedNow,
 	queueRefusal,
 	onEscapeStop,
-	onBoxTextChange,
+	onBoxHoldsChange,
+	notice = null,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
 	const boxHasText = draft.trim() !== "";
-	useEffect(() => {
-		onBoxTextChange?.(boxHasText);
-	}, [boxHasText, onBoxTextChange]);
 	const [caret, setCaret] = useState(0);
+	// The room the message goes to instead of this one, by its id: a label on the box, never a word in the text.
+	const [asking, setAsking] = useState<string | null>(() => initialAsking ?? null);
+	// Archived or deleted since it was picked: the label stays, without its name, and nothing is sent to it.
+	const askedRoom = asking && mention ? listedRoom(asking, mention.candidates, mention.currentRoomId) : null;
+	const askingGone = !!asking && !askedRoom;
+	const askingName = asking ? askedRoom?.displayName ?? ANOTHER_ROOM : null;
+	useEffect(() => {
+		onAskingChange?.(asking);
+	}, [asking, onAskingChange]);
+	const boxHolds = boxHasText || !!asking;
+	useEffect(() => {
+		onBoxHoldsChange?.(boxHolds);
+	}, [boxHolds, onBoxHoldsChange]);
+	const boxEmpty = draft === "" && !asking;
 	const [mentionIndex, setMentionIndex] = useState(0);
 	// §8.3: the visible rejection when a composer @-mention is attempted while a
 	// consult card is docked. Cleared on the next keystroke so it never lingers.
@@ -856,36 +877,28 @@ export function ComposerInput({
 	// Esc dismisses the popover for the current trigger; any further typing
 	// (onChange) clears this so it reopens.
 	const [mentionDismissed, setMentionDismissed] = useState(false);
+	// The notice the box has changed since, which no longer shows; one there when the box is made belongs to the box before it.
+	const [noticeDone, setNoticeDone] = useState<number | null>(() => notice?.key ?? null);
+	const noticeShown = notice && notice.key !== noticeDone ? notice.words : null;
+	// The draft as it was when an input method began composing, or null while none composes.
+	const composeFromRef = useRef<string | null>(null);
 	const textareaNodeRef = useRef<HTMLTextAreaElement | null>(null);
-	const mirrorRef = useRef<HTMLDivElement | null>(null);
-	// Whether an input method composes and whether text is selected (see BoxText).
-	const [composing, setComposing] = useState(false);
-	const [selecting, setSelecting] = useState(false);
-	// Caret to restore after a programmatic draft edit (mention completion).
+	// Caret to restore after a programmatic draft edit (a room picked or labelled).
 	const pendingCaretRef = useRef<number | null>(null);
-	// A leading mention of a known room routes the send to a consult. Skipped
-	// while busy (the draft goes as a normal send). With no question after the
-	// name yet, Send waits for one, files attached or not.
-	const leadingMention = mention && !mention.busy ? resolveLeadingMention(draft, mention.candidates, mention.currentRoomId) : null;
-	const awaitingQuestion = leadingMention?.kind === "awaiting-question";
-	const queueRefused = draft.trim() ? queueRefusal?.(draft) ?? null : null;
-	const sendDisabled = sendUnavailable || awaitingQuestion || !!queueRefused || (!draft.trim() && !allowEmptySend);
-	const sendButtonTitle = !sendUnavailable && awaitingQuestion ? "Type your question after the name" : !sendUnavailable && queueRefused ? queueRefused : sendTitle;
-	// A known room's name at the start shows in the effort dial's colour, as
-	// long as it routes the send to that room. A textarea draws its text in one
-	// colour, so a layer over it draws the text instead and the box's own text
-	// turns transparent; clicks, the caret and the selection stay the box's.
-	// The name is the room's id, the match ignoring only case, so it is the '@'
-	// and as many letters as the id has.
-	const boxText: BoxText = !leadingMention || selecting ? "box" : composing ? "box-and-name" : "layer";
-	const mentionLength = leadingMention && boxText !== "box" ? leadingMention.room.id.length + 1 : 0;
+	// Asking a room needs a question, files attached or not: files do not go with it.
+	const awaitingQuestion = !!asking && !draft.trim();
+	const queueRefused = draft.trim() ? queueRefusal?.(draft, asking) ?? null : null;
+	const sendDisabled = sendUnavailable || askingGone || awaitingQuestion || !!queueRefused || (!draft.trim() && !allowEmptySend);
+	const sendButtonTitle = sendUnavailable ? sendTitle : askingGone ? ROOM_GONE : awaitingQuestion ? TYPE_QUESTION : queueRefused ?? sendTitle;
+	// A later '@' word that names one room: the line above the box says how to ask it; the message still goes to this room.
+	const laterRoom = mention && !asking ? laterMentionRoom(draft, mention.candidates, mention.currentRoomId) : null;
 
 	// Mention popover state. The interactive picker opens only when a trigger is
-	// active, the room is not busy, it has not been dismissed, and at least one
-	// room matches — so an unmatched '@' never traps Enter. While busy a trigger
-	// shows only the disabled affordance (with a title), and submit falls back to
-	// normal send.
-	const rawTrigger = mention ? detectMentionQuery(draft, caret) : null;
+	// active, no room is on the box, the room is not busy, it has not been
+	// dismissed, and at least one room matches, so an unmatched '@' never traps
+	// Enter. While busy a trigger shows only the disabled affordance (with a
+	// title).
+	const rawTrigger = mention && !asking ? detectMentionQuery(draft, caret) : null;
 	const mentionQuery = mention && !mention.busy && !mentionDismissed ? rawTrigger : null;
 	const mentionMatches: MentionCandidateRoom[] = mention && mentionQuery
 		? filterMentionCandidates(mention.candidates, mentionQuery.query, mention.currentRoomId)
@@ -901,6 +914,7 @@ export function ComposerInput({
 
 	useEffect(() => {
 		setDraft(initialDraftValue ?? "");
+		setAsking(initialAsking ?? null);
 		setMentionDismissed(false);
 	}, [draftResetKey]);
 
@@ -922,7 +936,6 @@ export function ComposerInput({
 		const end = (initialDraftValue ?? "").length;
 		el.setSelectionRange(end, end);
 		setCaret(end);
-		setSelecting(false);
 	}, [draftResetKey]);
 
 	// Reset the highlighted row whenever the query changes.
@@ -942,7 +955,7 @@ export function ComposerInput({
 		el.style.height = `${el.scrollHeight}px`;
 	}, [draft]);
 
-	// Restore the caret after a mention completion rewrote the draft.
+	// Restore the caret after picking or labelling a room rewrote the draft.
 	useLayoutEffect(() => {
 		const el = textareaNodeRef.current;
 		if (!el || pendingCaretRef.current == null) return;
@@ -951,63 +964,44 @@ export function ComposerInput({
 		el.focus();
 		el.setSelectionRange(pos, pos);
 		setCaret(pos);
-		setSelecting(false);
-	}, [draft]);
+	}, [draft, asking]);
 
-	// After the auto-grow above, so the layer takes the box's new height.
-	useLayoutEffect(() => {
-		const box = textareaNodeRef.current;
-		const mirror = mirrorRef.current;
-		if (!box || !mirror) return;
-		alignMirror(box, mirror);
-		const Observer = box.ownerDocument.defaultView?.ResizeObserver;
-		if (!Observer) return;
-		const observer = new Observer(() => alignMirror(box, mirror));
-		observer.observe(box);
-		return () => observer.disconnect();
-	}, [draft, mentionLength]);
-
-	// A click inside a selection clears it only after the click's own events,
-	// so the page's selection event says when text stops (or starts) being selected.
-	useEffect(() => {
-		const box = textareaNodeRef.current;
-		if (!box) return;
-		const page = box.ownerDocument;
-		const onSelectionChange = () => {
-			if (page.activeElement === box) setSelecting(box.selectionStart !== box.selectionEnd);
-		};
-		page.addEventListener("selectionchange", onSelectionChange);
-		return () => page.removeEventListener("selectionchange", onSelectionChange);
-	}, []);
-
-	useEffect(() => setComposerEmpty(draft === ""), [draft]);
+	useEffect(() => setComposerEmpty(boxEmpty), [boxEmpty]);
+	// The box changed: a notice about what it held before no longer applies.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	useEffect(() => setNoticeDone(notice?.key ?? null), [draft, asking]);
 	useEffect(() => () => setComposerEmpty(true), []);
 
 	// Enter and Esc from anywhere on the page, one layer at a time: an open
 	// dialog, menu or viewer takes Esc first and that Esc does nothing else;
 	// a text field keeps its own keys. With nothing open and the box empty,
 	// Enter answers the one waiting question with yes and Esc with no, unless
-	// a button or link has the focus, since Enter presses it.
-	const pageKeyRef = useRef<(enter: boolean) => boolean>(() => false);
-	pageKeyRef.current = (enter) => {
-		if (keyboardApproval && draft === "") {
-			if (enter) keyboardApproval.approve();
+	// a button or link has the focus, since Enter presses it. The room's
+	// question above the box takes Esc as its no, and Cmd/Ctrl+Enter as its
+	// Allow this time where the box would send nothing.
+	const pageKeyRef = useRef<(key: "enter" | "escape" | "chord", repeat: boolean) => boolean>(() => false);
+	pageKeyRef.current = (key, repeat) => {
+		if (key === "chord") return askPanelChord(repeat);
+		if (keyboardApproval && boxEmpty) {
+			if (key === "enter") keyboardApproval.approve();
 			else keyboardApproval.decline();
 			return true;
 		}
+		if (key === "escape" && boxEmpty && askPanelEscape(repeat)) return true;
 		// Esc anywhere on the page stops the answer while it runs.
-		return !enter && !!onEscapeStop?.();
+		return key === "escape" && !!onEscapeStop?.();
 	};
 	useEffect(() => {
 		const onKeyDown = (event: globalThis.KeyboardEvent) => {
 			const enter = event.key === "Enter" && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
-			if ((event.key !== "Escape" && !enter) || event.defaultPrevented || event.isComposing) return;
+			const chord = event.key === "Enter" && !event.shiftKey && !event.altKey && chordHeld(event);
+			if ((event.key !== "Escape" && !enter && !chord) || event.defaultPrevented || event.isComposing) return;
 			const target = event.target instanceof HTMLElement ? event.target : null;
 			if (target?.closest(".composer-box")) return;
 			if (isTextField(target)) return;
-			if (enter && target && !enterReachesQuestion(target)) return;
+			if ((enter || chord) && target && !enterReachesQuestion(target)) return;
 			if (otherLayerOpen()) return;
-			if (pageKeyRef.current(enter)) event.preventDefault();
+			if (pageKeyRef.current(chord ? "chord" : enter ? "enter" : "escape", event.repeat)) event.preventDefault();
 		};
 		document.addEventListener("keydown", onKeyDown);
 		return () => document.removeEventListener("keydown", onKeyDown);
@@ -1015,49 +1009,98 @@ export function ComposerInput({
 
 	const syncCaret = useCallback((el: HTMLTextAreaElement) => {
 		setCaret(el.selectionStart ?? el.value.length);
-		setSelecting(el.selectionStart !== el.selectionEnd);
 	}, []);
 
 	const selectMention = useCallback((room: MentionCandidateRoom) => {
-		const trigger = detectMentionQuery(draft, caret);
-		if (!trigger) return;
-		const { text, caret: nextCaret } = completeMention(draft, trigger, room);
-		pendingCaretRef.current = nextCaret;
+		const rest = draftAfterPick(draft);
+		pendingCaretRef.current = Math.max(0, caret - (draft.length - rest.length));
 		setMentionDismissed(false);
-		setDraft(text);
+		setAsking(room.id);
+		setDraft(rest);
 	}, [draft, caret]);
+
+	// Typing in the box. The space after a word at the start that names one
+	// room puts that room on the box, unless Esc dismissed the list for it.
+	// While an input method composes, the words stay as they are: the label
+	// forms once the word is done (`from`, the draft before it began).
+	function changeDraft(box: HTMLTextAreaElement, from = draft) {
+		const next = box.value;
+		const composing = composeFromRef.current !== null;
+		const labelled = !composing && mention && !mention.busy && !asking && !mentionDismissed ? labelAtFirstSpace(from, next, mention.candidates, mention.currentRoomId) : null;
+		// Esc holds while an input method composes, so the word it ends with is judged with Esc's choice.
+		if (!composing) setMentionDismissed(false);
+		setConsultGateNotice(null);
+		if (labelled) {
+			pendingCaretRef.current = Math.max(0, (box.selectionStart ?? next.length) - (next.length - labelled.rest.length));
+			setAsking(labelled.room.id);
+			setDraft(labelled.rest);
+			return;
+		}
+		setDraft(next);
+		syncCaret(box);
+	}
+
+	// The label comes off; the text stays, and goes to this room.
+	const stopAsking = useCallback(() => {
+		setAsking(null);
+		setConsultGateNotice(null);
+		textareaNodeRef.current?.focus();
+	}, []);
+
+	// Asking a room: a fresh question to it, now or once the answer here ends.
+	const askRoom = useCallback((now: boolean) => {
+		if (!mention || !asking) return;
+		// A mention here always means a fresh consult, so while a card is docked
+		// it is refused visibly: the card is where you follow up, and a keystroke
+		// must never drop a stack not yet added to the conversation. The draft
+		// is kept so nothing is lost.
+		if (mention.activeConsultDisplayName) {
+			setConsultGateNotice(`a consult with @${mention.activeConsultDisplayName} is open. Follow up in the card, or dismiss it first.`);
+			return;
+		}
+		// Only clear the box if the consult was accepted. With one already
+		// active, or the socket down, the request is refused, and wiping the
+		// typed question would lose it with no feedback; the box stays for a
+		// retry, its label with it.
+		if (mention.onConsultRequest(asking, draft.trim(), now)) {
+			setDraft("");
+			setAsking(null);
+			setMentionDismissed(false);
+		}
+	}, [mention, asking, draft]);
 
 	const submitDraft = useCallback(() => {
 		if (sendDisabled) return;
-		if (mention && leadingMention?.kind === "consult") {
-			// A mention here always means a fresh consult, so while a card is docked
-			// it is refused visibly: the card is where you follow up, and a keystroke
-			// must never drop a stack not yet added to the conversation. The draft
-			// is kept so nothing is lost.
-			if (mention.activeConsultDisplayName) {
-				setConsultGateNotice(`a consult with @${mention.activeConsultDisplayName} is open. Follow up in the card, or dismiss it first.`);
-				return;
-			}
-			// Only clear the composer if the consult was accepted. With one already
-			// active, or the socket down, the request is refused, and wiping the
-			// typed question would lose it with no feedback; the draft stays for a
-			// retry.
-			const accepted = mention.onConsultRequest(leadingMention.room.id, leadingMention.question);
-			if (accepted) {
-				setDraft("");
-				setMentionDismissed(false);
-			}
+		if (asking) {
+			askRoom(false);
 			return;
 		}
 		const accepted = onSend(draft);
 		if (accepted) {
 			setDraft("");
 		}
-	}, [draft, onSend, sendDisabled, mention, leadingMention]);
+	}, [draft, onSend, sendDisabled, asking, askRoom]);
+
+	// Cmd+Enter on a Mac, Ctrl+Enter elsewhere: now, even through the answer; in an empty box, the first queued message goes now.
+	function sendNowByChord() {
+		// A room on the label waits for its question, also with messages queued.
+		if (!boxHolds) onSendQueuedNow?.();
+		else if (sendUnavailable || askingGone || awaitingQuestion || queueRefused) return;
+		else if (asking) askRoom(true);
+		else if (onSendNow?.(draft)) setDraft("");
+	}
+	// The same chord pressed on the room's question above the box, when its answer doesn't take it.
+	useBoxChord(sendNowByChord);
 
 	function handleComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
 		// Enter that confirms a Japanese, Chinese or Korean word is the input method's, never a send.
 		if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+		// Backspace at the very start of the box takes the room's label off.
+		if (asking && e.key === "Backspace" && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
+			e.preventDefault();
+			stopAsking();
+			return;
+		}
 		if (mentionOpen) {
 			// Navigation and selection never submit the message (spec invariant).
 			if (e.key === "ArrowDown") { e.preventDefault(); setMentionIndex((i) => (Math.min(i, mentionMatches.length - 1) + 1) % mentionMatches.length); return; }
@@ -1069,18 +1112,27 @@ export function ComposerInput({
 		// it, Enter sends as always and the card stays.
 		// Cmd/Ctrl+Enter is never the card's: in an empty box it sends the first queued message now.
 		if (e.key === "Escape" && otherLayerOpen()) return;
-		if (keyboardApproval && draft === "" && !e.shiftKey && !(e.key === "Enter" && chordHeld(e.nativeEvent)) && (e.key === "Enter" || e.key === "Escape")) {
+		if (keyboardApproval && boxEmpty && !e.shiftKey && !(e.key === "Enter" && chordHeld(e.nativeEvent)) && (e.key === "Enter" || e.key === "Escape")) {
 			e.preventDefault();
 			e.stopPropagation();
 			if (e.key === "Enter") keyboardApproval.approve();
 			else keyboardApproval.decline();
 			return;
 		}
-		// Cmd+Enter on a Mac, Ctrl+Enter elsewhere: now, even through the answer; in an empty box, the first queued message goes now.
+		// The room's question above the box: Esc in the empty box is its no, not Stop.
+		if (e.key === "Escape" && boxEmpty && askPanelEscape(e.nativeEvent.repeat)) {
+			e.preventDefault();
+			e.stopPropagation();
+			return;
+		}
+		// Cmd/Ctrl+Enter with nothing in the box and nothing queued: its Allow this time, once awake.
+		if (e.key === "Enter" && !e.shiftKey && !e.altKey && chordHeld(e.nativeEvent) && !boxHolds && askPanelChord(e.nativeEvent.repeat)) {
+			e.preventDefault();
+			return;
+		}
 		if (e.key === "Enter" && !e.shiftKey && !e.altKey && chordHeld(e.nativeEvent) && (onSendNow || onSendQueuedNow)) {
 			e.preventDefault();
-			if (!boxHasText) onSendQueuedNow?.();
-			else if (!sendUnavailable && !queueRefused && onSendNow?.(draft)) setDraft("");
+			sendNowByChord();
 			return;
 		}
 		if (e.key === "Enter" && !e.shiftKey) {
@@ -1113,6 +1165,11 @@ export function ComposerInput({
 	}
 
 	return (
+		<>
+		{/* Above the box, outside it: a line about the message, never a line of it. */}
+		{noticeShown && <div className="composer-edit-line" role="status">{noticeShown}</div>}
+		{laterRoom && <div className="composer-ask-hint" role="status">{askHint(laterRoom.displayName)}</div>}
+		{askingGone && <div className="composer-room-gone" role="status">{`${ROOM_GONE}.`}</div>}
 		<div className="composer-box">
 			{mentionOpen && mentionQuery && (
 				<MentionConsultPopover
@@ -1127,27 +1184,27 @@ export function ComposerInput({
 			{consultGateNotice && <div className="composer-consult-gate" role="status">{consultGateNotice}</div>}
 			{stagingSlot}
 			<div className="composer-input">
-				{mentionLength > 0 && (
-					<div className={boxText === "box-and-name" ? "composer-mirror name-only" : "composer-mirror"} ref={mirrorRef} aria-hidden="true">
-						<span className="composer-mention">{draft.slice(0, mentionLength)}</span>
-						{draft.slice(mentionLength)}
-						{/* The box shows a line after a final line break; an empty text node gives none. */}
-						{draft.endsWith("\n") && "\u200b"}
-					</div>
+				{askingName && (
+					<span className="composer-asking">
+						<span className="composer-asking-name">{askingWords(askingName)}</span>
+						<button type="button" className="composer-asking-off" aria-label={`Don't ask ${askingName}`} title={`Don't ask ${askingName}`} onClick={stopAsking}>×</button>
+					</span>
 				)}
 				<textarea
 					ref={setTextareaNode}
-					className={boxText === "layer" ? "has-mention" : undefined}
 					value={draft}
-					onChange={(e) => { setMentionDismissed(false); setConsultGateNotice(null); setDraft(e.target.value); syncCaret(e.target); }}
+					onChange={(e) => changeDraft(e.target)}
+					onCompositionStart={() => { composeFromRef.current ??= draft; }}
+					onCompositionEnd={(e) => {
+						const from = composeFromRef.current ?? draft;
+						composeFromRef.current = null;
+						changeDraft(e.currentTarget, from);
+					}}
 					onKeyUp={(e) => syncCaret(e.currentTarget)}
 					onClick={(e) => syncCaret(e.currentTarget)}
 					onSelect={(e) => syncCaret(e.currentTarget)}
 					onKeyDown={handleComposerKeyDown}
 					onPaste={handleComposerPaste}
-					onScroll={(e) => { if (mirrorRef.current) mirrorRef.current.scrollTop = e.currentTarget.scrollTop; }}
-					onCompositionStart={() => setComposing(true)}
-					onCompositionEnd={() => setComposing(false)}
 					placeholder={placeholder}
 					rows={2}
 					spellCheck={false}
@@ -1165,6 +1222,7 @@ export function ComposerInput({
 				</div>
 			</div>
 		</div>
+		</>
 	);
 }
 
@@ -1209,7 +1267,10 @@ export function InRoomChatShellView({
 	composerPlaceholder,
 	sendUnavailable,
 	initialDraftValue,
+	initialAsking,
 	draftResetKey,
+	onAskingChange,
+	composerNotice,
 	mention,
 	onResolveApproval,
 	onApprovalPreview,
@@ -1273,15 +1334,15 @@ export function InRoomChatShellView({
 	// The one "Reconnecting…" the page shows, in the working dot's place.
 	const turnStatusLine = !connected && reconnectState === "reconnecting" && !connectionStopped ? "Reconnecting…" : statusLine;
 	const showThinkingIndicator = Boolean(turnStatusLine) || (busy && items.length > 0 && !visiblyStreaming);
-	const [boxHasText, setBoxHasText] = useState(false);
-	const queuedSlot = useMemo(() => (queued && queued.length > 0 && queuedActions ? <QueuedBubbles key="queued" messages={queued} actions={queuedActions} boxHasText={boxHasText} /> : null), [queued, queuedActions, boxHasText]);
+	const [boxHolds, setBoxHolds] = useState(false);
+	const queuedSlot = useMemo(() => (queued && queued.length > 0 && queuedActions ? <QueuedBubbles key="queued" messages={queued} actions={queuedActions} boxHolds={boxHolds} /> : null), [queued, queuedActions, boxHolds]);
 	const soleApproval = soleKeyboardApproval(items);
 	const keyboardApproval = useMemo(() => {
 		if (!soleApproval) return null;
-		const labels = confirmApprovalLabels(soleApproval);
+		const { enter, escape } = keyboardAnswers(soleApproval);
 		return {
-			approve: () => onResolveApproval(soleApproval.requestId, true, labels.approve),
-			decline: () => onResolveApproval(soleApproval.requestId, false, labels.decline),
+			approve: () => onResolveApproval(soleApproval.requestId, enter[0], enter[1]),
+			decline: () => onResolveApproval(soleApproval.requestId, escape[0], escape[1]),
 		};
 	}, [soleApproval, onResolveApproval]);
 	// The context ring and Reconnect: under the box on wider screens, inside it
@@ -1306,7 +1367,7 @@ export function InRoomChatShellView({
 				</span>
 			)}
 			{!connected && reconnectState === "failed" && onReconnect && !connectionStopped && (
-				<button type="button" className="icon-btn composer-reconnect-btn" title={sharedServer ? "Try again now. If it keeps failing, reload the page or tell your admin." : "The automatic reconnect gave up. Try again now. If it keeps failing, restart exxperts."} onClick={onReconnect}>Reconnect</button>
+				<button type="button" className="rs-btn rs-btn-sm composer-reconnect-btn" title={sharedServer ? "Try again now. If it keeps failing, reload the page or tell your admin." : "The automatic reconnect gave up. Try again now. If it keeps failing, restart exxperts."} onClick={onReconnect}>Reconnect</button>
 			)}
 		</>
 	);
@@ -1642,7 +1703,9 @@ export function InRoomChatShellView({
 								sendUnavailable={sendUnavailable}
 								sendTitle={connected ? "Send" : "Waiting for the connection"}
 								initialDraftValue={initialDraftValue}
+								initialAsking={initialAsking}
 								draftResetKey={draftResetKey}
+								onAskingChange={onAskingChange}
 								mention={mention}
 								statusSlot={phone ? contextSlot : composerAttachSlot && <div className="composer-actions">{composerAttachSlot}</div>}
 								rightActions={phone ? <>{composerAttachSlot}{composerRememberSlot}{composerRightActions}</> : composerRightActions}
@@ -1654,7 +1717,8 @@ export function InRoomChatShellView({
 								onSendQueuedNow={onSendQueuedNow}
 								queueRefusal={queueRefusal}
 								onEscapeStop={onEscapeStop}
-								onBoxTextChange={setBoxHasText}
+								onBoxHoldsChange={setBoxHolds}
+								notice={composerNotice}
 							/>
 							{/* Wider screens keep the box to the text, the paperclip and Send;
 							    the meter, Remember and the model sit on one quiet row under it.

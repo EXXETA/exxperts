@@ -33,11 +33,11 @@ const {
 	persistentRoomWorkspaceDefaultPath,
 	persistentRoomWorkspacePolicyPath,
 	readPersistentRoomCapabilityPolicy,
-	releasePersistentRoomThreadWorkspaceMirror,
 	resolvePersistentRoomEffectiveWorkspacePolicy,
 	writePersistentRoomCapabilityPolicy,
 	writePersistentRoomDefaultCapabilityPolicy,
 } = await import("../src/persistent-room-workspace-policy.js");
+const { roomBoxAvailable } = await import("../src/room-box/box-available.js");
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -139,16 +139,16 @@ try {
 	assert(!fs.existsSync(sidecarAPath), "thread runtime creation must not write a room-default mirror sidecar");
 	const effectiveA = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage);
 	assert(effectiveA.source === "room-default", `thread A effective source should be room-default, got ${effectiveA.source}`);
-	assert(effectiveA.workspaceAccessMode === "bounded", "thread A should follow bounded room default");
-	assert(effectiveA.allowedToolNames.join(",") === "ls,find,grep,read,write,edit", "thread A should expose exact bounded workspace bundle");
+	assert(effectiveA.workspaceAccessMode === "localFiles", "a Bounded room default reads as the one access");
+	assert(effectiveA.allowedToolNames.join(",") === "read,ls,find,grep,write,edit", "thread A should expose all six file tools");
 	assert(effectiveA.workspaceToolsEnabled === true, "workspace tools should be enabled from the live default");
-	assert(effectiveA.bashEnabled === false, "bash must remain disabled under bounded default");
+	assert(effectiveA.bashEnabled === false, "a Bounded room's commands stay off");
 	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveA, runtimeCwd) === fs.realpathSync.native(workspaceA), "bounded effective policy should use its workspace as the runtime cwd");
 	const bootPromptA = readPersistentAgentBootPromptSnapshot(agentId, writeA.thread.runtime);
-	assert(bootPromptA.includes("Workspace label: Workspace A"), "boot prompt should include workspace A label");
+	assert(bootPromptA.includes("Folder name: Workspace A"), "boot prompt should include workspace A label");
 	assert(crypto.createHash("sha256").update(bootPromptA, "utf-8").digest("hex") === writeA.thread.runtime.bootPromptSha256, "boot prompt hash should match runtime metadata");
 	const sectionA = buildPersistentRoomCurrentWorkspaceSection(effectiveA);
-	assert(sectionA.includes("## Current workspace") && sectionA.includes("Workspace label: Workspace A"), "live workspace stanza should carry the current label");
+	assert(sectionA.includes("## Current workspace") && sectionA.includes("Folder name: Workspace A"), "live workspace stanza should carry the current label");
 
 	// Changing the room default mid-conversation applies to the SAME thread at
 	// its next resolution — tools, bash, runtime cwd and the per-turn stanza all
@@ -167,14 +167,15 @@ try {
 	const effectiveAfterChange = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage);
 	assert(effectiveAfterChange.source === "room-default", "mid-conversation default change should keep resolving from the room default");
 	assert(effectiveAfterChange.workspaceAccessMode === "localFiles", "thread A should pick up Local files mode from the changed default");
-	assert(effectiveAfterChange.allowedToolNames.join(",") === "read,ls,grep", "thread A should pick up the changed default's tool subset");
-	assert(effectiveAfterChange.bashEnabled === true, "thread A should pick up the changed default's bash setting");
+	assert(effectiveAfterChange.allowedToolNames.join(",") === "read,ls,find,grep", "thread A should pick up the changed default's Can change files off");
+	// With Can change files off, commands run only where protection does.
+	assert(effectiveAfterChange.bashEnabled === roomBoxAvailable(), "thread A should pick up the changed default's commands");
 	assert(effectiveAfterChange.policy?.roots[0]?.realpath === fs.realpathSync.native(workspaceB), "thread A should pick up workspace B root");
 	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveAfterChange, runtimeCwd) === fs.realpathSync.native(workspaceB), "local-files effective policy should use workspace B as runtime cwd");
 	assert(effectiveAfterChange.fingerprint.value !== effectiveA.fingerprint.value, "changed default must change the effective-policy fingerprint (the live-session rebind trigger)");
 	const sectionB = buildPersistentRoomCurrentWorkspaceSection(effectiveAfterChange);
-	assert(sectionB.includes("Workspace label: Workspace B") && sectionB.includes("Bash/shell access: enabled"), "live workspace stanza should carry the changed default's facts");
-	assert(readPersistentAgentBootPromptSnapshot(agentId, writeA.thread.runtime).includes("Workspace label: Workspace A"), "frozen boot snapshot stays untouched; the live stanza is the correction channel");
+	assert(sectionB.includes("Folder name: Workspace B") && sectionB.includes(roomBoxAvailable() ? "Commands: on" : "Commands: off"), "live workspace stanza should carry the changed default's facts");
+	assert(readPersistentAgentBootPromptSnapshot(agentId, writeA.thread.runtime).includes("Folder name: Workspace A"), "frozen boot snapshot stays untouched; the live stanza is the correction channel");
 
 	// Clearing the default applies live too: the same thread resolves to none.
 	deletePersistentRoomDefaultCapabilityPolicy(agentId, storage);
@@ -184,8 +185,8 @@ try {
 	assert(sectionCleared.includes("No folder is set for this room"), "live workspace stanza should state that no folder is set");
 	writePersistentRoomDefaultCapabilityPolicy(defaultB, storage);
 
-	// A deliberate per-conversation override (the workspace/validate flow) still
-	// wins over the room default, and mirror healing must not touch it.
+	// A conversation's own settings, which only older versions wrote (the
+	// workspace/validate flow), give way to the room's; the file stays as it was.
 	const overridePolicy = createPersistentRoomCapabilityPolicy({
 		agentId,
 		conversationId: threadA,
@@ -196,22 +197,14 @@ try {
 		source: "manual",
 	});
 	writePersistentRoomCapabilityPolicy(overridePolicy, storage);
+	const keptSidecar = fs.readFileSync(sidecarAPath, "utf-8");
 	const effectiveOverride = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage);
-	assert(effectiveOverride.source === "thread", "thread override should win over the room default");
-	assert(effectiveOverride.policy?.roots[0]?.realpath === fs.realpathSync.native(workspaceA), "thread override should keep its own root");
-	assert(releasePersistentRoomThreadWorkspaceMirror(agentId, threadA, storage).released === false, "a deliberate override must not be released as a mirror");
-	assert(fs.existsSync(sidecarAPath), "deliberate override sidecar should survive mirror healing");
+	assert(effectiveOverride.source === "room-default", "a conversation's own settings give way to the room's");
+	assert(effectiveOverride.policy?.roots[0]?.realpath === fs.realpathSync.native(workspaceB), "the conversation uses the room's folder");
+	assert(readPersistentRoomCapabilityPolicy(agentId, threadA, storage) === null, "a conversation's own settings are not read");
+	writePersistentRoomDefaultCapabilityPolicy(defaultB, storage);
+	assert(fs.readFileSync(sidecarAPath, "utf-8") === keptSidecar, "the conversation's own file stays as it was after a room save");
 	fs.rmSync(sidecarAPath, { force: true });
-
-	// A legacy mirror (old snapshot regime: sidecar content-identical to the
-	// default) IS released, so the thread follows the live default again.
-	const mirrorRaw = JSON.parse(fs.readFileSync(persistentRoomWorkspaceDefaultPath(agentId, storage), "utf-8"));
-	fs.mkdirSync(path.dirname(sidecarAPath), { recursive: true, mode: 0o700 });
-	fs.writeFileSync(sidecarAPath, JSON.stringify({ ...mirrorRaw, policyId: "prcp_legacy_mirror_fixture", conversationId: threadA }, null, 2) + "\n", { mode: 0o600 });
-	assert(readPersistentRoomCapabilityPolicy(agentId, threadA, storage)?.policyId === "prcp_legacy_mirror_fixture", "legacy mirror fixture should read back");
-	assert(releasePersistentRoomThreadWorkspaceMirror(agentId, threadA, storage).released === true, "a sidecar mirroring the current default should be released");
-	assert(!fs.existsSync(sidecarAPath), "released mirror sidecar should be deleted");
-	assert(resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage).source === "room-default", "after mirror release the thread follows the live default");
 
 	// The one boundary the live model keeps: a turn in flight refuses the
 	// mutation and finishes under the rules it started with.
@@ -241,9 +234,9 @@ try {
 	assert(writeB.thread.runtime.kind === "pi-session-jsonl", "thread B should be Pi-backed");
 	assert(!fs.existsSync(persistentRoomWorkspacePolicyPath(agentId, threadB, storage)), "thread B creation must not write a mirror sidecar");
 	const bootPromptB = readPersistentAgentBootPromptSnapshot(agentId, writeB.thread.runtime);
-	assert(bootPromptB.includes("Workspace label: Workspace B"), "new thread boot prompt should use the current room default");
-	assert(bootPromptB.includes("Workspace tools: read, ls, grep"), "new thread boot prompt should list the current default's tools");
-	assert(bootPromptB.includes("Bash/shell access: enabled"), "new thread boot prompt should reflect the current default's bash setting");
+	assert(bootPromptB.includes("Folder name: Workspace B"), "new thread boot prompt should use the current room default");
+	assert(bootPromptB.includes("File tools: read, ls, find, grep") && bootPromptB.includes("Can change files: off"), "new thread boot prompt should list the current default's tools");
+	assert(bootPromptB.includes(roomBoxAvailable() ? "Commands: on" : "Commands: off"), "new thread boot prompt should reflect the current default's commands");
 
 	console.log("persistent-room workspace live-default smoke passed");
 } catch (error) {

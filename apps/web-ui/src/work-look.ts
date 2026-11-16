@@ -6,8 +6,10 @@
  * asked for a word of it.
  */
 import type { ChatItem } from "./types";
-import { commandAborted, commandDeclined, lastName, nobodyToApprove, stoppedBeforeAnswer, stoppedBeforeAsking } from "./step-lines";
+import { ASK_FOLDER, ASK_FOR_COMMANDS_TOOL_NAME, ASK_FOR_FOLDER_TOOL_NAME, ASK_OUTCOME, ASKED_FOR_COMMANDS, ASKED_FOR_FOLDER, type AskOutcome, commandAsShown, type FolderAskAccess, type FolderLasts, pageCardAddress, RUN_OUTSIDE_BOX_TOOL_NAME } from "../../web-server/src/room-box/card-text";
+import { commandAborted, commandDeclined, connectorNotRunLine, isCommandStep, lastName, nobodyToApprove, pageNotOpened, stoppedBeforeAnswer, stoppedBeforeAsking } from "./step-lines";
 import { approvalAsking, declinedAnswer, splitFencedBrief } from "./components/Approval";
+import { connectorApprovalSubject } from "../../web-server/src/room-approval-titles";
 
 type ToolItem = Extract<ChatItem, { kind: "tool" }>;
 type ApprovalItem = Extract<ChatItem, { kind: "approval" }>;
@@ -25,7 +27,7 @@ export type WorkPiece =
 	| { kind: "step"; item: ToolItem; ask?: ApprovalItem }
 	| { kind: "ask"; item: ApprovalItem };
 
-/** The command a command question asks about, as the server wrote it under its fence; null for any other question. */
+/** The command a command question saved before the run question asks about, as the server wrote it under its fence; null for any other question. */
 export function askedCommand(ask: ApprovalItem): string | null {
 	const fenced = splitFencedBrief(ask.message) ?? splitFencedBrief(ask.detail);
 	return fenced && /command/i.test(fenced.label) ? fenced.brief : null;
@@ -40,16 +42,27 @@ const commandHead = (text: string) => text.trim().slice(0, COMMAND_HEAD);
  * step, and the steps of one message are all placed before the first of them
  * asks. A command question names its command: it belongs to the earliest
  * command step with that command that has not asked yet, since the steps of
- * a message are prepared in order. Any other question belongs to the newest
+ * a message are prepared in order. The run question carries its command
+ * whole, as shown; one saved before it carries it under its fence, clipped
+ * when long. Any other question belongs to the newest
  * step still at work that has not asked; a step the page does not draw (a
  * hand-off) leaves its question a row of its own, never an earlier step's.
+ * A room's folder or commands card belongs to the earliest ask step of its
+ * kind that has none, and a page card to the earliest page step for its
+ * address.
  */
 function askOwner(pieces: WorkPiece[], ask: ApprovalItem): Extract<WorkPiece, { kind: "step" }> | null {
 	const command = askedCommand(ask);
 	const open = pieces.filter((piece): piece is Extract<WorkPiece, { kind: "step" }> => piece.kind === "step" && !piece.ask);
-	if (command !== null) return open.find((piece) => piece.item.name === "bash" && commandHead(String(piece.item.args?.command ?? "")) === commandHead(command)) ?? null;
+	// A room's folder or commands card is its ask step's, ended or not: those asks come one at a time, in order.
+	const askTool = ask.uiKind === "folder" ? ASK_FOR_FOLDER_TOOL_NAME : ask.uiKind === "commands" ? ASK_FOR_COMMANDS_TOOL_NAME : null;
+	if (askTool !== null) return open.find((piece) => piece.item.name === askTool) ?? null;
+	// A page card names its address: it is the earliest page step for that address, ended or not.
+	if (ask.uiKind === "site" && ask.address !== undefined) return open.find((piece) => piece.item.name === "fetch_url" && pageCardAddress(String(piece.item.args?.url ?? "")) === ask.address) ?? null;
+	if (ask.uiKind === "run") return open.find((piece) => piece.item.name === "bash" && commandAsShown(String(piece.item.args?.command ?? "")) === ask.command) ?? null;
+	if (command !== null) return open.find((piece) => isCommandStep(piece.item.name) && commandHead(String(piece.item.args?.command ?? "")) === commandHead(command)) ?? null;
 	const newest = open.at(-1);
-	return newest && newest.item.name !== "bash" && (newest.item.status === "writing" || newest.item.status === "running") ? newest : null;
+	return newest && !isCommandStep(newest.item.name) && (newest.item.status === "writing" || newest.item.status === "running") ? newest : null;
 }
 
 /** The pieces of one stretch, each question in the row of the step that asks it, or a row of its own. */
@@ -68,12 +81,80 @@ export function workPieces(stretch: ReadonlyArray<ChatItem>): WorkPiece[] {
 			else pieces.push({ kind: "ask", item });
 		}
 	}
-	return pieces;
+	// Once a connector step has ended, askOwner no longer gives it its card, as a command's own words do after a
+	// reload; with one connector step and one connector card in the stretch, the card can only be that step's.
+	// A yes keeps its own row too, so the card still shows it; a No or no answer is said by the step's row.
+	const steps = pieces.filter((piece) => piece.kind === "step");
+	const asks = pieces.filter((piece) => piece.kind === "ask");
+	if (steps.length === 1 && asks.length === 1 && !steps[0].ask && steps[0].item.name === "mcp" && connectorApprovalSubject(asks[0].item.title) !== null) {
+		const ask = asks[0].item;
+		steps[0].ask = ask;
+		if (ask.stopped || ask.unanswered || declinedAnswer(ask.done)) return pieces.filter((piece) => piece.kind !== "ask");
+	}
+	// A page card that ended with no yes and no step of its own here (its step is in an earlier stretch): the step's row says what came of it.
+	return pieces.filter((piece) => !(piece.kind === "ask" && piece.item.uiKind === "site" && piece.item.address !== undefined && (piece.item.stopped || piece.item.unanswered || declinedAnswer(piece.item.done))));
+}
+
+/**
+ * The newest command still running in the answer under way, as the site
+ * question's Running now row shows it, or null when none runs (a job an
+ * earlier command left running can reach a site too). A message the room
+ * took in while it answered doesn't end the answer. A step reads running from
+ * the moment the model has written it, so only one the server said has begun
+ * counts, and a command that waits for its own run-outside question has not.
+ */
+export function commandRunningNow(items: ReadonlyArray<ChatItem>): string | null {
+	// A question comes after its step, so the scan back meets it first.
+	const askedOutside = new Set<string>();
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind === "user" && !item.steered) return null;
+		if (item.kind === "approval" && item.uiKind === "outside" && askOpen(item)) askedOutside.add(item.command ?? "");
+		if (item.kind !== "tool" || !isCommandStep(item.name) || item.status !== "running" || item.startedAt === undefined) continue;
+		const command = commandAsShown(String(item.args?.command ?? ""));
+		if (!(item.name === RUN_OUTSIDE_BOX_TOOL_NAME && askedOutside.has(command))) return command;
+	}
+	return null;
 }
 
 /** A question still waiting for the person. */
 export function askOpen(ask: ApprovalItem | undefined): boolean {
 	return !!ask && approvalAsking(ask);
+}
+
+/** What a yes to a room's ask gave, as the line under it says it, and its way back. */
+export type RoomAskGiven =
+	| { kind: "folder"; path: string; name: string; access: FolderAskAccess; lasts: FolderLasts }
+	// A pick of a folder the room could already use: nothing new to take back.
+	| { kind: "folder-already"; name: string; access: FolderAskAccess }
+	| { kind: "commands" };
+
+const lowerFirst = (words: string): string => words.charAt(0).toLowerCase() + words.slice(1);
+
+const ASK_OUTCOMES: ReadonlySet<string> = new Set<AskOutcome>(["yes", "already", "not-now", "nobody", "not-asked"]);
+
+/** Whether a step's details say a room's ask was answered yes: the room's folders or commands changed. */
+export function roomAskYes(details: unknown): boolean {
+	return !!details && typeof details === "object" && (details as Record<string, unknown>)[ASK_OUTCOME] === "yes";
+}
+
+/**
+ * What a room's ask came to, from its step's details: its outcome, and on a
+ * yes what it gave, for the line under it. Null for any other step, or an
+ * ask whose details can't be read.
+ */
+export function roomAskResult(item: ToolItem): { outcome: AskOutcome; given: RoomAskGiven | null } | null {
+	if (item.name !== ASK_FOR_FOLDER_TOOL_NAME && item.name !== ASK_FOR_COMMANDS_TOOL_NAME) return null;
+	const details = item.details && typeof item.details === "object" ? item.details : {};
+	const outcome = details[ASK_OUTCOME];
+	if (typeof outcome !== "string" || !ASK_OUTCOMES.has(outcome)) return null;
+	const folder = details[ASK_FOLDER];
+	const named = folder && typeof folder.path === "string" && typeof folder.name === "string" && (folder.access === "read" || folder.access === "write") ? { path: folder.path as string, name: folder.name as string, access: folder.access as FolderAskAccess } : null;
+	if (outcome === "already" && item.name === ASK_FOR_FOLDER_TOOL_NAME) return { outcome, given: named ? { kind: "folder-already", name: named.name, access: named.access } : null };
+	if (outcome !== "yes") return { outcome: outcome as AskOutcome, given: null };
+	if (item.name === ASK_FOR_COMMANDS_TOOL_NAME) return { outcome, given: { kind: "commands" } };
+	// A pick that doesn't say how long it lasts went on the room's list.
+	return { outcome, given: named ? { kind: "folder", ...named, lasts: folder.lasts === "answer" ? "answer" : "room" } : null };
 }
 
 /** Where a step stands, as its row shows it. */
@@ -87,12 +168,12 @@ export function stepState(item: ToolItem, ask: ApprovalItem | undefined): StepSt
 	if (item.status === "running") return "running";
 	if (item.status === "done") return "done";
 	if (item.status === "stopped" || (item.status === "error" && (commandAborted(item.result) || stoppedBeforeAsking(item.result) || stoppedBeforeAnswer(item.result)))) return "stopped";
-	if (item.status === "error" && (commandDeclined(item.result) || nobodyToApprove(item.result))) return "denied";
+	if (item.status === "error" && (commandDeclined(item.result) || nobodyToApprove(item.result) || connectorNotRunLine(item) !== null || pageNotOpened(item) !== null)) return "denied";
 	return "failed";
 }
 
 /** The kind of a step, for its icon and for the folded line. */
-export type StepKind = "read" | "write" | "edit" | "command" | "search" | "web" | "page" | "list" | "handoff" | "connector" | "memory" | "skill" | "other";
+export type StepKind = "read" | "write" | "edit" | "command" | "search" | "web" | "page" | "list" | "handoff" | "connector" | "memory" | "skill" | "folder-ask" | "commands-ask" | "other";
 
 export function stepKind(name: string): StepKind {
 	switch (name) {
@@ -107,6 +188,7 @@ export function stepKind(name: string): StepKind {
 		case "edit":
 			return "edit";
 		case "bash":
+		case RUN_OUTSIDE_BOX_TOOL_NAME:
 			return "command";
 		case "grep":
 		case "find":
@@ -128,6 +210,10 @@ export function stepKind(name: string): StepKind {
 			return "memory";
 		case "read_skill":
 			return "skill";
+		case ASK_FOR_FOLDER_TOOL_NAME:
+			return "folder-ask";
+		case ASK_FOR_COMMANDS_TOOL_NAME:
+			return "commands-ask";
 		default:
 			return "other";
 	}
@@ -243,7 +329,7 @@ function commandOperands(words: string[], valueOptions: ReadonlySet<string>): { 
 	return { operands, pattern, path };
 }
 
-// Far more than a row shows: the row cuts the line with "…" where it runs out of room.
+// Far more than a row shows on a desktop, where the row cuts the line with "…"; on a phone the row takes the lines it needs.
 const LINE_HEAD = 300;
 
 export function commandAction(command: string): CommandAction {
@@ -305,7 +391,7 @@ export function commandKind(action: CommandAction): StepKind {
 
 /** A step's kind, a command's from what it does. */
 export function itemKind(item: ToolItem): StepKind {
-	return item.name === "bash" ? commandKind(commandAction(String(item.args?.command ?? ""))) : stepKind(item.name);
+	return isCommandStep(item.name) ? commandKind(commandAction(String(item.args?.command ?? ""))) : stepKind(item.name);
 }
 
 /**
@@ -374,7 +460,7 @@ export function stepResultWords(item: ToolItem): string {
 		if (!result.trim() || /^No files found|^\(empty directory\)/i.test(result)) return "none";
 		return plural(countLines(result), item.name === "ls" ? "entry" : "file", item.name === "ls" ? "entries" : "files");
 	}
-	if (item.name === "bash") {
+	if (isCommandStep(item.name)) {
 		const lines = countLines(result);
 		return lines ? plural(lines, "line", "lines") : "no output";
 	}
@@ -384,8 +470,11 @@ export function stepResultWords(item: ToolItem): string {
 /** How long a finished step took, when both its ends are known. */
 export function stepTime(item: ToolItem): string {
 	if (item.startedAt === undefined || item.endedAt === undefined || item.endedAt < item.startedAt) return "";
-	// A file read often ends within a few milliseconds, and "0.0 s" reads as no time at all.
-	const ms = item.endedAt - item.startedAt;
+	return tookText(item.endedAt - item.startedAt);
+}
+
+/** A step's or a thought's own time. A file read often ends within a few milliseconds, and "0.0 s" reads as no time at all. */
+export function tookText(ms: number): string {
 	return ms < 50 ? "<0.1 s" : durationText(ms);
 }
 
@@ -393,9 +482,8 @@ export function stepTime(item: ToolItem): string {
 export function durationText(ms: number): string {
 	const seconds = Math.max(0, ms) / 1000;
 	if (seconds < 10) return `${seconds.toFixed(1)} s`;
-	if (seconds < 60) return `${Math.round(seconds)} s`;
 	const whole = Math.round(seconds);
-	return `${Math.floor(whole / 60)} min ${whole % 60} s`;
+	return whole < 60 ? `${whole} s` : `${Math.floor(whole / 60)} min ${whole % 60} s`;
 }
 
 const KIND_PHRASES: Record<StepKind, (count: number) => string> = {
@@ -411,6 +499,8 @@ const KIND_PHRASES: Record<StepKind, (count: number) => string> = {
 	connector: (n) => (n === 1 ? "used a connector" : `used a connector ${n} times`),
 	memory: (n) => (n === 1 ? "searched memory" : `searched memory ${n} times`),
 	skill: (n) => (n === 1 ? "read a skill" : `read ${n} skills`),
+	"folder-ask": (n) => (n === 1 ? lowerFirst(ASKED_FOR_FOLDER) : `${lowerFirst(ASKED_FOR_FOLDER)} ${n} times`),
+	"commands-ask": (n) => (n === 1 ? lowerFirst(ASKED_FOR_COMMANDS) : `${lowerFirst(ASKED_FOR_COMMANDS)} ${n} times`),
 	other: (n) => (n === 1 ? "used a tool" : `used ${n} tools`),
 };
 

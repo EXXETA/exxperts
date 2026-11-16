@@ -24,9 +24,10 @@ export function formatFriendlyRunReason(run: Pick<PersistentRoomBackgroundRunVie
 		case "completed": return "Completed.";
 		case "already_completed": return "Already completed; no duplicate execution was performed.";
 		case "server_stopped": return "Stopped when exxperts stopped.";
-		// A shared server's two run rules write the person's own sentence as the message (the time limit's names the limit).
+		// A shared server's run rules write the person's own sentence as the message (the time limit's names the limit).
 		case "time_limit":
-		case "interrupted_by_restart": if (run.message) return run.message; break;
+		case "interrupted_by_restart":
+		case "owner_paused": if (run.message) return run.message; break;
 		default: break;
 	}
 	// The server's own text names engine parts and ids: never shown.

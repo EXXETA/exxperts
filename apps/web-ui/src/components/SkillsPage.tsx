@@ -51,7 +51,7 @@ function SkillUploadModal({ onClose, onFile }: { onClose: () => void; onFile: (f
 			<div className="skill-upload-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="skill-upload-modal-head">
 					<h3>Upload skill</h3>
-					<button className="icon-btn" aria-label="Close" onClick={onClose}>✕</button>
+					<button className="rs-btn rs-btn-icon" aria-label="Close" onClick={onClose}>✕</button>
 				</div>
 				<button
 					type="button"

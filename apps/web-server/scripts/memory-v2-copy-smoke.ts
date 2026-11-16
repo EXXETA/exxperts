@@ -1266,6 +1266,22 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const later = new Date(2026, 9, 20, 9, 5);
 	assert(presets.formatFriendlyWhenForJob({ type: "once", schedule: later.toISOString() }, at) === "Once on 20 Oct at 09:05.", `got ${presets.formatFriendlyWhenForJob({ type: "once", schedule: later.toISOString() }, at)}`);
 	assert(presets.formatNativeTimeSummary("17:18") === "17:18", `got ${presets.formatNativeTimeSummary("17:18")}`);
+	// The weekly row's sentence ends once, on this computer and on a shared server; the summary said on its own keeps its full stop.
+	const weeklyDraft = (days: number[]) => presets.createDefaultScheduleRecurrenceDraft({ mode: "weekly", weekly: { days, time: "08:30" } });
+	for (const [days, zone, said] of [
+		[[1], null, "Runs every Monday at 08:30, in this computer's time."],
+		[[1, 5], null, "Runs every Monday and Friday at 08:30, in this computer's time."],
+		[[1, 2, 3, 4, 5], null, "Runs every weekday at 08:30, in this computer's time."],
+		[[1], "Europe/Berlin", "Every Monday at 08:30, in Europe/Berlin time."],
+		[[], null, "Choose the days this task should run."],
+		[[], "Europe/Berlin", "Choose the days this task should run."],
+	] as const) {
+		const line = presets.formatWeeklyTimeLine(weeklyDraft([...days]).weekly, zone);
+		assert(line === said, `the weekly row says ${said}, got ${line}`);
+	}
+	assert(presets.formatScheduleRecurrenceDraftSummary(weeklyDraft([1])) === "Runs every Monday at 08:30.", `the summary alone, got ${presets.formatScheduleRecurrenceDraftSummary(weeklyDraft([1]))}`);
+	const fields = presets.recurrenceDraftToCreateRequestFields(weeklyDraft([1]));
+	assert(fields.ok && fields.summary === "Runs every Monday at 08:30.", `the saved fields' summary, got ${JSON.stringify(fields)}`);
 	const pane = fs.readFileSync(new URL("../../web-ui/src/components/RoomScheduledTasksSection.tsx", import.meta.url), "utf8");
 	assert(!pane.includes("toLocaleString()") && pane.includes("fmtMemoryMoment("), "the pane's timestamps are the app's");
 	// A task that only waits (decision 47) reads as a wait in the pane's neutral tone, never as a red block.

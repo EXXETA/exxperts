@@ -98,6 +98,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/mcp/status": "read",
 	"POST /api/mcp/servers": "local",
 	"DELETE /api/mcp/servers/:name": "local",
+	"PUT /api/mcp/servers/:name/address": "local",
 	"GET /api/mcp/servers/:name/login": "local",
 	"POST /api/mcp/servers/:name/login": "local",
 	"DELETE /api/mcp/servers/:name/login": "local",
@@ -251,10 +252,18 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	// Auto-approving bash removes the per-command consent step entirely, so
 	// only the computer's own keyboard may grant it.
 	"PUT /api/persistent-agents/:id/bash-settings": "local",
+	// Turning a room's protection off lets its commands reach every file: only the computer's own keyboard may.
+	"PUT /api/persistent-agents/:id/protection": "local",
 	"PUT /api/persistent-agents/:id/mcp-connectors": "local",
 	"PUT /api/persistent-agents/:id/skill-settings": "local",
 	"PUT /api/persistent-agents/:id/workspace-default": "local",
 	"DELETE /api/persistent-agents/:id/workspace-default": "local",
+	// The room's Also allowed list: a phone sees its names, and only the computer changes it.
+	"GET /api/persistent-agents/:id/also-allowed": "read",
+	"POST /api/persistent-agents/:id/also-allowed/folders": "local",
+	"POST /api/persistent-agents/:id/also-allowed/access": "local",
+	"POST /api/persistent-agents/:id/also-allowed/remove": "local",
+	"POST /api/persistent-agents/:id/also-allowed/restore": "local",
 	"DELETE /api/persistent-agents/:id/workspace-policy": "local",
 	"POST /api/persistent-agents/:id/workspace/validate": "local",
 

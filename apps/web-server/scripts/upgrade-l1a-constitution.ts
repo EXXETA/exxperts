@@ -36,7 +36,7 @@ if (all && requestedIds.length > 0) {
 	process.exit(1);
 }
 
-const targetIds = all ? listPersistentAgents().map((status: any) => String(status.id)) : requestedIds;
+const targetIds = all ? listPersistentAgents("every room").map((status: any) => String(status.id)) : requestedIds;
 if (targetIds.length === 0) {
 	console.log("No rooms found.");
 	process.exit(0);

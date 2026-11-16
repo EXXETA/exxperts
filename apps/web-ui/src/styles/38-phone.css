@@ -14,14 +14,6 @@
 	/* The guide: the flow stays one sequence, top to bottom, each stage on one
 	   line so the numbered steps start sooner. */
 	.help-tiles { grid-template-columns: minmax(0, 1fr); }
-	/* The first tap the guide asks of a new person: a 44 px area, the same
-	   drawing. The inset counts from inside the button's 1 px border. */
-	.help-head .icon-btn { position: relative; }
-	.help-head .icon-btn::after {
-		content: "";
-		position: absolute;
-		inset: -10px -7px;
-	}
 	.help-flow {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 14px;
@@ -139,6 +131,11 @@
 	.composer-box-bottom .composer-actions {
 		gap: 8px;
 	}
+	/* The command modes' selector sits mid-box here: it opens over the box,
+	   on the box's right edge, so its width never runs off the screen's left. */
+	.composer-box-bottom .bash-mode-chip-anchor {
+		position: static;
+	}
 }
 
 /* In-room drawer backdrop (phone) --------------------------------
@@ -183,11 +180,7 @@
 	.gateway-model-bulk-row .gateway-model-approve {
 		flex-basis: 100%;
 	}
-	.gateway-model-bulk-seg button,
-	.gateway-model-bulk-button {
-		padding: 8px 12px;
-	}
-	.gateway-model-adjust {
+	.gateway-model-bulk-seg button {
 		padding: 8px 12px;
 	}
 	.gateway-model-row {
@@ -213,8 +206,8 @@
 }
 @media (max-width: 760px) {
 	/* Pinned to the same fixed coordinate system as the floating rail
-	   toggle beside it, same box, same vertical center - as a flow child
-	   of the topbar it sat visibly off the toggle's line. */
+	   toggle beside it, same vertical center - as a flow child of the topbar
+	   it sat visibly off the toggle's line. */
 	.topbar-home-btn {
 		position: fixed;
 		top: calc(8px + env(safe-area-inset-top, 0px));
@@ -238,11 +231,25 @@
 		color: var(--fg);
 		outline: none;
 	}
-	/* The mac app zoomed in to this width: the toggle sits right of the window
-	   buttons (in window points), and the home button keeps beside it. */
+	/* In a browser, the room's top bar holds Forget and the gear at a
+	   finger's 44 px from its 8 px top: the sidebar's button and the way
+	   home, 28 px each, sit on their centre line. */
+	html:not(.desktop-app):has(.topbar-actions) .sidebar-toggle-floating,
+	html:not(.desktop-app) .topbar-home-btn {
+		top: calc(8px + env(safe-area-inset-top, 0px) + (var(--exx-btn-h) - 28px) / 2);
+	}
+	/* The mac app zoomed in to this width: the toggle and the arrows sit right
+	   of the window buttons (in window points), and the home button keeps
+	   beside them, so the arrows stay put on a screen without it. They are set
+	   in window points and this button is not, so it centres on the row by
+	   itself. */
 	html.desktop-app-mac .topbar-home-btn {
-		top: var(--mac-toggle-top);
-		left: calc(var(--mac-toggle-left) + 36px);
+		top: calc(var(--mac-row-centre) - 14px);
+		left: calc(var(--mac-row-buttons-end) + 8px);
+	}
+	/* The open drawer paints over the arrows' level, and a dialog closes it. */
+	html.desktop-app-mac:has(.sidebar-drawer-backdrop) .history-arrows {
+		z-index: 61;
 	}
 	/* The in-room topbar clears BOTH floating buttons now, not just the
 	   rail toggle's 52px. The second selector matches the collapsed-state
@@ -250,6 +257,25 @@
 	.app .topbar,
 	html.sidebar-collapsed:not(.desktop-app-mac) .app .topbar {
 		padding-left: 84px;
+	}
+	/* The Windows app: the sidebar button, then the arrows, then this button,
+	   as on the mac's row, and the bar clears all four. With the drawer open
+	   the arrows end its top line above it, as they end the sidebar's. Over
+	   Home's top bar, which shows no sidebar button, they keep their place
+	   after its spot, as the mac's do, and the bar starts under them
+	   (35-sidebar-remote.css). */
+	html.desktop-app:not(.desktop-app-mac) .topbar-home-btn {
+		left: 106px;
+	}
+	html.desktop-app:not(.desktop-app-mac) .app .topbar {
+		padding-left: 146px;
+	}
+	html:not(.desktop-app-mac):not(.sidebar-collapsed):has(.sidebar-drawer-backdrop) .history-arrows {
+		left: calc(min(82vw, 320px) - 10px - 2 * 28px - 2px);
+		z-index: 61;
+	}
+	html.desktop-app:not(.desktop-app-mac):has(.product-sidebar) .history-arrows {
+		left: 40px;
 	}
 }
 
@@ -266,7 +292,34 @@
 		z-index: 55;
 		border-top: none;
 	}
-	.workbench.with-file-pane .artifact-viewer-actions .artifact-viewer-icon:not(.artifact-viewer-open-tab) { display: none; }
+	.workbench.with-file-pane .artifact-viewer-actions .artifact-viewer-icon { display: none; }
+	/* The desktop apps (the mac's zoomed in to this width): the sidebar button
+	   and the arrows stay above the file, and its head starts past them. An
+	   open drawer keeps the arrows on its own level. */
+	html.desktop-app:has(.workbench.with-file-pane .artifact-viewer):not(:has(.sidebar-drawer-backdrop)) :is(.history-arrows, .sidebar-toggle-floating) {
+		z-index: 56;
+	}
+	html.desktop-app-mac .workbench.with-file-pane .artifact-viewer-head {
+		padding-left: calc(var(--mac-row-buttons-end) + 14px);
+	}
+	/* The Windows app: the head shares the sidebar button's line, as the
+	   mac's shares its row (34-desktop-app.css): one line as tall as the
+	   button's 8px above and below its 28px, centred on it, the bare "File"
+	   kicker read by screen readers only. */
+	html.desktop-app:not(.desktop-app-mac) .workbench.with-file-pane .artifact-viewer-head {
+		min-height: 44px;
+		padding-top: 0;
+		padding-bottom: 0;
+		padding-left: 112px;
+	}
+	html.desktop-app:not(.desktop-app-mac) .workbench.with-file-pane .artifact-viewer-kicker-noun {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
 	.att-grid,
 	.attachments-panel .att-grid {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -294,17 +347,14 @@
 		box-shadow: var(--exx-shadow-popover);
 	}
 	.attachments-panel .att-head { min-height: 56px; padding: 10px 14px; border-bottom: none; }
-	/* On touch ⋯ sits in the foot, off the preview, with a 44px tap area. */
-	.att-more {
+	/* On touch ⋯ sits in the foot, off the preview, on the card's own surface. */
+	.att-more-holder {
 		top: auto;
-		right: 4px;
-		bottom: 4px;
-		width: 36px;
-		height: 36px;
-		border-color: transparent;
+		right: 0;
+		bottom: 0;
 		background: none;
+		box-shadow: none;
 	}
-	.att-more::after { content: ""; position: absolute; inset: -4px; }
 	.att-menu { right: 6px; }
 	.att-menu a,
 	.att-menu button { padding: 9px; }

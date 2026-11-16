@@ -2,10 +2,14 @@
 // ordered list where the first row whose state holds gives the words, in the
 // Mac, Windows and touch forms. composer-hint-smoke.ts reads every row.
 
+import { SENDING_COUNTS_AS_NOT_NOW, SENDING_ENDS_QUESTION } from "../../web-server/src/room-box/card-text";
+
 /** What the message box's greyed hint is chosen from. */
 export interface ComposerHintState {
 	/** The room's name as the topbar shows it. */
 	room: string;
+	/** The room on the box's label, by its name, or null: the message goes there, so the hint names it. */
+	asking: string | null;
 	/** The room stopped on its model (signed out, no longer offered) or a full save closed the conversation: the notice carries the ways on. */
 	asToday: boolean;
 	connected: boolean;
@@ -17,6 +21,8 @@ export interface ComposerHintState {
 	/** A model switch still settling, by the model's name. */
 	switchingTo: string | null;
 	stopping: boolean;
+	/** The room's question above the box waits: answered here, or only at the computer (a folder or commands while this is a phone). */
+	roomAsk?: "here" | "at-computer" | null;
 	/** A step of the answer waits for the person's OK. */
 	stepAsks: boolean;
 	/** The room writes, thinks or runs a step. */
@@ -25,21 +31,26 @@ export interface ComposerHintState {
 	keys: "mac" | "windows" | "touch";
 }
 
+/** Where the message goes: the room on the box's label, else this room. */
+const ask = (state: ComposerHintState) => `Ask ${state.asking ?? state.room}…`;
+
 /**
  * The box's greyed hint says what Enter does in each state. One ordered
  * list: the first row whose state holds gives the words.
  */
 const COMPOSER_HINTS: ReadonlyArray<{ when: (state: ComposerHintState) => boolean; words: (state: ComposerHintState) => string }> = [
-	{ when: (state) => state.asToday, words: (state) => `Ask ${state.room}…` },
+	{ when: (state) => state.asToday, words: ask },
 	{ when: (state) => !state.connected && state.reconnect === "failed", words: () => "Not connected, press Reconnect" },
 	{ when: (state) => !state.connected, words: () => "Waiting for the connection…" },
 	{ when: (state) => state.reconnectingTurn, words: () => "Reconnecting…" },
-	{ when: (state) => state.elsewhere, words: (state) => `Ask ${state.room}…` },
+	{ when: (state) => state.elsewhere, words: ask },
 	{ when: (state) => state.switchingTo !== null, words: (state) => `Switching to ${state.switchingTo}…` },
 	{ when: (state) => state.stopping, words: () => "Stopping current response…" },
+	{ when: (state) => state.roomAsk === "here", words: () => SENDING_COUNTS_AS_NOT_NOW },
+	{ when: (state) => state.roomAsk === "at-computer", words: () => SENDING_ENDS_QUESTION },
 	{ when: (state) => state.stepAsks, words: (state) => (state.keys === "touch" ? "Sending denies the step above" : "Sending a message denies the step above") },
 	{ when: (state) => state.answering, words: (state) => (state.keys === "mac" ? "Queue a message, ⌘↵ sends now" : state.keys === "windows" ? "Queue a message, Ctrl+Enter sends now" : "Queue a message") },
-	{ when: () => true, words: (state) => `Ask ${state.room}…` },
+	{ when: () => true, words: ask },
 ];
 
 export function composerHint(state: ComposerHintState): string {

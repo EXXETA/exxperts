@@ -17,7 +17,10 @@
 //      doctor's exit-code contract (optional layers and network probes warn,
 //      never fail) must hold on a bare machine, and the archive detection
 //      must fire.
-//   3. `exxperts web --no-open --port <free port>` boots the real web server
+//   3. Each document package is one file with its licences, and the vendored
+//      node makes a file of each kind with them, finding them through
+//      NODE_PATH as a room's script will.
+//   4. `exxperts web --no-open --port <free port>` boots the real web server
 //      (tsx compiling the TS sources with the vendored node) and serves HTTP
 //      on /healthz and /; then the whole process tree is torn down.
 //
@@ -30,6 +33,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const archiveArg = process.argv[2];
 if (!archiveArg) {
@@ -286,7 +290,34 @@ function runShim(args, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 3: boot the web server through the product path, assert HTTP, tear
+// Step 3: the document packages. The sample script runs from a copy in the
+// temp folder: from the checkout, require would find a root node_modules
+// before NODE_PATH.
+// ---------------------------------------------------------------------------
+
+{
+	const listDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "apps", "document-tools");
+	const toolsDir = path.join(top, "vendor", "document-tools", "node_modules");
+	const names = Object.keys(JSON.parse(fs.readFileSync(path.join(listDir, "package.json"), "utf8")).dependencies);
+	const expected = names.flatMap((name) => [`${name}/LICENSES.txt`, `${name}/index.js`]).sort();
+	const shipped = fs.readdirSync(toolsDir, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => path.relative(toolsDir, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"))
+		.sort();
+	step("each document package is one file with its licences", JSON.stringify(shipped) === JSON.stringify(expected), `${shipped.length} files, want ${expected.length}`);
+
+	const sample = path.join(work, "make-sample-files.cjs");
+	fs.copyFileSync(path.join(listDir, "make-sample-files.cjs"), sample);
+	const made = path.join(work, "documents");
+	const vendorNode = path.join(top, "vendor", "node", ...(isWin ? ["node.exe"] : ["bin", "node"]));
+	const res = spawnSync(vendorNode, [sample, made], { env: { ...sanitizedEnv, NODE_PATH: toolsDir }, cwd: work, encoding: "utf8", timeout: 120_000 });
+	const files = res.status === 0 ? fs.readdirSync(made) : [];
+	step("the vendored node makes documents with the packages", files.length === 8, res.status === 0 ? files.join(", ") : `exit ${res.status}: ${res.stderr?.trim().split("\n").slice(-3).join(" ")}`);
+	if (failed) process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Step 4: boot the web server through the product path, assert HTTP, tear
 // down. --no-open is the launcher's real browser-suppression flag (see
 // bin/lib/web-launcher.cjs), so CI never hangs on xdg-open/open.
 // ---------------------------------------------------------------------------

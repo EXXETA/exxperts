@@ -73,6 +73,7 @@ jobs:
         --lockfile=./package-lock.json
         --lockfile=./runtime/package-lock.json
         --lockfile=./apps/desktop/package-lock.json
+        --lockfile=./apps/document-tools/package-lock.json
 
   build:
     needs: [node-currency, tag-version-guard, dependency-scan]
@@ -259,6 +260,15 @@ jobs:
         working-directory: apps/desktop
         run: node scripts/package.mjs --target win-x64 --skip-bundle --sign-windows
 
+      # The launch test on the signed payload package.mjs just staged and
+      # trimmed: the Windows box worker, forked by the payload's own Node from
+      # a copy away from this checkout, must load Microsoft's sandbox kit and
+      # answer with the kit's platform answer (prune-payload.test.mjs).
+      - name: Launch the Windows box worker from the payload
+        env:
+          DESKTOP_PAYLOAD: apps/desktop/build/server
+        run: node --test --test-name-pattern "the launch test" apps/desktop/scripts/prune-payload.test.mjs
+
       - name: Checksum the app artifacts
         working-directory: apps/desktop
         shell: bash
@@ -378,16 +388,17 @@ jobs:
       # by npm convention but ships in every installer.
       - name: Generate SBOMs (CycloneDX)
         run: |
-          # All three SBOMs read the lockfiles directly: no installed tree is
+          # All four SBOMs read the lockfiles directly: no installed tree is
           # needed, so nothing platform-specific (mac-only optionals, runtime
           # workspace links) can make the inventory fail.
           npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file sbom-app.cdx.json
           cd runtime && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file ../sbom-runtime.cdx.json
           cd ../apps/desktop && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --output-format JSON --output-file ../../sbom-desktop.cdx.json
+          cd ../document-tools && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file ../../sbom-document-tools.cdx.json
       - name: Attach SBOMs to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" sbom-app.cdx.json sbom-runtime.cdx.json sbom-desktop.cdx.json --clobber
+        run: gh release upload "${{ github.ref_name }}" sbom-app.cdx.json sbom-runtime.cdx.json sbom-desktop.cdx.json sbom-document-tools.cdx.json --clobber
 
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'

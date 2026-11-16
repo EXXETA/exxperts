@@ -35,7 +35,12 @@
 //   model gone, the list not found at the saved address, the model listed,
 //   or a list that could not be read; two failures read the list once, and
 //   none of the gateway's own words reach the page;
-// - at a phone's width the lines wrap in the column, with no sideways scroll.
+// - a failure's line and the hand-back that follows it reach the page in one
+//   task, as on a page too busy to draw between them: one line on screen and
+//   one when the room opens again, for a refused message and an empty answer;
+// - at a phone's width the lines wrap in the column, with no sideways scroll;
+// - while a model change settles, Try again is grey, as Send is, with Choose
+//   another model still live, and Try again is live again once it has settled.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -105,7 +110,7 @@ const attempts = new Map<string, number>();
 const sentTexts: string[] = [];
 // A message that fails on the provider's server until the scene says it no longer does.
 let healed = false;
-function scripted(lastUserText: string): { status: number; body: unknown } | "drop" | "text" {
+function scripted(lastUserText: string): { status: number; body: unknown } | "drop" | "text" | "empty" {
 	const seen = (attempts.get(lastUserText) ?? 0) + 1;
 	attempts.set(lastUserText, seen);
 	if (/credit/i.test(lastUserText)) return { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: CREDIT_WORDS }, request_id: "req_smoke_credit" } };
@@ -118,6 +123,7 @@ function scripted(lastUserText: string): { status: number; body: unknown } | "dr
 	if (/always dropped/i.test(lastUserText)) return "drop";
 	if (/too much to read/i.test(lastUserText)) return { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 212345 tokens > 200000 maximum" }, request_id: "req_smoke_too_long" } };
 	if (/reads less/i.test(lastUserText)) return { status: 400, body: { error: { message: "This model's maximum context length is 8192 tokens. However, your messages resulted in 9100 tokens. Please reduce the length of the messages.", type: "invalid_request_error", param: "messages", code: "context_length_exceeded" } } };
+	if (/empty answer/i.test(lastUserText)) return "empty";
 	if (/leaky request/i.test(lastUserText)) return { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: "The request with key sk-ant-api03-SYNTHETICabcdef0123456789 and header Bearer synthetic.token.value was refused." }, request_id: "req_smoke_leaky" } };
 	return "text";
 }
@@ -160,17 +166,19 @@ const endpoint = http.createServer((req, res) => {
 		sentTexts.push(asked);
 		const answer = scripted(asked);
 		if (answer === "drop") { req.socket.destroy(); return; }
-		if (answer !== "text") {
+		if (answer !== "text" && answer !== "empty") {
 			res.writeHead(answer.status, { "content-type": "application/json" });
 			res.end(JSON.stringify(answer.body));
 			return;
 		}
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-		sse(res, "message_start", { type: "message_start", message: { id: "msg_smoke", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 1 } } });
-		sse(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-		sse(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `Answer from ${body.model}.` } });
-		sse(res, "content_block_stop", { type: "content_block_stop", index: 0 });
-		sse(res, "message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 20 } });
+		sse(res, "message_start", { type: "message_start", message: { id: "msg_smoke", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: answer === "empty" ? 0 : 1 } } });
+		if (answer === "text") {
+			sse(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+			sse(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `Answer from ${body.model}.` } });
+			sse(res, "content_block_stop", { type: "content_block_stop", index: 0 });
+		}
+		sse(res, "message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: answer === "empty" ? 0 : 20 } });
 		sse(res, "message_stop", { type: "message_stop" });
 		res.end();
 	});
@@ -255,16 +263,19 @@ try {
 		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 		const page = await ctx.newPage();
 		// In the page's own order: each retry frame as it arrives, before the page reads it, and each failure line mounted in full (an older line folding is not a new one).
-		await page.addInitScript({ content: 'window.__turnLog = []; var Socket = window.WebSocket; window.WebSocket = class extends Socket { constructor(a, b) { super(a, b); this.addEventListener("message", function (e) { try { var d = JSON.parse(String(e.data)); if (d && d.event && d.event.type === "auto_retry_start") window.__turnLog.push({ retry: true }); } catch (x) {} }); } }; var seen = new WeakSet(); new MutationObserver(function () { document.querySelectorAll(".failure-line").forEach(function (el) { if (!seen.has(el)) { seen.add(el); if (!el.classList.contains("is-folded")) window.__turnLog.push({ line: el.innerText.replace(/\\s+/g, " ").trim().slice(0, 120) }); } }); }).observe(document, { childList: true, subtree: true });' });
+		// With __holdTurnEnd set, a model's message_end and every frame after it wait for prompt_returned, then reach the page in their order in one task.
+		await page.addInitScript({ content: 'window.__turnLog = []; window.__holdTurnEnd = false; var Socket = window.WebSocket; window.WebSocket = class extends Socket { constructor(a, b) { super(a, b); this.addEventListener("message", function (e) { try { var d = JSON.parse(String(e.data)); if (d && d.event && d.event.type === "auto_retry_start") window.__turnLog.push({ retry: true }); } catch (x) {} }); } set onmessage(handler) { var held = null; super.onmessage = function (e) { var d = JSON.parse(String(e.data)); if (window.__holdTurnEnd && !held && d.event && d.event.type === "message_end" && d.event.message.role === "assistant") held = []; if (!held) return handler.call(this, e); held.push(e); if (d.type !== "prompt_returned") return; var frames = held; held = null; window.__holdTurnEnd = false; frames.forEach(function (frame) { handler.call(this, frame); }, this); }; } }; var seen = new WeakSet(); new MutationObserver(function () { document.querySelectorAll(".failure-line").forEach(function (el) { if (!seen.has(el)) { seen.add(el); if (!el.classList.contains("is-folded")) window.__turnLog.push({ line: el.innerText.replace(/\\s+/g, " ").trim().slice(0, 120) }); } }); }).observe(document, { childList: true, subtree: true });' });
 		const warnings: string[] = [];
 		// Every retry frame the page receives, and the text of every prompt it sends, on every socket it opens.
 		const retryFrames: any[] = [];
 		const promptsSent: string[] = [];
+		let readies = 0;
 		page.on("websocket", (socket) => {
 			socket.on("framereceived", (frame) => {
 				try {
 					const data = JSON.parse(String(frame.payload));
 					if (data?.event?.type === "auto_retry_start") retryFrames.push(data.event);
+					if (data?.type === "ready") readies++;
 				} catch {}
 			});
 			socket.on("framesent", (frame) => {
@@ -347,15 +358,18 @@ try {
 			await composer.press("Enter");
 			await waitUntil(() => promptsSent.slice(promptsBefore).some((sent) => sent.endsWith(text.trim())), `the page sends ${JSON.stringify(text.slice(0, 60))}`, 10000);
 		};
-		// Opens the room again from its card on the waits just written, with the lines it showed before.
+		// Opens the room again from its card on the waits just written, with the lines it showed before and the box as it left it.
+		// A message left in the box comes back with the room's ready frame, which Send does not wait for: typing as it lands can be overwritten, or joined to it.
 		const reopen = async (baseDelayMs: number) => {
 			retryWaits(baseDelayMs);
 			const shown = (await errorTexts()).length;
+			const box = await composer.inputValue();
 			await page.goto(`${baseUrl}/`);
 			await page.waitForLoadState("networkidle");
 			await page.locator(".persistent-agent-card").filter({ hasText: "Failure Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 			await waitUntil(async () => (await errorTexts()).length === shown, `the room shows its ${shown} lines again, got ${JSON.stringify(await errorTexts())}`, 10000);
+			await waitUntil(async () => (await composer.inputValue()) === box, `the box holds ${JSON.stringify(box)} again`, 10000);
 		};
 
 		// A spent credit balance on a Claude API key.
@@ -438,6 +452,25 @@ try {
 		assert((await buttonsOf(newest())) === "Try again", `a connection that may come back offers Try again, got ${JSON.stringify(await buttonsOf(newest()))}`);
 		assert((await newest().locator(".failure-details-toggle").count()) === 0, `no connection was made, so no Details, got ${JSON.stringify(await newest().innerText())}`);
 		console.log("  ok  a connection that never reaches the provider on this computer says the model could not be reached there, with Try again and no Details");
+
+		// The failure's frame and the hand-back in one task: the page reads the second before it has drawn the first.
+		// A miss on screen in one case still shows the other; reopen stops the smoke on a saved copy that differs from the screen.
+		const lineOnceFailures: string[] = [];
+		for (const [label, text] of [["a refused message", "An odd request, held back."], ["an empty answer", "An empty answer, held back."]] as const) {
+			await composer.fill("");
+			const linesBeforeHeld = (await errorTexts()).length;
+			await page.evaluate(() => { (window as any).__holdTurnEnd = true; });
+			await send(text);
+			await waitUntil(async () => (await composer.inputValue()) === text, `${label}: the message is back in the box`, 20000);
+			await settled();
+			const shownHeld = (await errorTexts()).length - linesBeforeHeld;
+			if (shownHeld !== 1) lineOnceFailures.push(`${label}: one line on screen, got ${shownHeld}: ${JSON.stringify((await errorTexts()).slice(linesBeforeHeld))}`);
+			await reopen(50);
+			const savedHeld = (await errorTexts()).length - linesBeforeHeld;
+			if (savedHeld !== 1) lineOnceFailures.push(`${label}: one line when the room opens again, got ${savedHeld}`);
+		}
+		assert(lineOnceFailures.length === 0, `the line and the hand-back in one task:\n  ${lineOnceFailures.join("\n  ")}`);
+		console.log("  ok  a failure's line and its hand-back in one task show one line, on screen and when the room opens again, for a refused message and an empty answer");
 
 		// The retry notes say what happened, and a retried attempt draws no line.
 		await composer.fill("");
@@ -607,6 +640,40 @@ try {
 		assert(retryLineFailures.length === 0, `a retried attempt drew a line:\n  ${retryLineFailures.join("\n  ")}`);
 		assert(retryFrames.every((frame) => frame.model?.provider === "anthropic-api-key" && frame.model?.model === "claude-haiku-5-5"), `every retry frame of the run carries the model it retries, got ${JSON.stringify(retryFrames.map((frame) => frame.model ?? null))}`);
 		console.log("  ok  an attempt the runtime asks again draws no failure line; the attempt that ends the turn does");
+
+		// A model change on the wire: held here, so the room has not settled it. What the box held comes back with the ready.
+		const readiesBefore = readies;
+		await page.goto(`${baseUrl}/`);
+		await page.waitForLoadState("networkidle");
+		await page.locator(".persistent-agent-card").filter({ hasText: "Failure Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
+		await waitUntil(() => readies > readiesBefore, "the room is ready");
+		await composer.fill("");
+		const linesBeforeChange = (await errorTexts()).length;
+		await send("An odd request, before the model changes.");
+		await waitUntil(async () => (await errorTexts()).length > linesBeforeChange, "the odd request shows a line");
+		await settled();
+		const tryAgain = newest().getByRole("button", { name: "Try again" });
+		await waitUntil(() => tryAgain.isEnabled(), "the turn over, Try again is live");
+		let letChangeGo = () => {};
+		const changeHeld = new Promise<void>((resolve) => { letChangeGo = resolve; });
+		let changeAsked = false;
+		await page.route("**/switch-model", async (route) => {
+			changeAsked = true;
+			await changeHeld;
+			await route.continue();
+		});
+		await newest().getByRole("button", { name: "Choose another model" }).click();
+		const modelPanel = page.locator(".model-pick-panel");
+		await modelPanel.waitFor({ timeout: 10000 });
+		if (await modelPanel.locator(".model-pick-effort-model").count()) await modelPanel.locator(".model-pick-effort-model").click();
+		await modelPanel.locator(".model-pick-row:not(.is-current):not(.is-greyed)").first().click();
+		await waitUntil(() => changeAsked, "the model change leaves the page");
+		await waitUntil(() => tryAgain.isDisabled(), "while the model change settles Try again is grey");
+		await composer.fill("Words for Send.");
+		assert(await sendButton.isDisabled() && await newest().getByRole("button", { name: "Choose another model" }).isEnabled(), "Send is grey with it, and Choose another model stays live");
+		letChangeGo();
+		await waitUntil(() => tryAgain.isEnabled(), "the model change settled, Try again is live again", 15000);
+		console.log("  ok  while a model change settles Try again is grey, as Send is, with Choose another model live; live again once it has settled");
 		await ctx.close();
 
 		// A saved gateway's bare 404: the line says what the gateway's list found, on this computer and then on a shared server.

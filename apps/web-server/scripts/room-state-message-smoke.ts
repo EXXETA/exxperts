@@ -103,7 +103,8 @@ try {
 		pass("a turn with nothing changed sends no copy and the same system prompt");
 
 		const changes: Array<{ label: string; change: () => Promise<void>; carries: (copy: string) => boolean }> = [
-			{ label: "a rename", change: () => rename(roomId, "Renamed Room"), carries: (copy) => copy.includes("Your name is now **Renamed Room**") },
+			// The name, and that it wins over an older one, with no word that has the model announce it.
+			{ label: "a rename", change: () => rename(roomId, "Renamed Room"), carries: (copy) => copy.includes("\n\n## Current identity\n\nYour name is now **Renamed Room**. If the constitution or memory call you by another name, they were written before a rename, and this name wins.") },
 			{ label: "an instruction edit", change: () => setInstructions(roomId, "Answer in French."), carries: (copy) => copy.includes("these are the instructions this room follows as they stand now") && copy.includes("Answer in French.") },
 			{
 				label: "a skill switch",

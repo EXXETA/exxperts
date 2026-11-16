@@ -1,4 +1,4 @@
-import { endPageForAnotherPerson, knownRemoteClientContext, pagePersonId, personHasChanged } from "./remote-client-context";
+import { endPageRefused, knownRemoteClientContext, pagePersonId, personHasChanged } from "./remote-client-context";
 
 // A 401 means the session cookie is missing or stale (for example cleared
 // while the app was open): the server is fine but every further call fails
@@ -8,11 +8,21 @@ import { endPageForAnotherPerson, knownRemoteClientContext, pagePersonId, person
 // rendering a raw auth error. The sessionStorage guard keeps a dev tab,
 // where Vite serves this app shell unauthenticated, from reload-looping.
 export function redirectToSignInOn401(res: Response): void {
-	if (res.status !== 401) return;
+	if (res.status !== 401 || signInRedirectHeld) return;
 	const lastRedirect = Number(sessionStorage.getItem("exxperts-auth-redirect") ?? 0);
 	if (Number.isFinite(lastRedirect) && Date.now() - lastRedirect < 15000) return;
 	sessionStorage.setItem("exxperts-auth-redirect", String(Date.now()));
 	location.assign("/");
+}
+
+// From the press of the page's own Sign out, only the sign-out moves the page: it follows the server's link on a
+// confirmed answer or on the person's choice, all of which leave the page. Its record ends this session, so the page's
+// other requests answer 401 meanwhile, and those send it nowhere, however long the person takes to choose.
+let signInRedirectHeld = false;
+
+/** For the page's own Sign out, at its press: a 401 no longer sends the page to sign in. */
+export function holdSignInRedirect(): void {
+	signInRedirectHeld = true;
 }
 
 // For call sites that inspect the raw Response instead of using fetchJson:
@@ -20,8 +30,8 @@ export function redirectToSignInOn401(res: Response): void {
 // when no answer came. Every direct API call in the UI goes through this or
 // fetchJson; plain fetch stays reserved for non-API resources.
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-	// This page belongs to a person who is no longer signed in: nothing it still has in flight may read or save as the new one.
-	if (personHasChanged()) throw new Error(PERSON_CHANGED_SENTENCE);
+	// This page has ended: nothing it still has in flight may read or save.
+	if (personHasChanged()) throw new Error(PAGE_ENDED_SENTENCE);
 	let res: Response;
 	try {
 		res = await fetch(input, withPagePerson(input, init));
@@ -31,16 +41,26 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 		throw error;
 	}
 	if (GATEWAY_NO_ANSWER_STATUSES.has(res.status) && !(await isOurErrorAnswer(res))) throw new ServiceUnreachableError();
-	// The shared server refused the person this page names: it ends here, as when a read finds another person. Other 409s are the server's own conflicts.
-	if (res.status === 409 && (await errorAnswerBody(res))?.code === "person_changed") {
-		endPageForAnotherPerson();
-		throw new Error(PERSON_CHANGED_SENTENCE);
+	// A refusal can say this page ends, and with which words: it ends here, and its words cover it. Only a 403 or a 409
+	// is read for it: a stalled body on any other status must not hold that answer up, and the gateway
+	// statuses keep their own handling. Other refusals and conflicts reach their caller.
+	if (PAGE_ENDING_STATUSES.has(res.status)) {
+		const body = await errorAnswerBody(res);
+		if (body?.endsPage === true) {
+			endPageRefused(typeof body.error === "string" && body.error.trim() !== "" ? body.error : null);
+			throw new Error(PAGE_ENDED_SENTENCE);
+		}
 	}
+	// Sent before the page ended, answered after: whatever the answer, it reaches no caller, and a 401 sends the page nowhere.
+	if (personHasChanged()) throw new Error(PAGE_ENDED_SENTENCE);
 	redirectToSignInOn401(res);
 	return res;
 }
 
-const PERSON_CHANGED_SENTENCE = "Another person is now signed in on this server.";
+const PAGE_ENDING_STATUSES: ReadonlySet<number> = new Set([403, 409]);
+
+// What a request on an ended page throws. The cover hides the page, so no one reads it there.
+const PAGE_ENDED_SENTENCE = "This page has ended.";
 
 // On a shared server every request names the person the page was opened for, so the server refuses it once another
 // person is signed in. Init's headers replace a Request's own in fetch, so the person joins whichever set fetch would send.

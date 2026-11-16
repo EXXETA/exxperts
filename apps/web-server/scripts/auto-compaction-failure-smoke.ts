@@ -321,7 +321,7 @@ try {
 	// --- 2. The room is told, after the turn, without the turn failing -------
 	const noticeIndex = await ws.waitFor((row) => row.type === "ui_request" && row.kind === "notify" && row.level === "error", "the compaction notice", 0, 10_000);
 	const notice = ws.frames[noticeIndex];
-	// The runtime's words stay in the log, never on the room's line. The page words the line from
+	// The runtime's words never reach the room's line. The page words the line from
 	// the notice's fields: a summary cut at the model's output limit, whose way on is a model that writes longer answers.
 	assert(notice.failure === "could-not-shorten" && notice.summaryCut === true && notice.reason === "threshold" && notice.model?.model === "narrow-model", `the notice carries what the page words its line from, got ${JSON.stringify(notice)}`);
 	assert(notice.message === undefined && notice.words === undefined, `the notice carries no words of its own, got ${JSON.stringify(notice)}`);

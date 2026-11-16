@@ -3,6 +3,7 @@ import path from "node:path";
 import type { PersistentAgentId } from "./persistent-agent-types.js";
 import { type AgentJson, assertPersistentRoomNotHeldByAnotherProcess, createPersistentAgentInstance, ensureDir, isPersistentAgentArchived, shortRandomId, slugTimestamp, writeFileAtomic } from "./persistent-agent-store.js";
 import { assertPersistentAgentDisplayNameAvailable, collapseHumanWhitespace, normalizePersistentAgentDisplayName } from "./persistent-agent-create.js";
+import type { RoomViewer } from "./persistent-agent-status.js";
 
 export interface PersistentAgentRenameMemoryMention {
 	line: number;
@@ -89,7 +90,7 @@ function replaceNameMentions(text: string, indexes: number[], oldName: string, n
  * titles are generated from agent.json at session boot, and
  * section_registry.json carries only fixed system section descriptions.
  */
-export function renamePersistentAgent(agentIdRaw: string, displayNameRaw: unknown, options: { dryRun?: boolean } = {}): PersistentAgentRenameResult {
+export function renamePersistentAgent(agentIdRaw: string, displayNameRaw: unknown, options: { dryRun?: boolean; viewer?: RoomViewer } = {}): PersistentAgentRenameResult {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	if (!fs.existsSync(instance.rootDir)) {
 		const error = new Error(`persistent agent not found: ${instance.agentId}`);
@@ -133,7 +134,7 @@ export function renamePersistentAgent(agentIdRaw: string, displayNameRaw: unknow
 		(error as any).statusCode = 400;
 		throw error;
 	}
-	assertPersistentAgentDisplayNameAvailable(displayName, { excludeAgentId: instance.agentId });
+	assertPersistentAgentDisplayNameAvailable(displayName, { excludeAgentId: instance.agentId, viewer: options.viewer });
 	// A display rename is harmless while the room is open in the web app (the frozen boot
 	// snapshot keeps the old name, but the per-turn current-identity stanza reads agent.json
 	// fresh, so the very next message already carries the new one) and web writers share this

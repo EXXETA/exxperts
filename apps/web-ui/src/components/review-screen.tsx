@@ -192,7 +192,7 @@ function ChangeRow({ change, busy, onEditEntry }: { change: ReviewChange; busy: 
 						{editing
 							? <NoteEditor text={change.after ?? ""} busy={saving} onSave={(text) => void save(text)} onCancel={() => { setEditing(false); setEditError(null); }} />
 							: <MarkdownRenderer>{change.after || "Not recorded."}</MarkdownRenderer>}
-						{editable && !editing && <button type="button" className="rs-quiet absorb-run-change-edit" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
+						{editable && !editing && <button type="button" className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet absorb-run-change-edit" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
 						{editError && <p className="checkpoint-proposal-error" role="alert">{editError}</p>}
 					</div>
 				</div>

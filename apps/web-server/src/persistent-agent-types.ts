@@ -99,6 +99,8 @@ export interface PersistentAgentWorkspaceCapabilitySummary {
 	availableToolNames: string[];
 	writeEnabled: boolean;
 	bashEnabled: boolean;
+	/** Commands can change files whatever Can change files says. */
+	commandsChangeFiles?: boolean;
 	nativePiFilesystemToolsEnabled?: boolean;
 }
 
@@ -291,7 +293,7 @@ export type PersistentRoomBackgroundRunClassification =
 	| { status: "queued"; reason: "resume_thread"; target: { kind: "resume-thread"; roomId: string; threadId: string; model?: PersistentAgentModelLock }; warnings: string[] }
 	| { status: "queued"; reason: "fresh_thread"; target: { kind: "fresh-thread"; roomId: string; modelPolicyKey: "scheduledRoom" }; warnings: string[] }
 	| { status: "deferred"; reason: "room_in_use" | "active_turn_in_flight"; target?: { kind: "none"; roomId: string }; message: string; warnings: string[] }
-	| { status: "blocked"; reason: "prepared_runtime_boundary" | "room_missing" | "room_archived" | "room_error"; target?: { kind: "none"; roomId: string; threadId?: string }; message: string; warnings: string[] };
+	| { status: "blocked"; reason: "prepared_runtime_boundary" | "room_missing" | "room_archived" | "room_error" | "owner_paused"; target?: { kind: "none"; roomId: string; threadId?: string }; message: string; warnings: string[] };
 
 export interface PersistentAgentStatus {
 	id: string;
@@ -387,6 +389,8 @@ export interface NormalizedPersistentAgentScaffoldInput {
 export interface ReservedPersistentAgentRoot {
 	agentId: PersistentAgentId;
 	rootDir: string;
+	/** Where the room is built before it is renamed to rootDir. */
+	buildDir: string;
 	baseAgentId: string;
 	attempts: number;
 }
@@ -425,6 +429,10 @@ export interface PersistentAgentUnseenLandedAnswer {
 	terminalReason: "completed" | "failed";
 	landedAt: number;
 	origin: PersistentAgentUnseenLandedAnswerOrigin;
+	/** When the first answer of this unopened run landed: kept across landings until the mark is cleared. */
+	firstUnopenedAt: number;
+	/** How many answers have landed since the mark was last cleared, the first included. */
+	unopenedCount: number;
 }
 
 /** A lock a conversation ran on before a switch, and when it stopped. */

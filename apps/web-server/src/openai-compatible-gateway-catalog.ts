@@ -351,6 +351,25 @@ export function providerOnThisComputer(providerId: string, modelsPath = getModel
 	}
 }
 
+function credentialValues(node: unknown): string[] {
+	if (Array.isArray(node)) return node.flatMap(credentialValues);
+	if (!isObject(node)) return [];
+	return Object.entries(node).flatMap(([key, value]) => {
+		if (key === "apiKey" && typeof value === "string") return [value];
+		if (key === "headers" && isObject(value)) return Object.values(value).filter((header) => typeof header === "string");
+		return credentialValues(value);
+	});
+}
+
+/**
+ * What the catalog sends as credentials: each provider's API key and every
+ * request header, at any level. The runtime takes any of these that names a
+ * variable from the environment.
+ */
+export function readCatalogCredentialValues(modelsPath = getModelsPath()): string[] {
+	return credentialValues(readModelsJsonLeniently(modelsPath));
+}
+
 /**
  * Every provider key the catalog holds. Read straight from the file rather than
  * from the registry's model list, because a provider someone configured with no

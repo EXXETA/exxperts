@@ -17,6 +17,7 @@ const {
 	recordPromptAssemblyManifest,
 } = await import("../src/prompt-diagnostics-store.js");
 const { persistentAgentRuntimeEnvelope } = await import("../src/persistent-agents.js");
+const { READ_ONLY_LINE } = await import("../src/persistent-agent-constitution.js");
 const permissionsExt = (await import("../../../pi-package/extensions/permissions/index.js")).default;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -62,9 +63,7 @@ const diagnosticsAgentId = "prompt-smoke-room";
 
 async function runPermissionSmoke(): Promise<void> {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-permissions-smoke-"));
-	const previousActiveAgent = process.env.EXXETA_ACTIVE_AGENT;
 	try {
-		process.env.EXXETA_ACTIVE_AGENT = diagnosticsAgentId;
 		const businessHandler = await loadPermissionToolCallHandler({
 			EXXETA_PERSONA: "business",
 			EXXETA_PERSISTENT_ROOM_SESSION: undefined,
@@ -127,8 +126,6 @@ async function runPermissionSmoke(): Promise<void> {
 		}
 		assert((await localFilesHandler({ toolName: "bash", input: {} }, { cwd: tmp }))?.block === true, "local-files persistent-room marker should still block bash");
 	} finally {
-		if (previousActiveAgent === undefined) delete process.env.EXXETA_ACTIVE_AGENT;
-		else process.env.EXXETA_ACTIVE_AGENT = previousActiveAgent;
 		fs.rmSync(tmp, { recursive: true, force: true });
 	}
 }
@@ -146,22 +143,6 @@ try {
 	const tinyL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"));
 	assert(!tinyL2.includes("Active workspace capability"), "no-policy L2 should keep tiny runtime envelope without capability snippet");
 	const capabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
-		workspaceAccessMode: "bounded",
-		workspaceLabel: "workspace",
-		rootCount: 1,
-		pathAccess: "workspace-only",
-		availableToolNames: ["ls", "find", "grep", "read", "write", "edit"],
-		writeEnabled: true,
-		bashEnabled: false,
-		nativePiFilesystemToolsEnabled: false,
-	});
-	assert(capabilityL2.includes("## Active workspace capability"), "active workspace tools should add L2 capability snippet");
-	assert(capabilityL2.includes("Workspace mode: Bounded workspace"), "bounded capability snippet should name bounded mode");
-	assert(capabilityL2.includes("Workspace tools: ls, find, grep, read, write, edit"), "capability snippet should list workspace tools");
-	assert(capabilityL2.includes("Write scope: files inside the selected workspace only, via the write and edit tools"), "capability snippet should state the bounded write scope");
-	assert(capabilityL2.includes("Bash/shell access: disabled"), "capability snippet should state bash disabled");
-	assert(!capabilityL2.includes("/tmp/") && !capabilityL2.includes("/Users/"), "capability snippet should not include raw full paths");
-	const localFilesCapabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
 		workspaceAccessMode: "localFiles",
 		workspaceLabel: "workspace",
 		rootCount: 1,
@@ -171,12 +152,14 @@ try {
 		bashEnabled: false,
 		nativePiFilesystemToolsEnabled: true,
 	});
-	assert(localFilesCapabilityL2.includes("Workspace mode: Full access"), "local-files capability snippet should name Full access mode");
-	assert(localFilesCapabilityL2.includes("Relative paths resolve from that folder"), "local-files capability snippet should explain cwd-relative paths");
-	assert(localFilesCapabilityL2.includes("Explicit absolute paths and `~` home paths are allowed"), "local-files capability snippet should allow explicit external paths");
-	assert(localFilesCapabilityL2.includes("Bash/shell access: disabled"), "local-files capability snippet should keep bash disabled");
-	assert(!localFilesCapabilityL2.includes("/tmp/") && !localFilesCapabilityL2.includes("/Users/"), "local-files capability snippet should not include raw full paths");
-	const localFilesBashCapabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
+	assert(capabilityL2.includes("## Active workspace capability"), "active workspace tools should add L2 capability snippet");
+	assert(!capabilityL2.includes("- Access:") && !capabilityL2.includes("Full access") && !capabilityL2.includes("Bounded"), "capability snippet should name no access mode");
+	assert(capabilityL2.includes("- File tools: read, ls, find, grep, write, edit"), "capability snippet should list workspace tools");
+	assert(capabilityL2.includes("- Can change files: on\n"), "capability snippet should name Can change files on");
+	assert(capabilityL2.includes("- Commands: off."), "capability snippet should state commands off");
+	assert(capabilityL2.includes("Relative paths resolve from the room's folder"), "capability snippet should explain cwd-relative paths");
+	assert(!capabilityL2.includes("/tmp/") && !capabilityL2.includes("/Users/"), "capability snippet should not include raw full paths");
+	const bashCapabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
 		workspaceAccessMode: "localFiles",
 		workspaceLabel: "workspace",
 		rootCount: 1,
@@ -186,10 +169,11 @@ try {
 		bashEnabled: true,
 		nativePiFilesystemToolsEnabled: true,
 	});
-	assert(localFilesBashCapabilityL2.includes("Workspace tools: none"), "bash-only capability snippet should allow ordinary file tools to be off");
-	assert(localFilesBashCapabilityL2.includes("Bash/shell access: enabled"), "local-files capability snippet should reflect explicit bash enabled");
-	assert(localFilesBashCapabilityL2.includes("- Write/edit tools: disabled. Bash is enabled and can still modify files."), "writers-off bash-on snippet must state that Bash can still modify files");
-	const localFilesReadOnlyCapabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
+	assert(bashCapabilityL2.includes("- File tools: none"), "bash-only capability snippet should allow ordinary file tools to be off");
+	assert(bashCapabilityL2.includes("- Commands: on\n"), "capability snippet should reflect commands on");
+	assert(bashCapabilityL2.includes(READ_ONLY_LINE), "Can change files off with commands on reads as Can change files off");
+	assert(!bashCapabilityL2.includes("can still change files"), "Can change files off never says commands can still change files");
+	const readOnlyCapabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
 		workspaceAccessMode: "localFiles",
 		workspaceLabel: "workspace",
 		rootCount: 1,
@@ -199,8 +183,8 @@ try {
 		bashEnabled: false,
 		nativePiFilesystemToolsEnabled: true,
 	});
-	assert(localFilesReadOnlyCapabilityL2.includes("- Write access: disabled. If asked to change files, say the room is read-only up front; do not attempt workarounds."), "writers-off bash-off snippet must lead with the read-only truth");
-	assert(!localFilesReadOnlyCapabilityL2.includes("can still modify files"), "a truly read-only snippet must not mention Bash modifying files");
+	assert(readOnlyCapabilityL2.includes(READ_ONLY_LINE), "writers-off commands-off snippet must lead with the read-only truth");
+	assert(!readOnlyCapabilityL2.includes("can still change files"), "a truly read-only snippet must not mention commands changing files");
 	await runPermissionSmoke();
 
 	const included = componentFromText({

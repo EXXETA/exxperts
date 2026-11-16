@@ -1,7 +1,7 @@
 import { AuthStorage } from "@exxeta/exxperts-runtime";
-import { saveProviderApiKey } from "./provider-auth.js";
+import { apiKeyRefusal, saveProviderApiKey } from "./provider-auth.js";
 import { OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
-import { type GatewayRoomModel, effectiveGatewayModel, type OpenAiCompatibleGateway, parseGatewayContextWindow, parseGatewayDetectedSnapshot, GATEWAY_DEFAULT_CONTEXT_WINDOW, writeOpenAiCompatibleGateway, findOpenAiCompatibleGateway, type GatewayModelDetected, readOpenAiCompatibleGateways, mintGatewayProviderId, GatewayStoreUnreadableError, deleteOpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
+import { type GatewayRoomModel, effectiveGatewayModel, type OpenAiCompatibleGateway, parseGatewayContextWindow, parseGatewayDetectedSnapshot, GATEWAY_DEFAULT_CONTEXT_WINDOW, writeOpenAiCompatibleGateway, findOpenAiCompatibleGateway, type GatewayModelDetected, readOpenAiCompatibleGateways, mintGatewayProviderId, GatewayStoreUnreadableError, deleteOpenAiCompatibleGateway, startGatewayProviderId, START_GATEWAY_REFUSAL } from "./openai-compatible-gateways.js";
 import { readGatewayProviderBaseUrl, writeGatewayProviderEntry, removeGatewayProviderEntry, readCatalogProviderIds, ModelCatalogUnreadableError } from "./openai-compatible-gateway-catalog.js";
 import { forgetGatewayModelFind } from "./gateway-model-find.js";
 import { normalizeGatewayBaseUrl, discoverGatewayModels, isNonChatGatewayMode, GatewayDiscoveryError } from "./openai-compatible-gateway-detect.js";
@@ -9,6 +9,7 @@ import { readSavedPersistentAgentAiProfileId, clearSavedPersistentAgentAiProfile
 import { forgetKeyRefusal } from "./model-call-causes.js";
 import { providerDisplayNameCache } from "./ai-models.js";
 import { buildPersistentAgentAiProfileSelectionStatus } from "./ai-profile-models.js";
+import { serverHooks } from "./server-hooks.js";
 
 // Saved OpenAI-compatible gateways (LiteLLM, vLLM, OpenRouter, company
 // proxies), plural: each one is its own AI profile with its own base URL, key
@@ -204,6 +205,8 @@ async function gatewayDiscoverHandler(req: any, reply: any, gatewayIdFromRoute =
 	const storedBaseUrl = gateway ? normalizeGatewayBaseUrl(gateway.baseUrl || readGatewayProviderBaseUrl(gateway.providerId)) : "";
 	const baseUrl = normalizeGatewayBaseUrl(String(body.baseUrl ?? "").trim() || storedBaseUrl);
 	if (!/^https?:\/\//.test(baseUrl)) return reply.code(400).send({ error: "baseUrl must start with http:// or https://" });
+	const addressRefusal = serverHooks().gatewayAddressRefusal?.(baseUrl);
+	if (addressRefusal) return reply.code(400).send({ error: addressRefusal });
 	let key = typeof body.key === "string" ? body.key.trim() : "";
 	// Editing an already-connected gateway means the person should not have to
 	// retype a key the machine already has. That courtesy stops at the server
@@ -275,8 +278,16 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 	// URL. Demanding one there would refuse the save over a field that screen
 	// does not even show; the address the gateway already has is the answer.
 	const knownBaseUrl = existing ? existing.baseUrl || readGatewayProviderBaseUrl(existing.providerId) : "";
+	// The gateway the server's start provides keeps the start's key, label and
+	// address: a save that changes only its models passes, as approve-models
+	// sends the stored label and address with them.
+	if (existing && existing.providerId === startGatewayProviderId() && (key || (label && label !== existing.label) || (submittedBaseUrl && submittedBaseUrl !== knownBaseUrl))) {
+		return reply.code(403).send({ error: START_GATEWAY_REFUSAL });
+	}
 	const baseUrl = submittedBaseUrl || knownBaseUrl;
 	if (!existing && !baseUrl) return reply.code(400).send({ error: "baseUrl is required" });
+	const addressRefusal = serverHooks().gatewayAddressRefusal?.(baseUrl);
+	if (addressRefusal) return reply.code(400).send({ error: addressRefusal });
 	// The stored key belongs to the server it was entered for, as in discovery:
 	// a save that moves the gateway to another server needs that server's key,
 	// or the next calls would carry the stored one there.
@@ -328,6 +339,10 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 	// a stale snapshot for a maintenance model this save just changed.
 	delete gateway.maintenanceModelDetected;
 	if (maintenanceModelDetected) gateway.maintenanceModelDetected = maintenanceModelDetected;
+	// Before any write: a key refused after the catalogue took a new address
+	// would leave the old key to be sent there.
+	const keyRefusal = key ? apiKeyRefusal(gateway.providerId, key) : null;
+	if (keyRefusal) return reply.code(400).send({ error: keyRefusal, gateway: existing ? gatewayPayload(existing) : null });
 	try {
 		saveGatewayEverywhere(gateway, key, !existing);
 	} catch (e) {
@@ -349,6 +364,7 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 function gatewayDeleteHandler(gatewayId: string, reply: any) {
 	const gateway = findOpenAiCompatibleGateway(gatewayId);
 	if (!gateway) return reply.code(404).send({ error: `gateway not found: ${gatewayId}` });
+	if (gateway.providerId === startGatewayProviderId()) return reply.code(403).send({ error: START_GATEWAY_REFUSAL });
 	try {
 		removeGatewayProviderEntry(gateway.providerId);
 	} catch (e) {

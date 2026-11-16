@@ -2,7 +2,6 @@ import type { AgentMessage } from "@exxeta/exxperts-core";
 import type { ImageContent, Message, TextContent } from "@exxeta/exxperts-ai";
 import { randomUUID } from "crypto";
 import {
-	appendFileSync,
 	closeSync,
 	existsSync,
 	mkdirSync,
@@ -11,10 +10,9 @@ import {
 	readFileSync,
 	readSync,
 	statSync,
-	writeFileSync,
 } from "fs";
 import { readdir, readFile, stat } from "fs/promises";
-import { join, resolve } from "path";
+import { join, relative, resolve } from "path";
 import { v7 as uuidv7 } from "uuid";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
@@ -24,6 +22,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.js";
+import { appendFileFlushed, writeFileAtomic } from "./safe-write.js";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -32,13 +31,29 @@ export interface SessionHeader {
 	version?: number; // v1 sessions don't have this
 	id: string;
 	timestamp: string;
-	cwd: string;
+	/** Absent on a session written with `portableHeader`. */
+	cwd?: string;
 	parentSession?: string;
 }
 
 export interface NewSessionOptions {
 	id?: string;
 	parentSession?: string;
+}
+
+export interface SessionFileOptions {
+	/**
+	 * Keep absolute paths out of every header this manager writes, so the session
+	 * file can move to another disk: no `cwd`, and a parent session named relative
+	 * to the session folder.
+	 */
+	portableHeader?: boolean;
+}
+
+/** The two header fields that can name a place on this computer. */
+function headerPlace(cwd: string, sessionDir: string, parentSession: string | undefined, options: SessionFileOptions): Pick<SessionHeader, "cwd" | "parentSession"> {
+	if (!options.portableHeader) return { cwd, parentSession };
+	return { parentSession: parentSession === undefined ? undefined : relative(sessionDir, parentSession) };
 }
 
 export interface SessionEntryBase {
@@ -168,7 +183,7 @@ export interface SessionContext {
 export interface SessionInfo {
 	path: string;
 	id: string;
-	/** Working directory where the session was started. Empty string for old sessions. */
+	/** Working directory where the session was started. Empty string for old sessions and for a header with none. */
 	cwd: string;
 	/** User-defined display name from session_info entries. */
 	name?: string;
@@ -463,7 +478,7 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 
 	if (unterminated) {
 		try {
-			appendFileSync(filePath, "\n");
+			appendFileFlushed(filePath, "\n");
 		} catch {
 			// Read-only file: nothing can be appended to it anyway, so leaving it alone is safe.
 		}
@@ -603,7 +618,8 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			}
 		}
 
-		const cwd = typeof (header as SessionHeader).cwd === "string" ? (header as SessionHeader).cwd : "";
+		const headerCwd = (header as SessionHeader).cwd;
+		const cwd = typeof headerCwd === "string" ? headerCwd : "";
 		const parentSessionPath = (header as SessionHeader).parentSession;
 
 		const modified = getSessionModifiedDate(entries, header as SessionHeader, stats.mtime);
@@ -687,11 +703,13 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	private fileOptions: SessionFileOptions;
 
-	private constructor(cwd: string, sessionDir: string, sessionFile: string | undefined, persist: boolean) {
+	private constructor(cwd: string, sessionDir: string, sessionFile: string | undefined, persist: boolean, fileOptions: SessionFileOptions = {}) {
 		this.cwd = cwd;
 		this.sessionDir = sessionDir;
 		this.persist = persist;
+		this.fileOptions = fileOptions;
 		if (persist && sessionDir && !existsSync(sessionDir)) {
 			mkdirSync(sessionDir, { recursive: true });
 		}
@@ -743,8 +761,7 @@ export class SessionManager {
 			version: CURRENT_SESSION_VERSION,
 			id: this.sessionId,
 			timestamp,
-			cwd: this.cwd,
-			parentSession: options?.parentSession,
+			...headerPlace(this.cwd, this.sessionDir, options?.parentSession, this.fileOptions),
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
@@ -783,15 +800,14 @@ export class SessionManager {
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
 		const content = `${this.fileEntries.map((e) => JSON.stringify(e)).join("\n")}\n`;
-		writeFileSync(this.sessionFile, content);
+		writeFileAtomic(this.sessionFile, content);
 		this.flushedEntryCount = this.fileEntries.length;
 	}
 
 	private _appendUnflushedEntries(): void {
 		if (!this.persist || !this.sessionFile) return;
-		for (const e of this.fileEntries.slice(this.flushedEntryCount)) {
-			appendFileSync(this.sessionFile, `${JSON.stringify(e)}\n`);
-		}
+		const unflushed = this.fileEntries.slice(this.flushedEntryCount);
+		if (unflushed.length > 0) appendFileFlushed(this.sessionFile, unflushed.map((e) => `${JSON.stringify(e)}\n`).join(""));
 		this.flushedEntryCount = this.fileEntries.length;
 	}
 
@@ -1218,8 +1234,7 @@ export class SessionManager {
 			version: CURRENT_SESSION_VERSION,
 			id: newSessionId,
 			timestamp,
-			cwd: this.cwd,
-			parentSession: this.persist ? previousSessionFile : undefined,
+			...headerPlace(this.cwd, this.sessionDir, this.persist ? previousSessionFile : undefined, this.fileOptions),
 		};
 
 		// Collect labels for entries in the path
@@ -1306,15 +1321,16 @@ export class SessionManager {
 	 * @param path Path to session file
 	 * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
 	 * @param cwdOverride Optional cwd override instead of the session header cwd.
+	 * @param options What this manager's headers may hold. A header it reads keeps what it holds.
 	 */
-	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
+	static open(path: string, sessionDir?: string, cwdOverride?: string, options?: SessionFileOptions): SessionManager {
 		// Extract cwd from session header if possible, otherwise use process.cwd()
 		const entries = loadEntriesFromFile(path);
 		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
 		const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ?? resolve(path, "..");
-		return new SessionManager(cwd, dir, path, true);
+		return new SessionManager(cwd, dir, path, true, options);
 	}
 
 	/**
@@ -1342,8 +1358,9 @@ export class SessionManager {
 	 * @param sourcePath Path to the source session file
 	 * @param targetCwd Target working directory (where the new session will be stored)
 	 * @param sessionDir Optional session directory. If omitted, uses default for targetCwd.
+	 * @param options What this manager's headers may hold.
 	 */
-	static forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string): SessionManager {
+	static forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string, options: SessionFileOptions = {}): SessionManager {
 		const sourceEntries = loadEntriesFromFile(sourcePath);
 		if (sourceEntries.length === 0) {
 			throw new Error(`Cannot fork: source session file is empty or invalid: ${sourcePath}`);
@@ -1371,19 +1388,13 @@ export class SessionManager {
 			version: CURRENT_SESSION_VERSION,
 			id: newSessionId,
 			timestamp,
-			cwd: targetCwd,
-			parentSession: sourcePath,
+			...headerPlace(targetCwd, dir, sourcePath, options),
 		};
-		appendFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`);
-
 		// Copy all non-header entries from source
-		for (const entry of sourceEntries) {
-			if (entry.type !== "session") {
-				appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
-			}
-		}
+		const copied = sourceEntries.filter((entry) => entry.type !== "session");
+		writeFileAtomic(newSessionFile, [newHeader, ...copied].map((entry) => `${JSON.stringify(entry)}\n`).join(""));
 
-		return new SessionManager(targetCwd, dir, newSessionFile, true);
+		return new SessionManager(targetCwd, dir, newSessionFile, true, options);
 	}
 
 	/**

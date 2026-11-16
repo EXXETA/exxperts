@@ -13,7 +13,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -160,7 +160,7 @@ try {
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
 		await composer.fill("First message.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
 		await page.waitForTimeout(1200);
 		await home();

@@ -1,5 +1,7 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../api";
+import { pollWhileShown } from "../visible-poll";
+import { knownRemoteClientContext, refreshRemoteClientContext, useRemoteClientContext } from "../remote-client-context";
 import { agentLabel } from "../types";
 import { CloseIcon } from "./icons";
 import { GATEWAY_PROVIDER_ID_PREFIX, canonicalModelName, formatModelWithProvider, modelDisplayName } from "../model-names";
@@ -213,7 +215,39 @@ function sourceCell(row: UsageRow): string {
 	return short ?? "unknown";
 }
 
+function DashboardLine({ text }: { text: string }) {
+	return <div className="dashboard"><div className="sub">{text}</div></div>;
+}
+
+const CONTEXT_RETRY_MS = 5000;
+
+// A shared server keeps the usage log closed: no row says whose it is. The
+// page must not ask for it there, so nothing reads usage until the server has
+// said which kind it is. useRemoteClientContext says "this computer" before
+// that and after a failed read, so only an answer opens the Wallet.
 export function Dashboard() {
+	const { sharedServer } = useRemoteClientContext();
+	const [contextKnown, setContextKnown] = useState(() => knownRemoteClientContext()?.sharedServer === true);
+	useEffect(() => {
+		if (contextKnown) return;
+		let alive = true;
+		let retry: ReturnType<typeof setTimeout> | undefined;
+		const ask = () => {
+			void refreshRemoteClientContext().then((result) => {
+				if (!alive) return;
+				if (result === "answered") setContextKnown(true);
+				else if (result === "no answer") retry = setTimeout(ask, CONTEXT_RETRY_MS);
+			});
+		};
+		ask();
+		return () => { alive = false; clearTimeout(retry); };
+	}, [contextKnown]);
+	if (!contextKnown) return <DashboardLine text="Loading…" />;
+	if (sharedServer) return <DashboardLine text="The Wallet isn't available on this server yet." />;
+	return <Wallet />;
+}
+
+function Wallet() {
 	const [data, setData] = useState<UsagePayload | null>(null);
 	const [recentOpen, setRecentOpen] = useState(false);
 	const [removedOpen, setRemovedOpen] = useState(false);
@@ -239,12 +273,11 @@ export function Dashboard() {
 				.then((d) => { if (d && !cancelled && seq === requestSeq) setData(d); })
 				.catch(() => {});
 		};
-		load();
-		const id = setInterval(load, 5000);
-		return () => { cancelled = true; clearInterval(id); };
+		const stop = pollWhileShown(load, 5000);
+		return () => { cancelled = true; stop(); };
 	}, [range, model, agent]);
 
-	if (!data) return <div className="dashboard"><div className="sub">Loading…</div></div>;
+	if (!data) return <DashboardLine text="Loading…" />;
 
 	const t = data.totals;
 	const est = totalCost(t.cost);
@@ -313,7 +346,7 @@ export function Dashboard() {
 								</button>
 							))}
 						</div>
-						<a className="export-btn" href="/api/usage/export.csv" download title="Download the full turn log as a CSV file">
+						<a className="rs-btn rs-btn-sm export-btn" href="/api/usage/export.csv" download title="Download the full turn log as a CSV file">
 							<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 1.5v6m0 0L3.5 5M6 7.5 8.5 5M1.5 9.5v1h9v-1" /></svg>
 							CSV
 						</a>

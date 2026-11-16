@@ -36,7 +36,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -461,7 +461,7 @@ try {
 			await ui.waitForTimeout(800);
 			const bodiesBeforeTurn = requestBodies.length;
 			await composer.fill("Still there?");
-			await composer.press("Enter");
+			await sendFromBox(ui);
 			const newestLine = async () => (await ui.locator(".failure-line:not(.is-folded) .system-line-text").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim()).at(-1);
 			await waitUntil(async () => (await newestLine()) === line, `${room}: the line ${JSON.stringify(line)} shows`, 60000).catch(async () => {
 				throw new Error(`${room}: the line ${JSON.stringify(line)} never showed; the newest line says ${JSON.stringify(await newestLine())} and the page ${JSON.stringify((await ui.locator("body").innerText()).slice(-600))}`);
@@ -484,7 +484,7 @@ try {
 			await waitUntil(async () => (await api(`/api/persistent-agents/${room.toLowerCase().replace(/\s+/g, "-")}/status`)).body?.activeThread?.inFlight === false, `${room}: the failed turn settled`);
 			const bodiesBefore = requestBodies.length;
 			await composer.fill("Another question.");
-			await composer.press("Enter");
+			await sendFromBox(ui);
 			const roomBodies = () => requestBodies.slice(bodiesBefore).filter((body) => body.includes(room));
 			await waitUntil(() => roomBodies().some((body) => body.includes("Another question.")), `${room}: the next message reached the backend`);
 			assert(!roomBodies().some((body) => body.includes("Still there?")), `${room}: the next message no longer carries the refused one`);

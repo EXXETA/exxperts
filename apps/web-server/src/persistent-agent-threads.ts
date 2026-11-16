@@ -5,6 +5,7 @@ import { persistentAgentModelLocksEqual } from "./persistent-agent-ai-profiles.j
 import type { PersistentAgentActiveThreadSummary, PersistentAgentId, PersistentAgentPiSessionJsonlThreadRuntime, PersistentAgentRuntimeBoundaryReason, PersistentAgentRuntimeState, PersistentAgentRuntimeStateValue, PersistentAgentThreadClosedReason, PersistentAgentThreadModelHistoryEntry, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, PersistentAgentThreadRuntime, PersistentAgentThreadStateValue, PersistentAgentThreadWriteInput, PersistentAgentThreadWriteOptions } from "./persistent-agent-types.js";
 import type { L1bSourceFingerprint } from "./persistent-agent-memory-types.js";
 import { heldMessageFiles } from "./held-messages-store.js";
+import { turnPieceFiles } from "./turn-pieces-store.js";
 import { applyCuts, isShared } from "./thread-items-by-id.js";
 import { assertOfferedRoomModel, assertPersistentAgentThreadNotInFlight, createPersistentAgentInstance, ensureDir, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, normalizePersistentAgentRootRelativePath, normalizeRuntimeModel, PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE, PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE_ID, PERSISTENT_AGENT_THREAD_ITEM_CAP, persistentAgentConflictError, persistentAgentModelLockLabel, readJson, safePersistentAgentEventRecordId, safeRuntimeThreadId, writeFileAtomic } from "./persistent-agent-store.js";
 
@@ -55,7 +56,7 @@ export function writePersistentAgentRuntimeState(agentIdRaw: string, input: Part
 	};
 	const file = instance.runtimeStatePath();
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(next, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(file, JSON.stringify(next, null, 2) + "\n");
 	return next;
 }
 
@@ -507,7 +508,7 @@ export function deletePersistentAgentThread(agentIdRaw: string, threadIdRaw: str
 	// The transcript goes with the record, unless a Remember closed it: search reads it.
 	if (getPersistentAgentThread(instance.agentId, threadId)?.closedReason !== "checkpoint") for (const transcript of [instance.runtimePiSessionPath(threadId), instance.runtimeBootPromptSnapshotPath(threadId)]) fs.rmSync(transcript, { force: true });
 	if (fs.existsSync(file)) fs.unlinkSync(file);
-	for (const held of heldMessageFiles(instance.rootDir, threadId)) fs.rmSync(held, { force: true });
+	for (const held of [...heldMessageFiles(instance.rootDir, threadId), ...turnPieceFiles(instance.rootDir, threadId)]) fs.rmSync(held, { force: true });
 	const runtime = existingRuntime.activeThreadId === threadId ? writePersistentAgentRuntimeState(instance.agentId, { state: "idle" }, { allowInFlightActiveThread: true }) : existingRuntime;
 	return { ok: true, runtime };
 }

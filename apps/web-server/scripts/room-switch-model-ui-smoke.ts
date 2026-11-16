@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -152,34 +152,29 @@ try {
 		await page.locator(".persistent-agent-card").filter({ hasText: "Switch UI Room" }).getByRole("button", { name: "Enter" }).click();
 		const composer = page.locator("textarea").first();
 		await composer.waitFor({ timeout: 15000 });
-		// Send waits for the room's socket; its title says when it is there.
-		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await page.waitForTimeout(800);
 		await composer.fill("First question on Claude.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from claude-fake.").waitFor({ timeout: 20000 });
 		const status = await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/status`)).json() as { runtime?: { activeThreadId?: string } };
 		const conversationId = String(status.runtime?.activeThreadId ?? "");
 		assert(conversationId, "the room has an open conversation");
-		// Entering dials (and may dial once more as the new conversation is
-		// saved); what counts is that nothing after this point dials again.
-		await page.waitForTimeout(1200);
+		// Entering dials (and once more as the new conversation is saved), all
+		// before Send lights; what counts is that nothing after this point dials again.
 		const dialsBefore = roomDials.length;
 		assert(dialsBefore >= 1, "the room has its socket");
 
 		// The model panel under the box: pick GPT for the open conversation.
 		await pickInPanel(page, "GPT Fake");
 		await page.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 10000 });
-		await page.waitForTimeout(1500);
-		assert(roomDials.length === dialsBefore, `the switch keeps the room's socket, got ${roomDials.length - dialsBefore} new dials`);
-		assert((await page.getByText(/^Continued on /).count()) === 1, `the transcript shows the line once, got ${await page.getByText(/^Continued on /).count()}`);
 
-		// The next message goes out on GPT over the same socket.
+		// The next message goes out on GPT over the same socket. A full turn after
+		// the switch, a second dial or a second line would be there to count.
 		await composer.fill("Second question, now on GPT.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
 		assert(requests[requests.length - 1]?.model === "gpt-fake", `the next turn runs on GPT, got ${requests[requests.length - 1]?.model}`);
-		assert(roomDials.length === dialsBefore, `still the same socket after the next answer, got ${roomDials.length - dialsBefore} new dials`);
+		assert(roomDials.length === dialsBefore, `the switch and the next answer keep the room's socket, got ${roomDials.length - dialsBefore} new dials`);
+		assert((await page.getByText(/^Continued on /).count()) === 1, `the transcript shows the line once, got ${await page.getByText(/^Continued on /).count()}`);
 
 		// The saved conversation holds the line exactly once.
 		let saved: Array<{ kind?: string; text?: string }> = [];
@@ -196,14 +191,12 @@ try {
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await page.waitForLoadState("networkidle");
 		await page.locator(".persistent-agent-card").filter({ hasText: "Stuck Room" }).getByRole("button", { name: "Enter" }).click();
-		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		// The room's ready frame (its context ring) is in: typed before it, the message would be cleared by the room's load.
-		await page.locator(".composer-context-pill:not(.composer-context-waiting)").first().waitFor({ timeout: 15000 });
+		await composer.waitFor({ timeout: 15000 });
 		const question = "A question the key refuses.";
 		refuseClaude = true;
 		const refusedBefore = requests.length;
 		await composer.fill(question);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		const notice = page.locator(".room-model-notice");
 		await notice.getByRole("button", { name: "Choose another model" }).waitFor({ timeout: 20000 });
 		refuseClaude = false;
@@ -217,7 +210,7 @@ try {
 		// The message is back in the box: sent again, it runs on GPT.
 		await waitUntil(async () => (await composer.inputValue()) === question, "the refused message is back in the box");
 		const resentBefore = requests.length;
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
 		assert(requests.length > resentBefore && requests[requests.length - 1]?.model === "gpt-fake", `the message sent again runs on GPT, got ${JSON.stringify(requests.slice(resentBefore))}`);
 		console.log("  ok  a conversation whose only message failed: Choose another model opens the model panel, and the message sent again runs on the new model");

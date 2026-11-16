@@ -9,6 +9,8 @@ const {
 	deletePersistentRoomCapabilityPolicy,
 	deletePersistentRoomDefaultCapabilityPolicy,
 	persistentRoomCapabilityPolicyView,
+	persistentRoomCommandsOf,
+	persistentRoomCommandsSwitchedOff,
 	PersistentRoomWorkspacePolicyError,
 	PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID,
 	persistentRoomWorkspaceDefaultPath,
@@ -21,6 +23,7 @@ const {
 	writePersistentRoomCapabilityPolicy,
 	writePersistentRoomDefaultCapabilityPolicy,
 } = await import("../src/persistent-room-workspace-policy.js");
+const { roomBoxAvailable } = await import("../src/room-box/box-available.js");
 
 const agentId = "workspace-policy-smoke-room";
 
@@ -115,47 +118,68 @@ try {
 	assert(fs.existsSync(policyPath), "policy sidecar should be written");
 	const storedPolicyJson = fs.readFileSync(policyPath, "utf-8");
 	assert(storedPolicyJson.includes(JSON.stringify(workspaceRoot).slice(1, -1)), "server-side sidecar should retain raw workspace path for enforcement");
-	const restoredPolicy = readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
+	// A conversation's own settings give way to the room's: none is read, and its file stays as it was.
+	assert(readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }) === null, "a conversation's own settings are not read");
+	assert(fs.readFileSync(policyPath, "utf-8") === storedPolicyJson, "a conversation's own file stays as it was");
+	const deletedPolicy = deletePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
+	assert(deletedPolicy.deleted === true && !fs.existsSync(policyPath), "delete should remove an existing policy sidecar");
+	assert(deletePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).deleted === false, "second delete should be safe no-op");
+
+	// The room's own policy, read on every read in the Folder pane's one shape.
+	const roomBounded = createPersistentRoomDefaultCapabilityPolicy({ ...baseInput, root: workspaceRoot, workspaceAccessMode: "bounded", source: "manual" });
+	writePersistentRoomDefaultCapabilityPolicy(roomBounded, { persistentAgentsRoot });
+	const roomPath = persistentRoomWorkspaceDefaultPath(agentId, { persistentAgentsRoot });
+	const storedRoomJson = fs.readFileSync(roomPath, "utf-8");
+	const restoredPolicy = readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
 	assert(restoredPolicy?.roots[0]?.realpath === fs.realpathSync.native(workspaceRoot), "stored policy should round-trip root realpath");
-	assert(restoredPolicy?.workspaceAccessMode === "bounded", "stored policy should round-trip workspace access mode");
+	assert(restoredPolicy?.workspaceAccessMode === "localFiles" && persistentRoomCommandsOf(restoredPolicy) === "switched-off", "a Bounded room reads as the one access with its commands switched off");
+	assert(JSON.parse(fs.readFileSync(roomPath, "utf-8")).access === "bounded", "the read stores nothing: the room keeps its stored access until the person changes it");
 	assert(!JSON.stringify(persistentRoomCapabilityPolicyView(restoredPolicy)).includes(workspaceRoot), "stored policy view must stay redacted");
-	const legacyPolicyRecord = JSON.parse(storedPolicyJson);
+	// An older app's room: no access or commands field, and no workspaceAccessMode at all.
+	const legacyPolicyRecord = JSON.parse(storedRoomJson);
 	delete legacyPolicyRecord.workspaceAccessMode;
-	fs.writeFileSync(policyPath, JSON.stringify(legacyPolicyRecord, null, 2) + "\n");
-	const legacyPolicy = readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
-	assert(legacyPolicy?.workspaceAccessMode === "bounded", "stored legacy policy with missing workspaceAccessMode should default safely to bounded");
-	assert(legacyPolicy?.bashEnabled === false, "stored legacy policy with missing bashEnabled should default safely to false");
-	assert(persistentRoomCapabilityPolicyView(legacyPolicy).pathAccess === "workspace-only", "legacy policy view should remain workspace-only");
-	fs.writeFileSync(policyPath, JSON.stringify({ ...legacyPolicyRecord, workspaceAccessMode: "unsafe" }, null, 2) + "\n");
-	assert(readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }) === null, "stored invalid workspaceAccessMode should fail closed");
+	delete legacyPolicyRecord.access;
+	delete legacyPolicyRecord.commands;
+	fs.writeFileSync(roomPath, JSON.stringify({ ...legacyPolicyRecord, bashEnabled: true }, null, 2) + "\n");
+	const legacyPolicy = readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
+	assert(legacyPolicy !== null && persistentRoomCommandsOf(legacyPolicy) === "switched-off" && legacyPolicy.bashEnabled === false, "an older app's room with no mode reads Bounded: commands switched off, its Bash on never honoured");
+	assert(persistentRoomCapabilityPolicyView(legacyPolicy).bashEnabled === false, "its view says commands are off");
+	fs.writeFileSync(roomPath, JSON.stringify({ ...legacyPolicyRecord, workspaceAccessMode: "unsafe" }, null, 2) + "\n");
+	assert(readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot }) === null, "stored invalid workspaceAccessMode should fail closed");
 
 	// Self-correction: a stored record claiming write:true with a read-only tool
 	// selection is re-derived to write:false on every read — the stored flag has
 	// no authority over the tool selection.
-	const lyingRecord = JSON.parse(storedPolicyJson);
+	const lyingRecord = JSON.parse(storedRoomJson);
 	lyingRecord.modes = { read: true, write: true };
 	lyingRecord.toolSelection = { kind: "custom", allowedToolNames: ["ls", "find", "grep", "read"] };
 	lyingRecord.allowedToolNames = ["ls", "find", "grep", "read"];
-	fs.writeFileSync(policyPath, JSON.stringify(lyingRecord, null, 2) + "\n");
-	const correctedPolicy = readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
+	fs.writeFileSync(roomPath, JSON.stringify(lyingRecord, null, 2) + "\n");
+	const correctedPolicy = readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
 	assert(correctedPolicy?.modes.write === false, "a stored write:true flag over a read-only selection self-corrects to write:false");
 	assert(persistentRoomCapabilityPolicyView(correctedPolicy).writeEnabled === false, "the corrected record reports writeEnabled false");
 
+	// A room's own tool list maps on every read: Write or Edit off is Can change
+	// files off, List, Find and Search come back, and Read off leaves no folder.
+	const withTools = (names: string[]) => {
+		fs.writeFileSync(roomPath, JSON.stringify({ ...JSON.parse(storedRoomJson), access: "localFiles", toolSelection: { kind: "custom", allowedToolNames: names }, allowedToolNames: names }, null, 2) + "\n");
+		return readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
+	};
+	assert(withTools(["read", "write"])?.allowedToolNames.join(",") === "read,ls,find,grep", "Write without Edit reads as Can change files off, with List, Find and Search back");
+	assert(withTools(["read", "edit", "write"])?.allowedToolNames.join(",") === "read,ls,find,grep,write,edit", "Write and Edit with Read reads as all six");
+	assert(withTools(["read"])?.allowedToolNames.join(",") === "read,ls,find,grep", "Read alone gets List, Find and Search back");
+	assert(withTools(["ls", "find", "grep", "write", "edit"]) === null, "Read off leaves the room no folder");
+	assert(JSON.parse(fs.readFileSync(roomPath, "utf-8")).toolSelection.allowedToolNames.join(",") === "ls,find,grep,write,edit", "the read leaves the room's file as it was");
+
 	// A selection change that flips writer presence changes the effective
 	// fingerprint, so the live rebind sees it.
+	fs.writeFileSync(roomPath, JSON.stringify(lyingRecord, null, 2) + "\n");
 	const readOnlyFingerprint = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).fingerprint.value;
-	writePersistentRoomCapabilityPolicy(updatePersistentRoomCapabilityPolicyToolSelection(correctedPolicy, { kind: "custom", allowedToolNames: ["ls", "find", "grep", "read", "write"] }), { persistentAgentsRoot });
+	writePersistentRoomDefaultCapabilityPolicy(updatePersistentRoomCapabilityPolicyToolSelection(correctedPolicy, { kind: "standard" }), { persistentAgentsRoot });
 	const writerFingerprint = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).fingerprint.value;
 	assert(readOnlyFingerprint !== writerFingerprint, "adding a writer tool must flip the effective workspace fingerprint");
-
-	writePersistentRoomCapabilityPolicy(policy, { persistentAgentsRoot });
-
-	const deletedPolicy = deletePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
-	assert(deletedPolicy.deleted === true, "delete should remove an existing policy sidecar");
-	assert(!fs.existsSync(policyPath), "policy sidecar should be gone after delete");
-	assert(readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }) === null, "read should return null after delete");
-	const deletedAgain = deletePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
-	assert(deletedAgain.deleted === false, "second delete should be safe no-op");
+	deletePersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
+	fs.rmSync(path.join(agentRoot, "runtime", "commands-kept.json"), { force: true });
 
 	const defaultPolicyPath = persistentRoomWorkspaceDefaultPath(agentId, { persistentAgentsRoot });
 	const defaultSentinelSidecarPath = persistentRoomWorkspacePolicyPath(agentId, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID, { persistentAgentsRoot });
@@ -174,7 +198,8 @@ try {
 	assert(localFilesBashPolicy.bashEnabled === true, "Local files policy should persist explicit bash enabled");
 	assert(localFilesBashView.bashEnabled === true, "Local files policy view should expose explicit bash enabled");
 	const bashOnlyPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_local_files_bash_only", root: workspaceRoot, workspaceAccessMode: "localFiles", source: "manual", toolSelection: { kind: "custom", allowedToolNames: [] }, bashEnabled: true });
-	assert(bashOnlyPolicy.allowedToolNames.length === 0 && persistentRoomCapabilityPolicyView(bashOnlyPolicy).bashEnabled === true, "Local files bash can be enabled independently of ordinary file tools");
+	// Commands with Can change files off run only where protection does: on a computer without it a command can change any file.
+	assert(bashOnlyPolicy.allowedToolNames.length === 0 && persistentRoomCapabilityPolicyView(bashOnlyPolicy).bashEnabled === roomBoxAvailable(), `commands with no file tools run ${roomBoxAvailable() ? "inside protection" : "nowhere, on a computer without protection"}`);
 	assert(bashOnlyPolicy.modes.write === false && persistentRoomCapabilityPolicyView(bashOnlyPolicy).writeEnabled === false, "bash alone does not derive writer capability — the write flag speaks only for writer tools");
 
 	const defaultPolicy = createPersistentRoomDefaultCapabilityPolicy({
@@ -198,8 +223,9 @@ try {
 	assert(resolvedDefault.policy?.roots[0]?.realpath === fs.realpathSync.native(defaultWorkspaceRoot), "resolver default fallback should return room-default root");
 	writePersistentRoomCapabilityPolicy(policy, { persistentAgentsRoot });
 	const resolvedThread = resolvePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
-	assert(resolvedThread.source === "thread", "resolver should prefer thread policy over room default");
-	assert(resolvedThread.policy?.roots[0]?.realpath === fs.realpathSync.native(workspaceRoot), "resolver thread precedence should return thread root");
+	assert(resolvedThread.source === "room-default", "a conversation's own policy gives way to the room's");
+	assert(resolvedThread.policy?.roots[0]?.realpath === fs.realpathSync.native(defaultWorkspaceRoot), "the conversation resolves the room's folder");
+	assert(resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).bashEnabled === false && persistentRoomCommandsSwitchedOff(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }), "a Bounded room's commands read switched off through a conversation too");
 	deletePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
 	const deletedDefault = deletePersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
 	assert(deletedDefault.deleted === true, "delete should remove room-default policy");
@@ -208,6 +234,18 @@ try {
 	const deletedDefaultAgain = deletePersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
 	assert(deletedDefaultAgain.deleted === false, "second room-default delete should be safe no-op");
 	assert(resolvePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).source === "none", "resolver should return none after thread/default policies are removed");
+
+	// Clear keeps the room's commands: its next folder, saved with no word on them, has them as they were.
+	for (const kept of [true, false]) {
+		writePersistentRoomDefaultCapabilityPolicy(createPersistentRoomDefaultCapabilityPolicy({ ...baseInput, root: defaultWorkspaceRoot, source: "manual", bashEnabled: kept }), { persistentAgentsRoot });
+		deletePersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
+		const next = createPersistentRoomDefaultCapabilityPolicy({ ...baseInput, root: workspaceRoot, source: "manual" });
+		assert(persistentRoomCommandsOf(next) === (kept ? "on" : "off"), `a folder after Clear keeps commands ${kept ? "on" : "off"}, got ${persistentRoomCommandsOf(next)}`);
+		writePersistentRoomDefaultCapabilityPolicy(next, { persistentAgentsRoot });
+		assert(!fs.existsSync(path.join(agentRoot, "runtime", "commands-kept.json")), "the kept commands go once the next folder is saved");
+		deletePersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot });
+		fs.rmSync(path.join(agentRoot, "runtime", "commands-kept.json"), { force: true });
+	}
 
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: "" }), "missing_root", "missing root");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: path.join(tmp, "missing") }), "root_not_found", "missing directory");

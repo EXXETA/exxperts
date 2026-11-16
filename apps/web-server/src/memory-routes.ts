@@ -1,12 +1,14 @@
+import { viewerOf } from "./persistent-agent-status.js";
 import { listPersistentAgents, readPersistentAgentReviewTargetEstimatedTokens, getPersistentAgentStatus, validatePersistentAgentId, isPersistentAgentArchived } from "./persistent-agents.js";
 import { readPersistentRoomMaintenanceSettings, overMemoryBudget, MEMORY_BUDGET_DEFAULT_TOKENS } from "./persistent-room-maintenance-settings.js";
 import { settleMemoryBudget } from "./memory-entries-store.js";
 import { createRoomModelCatalog, resolveRoomModel, resolveAiDefault, roomModelUnavailableError } from "./room-models.js";
 import { registerUsageApi } from "./usage-api.js";
 import { buildMemoryOverview, buildMemoryDigest, buildMemoryAskContext, withoutMemoryIds, searchMemory, buildRoomMemory, readMemoryArea, readConversationTranscript, listMemoryConversations, MEMORY_EVENT_DIFF_KINDS, readMemoryEventDiff, readMemoryNotesView, readMemorySnapshotAt } from "./memory-api.js";
-import { notOnAccountLine, notOfferedLine } from "./model-call-causes.js";
+import { notOnAccountLine, notOfferedLine, providerFailureLogFields } from "./model-call-causes.js";
 import { app } from "./server-app.js";
-import { isSharedServer } from "./server-hooks.js";
+import { isSharedServer, serverHooks } from "./server-hooks.js";
+import { settledRoomStatus } from "./room-status.js";
 import { remoteRoomExposure } from "./request-checks.js";
 import { getWebChatModelRegistry, roomModelNames, webChatProviderLabel } from "./ai-models.js";
 import { resolveAbsorbModel, runIsolatedLifecycleWorker } from "./ai-profile-models.js";
@@ -20,7 +22,7 @@ registerUsageApi(app, {
 			return undefined;
 		}
 	},
-	liveAgents: () => new Map(listPersistentAgents().map((status) => [status.id, status.displayName?.trim() || status.id])),
+	liveAgents: () => new Map(listPersistentAgents("every room").map((status) => [status.id, status.displayName?.trim() || status.id])),
 	// The same resolution the model rows use, so a gateway's source row reads
 	// as the name the person gave it and a rename shows up on the next poll.
 	// The raw id coming back means nobody answers for the provider any more.
@@ -69,7 +71,7 @@ function filterMemoryOverviewForRemote(overview: ReturnType<typeof buildMemoryOv
 
 app.get("/api/memory/overview", async (req, reply) => {
 	try {
-		const overview = buildMemoryOverview();
+		const overview = buildMemoryOverview(await viewerOf(req));
 		return (req as any).exxRemoteDevice ? filterMemoryOverviewForRemote(overview) : overview;
 	} catch (e) {
 		app.log.warn({ err: (e as Error).message }, "failed to build memory overview");
@@ -85,7 +87,8 @@ app.get("/api/memory/overview", async (req, reply) => {
 // never extrapolated.
 app.get("/api/memory/room-memory", async (req, reply) => {
 	try {
-		const overview = (req as any).exxRemoteDevice ? filterMemoryOverviewForRemote(buildMemoryOverview()) : buildMemoryOverview();
+		const viewer = await viewerOf(req);
+		const overview = (req as any).exxRemoteDevice ? filterMemoryOverviewForRemote(buildMemoryOverview(viewer)) : buildMemoryOverview(viewer);
 		const weekStart = overview.generatedAt - 7 * 24 * 3600 * 1000;
 		return {
 			generatedAt: overview.generatedAt,
@@ -146,7 +149,7 @@ app.get("/api/memory/digest", async (req, reply) => {
 	// Default to the last 7 days when no valid `since` is given.
 	const since = Number.isFinite(parsed) && parsed > 0 ? parsed : Date.now() - 7 * 24 * 3600 * 1000;
 	try {
-		const digest = buildMemoryDigest(since);
+		const digest = buildMemoryDigest(await viewerOf(req), since);
 		if (!(req as any).exxRemoteDevice || remoteRoomExposure.hiddenRooms().size === 0) return digest;
 		const rooms = digest.rooms.filter((room) => !remoteRoomExposure.isHidden(room.id));
 		const top = [...rooms].sort((a, b) => b.addedChars - a.addedChars)[0];
@@ -176,13 +179,19 @@ app.post("/api/memory/ask", async (req, reply) => {
 	if (!question) return reply.code(400).send({ error: "Ask a question." });
 
 	// Optional room scope (1-to-many) and prior conversation for follow-ups.
-	let rooms = Array.isArray(body.rooms) ? body.rooms.map((r) => String(r)).filter(Boolean) : undefined;
+	// The scope is cut to the viewer's rooms before any room is read: a room
+	// outside them is dropped as if never named, the same as a room that does
+	// not exist, and a scope with nothing left answers like one with no memory.
+	const viewer = await viewerOf(req);
+	const named = Array.isArray(body.rooms) ? [...new Set(body.rooms.map((r) => String(r).trim()).filter(Boolean))] : undefined;
+	let rooms = named?.filter((id) => viewer === "every room" || viewer.has(id));
+	if (named?.length && !rooms?.length) return { ok: false, reason: "no-memory", message: "No memory in the selected rooms to answer from." };
 	// A remote device's ask is always scoped away from hidden rooms: an
 	// unscoped ask becomes "every exposed room", a scoped one loses its
 	// hidden entries, and an all-hidden scope answers exactly like a scope
 	// with no memory, so nothing about hidden rooms is inferable.
 	if ((req as any).exxRemoteDevice && remoteRoomExposure.hiddenRooms().size > 0) {
-		const scoped = rooms ?? listPersistentAgents().map((agent) => agent.id);
+		const scoped = rooms ?? listPersistentAgents(viewer).map((agent) => agent.id);
 		rooms = scoped.filter((id) => !remoteRoomExposure.isHidden(id));
 		if (rooms.length === 0) {
 			return { ok: false, reason: "no-memory", message: "No memory in the selected rooms to answer from." };
@@ -220,7 +229,7 @@ app.post("/api/memory/ask", async (req, reply) => {
 			.slice(-6)
 			.map((m) => ({ role: m.role === "assistant" ? "Assistant" : "You", content: String(m.content).slice(0, 1500) }))
 		: [];
-	const { context, sources, leftOut } = buildMemoryAskContext(question, undefined, rooms, oneRoom ? undefined : sameProvider);
+	const { context, sources, leftOut } = buildMemoryAskContext(viewer, question, undefined, rooms, oneRoom ? undefined : sameProvider);
 	const note = leftOut.length === 0 ? undefined : leftOut.length === 1 ? `Left out: ${leftOut[0]}, uses a different AI provider.` : `Left out: ${leftOut.slice(0, -1).join(", ")} and ${leftOut[leftOut.length - 1]}, they use a different AI provider.`;
 	if (!context.trim()) {
 		const noMemory = rooms && rooms.length ? "No memory in the selected rooms to answer from." : "No room memory yet to answer from.";
@@ -246,6 +255,8 @@ app.post("/api/memory/ask", async (req, reply) => {
 		context,
 	].join("\n");
 
+	// No room is asked for, so the usage row names the person who asked.
+	const who = await serverHooks().whoIsAsking?.(req);
 	try {
 		const { text } = (await Promise.race([
 			runIsolatedLifecycleWorker(
@@ -255,14 +266,15 @@ app.post("/api/memory/ask", async (req, reply) => {
 				"memory ask worker",
 				trigger,
 				"memory ask worker produced no text",
-				{ agent: "hivemind:memory", kind: "hivemind" },
+				{ agent: "hivemind:memory", kind: "hivemind", who },
 				{ callKind: "memory-ask" },
 			),
 			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 60_000)),
 		])) as { text: string };
 		return { ok: true, answer: withoutMemoryIds(text), sources, provider: modelLock.provider, ...(note ? { note } : {}) };
 	} catch (e) {
-		app.log.warn({ err: (e as Error).message }, "memory ask failed");
+		// A question that ran out its minute has no provider failure to read codes from.
+		app.log.warn((e as Error).message === "timeout" ? { cause: "busy:timed-out" } : { ...providerFailureLogFields(e, modelLock.provider) }, "memory ask failed");
 		// One room asked: its own Memory model, in its Room settings. Several: the Memory default.
 		const refused = notOnAccountLine(e, modelLock, askedRoom ?? "defaults") ?? notOfferedLine(e, modelLock, askedRoom ?? "defaults");
 		if (refused) return { ok: false, reason: "no-model", message: refused };
@@ -279,7 +291,7 @@ app.get("/api/memory/search", async (req) => {
 	const q = (req.query as { q?: string; room?: string } | undefined) ?? {};
 	const query = String(q.q ?? "").slice(0, 200);
 	const room = q.room ? String(q.room) : undefined;
-	let hits = query.trim() ? searchMemory(query, room) : [];
+	let hits = query.trim() ? searchMemory(await viewerOf(req), query, room) : [];
 	// A hidden room searches like a nonexistent one (zero hits either way),
 	// and cross-room hits from hidden rooms are dropped.
 	if ((req as any).exxRemoteDevice && remoteRoomExposure.hiddenRooms().size > 0) {
@@ -296,7 +308,7 @@ app.get("/api/memory/rooms/:id", async (req, reply) => {
 	} catch {
 		return reply.code(400).send({ error: "Invalid room id." });
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
 	try {
@@ -317,7 +329,7 @@ app.get("/api/memory/rooms/:id/area", async (req, reply) => {
 	} catch {
 		return reply.code(400).send({ error: "Invalid room id." });
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
 	const name = String((req.query as { name?: string } | undefined)?.name ?? "").slice(0, 120);
@@ -338,7 +350,7 @@ app.get("/api/memory/rooms/:id/conversation", async (req, reply) => {
 	} catch {
 		return reply.code(400).send({ error: "Invalid room id." });
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
 	const checkpoint = String((req.query as { checkpoint?: string } | undefined)?.checkpoint ?? "").slice(0, 120);
@@ -364,7 +376,7 @@ app.get("/api/memory/rooms/:id/conversations", async (req, reply) => {
 	} catch {
 		return reply.code(400).send({ error: "Invalid room id." });
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
 	try {
@@ -387,7 +399,7 @@ app.get("/api/memory/rooms/:id/event-diff", async (req, reply) => {
 	} catch {
 		return reply.code(400).send({ error: "Invalid room id." });
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
 	const q = (req.query as { kind?: string; event?: string } | undefined) ?? {};
@@ -418,7 +430,7 @@ app.get("/api/memory/rooms/:id/snapshot", async (req, reply) => {
 	} catch {
 		return reply.code(400).send({ error: "Invalid room id." });
 	}
-	const status = getPersistentAgentStatus(id);
+	const status = settledRoomStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
 	const query = (req.query as { at?: string; view?: string } | undefined) ?? {};

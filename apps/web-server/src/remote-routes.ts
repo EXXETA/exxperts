@@ -299,7 +299,7 @@ app.get("/api/remote/client-context", async (req, reply) => {
 app.get("/api/remote/rooms", async (req, reply) => {
 	if (refuseRemoteAdminFromTunnel(req, reply)) return;
 	return {
-		rooms: listPersistentAgents().map((agent) => {
+		rooms: listPersistentAgents("every room").map((agent) => {
 			const defaultPolicy = readPersistentRoomDefaultCapabilityPolicy(agent.id);
 			const policyView = defaultPolicy ? persistentRoomCapabilityPolicyView(defaultPolicy) : null;
 			return {

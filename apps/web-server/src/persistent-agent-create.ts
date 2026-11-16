@@ -1,15 +1,18 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { estimateTokens } from "./token-estimate.js";
 import path from "node:path";
+import { renameOver, syncFolder } from "@exxeta/exxperts-runtime";
 import { MAINTENANCE_DIAGNOSTICS_DIRNAME } from "./maintenance-diagnostics.js";
 import { trimHumanText } from "./room-name.js";
 import { fingerprintL1bSource, type NormalizedPersistentAgentScaffoldInput, type PersistentAgentId, type PersistentAgentScaffoldInput, type PersistentAgentScaffoldResult, type ReservedPersistentAgentRoot } from "./persistent-agent-types.js";
 import type { L1bSourceFingerprint } from "./persistent-agent-memory-types.js";
-import { activePersistentRoomLock, type AgentJson, createPersistentAgentInstance, defaultPersistentAgentRuntimeState, ensureDir, ensurePersistentAgentCanonicalScaffoldDirs, getPersistentAgentRuntimeState, isPersistentAgentArchived, isValidPersistentAgentId, MAX_PERSISTENT_AGENT_ID_LENGTH, PERSISTENT_AGENTS_ROOT, type PersistentAgentInstance, shortRandomId, slugTimestamp, validatePersistentAgentId, writeFileAtomic } from "./persistent-agent-store.js";
+import { activePersistentRoomLock, type AgentJson, createPersistentAgentInstance, defaultPersistentAgentRuntimeState, ensureDir, ensurePersistentAgentCanonicalScaffoldDirs, getPersistentAgentRuntimeState, isPersistentAgentArchived, MAX_PERSISTENT_AGENT_ID_LENGTH, PERSISTENT_AGENTS_ROOT, type PersistentAgentInstance, readJson, shortRandomId, slugTimestamp, validatePersistentAgentId, writeFileAtomic } from "./persistent-agent-store.js";
 import { hasPersistentAgentTurnInFlight } from "./persistent-agent-turns.js";
 import { genericPersistentAgentJson } from "./persistent-agent-memory-files.js";
 import { defaultSectionRegistry, genericL1a, genericL1b, isPersistentAgentL1aModeId, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION } from "./persistent-agent-constitution.js";
-import { getPersistentAgentStatus } from "./persistent-agent-status.js";
+import { getPersistentAgentStatus, type RoomViewer, roomIdsForViewer } from "./persistent-agent-status.js";
+import { newRoomCommandFiles } from "./persistent-room-bash-settings.js";
 
 function collapseHumanWhitespace(value: string): string {
 	return trimHumanText(value);
@@ -31,36 +34,43 @@ function normalizeRequiredHumanName(value: unknown, requiredMessage: string): st
  * starting a fresh one under the same name is a supported flow — so the
  * collision check runs again at restore time instead. The caller excludes the
  * room being renamed so a case-only rename still works.
+ *
+ * The rooms compared are the viewer's: on a shared server a person's own, so a
+ * colleague's room name neither blocks nor shows. Without a viewer, every room.
  */
-export function assertPersistentAgentDisplayNameAvailable(displayName: string, options: { excludeAgentId?: string } = {}): void {
+export function assertPersistentAgentDisplayNameAvailable(displayName: string, options: { excludeAgentId?: string; viewer?: RoomViewer } = {}): void {
+	if (roomHoldingDisplayName(displayName, options)) throw displayNameTaken(displayName);
+}
+
+function displayNameTaken(displayName: string): Error {
+	const error = new Error(`A room named ${collapseHumanWhitespace(displayName)} already exists. Choose a different name.`);
+	(error as any).statusCode = 409;
+	(error as any).code = "display_name_taken";
+	return error;
+}
+
+/** The viewer's live room with this name, or null. */
+function roomHoldingDisplayName(displayName: string, options: { excludeAgentId?: string; viewer?: RoomViewer } = {}): string | null {
 	// NFC on BOTH sides of the comparison: stored names from before intake
 	// normalization may still be NFD on disk.
 	const wanted = collapseHumanWhitespace(displayName).normalize("NFC").toLowerCase();
-	if (!wanted) return;
-	let entries: fs.Dirent[] = [];
-	try {
-		if (fs.existsSync(PERSISTENT_AGENTS_ROOT)) entries = fs.readdirSync(PERSISTENT_AGENTS_ROOT, { withFileTypes: true });
-	} catch {
-		// An unscannable store must not block creation; id reservation still guarantees id uniqueness.
-		return;
-	}
-	for (const entry of entries) {
-		if (!entry.isDirectory() || !isValidPersistentAgentId(entry.name)) continue;
-		if (options.excludeAgentId && entry.name === options.excludeAgentId) continue;
+	if (!wanted) return null;
+	// An unscannable store gives no ids, so it never blocks creation; id
+	// reservation still guarantees id uniqueness.
+	for (const id of roomIdsForViewer(options.viewer ?? "every room")) {
+		if (options.excludeAgentId && id === options.excludeAgentId) continue;
 		let meta: Partial<AgentJson> | null = null;
 		try {
-			meta = createPersistentAgentInstance(entry.name).readAgentJson();
+			meta = createPersistentAgentInstance(id).readAgentJson();
 		} catch {
 			continue;
 		}
 		const existing = typeof meta?.displayName === "string" ? collapseHumanWhitespace(meta.displayName).normalize("NFC").toLowerCase() : "";
 		if (existing !== wanted) continue;
 		if (isPersistentAgentArchived(meta)) continue;
-		const error = new Error(`A room named ${collapseHumanWhitespace(displayName)} already exists. Choose a different name.`);
-		(error as any).statusCode = 409;
-		(error as any).code = "display_name_taken";
-		throw error;
+		return id;
 	}
+	return null;
 }
 
 function normalizeOptionalHumanText(value: unknown): string | undefined {
@@ -104,8 +114,8 @@ export function persistentAgentSlugFromDisplayName(displayNameRaw: unknown): str
 	return slug || "agent";
 }
 
-function persistentAgentIdCandidate(baseAgentId: string, attempt: number): PersistentAgentId {
-	const suffix = attempt <= 1 ? "" : `-${attempt}`;
+function persistentAgentIdCandidate(baseAgentId: string, attempt: number, idTail: (() => string) | undefined): PersistentAgentId {
+	const suffix = idTail ? `-${idTail()}` : attempt <= 1 ? "" : `-${attempt}`;
 	const maxBaseLength = MAX_PERSISTENT_AGENT_ID_LENGTH - suffix.length;
 	const truncatedBase = baseAgentId.slice(0, Math.max(1, maxBaseLength)).replace(/-+$/g, "") || "agent";
 	const candidate = `${truncatedBase}${suffix}`;
@@ -134,44 +144,110 @@ export function normalizePersistentAgentScaffoldInput(input: PersistentAgentScaf
 	};
 }
 
-export function reserveUniquePersistentAgentRoot(baseAgentIdRaw: string): ReservedPersistentAgentRoot {
+/** A room is built under this name and renamed into place whole, so no listing ever meets half a room. An id cannot start with a dot, so nothing reads it as a room. */
+const ROOM_BEING_BUILT_PREFIX = ".being-built-";
+
+/** A build takes a moment, so a folder this old is one a kill left, never one another server on this data folder is still writing. */
+const ROOM_BUILD_ABANDONED_MS = 60 * 60 * 1000;
+
+/** Picks a free id and makes the folder the room is built in, under a name of its own, and drops what a kill left long ago. */
+export function reserveUniquePersistentAgentRoot(baseAgentIdRaw: string, idTail?: () => string): ReservedPersistentAgentRoot {
 	const baseAgentId = persistentAgentSlugFromDisplayName(baseAgentIdRaw);
 	ensureDir(PERSISTENT_AGENTS_ROOT);
+	for (const name of fs.readdirSync(PERSISTENT_AGENTS_ROOT)) {
+		if (!name.startsWith(ROOM_BEING_BUILT_PREFIX)) continue;
+		const folder = path.join(PERSISTENT_AGENTS_ROOT, name);
+		const age = Date.now() - (fs.statSync(folder, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+		if (age > ROOM_BUILD_ABANDONED_MS) fs.rmSync(folder, { recursive: true, force: true });
+	}
 	for (let attempt = 1; attempt <= 9999; attempt += 1) {
-		const agentId = persistentAgentIdCandidate(baseAgentId, attempt);
+		const agentId = persistentAgentIdCandidate(baseAgentId, attempt, idTail);
 		const rootDir = path.join(PERSISTENT_AGENTS_ROOT, agentId);
-		try {
-			fs.mkdirSync(rootDir, { mode: 0o700 });
-			return { agentId, rootDir, baseAgentId, attempts: attempt };
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-			throw error;
-		}
+		if (fs.existsSync(rootDir)) continue;
+		const buildDir = path.join(PERSISTENT_AGENTS_ROOT, `${ROOM_BEING_BUILT_PREFIX}${agentId}-${crypto.randomUUID()}`);
+		fs.mkdirSync(buildDir, { mode: 0o700 });
+		return { agentId, rootDir, buildDir, baseAgentId, attempts: attempt };
 	}
 	throw new Error(`could not allocate unique persistent agent id for ${baseAgentId}`);
 }
 
-function removeReservedScaffoldRootOnFailure(rootDir: string): void {
-	const relativePath = path.relative(PERSISTENT_AGENTS_ROOT, rootDir);
-	if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) return;
+/** Flushes every folder under a built room, so the room's own entries reach the disk before its rename does. */
+function syncFolderTree(folder: string): void {
+	for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+		if (entry.isDirectory()) syncFolderTree(path.join(folder, entry.name));
+	}
+	syncFolder(folder);
+}
+
+function unansweredCreatePath(rootDir: string): string {
+	return path.join(rootDir, "runtime", "create-unanswered.json");
+}
+
+function scaffoldInputKey(normalized: NormalizedPersistentAgentScaffoldInput): string {
+	return crypto.createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
+/** A room's create was answered: the same input sent again from now on is a second room's name clash, not a retry. */
+export function markPersistentAgentCreateAnswered(agentId: string): void {
 	try {
-		fs.rmSync(rootDir, { recursive: true, force: true });
-	} catch {
-		// Preserve the original scaffold error. A partial newly reserved root may remain for inspection.
+		fs.rmSync(unansweredCreatePath(createPersistentAgentInstance(agentId).rootDir), { force: true });
+	} catch (error) {
+		// This runs after the answer: thrown here it would end the server for everyone, and left behind it costs a stale mark.
+		console.error(`[create] the mark of a room that was answered could not be removed: ${(error as NodeJS.ErrnoException)?.code ?? "Error"}`);
 	}
 }
 
-export function createPersistentAgentFromScaffoldInput(input: PersistentAgentScaffoldInput): PersistentAgentScaffoldResult {
+function scaffoldResult(agentId: PersistentAgentId, normalized: NormalizedPersistentAgentScaffoldInput, created: string[]): PersistentAgentScaffoldResult {
+	const status = getPersistentAgentStatus(agentId);
+	return {
+		agent: {
+			id: agentId,
+			agentId,
+			displayName: normalized.displayName,
+			...(normalized.description ? { description: normalized.description } : {}),
+			role: normalized.role,
+			templateId: normalized.templateId,
+			root: createPersistentAgentInstance(agentId).rootDir,
+			status: status.status,
+		},
+		status,
+		created,
+		warnings: [],
+	};
+}
+
+function removeRoomBeingBuiltOnFailure(buildDir: string): void {
+	try {
+		fs.rmSync(buildDir, { recursive: true, force: true });
+	} catch {
+		// Preserve the original scaffold error. The next create drops what is left.
+	}
+}
+
+/**
+ * Builds a room in a hidden folder and renames it into place: a kill leaves no
+ * room or a whole one. `untilAnswered` is for a caller that answers someone
+ * over a connection a kill can cut: the room keeps a mark until that caller says
+ * the answer went out, and the same input sent while it stands gets the room
+ * back, since the person never heard it was made. The mark names no person, so
+ * a server with several people must not ask for it: anyone sending the same
+ * details would get the room.
+ */
+export function createPersistentAgentFromScaffoldInput(input: PersistentAgentScaffoldInput, options: { idTail?: () => string; untilAnswered?: boolean; viewer?: RoomViewer } = {}): PersistentAgentScaffoldResult {
 	const normalized = normalizePersistentAgentScaffoldInput(input);
-	assertPersistentAgentDisplayNameAvailable(normalized.displayName);
-	const reserved = reserveUniquePersistentAgentRoot(normalized.baseAgentId);
-	const instance = createPersistentAgentInstance(reserved.agentId);
+	const key = scaffoldInputKey(normalized);
+	const holder = roomHoldingDisplayName(normalized.displayName, { viewer: options.viewer });
+	if (holder) {
+		if (options.untilAnswered && readJson(unansweredCreatePath(createPersistentAgentInstance(holder).rootDir))?.key === key) return scaffoldResult(holder, normalized, []);
+		throw displayNameTaken(normalized.displayName);
+	}
+	const reserved = reserveUniquePersistentAgentRoot(normalized.baseAgentId, options.idTail);
 	const now = Date.now();
 	const created: string[] = [];
 	try {
-		ensureDir(path.join(reserved.rootDir, "L1b/archive"));
+		ensureDir(path.join(reserved.buildDir, "L1b/archive"));
 		created.push("L1b/archive/");
-		ensurePersistentAgentCanonicalScaffoldDirs(instance);
+		ensurePersistentAgentCanonicalScaffoldDirs(reserved.buildDir);
 		for (const rel of ["runtime/threads", "runtime/workspace-policies", "events/checkpoint", "events/absorb", "events/review", `events/${MAINTENANCE_DIAGNOSTICS_DIRNAME}`]) {
 			created.push(`${rel}/`);
 		}
@@ -186,33 +262,24 @@ export function createPersistentAgentFromScaffoldInput(input: PersistentAgentSca
 			// none are granted until the user grants them. (Existing rooms get the
 			// full list once, via the update-day migration.)
 			["runtime/mcp-settings.json", JSON.stringify({ schemaVersion: 1, grantedConnectors: [], updatedAt: new Date(now).toISOString() }, null, 2) + "\n"],
+			// New rooms where commands stay inside the room start with them on; rooms made before keep what they have.
+			...newRoomCommandFiles(new Date(now)),
 		];
 		for (const [rel, body] of files) {
-			const file = path.join(reserved.rootDir, rel);
+			const file = path.join(reserved.buildDir, rel);
 			ensureDir(path.dirname(file));
-			fs.writeFileSync(file, body, { mode: 0o600, flag: "wx" });
+			writeFileAtomic(file, body);
 			created.push(rel);
 		}
-		const status = getPersistentAgentStatus(reserved.agentId);
-		return {
-			agent: {
-				id: reserved.agentId,
-				agentId: reserved.agentId,
-				displayName: normalized.displayName,
-				...(normalized.description ? { description: normalized.description } : {}),
-				role: normalized.role,
-				templateId: normalized.templateId,
-				root: instance.rootDir,
-				status: status.status,
-			},
-			status,
-			created,
-			warnings: [],
-		};
+		if (options.untilAnswered) writeFileAtomic(unansweredCreatePath(reserved.buildDir), JSON.stringify({ key }) + "\n");
+		syncFolderTree(reserved.buildDir);
+		renameOver(reserved.buildDir, reserved.rootDir);
+		syncFolder(PERSISTENT_AGENTS_ROOT);
 	} catch (error) {
-		removeReservedScaffoldRootOnFailure(reserved.rootDir);
+		removeRoomBeingBuiltOnFailure(reserved.buildDir);
 		throw error;
 	}
+	return scaffoldResult(reserved.agentId, normalized, created);
 }
 
 const L1A_MARKER_PATTERN = /<!--\s*exxeta:persistent-agent:l1a\s+schema_version=(\d+)(?:\s+template_version=(\d+))?(?:\s+mode=([a-z0-9_-]+))?\s*-->/;
@@ -304,17 +371,25 @@ function assertConstitutionUpgradeAllowed(instance: PersistentAgentInstance, met
  * made in place, so a room someone edited by hand keeps its own lines; from
  * any other version the template is rendered anew.
  */
-const L1A_IN_PLACE_STEPS: Record<number, { from: string; to: string }> = {
-	3: { from: "the transcripts of memorized conversations", to: "the transcripts of remembered conversations" },
+const L1A_IN_PLACE_STEPS: Record<number, ReadonlyArray<{ from: string; to: string }>> = {
+	3: [{ from: "the transcripts of memorized conversations", to: "the transcripts of remembered conversations" }],
+	// Our own words for memory's steps, which the room repeated to people, give way to the Memory pane's.
+	// The v4 line is matched as rooms store it, dash included.
+	4: [
+		{ from: "only through the product's approved memory workflows (checkpoint, absorb, prune) \u2014 never silently.", to: "only when the user approves it in Memory, never silently." },
+		{ from: "when no approved workflow ran; ordinary chat becomes durable memory only through those workflows.", to: "when the user approved nothing; ordinary chat becomes durable memory only that way." },
+		{ from: "a note comes back into memory only through a Memorize or a Review the user approves.", to: "a note comes back only when the user approves it with Memorize or Review in Memory." },
+	],
 };
 
 function constitutionUpgradeCandidate(agentId: PersistentAgentId, currentL1a: string, fromTemplateVersion: number, normalized: NormalizedPersistentAgentScaffoldInput): { l1a: string; inPlace: boolean } {
 	let l1a = currentL1a;
 	let version = fromTemplateVersion;
 	while (L1A_IN_PLACE_STEPS[version] && version < PERSISTENT_AGENT_L1A_TEMPLATE_VERSION) {
-		const step = L1A_IN_PLACE_STEPS[version];
+		const swaps = L1A_IN_PLACE_STEPS[version];
 		version += 1;
-		l1a = l1a.replace(L1A_MARKER_PATTERN, (marker) => marker.replace(/template_version=\d+/, `template_version=${version}`)).replace(step.from, step.to);
+		l1a = l1a.replace(L1A_MARKER_PATTERN, (marker) => marker.replace(/template_version=\d+/, `template_version=${version}`));
+		for (const swap of swaps) l1a = l1a.replace(swap.from, swap.to);
 	}
 	if (version === PERSISTENT_AGENT_L1A_TEMPLATE_VERSION && version !== fromTemplateVersion) return { l1a, inPlace: true };
 	return { l1a: genericL1a(agentId, normalized), inPlace: false };
@@ -365,7 +440,7 @@ export function upgradePersistentAgentConstitution(agentIdRaw: string, options: 
 
 	ensureDir(archiveDir);
 	ensureDir(path.dirname(eventRecordPath));
-	fs.writeFileSync(archivedL1aPath, currentL1a, { mode: 0o600, flag: "wx" });
+	writeFileAtomic(archivedL1aPath, currentL1a);
 	writeFileAtomic(l1aPath, candidateL1a);
 	const updatedMeta: AgentJson = {
 		...(meta as AgentJson),
@@ -392,7 +467,7 @@ export function upgradePersistentAgentConstitution(agentIdRaw: string, options: 
 			eventRecord: path.relative(instance.rootDir, eventRecordPath),
 		},
 	};
-	fs.writeFileSync(eventRecordPath, JSON.stringify(eventRecord, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+	writeFileAtomic(eventRecordPath, JSON.stringify(eventRecord, null, 2) + "\n");
 
 	return {
 		plan: { ...plan },

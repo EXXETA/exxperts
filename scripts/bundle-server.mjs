@@ -59,6 +59,8 @@ export const EXTERNAL_PACKAGES = [
 export const FILE_PACKAGES = [
 	{ name: "qrcode-terminal", reason: "remote-qr.ts loads it through createRequire, which esbuild cannot follow" },
 	{ name: "jszip", reason: "the shelf worker, a separate forked file, opens docx and xlsx with it" },
+	{ name: "@anthropic-ai/sandbox-runtime", reason: "the box worker, a separate forked file, holds the library's proxy and log monitor; the win-x64 desktop payload leaves it out (DESKTOP_TARGET_DROP in apps/desktop/scripts/prune-payload.mjs)" },
+	{ name: "@microsoft/mxc-sdk", reason: "the Windows box worker, a bundle of its own, imports it, and it finds its native library from its own folder; only the win-x64 desktop payload keeps it (DESKTOP_TARGET_DROP in apps/desktop/scripts/prune-payload.mjs)" },
 ];
 
 // A file of one of our runtime packages, whether esbuild reached it through
@@ -99,6 +101,8 @@ export const REVIEWED_OWN_LOCATION_READS = [
 	{ file: /(^|\/)apps\/web-server\/src\/scheduled-prompt-background-execution\.ts$/, sites: 2, reason: `${installRootReason}; loads room-lock.cjs from there` },
 	{ file: /(^|\/)apps\/web-server\/src\/whats-new\.ts$/, sites: 1, reason: installRootReason },
 	{ file: /(^|\/)apps\/web-server\/src\/persistent-room-shelf-reading\.ts$/, sites: 1, reason: "forks shelf-parse-worker.mjs, copied beside the bundle (BUNDLE_ASSETS)" },
+	{ file: /(^|\/)apps\/web-server\/src\/room-box\/box-process\.ts$/, sites: 1, reason: "forks box-worker.mjs, copied beside the bundle (BUNDLE_ASSETS)" },
+	{ file: /(^|\/)apps\/web-server\/src\/room-box\/windows\/start-check\.ts$/, sites: 1, reason: "forks box-worker-windows.mjs, bundled beside server.mjs (BUNDLE_ASSETS)" },
 	{ file: /(^|\/)apps\/web-server\/src\/remote-qr\.ts$/, sites: 1, reason: "loads qrcode-terminal through createRequire; it ships as files (FILE_PACKAGES)" },
 	{ file: /(^|\/)pi-package\/extensions\/fetch_url\/index\.ts$/, sites: 1, reason: "loads jsdom through createRequire on the first page it parses; jsdom ships as files (EXTERNAL_PACKAGES)" },
 	{ file: runtimeFile("coding-agent", "dist/config\\.js"), sites: 4, reason: "finds its package folder through the build-time define" },
@@ -133,11 +137,17 @@ export const REVIEWED_BARE_REQUIRES = [
 	{ name: "typebox", reason: "the extension loader resolves it for extensions run through jiti, which the server never starts" },
 ];
 
-// Files the bundled code reads from its own folder at run time, copied beside
-// the bundle. `source` is a path in the tree; `package` names the inlined
-// package whose folder holds `file`, so the copy matches the inlined version.
+// Files the bundled code reads from its own folder at run time, put beside
+// the bundle. `source` is a path in the tree, copied as it stands; `package`
+// names the inlined package whose folder holds `file`, so the copy matches the
+// inlined version; `entry` is a TypeScript file bundled into `file` with
+// everything of ours inlined and only the `outside` packages left as files,
+// under the same checks as server.mjs.
 export const BUNDLE_ASSETS = [
 	{ file: "shelf-parse-worker.mjs", source: "apps/web-server/src/shelf-parse-worker.mjs", reason: "persistent-room-shelf-reading.ts forks it from its own folder" },
+	{ file: "box-worker.mjs", source: "apps/web-server/src/room-box/box-worker.mjs", reason: "room-box/box-process.ts forks it from its own folder" },
+	{ file: "file-worker.mjs", source: "apps/web-server/src/room-box/file-worker.mjs", reason: "room-box/box-files.ts runs it in the box from box-process.ts's folder" },
+	{ file: "box-worker-windows.mjs", entry: "apps/web-server/src/room-box/windows/box-worker-windows.ts", outside: ["@microsoft/mxc-sdk"], reason: "the Windows box's own process, a bundle of its own because it imports TypeScript of ours; the server will fork it from its own folder" },
 	{ file: "photon_rs_bg.wasm", package: "@silvia-odwyer/photon-node", reason: "photon-node reads its wasm from its own __dirname" },
 	{ file: "app-bridge.bundle.js", package: "pi-mcp-adapter", reason: "the adapter's ui-server.ts reads it from import.meta.dirname" },
 ];
@@ -318,7 +328,7 @@ function sitesOf(text, pattern) {
 // What a scan finds beyond its reviewed list: a file no entry matches, named
 // with its first place, and an entry whose files hold more places than it
 // reviews, named with every place so the new one can be found.
-function siteProblems(text, pattern, reviewed, { list, one, many }) {
+function siteProblems(text, pattern, reviewed, { list, one, many }, bundleFile = "server.mjs") {
 	const unreviewed = new Map();
 	const byEntry = new Map();
 	for (const site of sitesOf(text, pattern)) {
@@ -330,12 +340,12 @@ function siteProblems(text, pattern, reviewed, { list, one, many }) {
 		if (!byEntry.has(entry)) byEntry.set(entry, []);
 		byEntry.get(entry).push(site);
 	}
-	const problems = [...unreviewed].map(([file, line]) => `${file} (server.mjs line ${line}) ${one}; review it and list it in ${list} with the reason it is safe`);
+	const problems = [...unreviewed].map(([file, line]) => `${file} (${bundleFile} line ${line}) ${one}; review it and list it in ${list} with the reason it is safe`);
 	for (const [entry, sites] of byEntry) {
 		if (sites.length <= entry.sites) continue;
 		const files = [...new Set(sites.map((site) => site.file))].join(", ");
 		const lines = sites.map((site) => site.line).join(", ");
-		problems.push(`${files} has ${sites.length} places that ${many} (server.mjs lines ${lines}), ${entry.sites} reviewed; review the new one and raise the count in ${list} with the reason it is safe`);
+		problems.push(`${files} has ${sites.length} places that ${many} (${bundleFile} lines ${lines}), ${entry.sites} reviewed; review the new one and raise the count in ${list} with the reason it is safe`);
 	}
 	return problems;
 }
@@ -376,13 +386,19 @@ function resolvePackageDir(name, from, root) {
 // folder: what a payload that drops everything else must keep. `missing`
 // names what could not be found. `exclude` names optional dependencies a
 // trimmed payload leaves out on purpose; a package that a kept package
-// requires is kept all the same.
-export function shippedPackageDirs(root, { exclude = [] } = {}) {
+// requires is kept all the same. `leaveOut` names shipped packages a trimmed
+// payload leaves out on purpose: the walk does not start from them, so what
+// only they need goes with them, and what a kept package needs is still kept
+// and still checked. `cut` names dependencies, as { name, from }, that the
+// walk does not follow from that package, for code of it nothing loads.
+export function shippedPackageDirs(root, { exclude = [], leaveOut = [], cut = [] } = {}) {
 	const base = path.resolve(root);
 	const outDir = path.join(base, ...OUT_DIR);
 	const dirs = new Set();
 	const missing = [];
-	const queue = [...EXTERNAL_PACKAGES.filter((pkg) => pkg.ships), ...FILE_PACKAGES].map(({ name }) => ({ name, from: outDir }));
+	const queue = [...EXTERNAL_PACKAGES.filter((pkg) => pkg.ships), ...FILE_PACKAGES]
+		.filter(({ name }) => !leaveOut.includes(name))
+		.map(({ name }) => ({ name, from: outDir }));
 	while (queue.length > 0) {
 		const { name, from, neededBy, optional } = queue.shift();
 		const dir = resolvePackageDir(name, from, base);
@@ -397,6 +413,7 @@ export function shippedPackageDirs(root, { exclude = [] } = {}) {
 		for (const dep of new Set([...Object.keys(pkg.dependencies ?? {}), ...optionalNames])) {
 			const optional = optionalNames.has(dep);
 			if (optional && exclude.includes(dep)) continue;
+			if (cut.some((edge) => edge.name === dep && edge.from === pkg.name)) continue;
 			queue.push({ name: dep, from: dir, neededBy: pkg.name, optional });
 		}
 	}
@@ -405,23 +422,26 @@ export function shippedPackageDirs(root, { exclude = [] } = {}) {
 
 // What a payload holding the bundled server lacks: the bundle, its licences
 // and assets, and the packages it loads as files. Empty when complete. Run
-// after every build and again on any payload trimmed around the bundle.
-export function checkServerFiles(root, out = DEFAULT_OUT) {
+// after every build and again on any payload trimmed around the bundle, with
+// the shipped packages that payload leaves out on purpose and the dependencies
+// it does not follow (shippedPackageDirs).
+export function checkServerFiles(root, out = DEFAULT_OUT, { leaveOut = [], cut = [] } = {}) {
 	const outDir = path.join(root, ...out.split("/"));
 	const problems = [];
 	for (const file of ["server.mjs", LICENCES_FILE, ...BUNDLE_ASSETS.map((asset) => asset.file)]) {
 		if (!fs.existsSync(path.join(outDir, file))) problems.push(`${out}/${file} is missing`);
 	}
-	return [...problems, ...shippedPackageDirs(root).missing];
+	return [...problems, ...shippedPackageDirs(root, { leaveOut, cut }).missing];
 }
 
-// Packages the forked shelf worker imports; it runs as its own file, so each
-// must ship as files.
+// Packages the forked workers import; each runs as its own file, so each
+// package must ship as files.
 async function workerPackages(root) {
-	const worker = BUNDLE_ASSETS.find((asset) => asset.file === "shelf-parse-worker.mjs").source;
+	const workers = BUNDLE_ASSETS.filter((asset) => asset.entry || asset.file.endsWith("-worker.mjs")).map((asset) => asset.entry ?? asset.source);
 	const result = await esbuild.build({
 		absWorkingDir: root,
-		entryPoints: [worker],
+		entryPoints: workers,
+		outdir: "workers",
 		bundle: true,
 		packages: "external",
 		platform: "node",
@@ -434,18 +454,25 @@ async function workerPackages(root) {
 	return [...new Set(specifiers.filter((specifier) => !isBuiltin(specifier)))];
 }
 
-async function bundleProblems(root, text, metafile, packages, out) {
-	const problems = [];
-	problems.push(
-		...siteProblems(text, DYNAMIC_LOAD, REVIEWED_DYNAMIC_LOADS, { list: "REVIEWED_DYNAMIC_LOADS", one: "loads a module by a computed name", many: "load a module by a computed name" }),
-		...siteProblems(text, OWN_LOCATION_READ, REVIEWED_OWN_LOCATION_READS, { list: "REVIEWED_OWN_LOCATION_READS", one: "finds files through its own location", many: "find files through their own location" }),
-	);
-	const loadable = new Set([...EXTERNAL_PACKAGES, ...FILE_PACKAGES, ...REVIEWED_BARE_REQUIRES].map((pkg) => pkg.name));
+// The checks server.mjs and every bundled asset share: no unreviewed load by
+// a computed name or read of its own location, and no package loaded by name
+// that is not in `loadable`.
+function codeProblems(text, bundleFile, loadable) {
+	const problems = [
+		...siteProblems(text, DYNAMIC_LOAD, REVIEWED_DYNAMIC_LOADS, { list: "REVIEWED_DYNAMIC_LOADS", one: "loads a module by a computed name", many: "load a module by a computed name" }, bundleFile),
+		...siteProblems(text, OWN_LOCATION_READ, REVIEWED_OWN_LOCATION_READS, { list: "REVIEWED_OWN_LOCATION_READS", one: "finds files through its own location", many: "find files through their own location" }, bundleFile),
+	];
 	for (const [name, { specifier, index }] of bareRequires(text)) {
 		if (loadable.has(name)) continue;
 		const line = text.slice(0, index).split("\n").length;
-		problems.push(`the bundle loads ${specifier} by name at run time (server.mjs line ${line}), but ${name} neither ships as files nor is reviewed, so a trimmed payload would lack it; add it to FILE_PACKAGES with the reason, or to REVIEWED_BARE_REQUIRES with the reason it is safe`);
+		problems.push(`the bundle loads ${specifier} by name at run time (${bundleFile} line ${line}), but ${name} neither ships as files nor is reviewed, so a trimmed payload would lack it; add it to FILE_PACKAGES with the reason, or to REVIEWED_BARE_REQUIRES with the reason it is safe`);
 	}
+	return problems;
+}
+
+async function bundleProblems(root, text, metafile, packages, out) {
+	const loadable = new Set([...EXTERNAL_PACKAGES, ...FILE_PACKAGES, ...REVIEWED_BARE_REQUIRES].map((pkg) => pkg.name));
+	const problems = codeProblems(text, "server.mjs", loadable);
 
 	const output = Object.entries(metafile.outputs).find(([file]) => file.endsWith("server.mjs"))[1];
 	for (const imp of output.imports) {
@@ -459,7 +486,7 @@ async function bundleProblems(root, text, metafile, packages, out) {
 	const shipped = new Set([...EXTERNAL_PACKAGES.filter((pkg) => pkg.ships), ...FILE_PACKAGES].map((pkg) => pkg.name));
 	for (const specifier of await workerPackages(root)) {
 		if (!shipped.has(packageName(specifier))) {
-			problems.push(`the shelf worker imports ${specifier}, but ${packageName(specifier)} does not ship as files; add it to FILE_PACKAGES with the reason`);
+			problems.push(`a forked worker imports ${specifier}, but ${packageName(specifier)} does not ship as files; add it to FILE_PACKAGES with the reason`);
 		}
 	}
 
@@ -468,6 +495,48 @@ async function bundleProblems(root, text, metafile, packages, out) {
 		if (!hasLicenceFile && !pkg.license) problems.push(`${pkg.name} ${pkg.version} is inlined but has neither a licence file nor a license field`);
 	}
 	return [...problems, ...checkServerFiles(root, out)];
+}
+
+// What every bundle is built with: one ES module file for node, from the
+// sources under root.
+function bundleOptions(root, outDir) {
+	return {
+		absWorkingDir: root,
+		outdir: outDir,
+		outExtension: { ".js": ".mjs" },
+		bundle: true,
+		platform: "node",
+		format: "esm",
+		target: "node22",
+		// Explicit, so no tsconfig.json on disk applies: the runtime's `paths`
+		// would otherwise pull its packages from src/ instead of the built dist/.
+		tsconfigRaw: { compilerOptions: { target: "ES2022" } },
+		banner: { js: BANNER },
+		metafile: true,
+		logLevel: "warning",
+	};
+}
+
+// Bundles each BUNDLE_ASSETS entry from root's sources into outDir, its
+// `outside` packages its only externals, and returns what its checks find.
+// Its code is checked as server.mjs is, and it inlines nothing but our own
+// source, since the licences file covers server.mjs alone. bundleServer runs
+// it; the desktop payload's launch test runs it alone.
+export async function bundleEntryAssets(root, outDir) {
+	const problems = [];
+	for (const asset of BUNDLE_ASSETS.filter((candidate) => candidate.entry)) {
+		const assetOptions = { ...bundleOptions(root, outDir), entryPoints: { [asset.file.replace(/\.mjs$/, "")]: asset.entry }, external: asset.outside, plugins: [loadRewritesPlugin()] };
+		const inspected = await esbuild.build({ ...assetOptions, write: false });
+		const shipped = await esbuild.build({ ...assetOptions, minifyWhitespace: true, legalComments: "eof" });
+		const loadable = new Set([...asset.outside, ...REVIEWED_BARE_REQUIRES.map((pkg) => pkg.name)]);
+		problems.push(...codeProblems(inspected.outputFiles.find((file) => file.path.endsWith(asset.file)).text, asset.file, loadable));
+		const inlined = Object.keys(shipped.metafile.inputs).filter((input) => /(^|\/)node_modules\//.test(input) || input.startsWith("runtime/"));
+		if (inlined.length > 0) problems.push(`${asset.file} inlines ${inlined[0]}${inlined.length > 1 ? ` and ${inlined.length - 1} more` : ""}, but only server.mjs has a licences file; leave its package outside (\`outside\` in BUNDLE_ASSETS, and FILE_PACKAGES) or drop the import`);
+		if (JSON.stringify(Object.keys(inspected.metafile.inputs).sort()) !== JSON.stringify(Object.keys(shipped.metafile.inputs).sort())) {
+			problems.push(`the checked and the shipped builds of ${asset.file} inlined different files`);
+		}
+	}
+	return problems;
 }
 
 // Where a bundle may go: dist, or a folder beside it named dist-<name>, so
@@ -487,22 +556,10 @@ export async function bundleServer({ root, mapFile = null, entry = ENTRY, out = 
 	fs.rmSync(outDir, { recursive: true, force: true });
 	const missingPeers = new Set();
 	const options = {
-		absWorkingDir: root,
+		...bundleOptions(root, outDir),
 		entryPoints: { server: entry },
-		outdir: outDir,
-		outExtension: { ".js": ".mjs" },
-		bundle: true,
-		platform: "node",
-		format: "esm",
-		target: "node22",
 		external: EXTERNAL_PACKAGES.map((pkg) => pkg.name),
-		// Explicit, so no tsconfig.json on disk applies: the runtime's `paths`
-		// would otherwise pull its packages from src/ instead of the built dist/.
-		tsconfigRaw: { compilerOptions: { target: "ES2022" } },
 		define: { __EXXPERTS_BUNDLED_PACKAGE_DIR__: JSON.stringify(PACKAGE_DIR_FROM_BUNDLE) },
-		banner: { js: BANNER },
-		metafile: true,
-		logLevel: "warning",
 		plugins: [loadRewritesPlugin(), missingOptionalPeersPlugin(missingPeers)],
 	};
 	// Two builds from the same inputs. The checks read the first, kept in
@@ -517,17 +574,18 @@ export async function bundleServer({ root, mapFile = null, entry = ENTRY, out = 
 	const packages = inlinedPackages(root, result.metafile);
 
 	const byName = new Map([...packages.values()].map((pkg) => [pkg.name, pkg]));
-	for (const asset of BUNDLE_ASSETS) {
+	for (const asset of BUNDLE_ASSETS.filter((candidate) => !candidate.entry)) {
 		if (asset.package && !byName.has(asset.package)) {
 			throw new Error(`${asset.file}: ${asset.package} is no longer inlined; drop the entry from BUNDLE_ASSETS in scripts/bundle-server.mjs`);
 		}
 		const from = asset.source ? path.join(root, ...asset.source.split("/")) : path.join(byName.get(asset.package).dir, asset.file);
 		fs.copyFileSync(from, path.join(outDir, asset.file));
 	}
+	const entryProblems = await bundleEntryAssets(root, outDir);
 	fs.writeFileSync(path.join(outDir, LICENCES_FILE), licenceText(packages));
 
 	const inspectedText = inspected.outputFiles.find((file) => file.path.endsWith("server.mjs")).text;
-	const problems = await bundleProblems(root, inspectedText, result.metafile, packages, out);
+	const problems = [...entryProblems, ...(await bundleProblems(root, inspectedText, result.metafile, packages, out))];
 	const sameInputs = (build) => JSON.stringify(Object.keys(build.metafile.inputs).sort());
 	if (sameInputs(inspected) !== sameInputs(result)) problems.push("the checked build and the shipped build inlined different files");
 	if (problems.length > 0) {

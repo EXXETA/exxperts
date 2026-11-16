@@ -213,9 +213,11 @@ function FileCard({ row, roomId, selected, menuOpen, onToggleMenu, onCloseMenu, 
 				</span>
 			</button>
 			{(downloadUrl !== null || fileVerbs || removable) && (
-				<button type="button" className="att-more" aria-label={`More for ${row.title}`} aria-expanded={menuOpen} title="Download, rename or delete" onClick={onToggleMenu}>
-					<span aria-hidden="true">⋯</span>
-				</button>
+				<span className="att-more-holder">
+					<button type="button" className="rs-btn rs-btn-icon rs-btn-sm att-more" aria-label={`More for ${row.title}`} aria-haspopup="menu" aria-expanded={menuOpen} title="Download, rename or delete" onClick={onToggleMenu}>
+						<span aria-hidden="true">⋯</span>
+					</button>
+				</span>
 			)}
 			<div className="att-foot">
 				<div className="att-words">
@@ -301,8 +303,8 @@ export function AttachmentsBrowser({ view, rows, roomId, selectedTaskId, onOpen,
 		};
 	}, [menuFor]);
 	const addButton = (
-		<button type="button" className="att-add" onClick={() => addInputRef.current?.click()}>
-			<PaperclipIcon size={14} /> Attach a file
+		<button type="button" className="rs-btn rs-btn-sm att-add" onClick={() => addInputRef.current?.click()}>
+			<PaperclipIcon size={14} />Attach a file
 		</button>
 	);
 	return (
@@ -311,7 +313,7 @@ export function AttachmentsBrowser({ view, rows, roomId, selectedTaskId, onOpen,
 			<section className={`attachments-browser attachments-${view}`} aria-label="Attachments">
 				<header className="att-head">
 					{view === "gallery" && (
-						<button type="button" className="att-icon" onClick={() => onShowView("panel")} aria-label="Back to the conversation" title="Back to the conversation">
+						<button type="button" className="rs-btn rs-btn-icon rs-btn-sm" onClick={() => onShowView("panel")} aria-label="Back to the conversation" title="Back to the conversation">
 							<BackArrowIcon />
 						</button>
 					)}
@@ -320,10 +322,10 @@ export function AttachmentsBrowser({ view, rows, roomId, selectedTaskId, onOpen,
 					<span className="att-spacer" aria-hidden="true" />
 					{rows.length > 0 && addButton}
 					{view === "panel" && !phone && rows.length > 0 && (
-						<button type="button" className="artifact-viewer-icon" onClick={() => onShowView("gallery")} aria-label="Show as a gallery" title="Show as a gallery">⤢</button>
+						<button type="button" className="rs-btn rs-btn-icon rs-btn-sm" onClick={() => onShowView("gallery")} aria-label="Show as a gallery" title="Show as a gallery">⤢</button>
 					)}
 					{view === "panel" && (
-						<button type="button" className="artifact-viewer-close" onClick={onClose} aria-label="Close attachments" title="Close">
+						<button type="button" className="rs-btn rs-btn-icon rs-btn-sm artifact-viewer-close" onClick={onClose} aria-label="Close attachments" title="Close">
 							<CloseIcon size={16} />
 						</button>
 					)}

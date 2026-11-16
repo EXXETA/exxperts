@@ -24,6 +24,7 @@ import {
 	withRoomCallWait,
 	type PatienceWait,
 } from "../src/model-call-causes.js";
+import { withoutKey } from "@exxeta/exxperts-ai";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -384,6 +385,28 @@ pass(`${documented.length} documented provider failures, as the runtime hands th
 	if (!(waited.cause === "busy" && waited.detail === "too-many-requests" && waited.waitMs === 20_000)) wrong.push(`a 429 keeps the wait its words name, got ${JSON.stringify(waited)}`);
 	assert(wrong.length === 0, `statuses misread:\n${wrong.join("\n")}`);
 	pass("words that name nothing read as their status says: 401, 402, 403, 404, 413, 429, 500, 502, 503, 504 and 529; any other status stays as it was");
+}
+
+// --- A one-letter key cut from the words ------------------------------------
+// The runtime cuts the request's key from an OpenAI-compatible provider's error
+// before it is read here; a short key only where it stands alone, so an
+// overflow still reads as one and the recovery starts.
+{
+	const overflows = [
+		"400 This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
+		"400 litellm.ContextWindowExceededError: ContextWindowExceededError: OpenAIException - This model's maximum context length is 8192 tokens.",
+	];
+	const wrong: string[] = [];
+	for (const words of overflows) {
+		const cut = withoutKey(words, "e", "[key removed]");
+		if (turnFailureOf(cut, false, "openai") !== "overflow") wrong.push(`[C1] a chat turn: "${cut}" is an overflow, got ${turnFailureOf(cut, false, "openai")}`);
+		if (kindOf(classifyModelFailure(workerError(cut))) !== "too-large") wrong.push(`[C1] a Memory call: "${cut}" is too large, got ${kindOf(classifyModelFailure(workerError(cut)))}`);
+	}
+	const echoed = withoutKey("401 Incorrect API key provided: e. You can find your API key at https://platform.openai.com/account/api-keys.", "e", "[key removed]");
+	if (echoed !== "401 Incorrect API key provided: [key removed]. You can find your API key at https://platform.openai.com/account/api-keys.") wrong.push(`[C2] the one-letter key echoed as a word is hidden and nothing else, got "${echoed}"`);
+	if (kindOf(classifyModelFailure(workerError(echoed))) !== "unreachable/signed-out") wrong.push(`[C2] the refusal with its key hidden still reads as signed out, got ${kindOf(classifyModelFailure(workerError(echoed)))}`);
+	assert(wrong.length === 0, `a one-letter key cut from the words:\n${wrong.join("\n")}`);
+	pass(`with a one-letter key cut from the words, ${overflows.length} overflows still read as overflows in chat and too large in Memory, and the key echoed as a word is hidden`);
 }
 
 // --- Patience -----------------------------------------------------------------

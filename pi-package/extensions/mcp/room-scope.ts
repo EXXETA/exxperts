@@ -18,6 +18,12 @@
  *    eager/keep-alive lifecycles and the adapter's direct-tools cache
  *    bootstrap deliberately keep their global warm behavior (the user opted
  *    those servers into background connections);
+ *  - what a tool may DO is asked: a connector tool runs by itself only when
+ *    the connection that will run it marks it read-only, it is a plain
+ *    resource read, or the room was allowed that web connector's tool for
+ *    itself; anything else stops on the room's question
+ *    (askBeforeConnectorCall, called by the adapter right before it reaches
+ *    the connector, scripts/patch-mcp-adapter.mjs patch 12);
  *  - tool RESULTS are sanitized: any delegated result whose details name a
  *    server outside the grant list is replaced by the refusal, so a stray
  *    adapter-side resolution can never hand the room an ungranted answer.
@@ -42,16 +48,29 @@
  */
 
 import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { stateHome } from "../../product-state-paths.js";
 import {
+	allowedToolsOf,
+	allowPersistentRoomMcpTool,
+	type AllowedConnectorTools,
+	connectorAddressPin,
 	effectiveGrantedMcpConnectors,
 	ensurePersistentRoomMcpGrantsMigration,
+	forgetPersistentRoomMcpTool,
 	mcpGrantsFingerprint,
 	persistentRoomMcpGrantsMigrationPending,
 	readPersistentRoomMcpSettings,
 	type PersistentRoomMcpSettingsStorageOptions,
 } from "../../../apps/web-server/src/persistent-room-mcp-settings.js";
+import { connectorApprovalSubject, connectorApprovalTitle } from "../../../apps/web-server/src/room-approval-titles.js";
+import { isSharedServer } from "../../../apps/web-server/src/server-hooks.js";
+import type { ConnectorApply, ConnectorCard } from "../../../apps/web-server/src/web-ui-context.js";
+import { scanInvisibleUnicode } from "../../../apps/web-server/src/skills-import.js";
+import { classifyAddress } from "../fetch_url/address-class.js";
+import { CONNECTOR_CATALOG } from "./connector-catalog.js";
 
 // Non-literal specifiers keep tsc from resolving the adapter's raw .ts
 // sources (same pattern as index.ts).
@@ -106,6 +125,8 @@ interface RoomGrantContext {
 	prefixMode: PrefixMode;
 	/** The room's stored grant list exactly as read (pre-intersection, sorted). */
 	storedGrantedConnectors: string[];
+	/** The room's lasting yeses as stored, by connector. */
+	allowedTools: AllowedConnectorTools;
 }
 
 const ROOM_SETTINGS_SENTENCE = "Room settings control which connectors this room can use.";
@@ -154,9 +175,24 @@ export function roomConnectorConfigCwd(): string {
 	return path.join(stateHome(), ".exxperts", "agent", "room-connectors");
 }
 
-async function loadRoomGrantContext(roomId: string): Promise<RoomGrantContext> {
+interface AdapterModules {
+	configMod: any;
+	utilsMod: any;
+	typesMod: any;
+}
+
+async function adapterModules(): Promise<AdapterModules> {
 	ensureAgentDirEnv();
-	const [configMod, utilsMod] = await Promise.all([import(ADAPTER_CONFIG), import(ADAPTER_UTILS)]);
+	const [configMod, utilsMod, typesMod] = await Promise.all([import(ADAPTER_CONFIG), import(ADAPTER_UTILS), import(ADAPTER_TYPES)]);
+	return { configMod, utilsMod, typesMod };
+}
+
+async function loadRoomGrantContext(roomId: string): Promise<RoomGrantContext> {
+	return roomGrantContextFrom(await adapterModules(), roomId);
+}
+
+/** The room's grants read now, with the modules already loaded: nothing here waits, so a card's answer can read them in the same step as it stores. */
+function roomGrantContextFrom({ configMod, utilsMod }: AdapterModules, roomId: string): RoomGrantContext {
 	// Same baseline as the adapter's own session load for a room: the
 	// --mcp-config argv override (which the adapter factory and
 	// directToolSpecServers honor) plus the person's global files - otherwise a
@@ -167,7 +203,7 @@ async function loadRoomGrantContext(roomId: string): Promise<RoomGrantContext> {
 	const settings = readPersistentRoomMcpSettings(roomId);
 	const granted = new Set(effectiveGrantedMcpConnectors(settings.grantedConnectors, configuredNames));
 	const prefixMode: PrefixMode = config.settings?.toolPrefix ?? "server";
-	return { granted, configuredNames, config, prefixMode, storedGrantedConnectors: settings.grantedConnectors };
+	return { granted, configuredNames, config, prefixMode, storedGrantedConnectors: settings.grantedConnectors, allowedTools: settings.allowedTools };
 }
 
 interface CachedToolMetadataLike {
@@ -349,9 +385,262 @@ async function describeFromGrantedCache(context: RoomGrantContext, toolName: str
 	return null;
 }
 
+/** What the adapter hands the gate at the moment it would reach the connector (scripts/patch-mcp-adapter.mjs, patch 12). */
+interface ConnectorCall {
+	server: string;
+	/** The tool's own name on the connector. */
+	toolName: string;
+	/** The tool as the connection that will run it listed it; none when it did not. */
+	liveTool?: { annotations?: { readOnlyHint?: unknown; destructiveHint?: unknown } | null };
+	resourceRead: boolean;
+	args: unknown;
+}
+
+type ConnectorCallGate = (call: ConnectorCall) => Promise<ProxyToolResultLike | undefined>;
+
+/** A call that ran on the room's kept yes carries the person's words for it ("Create task in Asana"), as a refused call does: the page's step row reads them, and the model never sees details. */
+function withRoomYesWords<T extends ProxyToolResultLike>(result: T, use: string | undefined): T {
+	return use && !result.isError ? { ...result, details: { ...(result.details ?? {}), use } } : result;
+}
+
+interface ConnectorCardContext {
+	ui?: { askConnector?(card: ConnectorCard, apply: ConnectorApply): Promise<"once" | "room" | "decline"> };
+}
+
+const CARD_ARGS_MAX_CHARS = 1_200;
+const CARD_NAME_MAX_CHARS = 80;
+
+/** Characters a person can't see, written out: a page or a model can hide words in them. */
+function withHiddenCharactersShown(text: string): string {
+	const controlsShown = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) => `[U+${character.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}]`);
+	let shown = "";
+	let at = 0;
+	for (const { index, codePoint, label } of scanInvisibleUnicode(controlsShown).findings) {
+		shown += `${controlsShown.slice(at, index)}[${label}]`;
+		at = index + (codePoint > 0xffff ? 2 : 1);
+	}
+	return shown + controlsShown.slice(at);
+}
+
+function cardName(text: string): string {
+	const characters = Array.from(withHiddenCharactersShown(text.trim()));
+	return characters.length > CARD_NAME_MAX_CHARS ? `${characters.slice(0, CARD_NAME_MAX_CHARS - 1).join("")}…` : characters.join("");
+}
+
+function connectorWords(server: string): string {
+	return cardName(CONNECTOR_CATALOG.find((entry) => entry.id === server)?.name ?? server);
+}
+
+/** A tool's name as people read it: "delete_project" and "deleteProject" read "Delete project" and "Delete Project". */
+export function connectorToolWords(toolName: string): string {
+	const words = cardName(toolName.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " "));
+	return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** What the room would send, as the question shows it: one line of JSON with every hidden character written out, cut at its end. */
+function sentShown(args: unknown): { sent: string; cut: number } {
+	const sent = Array.from(withHiddenCharactersShown(JSON.stringify(args ?? {})));
+	return { sent: sent.slice(0, CARD_ARGS_MAX_CHARS).join(""), cut: Math.max(0, sent.length - CARD_ARGS_MAX_CHARS) };
+}
+
+/** Names that are this computer by convention, whatever a lookup would say. */
+const THIS_COMPUTER_NAMES = new Set(["localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"]);
+
+/**
+ * Whether a connector's address is this computer: `localhost`, a `.localhost`
+ * name or another reserved name for it, this computer's own network name (with
+ * or without `.local`), or a loopback or unspecified IP in any spelling (the
+ * classes the web reader and a room's commands refuse as local). What listens
+ * there is a program on this computer, with the person's rights. Names are
+ * never looked up, so a web name that leads back here still counts as web. An
+ * address the URL parser can't read counts as this computer.
+ */
+function addressIsThisComputer(address: string): boolean {
+	let host: string;
+	try {
+		host = new URL(address).hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+	} catch {
+		return true;
+	}
+	const ownName = os.hostname().toLowerCase().replace(/\.+$/, "").replace(/\.local$/, "");
+	if (THIS_COMPUTER_NAMES.has(host) || host.endsWith(".localhost") || (ownName !== "" && (host === ownName || host === `${ownName}.local`))) return true;
+	return net.isIP(host) !== 0 && ["loopback", "unspecified"].includes(classifyAddress(host));
+}
+
+/** A web connector's address; null for a program on this computer: one the adapter starts, whenever its entry names a command, or one listening at this computer's own address. */
+function webAddressOf(definition: Record<string, unknown> | undefined): string | null {
+	const url = definition && !definition.command && typeof definition.url === "string" ? definition.url : "";
+	return url && !addressIsThisComputer(url) ? url : null;
+}
+
+/** Where a connector's entry says it is, as a question compares it before and after its answer. */
+function connectorWhere(definition: Record<string, unknown> | undefined): string {
+	return JSON.stringify([definition?.url ?? null, definition?.command ?? null, definition?.args ?? null]);
+}
+
+/** Where each connector is, by name (connectorWhere), as one read of the person's settings has them. */
+export type ConnectorPlaces = ReadonlyMap<string, string>;
+
+/**
+ * A reader of the connector places that waits for nothing once made, so it can
+ * run inside the adapter's own read of its settings (index.ts). It reads as the
+ * adapter does, from the folder a room's settings are read against and the
+ * given --mcp-config path. A read that fails knows no place, so it offers and
+ * honours no lasting yes.
+ */
+export async function connectorPlacesReader(): Promise<(configPath: string | undefined) => ConnectorPlaces> {
+	const { configMod } = await adapterModules();
+	return (configPath) => {
+		try {
+			const servers: Record<string, Record<string, unknown>> = configMod.loadMcpConfig(configPath, roomConnectorConfigCwd()).mcpServers ?? {};
+			return new Map(Object.entries(servers).map(([name, definition]) => [name, connectorWhere(definition)]));
+		} catch {
+			return new Map();
+		}
+	};
+}
+
+/**
+ * The pin a lasting yes for this call is kept with, from the room's settings
+ * as they are now; null where Allow for this room is neither offered nor
+ * honoured: a shared server, a connector that is a program on this computer
+ * (it runs with the person's rights, outside the room's protection), a tool
+ * the live connection doesn't list or marks destructive, a connector no longer
+ * enabled for the room, a tool switched off for it, or a connector whose entry
+ * is no longer the one this session connected with: the adapter connects and
+ * reconnects from its own read at the session's start, so the call still goes
+ * there, and it asks as on any other call until the room is opened again.
+ */
+function roomYesPin(context: RoomGrantContext, typesMod: AdapterModules["typesMod"], call: ConnectorCall, connectedPlace: string | undefined): string | null {
+	if (isSharedServer() || !call.liveTool || call.liveTool.annotations?.destructiveHint === true || !context.granted.has(call.server)) return null;
+	const definition = context.config.mcpServers[call.server];
+	if (connectedPlace === undefined || connectorWhere(definition) !== connectedPlace) return null;
+	const address = webAddressOf(definition);
+	if (address === null || typesMod.isToolExcluded(call.toolName, call.server, context.prefixMode, definition?.excludeTools)) return null;
+	return connectorAddressPin(address);
+}
+
+/** A yes for a tool of this connector that is excluded now is dropped, so taking the exclusion away again asks. Never on a shared server, which keeps no yes. */
+function dropExcludedYeses(roomId: string, context: RoomGrantContext, typesMod: AdapterModules["typesMod"], server: string): void {
+	if (isSharedServer()) return;
+	const excludeTools = context.config.mcpServers[server]?.excludeTools;
+	for (const { tool } of allowedToolsOf(context.allowedTools, server)) {
+		if (typesMod.isToolExcluded(tool, server, context.prefixMode, excludeTools)) forgetPersistentRoomMcpTool(roomId, server, tool);
+	}
+}
+
+/**
+ * The pin read now, whether the room already allowed this tool at it, and
+ * where the connector is. A read that fails offers and honours nothing.
+ */
+function roomYesNow(modules: AdapterModules, roomId: string, call: ConnectorCall, connectedPlace: string | undefined): { pin: string | null; allowed: boolean; where: string | null } {
+	try {
+		const context = roomGrantContextFrom(modules, roomId);
+		const pin = roomYesPin(context, modules.typesMod, call, connectedPlace);
+		const allowed = pin !== null && allowedToolsOf(context.allowedTools, call.server).some((entry) => entry.tool === call.toolName && entry.addressPin === pin);
+		return { pin, allowed, where: connectorWhere(context.config.mcpServers[call.server]) };
+	} catch {
+		return { pin: null, allowed: false, where: null };
+	}
+}
+
+/** Read-only and not destructive, in the protocol's own true and false; anything else is unknown, and unknown asks. */
+function connectorMarksReadOnly(tool: ConnectorCall["liveTool"]): boolean {
+	const marks = tool?.annotations;
+	return marks?.readOnlyHint === true && (marks.destructiveHint === undefined || marks.destructiveHint === false);
+}
+
+/** A card can wait for a long time: what was allowed when it opened, and where the connector was, is read again. A read that fails withdraws. */
+async function connectorCallWithdrawn(roomId: string, call: ConnectorCall, askedWhere: string | null): Promise<ProxyToolResultLike | undefined> {
+	try {
+		const context = await loadRoomGrantContext(roomId);
+		if (!context.granted.has(call.server)) return connectorNotEnabledResult(call.server);
+		if (connectorWhere(context.config.mcpServers[call.server]) !== askedWhere) {
+			return refusalResult(
+				`Connector "${call.server}" was moved to another address while this waited, so it did not run.`,
+				{ mode: "call", error: "connector_moved", server: call.server },
+			);
+		}
+		const typesMod = await import(ADAPTER_TYPES);
+		if (!typesMod.isToolExcluded(call.toolName, call.server, context.prefixMode, context.config.mcpServers[call.server]?.excludeTools)) return undefined;
+	} catch {
+		return connectorNotEnabledResult(call.server);
+	}
+	return refusalResult(
+		`Tool "${call.toolName}" was switched off for connector "${call.server}" while this waited, so it did not run.`,
+		{ mode: "call", error: "connector_tool_withdrawn", server: call.server },
+	);
+}
+
+/**
+ * The gate: every connector call passes it right before it reaches the
+ * connector. It answers nothing to let the call run, or the result to give the
+ * model instead. A connector's marks are its own word about its own tools, so
+ * they guard against a fooled model, not a bad connector.
+ *
+ * A tool the room was allowed for itself runs with no question, with nobody
+ * there too: its yes is read on every call and holds only while roomYesPin
+ * gives the pin it was stored with. Anything else asks. The answer Allow for
+ * this room stores that yes before the question says answered, and only from
+ * the computer, after the same reading; otherwise it counts as this time. Any
+ * answer is refused as withdrawn when the connector was switched off, the tool
+ * excluded or the connector moved while the question waited.
+ *
+ * Auto is not read here: it is about commands inside the box. With nobody there
+ * the question rejects by itself, and whoever asked for it leaves the note: a
+ * scheduled run's context, or the bridge when the person left or a view-only
+ * phone took over. The rejection's words stay first, since the page reads a
+ * stopped step by them (step-lines.ts). A refusal keeps what the card asked to
+ * use in its details, the page's words for the step; the model never sees details.
+ */
+async function askBeforeConnectorCall(roomId: string, ctx: unknown, call: ConnectorCall, connectedPlace: string | undefined, ranOnYes?: (use: string) => void): Promise<ProxyToolResultLike | undefined> {
+	const modules = await adapterModules();
+	// Every call to the connector, a reading one too, drops the yeses of its tools excluded now.
+	try {
+		dropExcludedYeses(roomId, roomGrantContextFrom(modules, roomId), modules.typesMod, call.server);
+	} catch {
+		// A read that fails drops nothing; the yes is read again, and honoured only where the tool is not excluded.
+	}
+	if (call.resourceRead || connectorMarksReadOnly(call.liveTool)) return undefined;
+	const before = roomYesNow(modules, roomId, call, connectedPlace);
+	const connector = connectorWords(call.server);
+	const title = connectorApprovalTitle(connectorToolWords(call.toolName), connector);
+	const use = connectorApprovalSubject(title);
+	if (before.allowed) {
+		if (use) ranOnYes?.(use);
+		return undefined;
+	}
+	const apply: ConnectorApply = (choice, answeredBy) => {
+		if (choice !== "room" || answeredBy !== "computer" || before.pin === null) return "once";
+		// Read again: the connector may have been switched off, the tool excluded or the address changed while this waited.
+		if (roomYesNow(modules, roomId, call, connectedPlace).pin !== before.pin) return "once";
+		return allowPersistentRoomMcpTool(roomId, call.server, call.toolName, before.pin) ? "room" : "once";
+	};
+	let choice: "once" | "room" | "decline";
+	try {
+		const ui = (ctx as ConnectorCardContext).ui;
+		if (!ui?.askConnector) throw new Error("Nobody can answer a question here.");
+		choice = await ui.askConnector({ title, connector, ...sentShown(call.args), lasting: before.pin !== null }, apply);
+	} catch (error) {
+		return refusalResult(
+			`${error instanceof Error ? error.message : String(error)} Nothing was sent to ${connector}. Leave this undone and say so.`,
+			{ mode: "call", error: "connector_call_unanswered", server: call.server, use },
+		);
+	}
+	if (choice === "decline") {
+		return refusalResult(
+			`You declined this, so nothing changed in ${connector}. Don't try it again unless the person asks.`,
+			{ mode: "call", error: "connector_call_declined", server: call.server, use },
+		);
+	}
+	return connectorCallWithdrawn(roomId, call, before.where);
+}
+
 export interface RoomScopeExecuteOptions {
 	/** The session's registered tools, for the adapter's native-tool redirect hint. */
 	getAllTools?: () => Array<{ name: string }>;
+	/** Where this session's connections are made from: the adapter's own read of the settings at the session's start (index.ts). Without it no lasting yes is offered or honoured. */
+	connectedPlaces?: () => ConnectorPlaces | undefined;
 }
 
 /**
@@ -396,9 +685,12 @@ function createRoomScopedProxyAnswer(roomId: string, originalExecute: ProxyExecu
 	return async (toolCallId, params, signal, onUpdate, ctx) => {
 		const context = await loadRoomGrantContext(roomId);
 		const granted = context.granted;
+		let ranOnYes: string | undefined;
+		const gate: ConnectorCallGate = (call) => askBeforeConnectorCall(roomId, ctx, call, executeOptions.connectedPlaces?.()?.get(call.server), (use) => { ranOnYes = use; });
 		const delegate = async (overrides: Partial<McpProxyParams> = {}): Promise<ProxyToolResultLike> => {
-			const result = await originalExecute(toolCallId, { ...params, ...overrides }, signal, onUpdate, ctx);
-			return sanitizeDelegatedResult(result, granted);
+			ranOnYes = undefined;
+			const result = await originalExecute(toolCallId, { ...params, ...overrides }, signal, onUpdate, gate);
+			return withRoomYesWords(sanitizeDelegatedResult(result, granted), ranOnYes);
 		};
 
 		// Mode precedence mirrors the adapter exactly:
@@ -549,7 +841,7 @@ async function loadRoomMcpGrantContextSafe(roomId: string): Promise<RoomGrantCon
 	try {
 		return await loadRoomGrantContext(roomId);
 	} catch {
-		return { granted: new Set(), configuredNames: [], config: { mcpServers: {} }, prefixMode: "server", storedGrantedConnectors: [] };
+		return { granted: new Set(), configuredNames: [], config: { mcpServers: {} }, prefixMode: "server", storedGrantedConnectors: [], allowedTools: {} };
 	}
 }
 
@@ -736,9 +1028,11 @@ export interface RoomScopeRegistrationOptions extends RoomScopeExecuteOptions {
  * gated execute above plus the filtered description; a per-server direct
  * tool is dropped when its connector is not granted at registration time and
  * keeps a live per-call grant check either way. Returns null when the tool
- * must not be registered for this room.
+ * must not be registered for this room. A tool that doesn't say it stops at the
+ * gate is never offered: an install that skipped the patcher would run it unasked.
  */
 export async function roomScopedMcpToolRegistration(roomId: string, tool: RegisteredToolLike, options: RoomScopeRegistrationOptions = {}): Promise<RegisteredToolLike | null> {
+	if (tool.asksBeforeConnectorCalls !== true) return null;
 	if (tool.name === "mcp") {
 		const originalExecute = tool.execute as unknown as ProxyExecute;
 		return {
@@ -755,10 +1049,12 @@ export async function roomScopedMcpToolRegistration(roomId: string, tool: Regist
 	const originalExecute = tool.execute;
 	return {
 		...tool,
-		execute: async (...args: unknown[]) => {
+		execute: async (toolCallId: unknown, params: unknown, signal: unknown, onUpdate: unknown, ctx: unknown) => {
 			const liveContext = await loadRoomMcpGrantContextSafe(roomId);
 			if (!liveContext.granted.has(serverName)) return connectorNotEnabledResult(serverName);
-			return originalExecute(...args);
+			let ranOnYes: string | undefined;
+			const gate: ConnectorCallGate = (call) => askBeforeConnectorCall(roomId, ctx, call, options.connectedPlaces?.()?.get(call.server), (use) => { ranOnYes = use; });
+			return withRoomYesWords(await originalExecute(toolCallId, params, signal, onUpdate, gate), ranOnYes);
 		},
 	};
 }

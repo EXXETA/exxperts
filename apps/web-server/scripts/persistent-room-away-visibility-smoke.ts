@@ -79,6 +79,7 @@ try {
 	const { createWebUiContext } = await import("../src/web-ui-context.js");
 	const { createPersistentRoomBashApprovalGuard } = await import("../src/persistent-room-bash-approval.js");
 	const { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } = await import("../src/room-approval-titles.js");
+	const { ANSWER_FLOOR_MS } = await import("../src/room-box/card-text.js");
 	const executionAdapter = await import("../src/persistent-room-background-execution.js");
 	const {
 		createHeadlessUiContext,
@@ -285,6 +286,38 @@ try {
 	console.log("ok: a scheduled badge survives every door that did not show the answer, and dies at the one that did");
 
 	// -----------------------------------------------------------------------
+	// 3c. The mark keeps when the first unopened answer landed and how many
+	//     have landed since, until it is cleared.
+	// -----------------------------------------------------------------------
+	const landedLater = async () => { const before = Date.now(); while (Date.now() === before) await new Promise((resolve) => setTimeout(resolve, 1)); };
+	recordPersistentAgentUnseenLandedAnswer(survivalRoom, { ...scheduledMarker, turnId: "count_1" });
+	const firstMark = getPersistentAgentUnseenLandedAnswer(survivalRoom);
+	assert(firstMark?.unopenedCount === 1 && firstMark.firstUnopenedAt === firstMark.landedAt, `a first landing counts 1 from its own time, got ${JSON.stringify(firstMark)}`);
+	for (const turnId of ["count_2", "count_3"]) {
+		await landedLater();
+		recordPersistentAgentUnseenLandedAnswer(survivalRoom, { ...scheduledMarker, turnId });
+	}
+	const thirdMark = getPersistentAgentUnseenLandedAnswer(survivalRoom);
+	assert(thirdMark?.turnId === "count_3" && thirdMark.unopenedCount === 3 && thirdMark.firstUnopenedAt === firstMark.landedAt && thirdMark.landedAt > firstMark.landedAt, `three landings keep the first time and count 3, got ${JSON.stringify(thirdMark)}`);
+	// A live landing in another conversation over a scheduled mark changes nothing.
+	recordPersistentAgentUnseenLandedAnswer(survivalRoom, { threadId: liveThreadId, turnId: "detached_over_count", terminalReason: "completed" });
+	assert(JSON.stringify(getPersistentAgentUnseenLandedAnswer(survivalRoom)) === JSON.stringify(thirdMark), `a live landing in another conversation must not touch the scheduled mark's facts, got ${JSON.stringify(getPersistentAgentUnseenLandedAnswer(survivalRoom))}`);
+	// Opening the conversation clears both; the next landing starts again.
+	clearPersistentAgentUnseenLandedAnswerForBind(survivalRoom, scheduledThreadId);
+	assert(!getPersistentAgentUnseenLandedAnswer(survivalRoom), "opening the landed conversation clears the mark and its facts");
+	await landedLater();
+	recordPersistentAgentUnseenLandedAnswer(survivalRoom, { ...scheduledMarker, turnId: "count_again" });
+	const againMark = getPersistentAgentUnseenLandedAnswer(survivalRoom);
+	assert(againMark?.unopenedCount === 1 && againMark.firstUnopenedAt === againMark.landedAt && againMark.landedAt > thirdMark.landedAt, `after a clear the next landing counts 1 from its own time, got ${JSON.stringify(againMark)}`);
+	// A mark written before the two facts counts as one answer, landed when it says.
+	const olderMarkFile = path.join(tempAgentsRoot, survivalRoom, "runtime", "unseen-landed-answer.json");
+	writeJson(olderMarkFile, { threadId: scheduledThreadId, turnId: "older_mark", terminalReason: "completed", landedAt: 1_700_000_000_000, origin: "scheduled-run" });
+	const olderMark = getPersistentAgentUnseenLandedAnswer(survivalRoom);
+	assert(olderMark?.unopenedCount === 1 && olderMark.firstUnopenedAt === 1_700_000_000_000, `an older mark reads as one answer from its own time, got ${JSON.stringify(olderMark)}`);
+	clearPersistentAgentUnseenLandedAnswerForBind(survivalRoom, scheduledThreadId);
+	console.log("ok: the mark keeps its first unopened time and its count across landings, and a clear starts them again");
+
+	// -----------------------------------------------------------------------
 	// 4. The detached web bridge: an auto-declined confirm leaves exactly one
 	//    honest note in the persisted thread.
 	// -----------------------------------------------------------------------
@@ -369,7 +402,9 @@ try {
 	const returnLog = createPersistentRoomAutoDeclinedQuestionLog();
 	const returnFrames: any[] = [];
 	let watcher = (msg: any) => returnFrames.push({ ...msg, tab: "first" });
-	const returnBridge = createWebUiContext((msg) => watcher(msg), (question) => returnLog.note(question));
+	// A clock the smoke moves past the answer floor before each yes, as a person's click comes after it.
+	const returnClock = { at: 0 };
+	const returnBridge = createWebUiContext((msg) => watcher(msg), (question) => returnLog.note(question), "computer", { now: () => returnClock.at });
 	const commandGuard = createPersistentRoomBashApprovalGuard({ isAutoApproved: () => false });
 	const runCommand = (command: string) => commandGuard.beforeBashCall(command, { hasUI: true, cwd: repoRoot, ui: returnBridge });
 	const commandCards = () => returnFrames.filter((frame) => frame?.type === "ui_request" && frame?.title === PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE);
@@ -380,7 +415,8 @@ try {
 	returnBridge.attach();
 	const approvedRun = runCommand("ls back");
 	const approveCard = commandCards().at(-1);
-	assert(approveCard?.tab === "first" && String(approveCard.message).includes("ls back"), `a command asked after the return shows its card, got ${JSON.stringify(commandCards())}`);
+	assert(approveCard?.tab === "first" && approveCard.command === "ls back", `a command asked after the return shows its card, got ${JSON.stringify(commandCards())}`);
+	returnClock.at += ANSWER_FLOOR_MS;
 	returnBridge.resolveResponse(approveCard.id, true);
 	assert(JSON.stringify(await approvedRun) === JSON.stringify({ allow: true }), "the returning person's approve reaches the room");
 	const declinedRun = runCommand("rm back");
@@ -393,7 +429,7 @@ try {
 	watcher = (msg: any) => returnFrames.push({ ...msg, tab: "second" });
 	returnBridge.attach();
 	const secondTabCard = commandCards().at(-1);
-	assert(secondTabCard?.tab === "second" && secondTabCard.id === firstTabCard.id && secondTabCard.message === firstTabCard.message, `the open card is asked again in the tab that came back last, got ${JSON.stringify(commandCards())}`);
+	assert(secondTabCard?.tab === "second" && secondTabCard.id === firstTabCard.id && secondTabCard.command === firstTabCard.command, `the open card is asked again in the tab that came back last, got ${JSON.stringify(commandCards())}`);
 	returnBridge.resolveResponse(secondTabCard.id, false);
 	returnBridge.resolveResponse(firstTabCard.id, true);
 	const twoTabDecision = await openRun;

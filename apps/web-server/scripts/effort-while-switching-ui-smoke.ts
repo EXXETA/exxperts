@@ -20,7 +20,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page, type WebSocketRoute } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -143,11 +143,9 @@ async function openRoom(browser: Browser, agentId: string, name: string, routeSo
 	await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 	// The room's ready frame (its context ring) is in, so the effort is the socket's.
 	await page.locator(".composer-context-pill:not(.composer-context-waiting)").first().waitFor({ timeout: 15000 });
-	// Entering a room can swap its socket once: Enter waits for a Send that is on.
 	const composer = page.locator("textarea").first();
 	await composer.fill("A first question.");
-	await waitUntil(async () => !(await page.locator('button[title="Send"]').first().isDisabled()), "Send is on");
-	await composer.press("Enter");
+	await sendFromBox(page);
 	await page.getByText("Answer from claude-fake.").last().waitFor({ timeout: 20000 });
 	await waitUntil(async () => (await page.locator(".stop-btn").count()) === 0, "the first answer has ended");
 	await page.locator(".model-pick-trigger").first().click();
@@ -168,7 +166,7 @@ async function startHeldAnswer(page: Page): Promise<() => void> {
 	const release = holdAnswers();
 	const composer = page.locator("textarea").first();
 	await composer.fill("A question the room is still answering.");
-	await composer.press("Enter");
+	await sendFromBox(page);
 	await page.locator(".stop-btn").waitFor({ timeout: 15000 });
 	return release;
 }
@@ -282,7 +280,7 @@ try {
 		await sendIsBack(page);
 		const composer = page.locator("textarea").first();
 		await composer.fill("A question after the switch.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
 		const asked = requests.filter((request) => request.model === GPT.model && request.raw.includes("A question after the switch."));
 		assert(asked.length > 0 && asked.every((request) => request.raw.includes(`"reasoning_effort":"${level}"`)), `the next answer runs at ${level}, got ${asked.map((request) => JSON.parse(request.raw).reasoning_effort)}`);

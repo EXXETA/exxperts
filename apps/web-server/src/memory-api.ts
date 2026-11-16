@@ -10,6 +10,7 @@ import {
 	fingerprintL1bSource,
 	listPersistentAgents,
 	reviewTargetEstimatedTokensFromL1b,
+	type RoomViewer,
 	type AbsorbEventRecord,
 	type CheckpointEventRecord,
 	type ReviewEventRecord,
@@ -19,6 +20,7 @@ import {
 import { buildMemoryMap, extractMemorySourceParts, memoryMetrics, type MemoryMapRow } from "./memory-shape.js";
 import { ARCHIVE_REASONS, archiveIndex, isMigratedMemoryDocument, MEMORY_ACTIVE_ITEMS_TOPIC, MEMORY_GENERAL_TOPIC, MEMORY_SECTIONS, migrateMemoryDocument, parseMemoryDocument, renderMemoryContext, renderMemoryDocument, type ArchiveIndex, type ArchiveReason, type MemoryDocument, type MemoryEntry, type MemoryTopic } from "./memory-entries.js";
 import { readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import type { PersistentAgentListRow } from "./persistent-agent-status.js";
 import { readArchive, settleMemoryBudget, type MemoryEditEventRecord } from "./memory-entries-store.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 
@@ -584,7 +586,7 @@ function growthSeries(id: string, checkpoints: CheckpointEventRecord[]): MemoryG
 }
 
 /** The room's memory against its limit: from the status when it carries it, else measured through the same numerator. */
-function roomMemoryLimit(status: PersistentAgentStatus): RoomMemorySummary["memoryLimit"] {
+function roomMemoryLimit(status: PersistentAgentListRow): RoomMemorySummary["memoryLimit"] {
 	if (status.memoryBudget) return status.memoryBudget;
 	try {
 		const tokens = reviewTargetEstimatedTokensFromL1b(createPersistentAgentInstance(status.id).readL1b());
@@ -596,7 +598,7 @@ function roomMemoryLimit(status: PersistentAgentStatus): RoomMemorySummary["memo
 	}
 }
 
-function summarizeRoom(status: PersistentAgentStatus, payoffByRoom: Map<string, RoomPayoff>): RoomMemorySummary {
+function summarizeRoom(status: PersistentAgentListRow, payoffByRoom: Map<string, RoomPayoff>): RoomMemorySummary {
 	const info = readRoomL1bInfo(status.id);
 	const checkpoints = readCheckpoints(status.id);
 	const lastCheckpointAt = status.memoryStatus.lastCheckpointAt
@@ -634,10 +636,10 @@ function summarizeRoom(status: PersistentAgentStatus, payoffByRoom: Map<string, 
 	};
 }
 
-export function buildMemoryOverview(): MemoryOverview {
-	// listPersistentAgents() returns active (non-archived) rooms only.
+export function buildMemoryOverview(viewer: RoomViewer): MemoryOverview {
+	// The list returns active (non-archived) rooms only.
 	const payoffByRoom = loadPayoffByRoom();
-	const rooms = listPersistentAgents().map((status) => summarizeRoom(status, payoffByRoom));
+	const rooms = listPersistentAgents(viewer).map((status) => summarizeRoom(status, payoffByRoom));
 	rooms.sort((a, b) => b.l1bTokens - a.l1bTokens);
 	return {
 		generatedAt: Date.now(),
@@ -669,11 +671,11 @@ export interface MemorySearchHit {
 }
 
 /** Case-insensitive substring search over each room's L1b, section-aware. */
-export function searchMemory(query: string, roomId?: string, limit = 25): MemorySearchHit[] {
+export function searchMemory(viewer: RoomViewer, query: string, roomId?: string, limit = 25): MemorySearchHit[] {
 	const q = query.trim().toLowerCase();
 	if (!q) return [];
 	const hits: MemorySearchHit[] = [];
-	const rooms = listPersistentAgents().filter((s) => !roomId || s.id === roomId);
+	const rooms = listPersistentAgents(viewer).filter((s) => !roomId || s.id === roomId);
 	for (const status of rooms) {
 		let l1b: string;
 		try {
@@ -726,11 +728,11 @@ export interface MemoryAskContext {
 }
 
 /** Memory across rooms for a question: all of it when it fits the budget, else the rooms ranked by the question's words, truncated to fit. Never empty while a room in scope that `include` keeps has memory. */
-export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGET_TOKENS, roomIds?: string[], include?: (roomId: string) => boolean): MemoryAskContext {
+export function buildMemoryAskContext(viewer: RoomViewer, question: string, budgetTokens = ASK_BUDGET_TOKENS, roomIds?: string[], include?: (roomId: string) => boolean): MemoryAskContext {
 	const scope = roomIds && roomIds.length ? new Set(roomIds) : null;
 	const blocks: Array<{ room: string; text: string; tokens: number }> = [];
 	const leftOut: string[] = [];
-	for (const status of listPersistentAgents()) {
+	for (const status of listPersistentAgents(viewer)) {
 		if (scope && !scope.has(status.id)) continue;
 		let text = "";
 		try {
@@ -802,9 +804,9 @@ export interface MemoryDigest {
 	rooms: DigestRoomChange[];
 }
 
-export function buildMemoryDigest(sinceMs: number): MemoryDigest {
+export function buildMemoryDigest(viewer: RoomViewer, sinceMs: number): MemoryDigest {
 	const changes: DigestRoomChange[] = [];
-	for (const status of listPersistentAgents()) {
+	for (const status of listPersistentAgents(viewer)) {
 		const points = readCheckpoints(status.id).map(growthPoint).filter((p) => p.ts >= sinceMs);
 		const reviewsSince = reviewPoints(status.id).filter((p) => p.ts >= sinceMs);
 		if (points.length === 0 && reviewsSince.length === 0) continue;

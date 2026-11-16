@@ -127,7 +127,8 @@ export function conversationSwitchRefusal(error: unknown): ConversationSwitchRef
 }
 
 /**
- * Moves the open conversation to another model; the room's default stays.
+ * Moves the open conversation to another model, which then is the room's
+ * conversation model too.
  * Resolves with the model it continues on, the line it wrote into the
  * conversation (none when the conversation already ran on that model) and
  * the room's rows after the switch; rejects with the server's own sentence,

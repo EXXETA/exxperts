@@ -77,8 +77,10 @@ function getCacheControl(
 // Code 2.1.251 does not support this model; version 2.1.280 or newer is
 // required" (error_code claude_code_version_too_old); earlier the same day
 // 2.1.75 was refused for Fable 5.1 with "does not support this model" and
-// 2.1.251 was the fix. Upstream Pi main still advertises 2.1.251.
-const claudeCodeVersion = "2.1.280";
+// 2.1.251 was the fix. On 2026-11-16 the subscription refused claude-fable-5-2
+// on 2.1.280 with "Claude Code 2.1.280 does not support this model; version
+// 2.1.290 or newer is required". Upstream Pi main still advertises 2.1.251.
+const claudeCodeVersion = "2.1.290";
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
@@ -1001,9 +1003,10 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
 /**
  * Whether a model binds every thinking block to the exact prefix it was
  * produced under: the system prompt, the tools array and all earlier
- * messages. True for direct Anthropic requests to Claude Fable 5.1 and
- * Mythos 5.1 (ids "claude-fable-5-1" and "claude-mythos-5-1", the dotted
- * spelling "5.1" too, with or without a date suffix) and to Claude Opus 5.5
+ * messages. True for direct Anthropic requests to Claude Fable 5.1 and 5.2
+ * and Mythos 5.1 (ids "claude-fable-5-1", "claude-fable-5-2" and
+ * "claude-mythos-5-1", the dotted spellings too, with or without a date
+ * suffix; Fable 5.2 enforces the check on every account) and to Claude Opus 5.5
  * (id "claude-opus-5-5", released 2026-09-22), Claude Sonnet 5.5 (id
  * "claude-sonnet-5-5", released 2026-09-28) and Claude Haiku 5.5 (id
  * "claude-haiku-5-5", released 2026-10-07), which are bound the same way and
@@ -1032,7 +1035,7 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
  */
 export function usesThinkingBlockBinding(model: Model<"anthropic-messages">): boolean {
 	if (!isDirectAnthropicProvider(model.provider)) return false;
-	return /claude-(fable|mythos)-5[-.]1(?:$|[^0-9])|claude-(opus|sonnet|haiku)-5[-.]5(?:$|[^0-9])/.test(model.id);
+	return /claude-fable-5[-.][12](?:$|[^0-9])|claude-mythos-5[-.]1(?:$|[^0-9])|claude-(opus|sonnet|haiku)-5[-.]5(?:$|[^0-9])/.test(model.id);
 }
 
 /**
@@ -1048,7 +1051,7 @@ export function usesThinkingBlockBinding(model: Model<"anthropic-messages">): bo
  */
 function sendsRoomStateAsSystem(model: Model<"anthropic-messages">): boolean {
 	if (!isDirectAnthropicProvider(model.provider)) return false;
-	return /^claude-(?:(?:fable|mythos)-5(?:[-.]1)?|mythos-preview|opus-(?:5|5[-.]5|4[-.]8)|(?:sonnet|haiku)-5[-.]5)(?:-\d{8})?$/.test(
+	return /^claude-(?:fable-5(?:[-.][12])?|mythos-5(?:[-.]1)?|mythos-preview|opus-(?:5|5[-.]5|4[-.]8)|(?:sonnet|haiku)-5[-.]5)(?:-\d{8})?$/.test(
 		model.id,
 	);
 }
@@ -1150,6 +1153,8 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 };
 
 function isOAuthToken(apiKey: string): boolean {
+	// A shared server serves no subscription: a token-shaped key goes out as an ordinary key.
+	if (typeof process !== "undefined" && process.env.EXXPERTS_SHARED_SERVER === "1") return false;
 	return apiKey.includes("sk-ant-oat");
 }
 

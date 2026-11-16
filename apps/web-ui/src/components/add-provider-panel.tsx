@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { GroupHeader } from "./pane-header";
 import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
@@ -55,6 +55,12 @@ export function ApiKeyForm({ providerName, onSave, className, onCancel }: {
 	const [key, setKey] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const errorRef = useRef<HTMLDivElement>(null);
+	// The browser keeps only the focused field in view, so a form low in the
+	// list puts this sentence past the pane's edge and Save key seems to do nothing.
+	useEffect(() => {
+		if (error) errorRef.current?.scrollIntoView({ block: "nearest" });
+	}, [error]);
 	async function save() {
 		setSaving(true);
 		setError(null);
@@ -94,38 +100,50 @@ export function ApiKeyForm({ providerName, onSave, className, onCancel }: {
 			<button className="rs-btn rs-btn-primary" disabled={!key.trim() || saving} onClick={() => void save()}>
 				{saving ? "Saving…" : "Save key"}
 			</button>
-			{error && <div className="add-provider-key-error" role="alert">{error}</div>}
+			{error && <div ref={errorRef} className="add-provider-key-error" role="alert">{error}</div>}
 		</div>
 	);
 }
 
 // Browser sign-in for a raw provider id: the server starts the runtime's OAuth
 // flow, we open the URL in a new tab and poll until it settles.
+export type ProviderLogin = ReturnType<typeof useProviderLogin>;
 export function useProviderLogin(onDone: (providerId: string, ok: boolean) => void) {
 	const [signingInProvider, setSigningInProvider] = useState<string | null>(null);
 	// Device-code flows (GitHub Copilot) hand back a code the person must type
 	// on the provider's page; callback-server flows have no instructions.
 	const [instructions, setInstructions] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	// Each start and each cancel moves this on, so the answer to a start that was
+	// cancelled while on its way opens nothing.
+	const attemptRef = useRef(0);
 
-	async function signIn(providerId: string) {
+	/** `companyAddress`: Copilot's company GitHub; empty or none signs in on github.com. */
+	async function signIn(providerId: string, companyAddress?: string) {
+		const attempt = ++attemptRef.current;
 		setError(null);
 		setInstructions(null);
+		// Held from the click, not from the answer: a second click finds the sign-in
+		// under way, and its Cancel is on screen while the start is on its way.
+		setSigningInProvider(providerId);
 		try {
 			const { url, instructions: startInstructions } = await fetchJson<{ url: string; instructions?: string | null }>("/api/auth/login", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ provider: providerId }),
+				body: JSON.stringify(companyAddress ? { provider: providerId, companyAddress } : { provider: providerId }),
 			});
+			if (attempt !== attemptRef.current) return;
 			window.open(url, "_blank", "noopener");
 			setInstructions(startInstructions ?? null);
-			setSigningInProvider(providerId);
 		} catch (e) {
+			if (attempt !== attemptRef.current) return;
+			setSigningInProvider(null);
 			setError((e as Error).message);
 		}
 	}
 
 	async function cancel() {
+		attemptRef.current += 1;
 		try {
 			await fetchJson("/api/auth/login/cancel", { method: "POST" });
 		} catch {}
@@ -158,6 +176,64 @@ export function useProviderLogin(onDone: (providerId: string, ok: boolean) => vo
 	}, [signingInProvider]);
 
 	return { signingInProvider, instructions, error, setError, signIn, cancel };
+}
+
+export const COPILOT_PROVIDER_ID = "github-copilot";
+
+/**
+ * Copilot's sign-in, opened by its Sign in: Copilot can sign in at a company's
+ * own GitHub instead of github.com. The address is optional, and the sign-in's
+ * error line shows under it, where the person can change the address and try
+ * again. While the sign-in runs the form steps aside, its address kept: the row
+ * says to finish in the browser, shows the code and carries the Cancel.
+ */
+export function CopilotSignInForm({ login, className, onCancel }: {
+	login: ProviderLogin;
+	className?: string;
+	onCancel: () => void;
+}) {
+	const [address, setAddress] = useState("");
+	const fieldId = useId();
+	const hintId = useId();
+	const signingIn = login.signingInProvider !== null;
+	const errorRef = useRef<HTMLDivElement>(null);
+	// Same as the key form: the browser keeps only the focused field in view.
+	useEffect(() => {
+		if (login.error) errorRef.current?.scrollIntoView({ block: "nearest" });
+	}, [login.error]);
+	const signIn = () => void login.signIn(COPILOT_PROVIDER_ID, address.trim());
+	if (signingIn) return null;
+	return (
+		<div className={`add-provider-key-form copilot-signin-form${className ? ` ${className}` : ""}`}>
+			<label className="copilot-address-label" htmlFor={fieldId}>GitHub address</label>
+			<input
+				id={fieldId}
+				className="launcher-path-input create-room-input"
+				type="text"
+				inputMode="url"
+				autoCapitalize="none"
+				autoCorrect="off"
+				spellCheck={false}
+				placeholder="yourcompany.ghe.com"
+				aria-describedby={hintId}
+				value={address}
+				autoFocus
+				onChange={(e) => setAddress(e.target.value)}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") signIn();
+					if (e.key === "Escape") {
+						e.preventDefault();
+						e.stopPropagation();
+						onCancel();
+					}
+				}}
+			/>
+			<button className="rs-btn" type="button" onClick={onCancel}>Cancel</button>
+			<button className="rs-btn rs-btn-primary" type="button" onClick={signIn}>Sign in</button>
+			<p id={hintId} className="settings-help copilot-address-hint">Leave it empty if you sign in at github.com.</p>
+			{login.error && <div ref={errorRef} className="add-provider-key-error" role="alert">{login.error}</div>}
+		</div>
+	);
 }
 
 // Suggest-then-approve model configuration for one provider: which models its
@@ -198,7 +274,9 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 				setCatalog(result);
 				const initialRooms = existingRoomModels.length > 0 ? existingRoomModels : [result.suggested];
 				setRoomModels(new Set(initialRooms.filter((id) => result.models.some((model) => model.id === id))));
-				setLearnModel(existingForPurpose("absorb") || result.suggested);
+				// A saved Memory model the list no longer holds would save again unseen: the picker shows only the list.
+				const existingLearn = existingForPurpose("absorb");
+				setLearnModel(result.models.some((model) => model.id === existingLearn) ? existingLearn : result.suggested);
 			})
 			.catch((e) => {
 				if (!stopped) setLoadError((e as Error).message);
@@ -266,7 +344,7 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 							<h2>{`Approve ${providerName} models`}</h2>
 						</div>
 					</div>
-					<button className="icon-btn" onClick={onClose} aria-label="Close">Close</button>
+					<button className="rs-btn" onClick={onClose} aria-label="Close">Close</button>
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
@@ -298,7 +376,7 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 								<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save profile"}</button>
 								<button className="rs-btn" disabled={saving || removing} onClick={onClose}>Cancel</button>
 								{existingProfile && allowRemove && (
-									<button className="ai-profile-foot-link configure-profile-remove" disabled={saving || removing} onClick={() => void removeProfile()}>
+									<button className="rs-btn rs-btn-danger rs-btn-sm configure-profile-remove" disabled={saving || removing} onClick={() => void removeProfile()}>
 										{removing ? "Removing…" : "Remove profile"}
 									</button>
 								)}
@@ -655,7 +733,7 @@ export function GatewayModelApprovalList({ drafts, onChange, ariaLabel, askedGat
 						/>
 						<button
 							type="button"
-							className="gateway-model-bulk-button"
+							className="rs-btn rs-btn-sm gateway-model-bulk-button"
 							disabled={!bulkWindowTouched || Boolean(bulkWindowError)}
 							title={bulkWindowError ?? (bulkWindowTouched ? "Give every approved model this context window, as your choice over detection" : "Type a context window first")}
 							onClick={() => onChange(applyToApproved(drafts, { contextWindow: bulkWindow.trim() }))}
@@ -668,7 +746,7 @@ export function GatewayModelApprovalList({ drafts, onChange, ariaLabel, askedGat
 					{hasDetections && (
 						<button
 							type="button"
-							className="gateway-model-bulk-button gateway-model-bulk-detected"
+							className="rs-btn rs-btn-sm gateway-model-bulk-button gateway-model-bulk-detected"
 							title="Follow the gateway's detection: clears your per-model choices for the fields it answers, and sets the web search tick to what it declares"
 							onClick={() => onChange(trustDetected(drafts))}
 						>
@@ -704,7 +782,7 @@ export function GatewayModelApprovalList({ drafts, onChange, ariaLabel, askedGat
 							<input type="checkbox" checked={draft.webSearch} onChange={() => update(draft.id, { webSearch: !draft.webSearch })} />
 							<span>web search</span>
 						</label>
-						<button type="button" className="gateway-model-adjust" aria-expanded={adjustOpen} onClick={() => toggleAdjust(draft.id)}>adjust</button>
+						<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm gateway-model-adjust" aria-expanded={adjustOpen} onClick={() => toggleAdjust(draft.id)}>adjust</button>
 						{adjustOpen && (
 							<div className="gateway-model-adjust-fold">
 								<div className="gateway-adjust-field">
@@ -739,7 +817,7 @@ export function GatewayModelApprovalList({ drafts, onChange, ariaLabel, askedGat
 									{rowCanTrustDetection(draft) && (
 										<button
 											type="button"
-											className="gateway-model-bulk-button"
+											className="rs-btn rs-btn-sm gateway-model-bulk-button"
 											title="Clear your choices for the fields the gateway answered, so this model follows detection again"
 											onClick={() => onChange(drafts.map((row) => (row.id === draft.id ? trustDetected([row])[0] : row)))}
 										>
@@ -934,7 +1012,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 							<h2>{title}</h2>
 						</div>
 					</div>
-					<button className="icon-btn" onClick={onClose} aria-label="Close">Close</button>
+					<button className="rs-btn" onClick={onClose} aria-label="Close">Close</button>
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
@@ -1157,7 +1235,7 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 							<h2>{`Approve ${gatewayName} models`}</h2>
 						</div>
 					</div>
-					<button className="icon-btn" onClick={onClose} aria-label="Close">Close</button>
+					<button className="rs-btn" onClick={onClose} aria-label="Close">Close</button>
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
@@ -1271,6 +1349,8 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	const [providers, setProviders] = useState<LoginProviderCatalogEntry[] | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [apiKeyProvider, setApiKeyProvider] = useState<LoginProviderCatalogEntry | null>(null);
+	// Copilot's Sign in opens its form first, for an optional company address.
+	const [copilotFormOpen, setCopilotFormOpen] = useState(false);
 	const [configureProvider, setConfigureProvider] = useState<{ id: string; name: string } | null>(null);
 	// null id means "adding a new one"; the modal is closed when the whole slot is null.
 	const [gatewayEdit, setGatewayEdit] = useState<{ id: string | null; label?: string } | null>(null);
@@ -1302,7 +1382,10 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	// next open, one nothing outside this panel knows about.
 	useEffect(() => {
 		if (open) setAddedNote(null);
-		else setApiKeyProvider(null);
+		else {
+			setApiKeyProvider(null);
+			setCopilotFormOpen(false);
+		}
 	}, [open]);
 
 	// Called when a provider gains its profile: collapse the panel and narrate
@@ -1316,6 +1399,7 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 
 	const login = useProviderLogin((providerId, ok) => {
 		if (!ok) return;
+		if (providerId === COPILOT_PROVIDER_ID) setCopilotFormOpen(false);
 		const entry = providers?.find((provider) => provider.id === providerId);
 		if (!entry?.profileId) setConfigureProvider({ id: providerId, name: entry?.name ?? providerId });
 		onProfilesChanged();
@@ -1394,6 +1478,8 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	const matchesFilter = (provider: LoginProviderCatalogEntry) =>
 		!filterText || provider.name.toLowerCase().includes(filterText) || provider.id.toLowerCase().includes(filterText);
 	const oauthProviders = sharedServer ? [] : addable.filter((provider) => provider.authTypes.includes("oauth")).filter(matchesFilter);
+	// The form's error line stands in for the panel's only while the form is on screen.
+	const copilotFormShown = copilotFormOpen && oauthProviders.some((provider) => provider.id === COPILOT_PROVIDER_ID);
 	const apiKeyProviders = addable
 		.filter((provider) => sharedServer ? provider.authTypes.includes("api_key") : !provider.authTypes.includes("oauth"))
 		.filter(matchesFilter)
@@ -1425,14 +1511,14 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 					/>
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{!providers && !loadError && <p className="cli-note">Loading providers…</p>}
-					{login.error && <div className="checkpoint-proposal-error">{login.error}</div>}
+					{login.error && !copilotFormShown && <div className="checkpoint-proposal-error">{login.error}</div>}
 					{gatewayNotice && <div className="checkpoint-proposal-error">{gatewayNotice}</div>}
 					{providers && filterText && oauthProviders.length === 0 && apiKeyProviders.length === 0 && (
 						<p className="cli-note">No provider matches "{filter.trim()}".</p>
 					)}
 					<div className="settings-rows">
 						{oauthProviders.map((provider) => (
-							<div key={provider.id} className={`add-provider-row-group${login.signingInProvider === provider.id && login.instructions ? " key-open" : ""}`}>
+							<div key={provider.id} className={`add-provider-row-group${(login.signingInProvider === provider.id && login.instructions) || (provider.id === COPILOT_PROVIDER_ID && copilotFormShown) ? " key-open" : ""}`}>
 								<div className="settings-row">
 									<div className="settings-row-main">
 										<span className="settings-row-label">{provider.name}</span>
@@ -1445,11 +1531,17 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 											<button className="rs-btn" onClick={() => void login.cancel()}>Cancel</button>
 										) : provider.configured ? (
 											<button className="rs-btn" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
+										) : provider.id === COPILOT_PROVIDER_ID ? (
+											!copilotFormShown && <button className="rs-btn" disabled={login.signingInProvider !== null} onClick={() => { login.setError(null); setCopilotFormOpen(true); }}>Sign in</button>
 										) : (
-											<button className="rs-btn" disabled={login.signingInProvider !== null} onClick={() => void login.signIn(provider.id)}>Sign in</button>
+											// Copilot's form shows the sign-in's error line, so it closes when another starts.
+											<button className="rs-btn" disabled={login.signingInProvider !== null} onClick={() => { setCopilotFormOpen(false); void login.signIn(provider.id); }}>Sign in</button>
 										)}
 									</span>
 								</div>
+								{provider.id === COPILOT_PROVIDER_ID && copilotFormShown && (
+									<CopilotSignInForm className="add-provider-row-key-form" login={login} onCancel={() => { login.setError(null); setCopilotFormOpen(false); }} />
+								)}
 								{login.signingInProvider === provider.id && login.instructions && (
 									<div className="add-provider-instructions">{login.instructions}</div>
 								)}
@@ -1479,9 +1571,9 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 											<>
 												<button className="rs-btn" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
 												{keyFormOpen !== provider.id && (
-													<button className="rs-quiet" onClick={() => openApiKeyProvider(provider)}>Replace key</button>
+													<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" onClick={() => openApiKeyProvider(provider)}>Replace key</button>
 												)}
-												{!sharedServer && <button className="rs-quiet" onClick={() => void removeKey(provider)}>Remove key</button>}
+												{!sharedServer && <button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" onClick={() => void removeKey(provider)}>Remove key</button>}
 											</>
 										) : (
 											keyFormOpen !== provider.id && (

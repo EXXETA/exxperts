@@ -61,9 +61,9 @@ export function fetchRoomOrder(): Promise<RoomOrderResponse> {
 /**
  * The ONE sentence for a save that got no usable answer. It names no
  * control: the home screen keeps it until the next save starts (rule 4 of
- * home-room-order.ts) and draws it wherever the user then is, in the menu,
- * under the control, or in the arrange line, and "try again" is true in
- * every one of those places.
+ * home-room-order.ts) and draws it wherever the user then is, in the menu or
+ * under the control, and "try again" is true in both. An arrangement's
+ * failure is said in arranging's own words instead (home-room-arrange.ts).
  */
 export const ROOM_ORDER_SAVE_FALLBACK = "The order was not saved. Try again.";
 

@@ -1,7 +1,7 @@
 # Unsigned macOS arm64 build (signing/notarization is a v2 item pending the
 # organization certificate); electron-builder still ad-hoc signs so the arm64
 # binary launches. The server payload rides as an extraResource: the exact
-# release-archive tree (app/ + vendor/node/) staged by scripts/package.mjs.
+# release-archive tree (app/ + vendor/) staged by scripts/package.mjs.
 appId: com.exxeta.exxperts
 productName: exxperts
 directories:

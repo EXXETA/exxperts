@@ -25,8 +25,8 @@ your explicit approval.
 
 ## Lineage
 
-exxperts is a hard fork of the open-source
-[Pi](https://github.com/badlogic/pi-mono) coding agent (v0.70.5, MIT).
+The engine inside exxperts is a hard fork of the open-source
+[Pi](https://github.com/earendil-works/pi) coding agent (v0.70.5, MIT).
 The fork lives in `runtime/` as `@exxeta/exxperts-*` workspace packages
 and provides sessions, model providers, tools, and extensions. The
 product layer (persistent rooms, the memory engine, the web app) is
@@ -117,7 +117,7 @@ Freezes the active thread and asks a compression worker to distill it
 into a proposed summary of the conversation. The default Remember button
 runs a fast path at standard density and shows you the proposal before
 it is saved; a room can be set to save without that preview (Room
-settings, Memory, **Remember without the preview**). The arrow beside Remember opens "Choose what to keep…", the full flow, where you
+settings, Memory, **Remember without the preview**). The arrow beside Remember, "Choose what to keep", opens the full flow, where you
 choose a density (compact/standard/rich) and can add an optional
 steering note. Things
 you explicitly asked the agent to remember are carried through and
@@ -194,27 +194,27 @@ silently run on a model that is not approved. Setup is described in
 
 Rooms get tools through a per-room policy rather than a global grant:
 
-- **Workspace**: two access modes over the same toolset. **Full
-  access** works with files like you do, in the chosen folder and
-  beyond. **Bounded workspace** carries the same Read, List, Find,
-  Search, Write and Edit tools fenced to one folder: the folder is
-  re-verified against its fingerprint on every use (a swapped or
-  redirected folder is refused), protected files (secrets, keys,
-  `.git`) stay untouchable and a custom protected list adds to the
-  built-ins rather than replacing them, and Search runs on ripgrep
-  with a guarded built-in fallback. Each tool is a toggle; whether a
-  room can change files follows from the tools you enabled, and a room
-  with no write tools and no Bash says it is read-only
+- **Workspace**: the room works in a folder you choose and the folders you
+  allow. Its Read, List, Find, Search, Write and Edit tools stay in those
+  folders: the folder is re-verified against its fingerprint on every use
+  (a swapped or redirected folder is refused), common secret and key files
+  stay closed to them, and Search runs on ripgrep with a guarded built-in
+  fallback. With **Can change files** off, the room can only read while
+  its protection is on
   ([`workspace-and-bash.md`](workspace-and-bash.md)).
-- **Bash**: Full access only, off by default. Each command shows an
-  approval card with the exact command before it runs; the "Ask
-  first" / "Auto" chip under the message box (inside it on a phone)
-  switches a room to run without asking, and auto can only be enabled at the computer, never
-  from a remote device. Rooms that had Bash before the card existed
-  were switched to auto once, at upgrade, so their behavior did not
-  change; every room since starts at asks.
+- **Commands**: on a Mac and on Windows 11, a room's commands run inside its
+  protection: they change files only in the room's folders, can't read your
+  other files or keys, and reach a website only after your yes, or, on Auto,
+  public websites without it. A new room with a folder starts with commands
+  on, running without asking; the chip under the message box (inside it on a
+  phone) switches between Ask, Semi and Auto. Only you can turn a room's
+  protection off, at the computer. Where protection isn't available, commands
+  start off and ask before each one unless you choose otherwise.
 - **`fetch_url`**: HTTP fetching with SSRF defenses (private-range and
-  redirect protection).
+  redirect protection). It asks before it opens an address you didn't give
+  the room, unless it is a search result, on a site you named or already
+  allowed in that answer, or on a site listed for the room, or the room is on
+  Auto, where it opens any public address.
 - **Web search**: built in via DuckDuckGo; local SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries ([`web-search.md`](web-search.md)).
 - **Attachments**: documents you add and outputs a room produced, shown
   as cards beside the chat and opened in a sandboxed file viewer; files that earlier visual specialists
@@ -238,11 +238,12 @@ Rooms get tools through a per-room policy rather than a global grant:
 - **Schedules**: recurring background prompts with preflight checks
   and run history.
 
-Tool permissions are checked and explained per call, and the bounded
+Tool permissions are checked and explained per call, and the folder
 fence is enforced: a tool that is supposed to be blocked fails the
-session loudly instead of slipping through. None of it is an OS
-sandbox; the security boundary is the localhost-only server and your
-approval gates, not process isolation.
+session loudly instead of slipping through. On a Mac and on Windows 11,
+the operating system holds a room's commands to its folders and the
+sites you allowed; what that covers and what it doesn't is in
+[`workspace-and-bash.md`](workspace-and-bash.md).
 
 Where your file goes: when you attach a file to a room, it is stored
 on your machine under that room's own folder; it is not uploaded
@@ -263,6 +264,10 @@ room's Attachments panel, where you can download, rename or delete them.
   back for a manual approval screen.
 - State directories are created with restrictive modes under
   `~/.exxperts/`.
+- On a Mac and on Windows 11, a room's commands run inside its
+  protection, which only you can turn off, per room, at the computer; if
+  it fails, commands don't run
+  ([`workspace-and-bash.md`](workspace-and-bash.md)).
 
 ## Where state lives
 

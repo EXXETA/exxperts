@@ -18,6 +18,7 @@ CLAUDE.local.md
 !.claude/agents/
 !.claude/slices/
 !.claude/repo-map.md
+!.claude/repo-map/
 */**/.claude/
 
 # Personal planning notes

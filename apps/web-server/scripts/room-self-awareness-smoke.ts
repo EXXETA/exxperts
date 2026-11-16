@@ -8,9 +8,9 @@
 //      what is built in and how scheduled tasks are entered, the on-screen
 //      names of Room settings and memory, the docs pointer, the Mermaid line;
 //   3. the live workspace part, per folder state: no folder says how to set
-//      one and what Bash needs; Bounded and Full access with Bash off say what
-//      a command needs; Full access with Bash on says no more than "enabled",
-//      and its boot line lets the room use Bash without asking twice;
+//      one; an older Bounded room reads Commands switched off and never asks;
+//      commands off in a room made before may ask; Commands on says no more
+//      than "on", and its boot line lets the room run commands without asking twice;
 //   4. a shared server says it offers no folder and no commands yet;
 //   5. the room-state message carries today's date, and a new day sends a new
 //      copy, so a conversation reopened days later does not keep its boot day.
@@ -25,10 +25,13 @@ import { createPersistentRoomDefaultCapabilityPolicy, writePersistentRoomDefault
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const version = String(JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version);
 
-const NO_FOLDER = "No folder is set for this room: you cannot open the user's files beyond Attachments, save a file, or run commands. When the user asks for one of these, or a result is worth keeping as a file, say so once and how to switch it on: Room settings → Folder → Choose folder. With a folder you can create and edit text files in it (notes, tables, web pages, SVG). Running commands (Bash: scripts, converting files, making Word, Excel, PowerPoint or PDF files with the computer's own programs) also needs Access set to Full access and the Bash switch on; each command then waits for the user's approval unless the chip under the message box says Auto.";
+// A room with no folder of its own: nobody can give it another, so it says what it couldn't do.
+const NO_FOLDER = "No folder is set for this room: you cannot open the user's files beyond Attachments, save a file, or run commands. When the user asks for one of these, say what you couldn't do; they can choose a folder for this room at their computer.";
 const SHARED_NO_FOLDER = "This server offers no folder and no commands yet; results stay in the chat.";
-const BASH_OFF = "- Bash/shell access: disabled. Commands need Access set to Full access and the Bash switch on, in Room settings → Folder; say so if a task needs one.";
-const BASH_ON_BOOT = "Use Bash when a task needs it; each command asks the user first unless they have set Auto.";
+const COMMANDS_MAY_ASK = "- Commands: off. If a job truly needs a command, call ask_for_commands; don't send them to a setting.";
+const COMMANDS_SWITCHED_OFF = "- Commands: off, because the person switched them off in Room settings. Don't ask for them: say what you couldn't do.";
+const COMMANDS_CANT_COME_ON = "- Commands: off. If a job needs one, say what you couldn't do; don't send them to a setting.";
+const BASH_ON_BOOT = "Run a command with the bash tool when a task needs it; each command asks the user first unless the room is on Semi or Auto.";
 const KERNEL_LINES = [
 	"The user's data and your memory stay inside this exxperts installation.",
 	"- **Built in**: web search and page fetching; reading the room's Attachments (what the user added; you cannot add to them); searching the room's memory. Scheduled tasks run a prompt in this room on a schedule. You cannot create them: when asked, give the values to enter in Room settings → Scheduled tasks: Name, What should this room do?, and Runs (Daily, Weekly, One time or Advanced).",
@@ -52,10 +55,12 @@ async function scenario(label: string, run: () => Promise<void>): Promise<void> 
 
 const sockets: RoomSocket[] = [];
 /** The one request a first message in a new conversation sends, and the room-state copy it carries. */
-async function firstTurn(name: string, folder?: { mode: "bounded" | "localFiles"; bash: boolean }): Promise<{ request: SentRequest; copy: string }> {
+async function firstTurn(name: string, folder?: { mode: "bounded" | "localFiles"; bash: boolean; madeBefore?: true }): Promise<{ request: SentRequest; copy: string }> {
 	const { roomId, conversationId } = await openRoom(name, folder && (async (id) => {
 		const root = path.join(tempHome, `folder-${id}`);
 		fs.mkdirSync(root, { recursive: true });
+		// A room made before commands started on has no such file.
+		if (folder.madeBefore) fs.rmSync(path.join(agentsRoot, id, "runtime", "commands-start-on.json"), { force: true });
 		writePersistentRoomDefaultCapabilityPolicy(createPersistentRoomDefaultCapabilityPolicy({ agentId: id, repoRoot, root, workspaceAccessMode: folder.mode, displayLabel: "Project", source: "manual", bashEnabled: folder.bash }), { persistentAgentsRoot: agentsRoot });
 	}));
 	const room = await RoomSocket.connect(roomId, conversationId);
@@ -85,29 +90,29 @@ try {
 		assert(request.system.indexOf("## This installation") > request.system.indexOf("# Persistent Agent Runtime Envelope"), "the installation section comes after the boot prompt, not inside the frozen kernel");
 		for (const line of KERNEL_LINES) assert(request.system.includes(line), `the kernel carries: ${line}`);
 		for (const gone of ["live on their machine", "The docs track the newest version", "the room's file shelf"]) assert(!request.system.includes(gone), `the kernel no longer says "${gone}"`);
-		assert(currentWorkspace(copy).includes(`${NO_FOLDER} If earlier context claims a workspace, the user has removed or changed it since.`), `the live part says how to set a folder, got:\n${currentWorkspace(copy)}`);
+		assert(currentWorkspace(copy).includes(`${NO_FOLDER} If earlier context claims a folder, the user has removed or changed it since.`), `the live part says how to set a folder, got:\n${currentWorkspace(copy)}`);
 		assert(copy.includes(`\n\n## Current date\n\nToday is ${today()}.`), `the copy carries today's date, got:\n${copy.slice(0, 400)}`);
 	});
 
-	await scenario("Bounded: a command needs Full access and the Bash switch", async () => {
+	await scenario("an older Bounded room: it can change files, commands are switched off and it never asks", async () => {
 		const { copy } = await firstTurn("Bounded Room", { mode: "bounded", bash: false });
 		const live = currentWorkspace(copy);
-		assert(live.includes("- Workspace mode: Bounded workspace") && live.includes(BASH_OFF), `the live part says what a command needs, got:\n${live}`);
+		assert(!live.includes("- Access:") && live.includes("- Can change files: on\n") && live.includes(COMMANDS_SWITCHED_OFF) && !live.includes("ask_for_commands"), `the live part says commands are switched off, got:\n${live}`);
 		assert(live.includes("(that panel shows only the room's own files)") && !live.includes("task artifacts"), "the Attachments panel is the room's own files");
 		assert(!live.includes("No folder is set"), "a room with a folder is not told to set one");
 	});
 
-	await scenario("Full access, Bash off: the same line, and the boot prompt keeps Bash unavailable", async () => {
-		const { request, copy } = await firstTurn("Full Room", { mode: "localFiles", bash: false });
+	await scenario("commands off in a room made before: the room may ask for them, and the boot prompt keeps them unavailable", async () => {
+		const { request, copy } = await firstTurn("Full Room", { mode: "localFiles", bash: false, madeBefore: true });
 		const live = currentWorkspace(copy);
-		assert(live.includes("- Workspace mode: Full access") && live.includes(BASH_OFF), `the live part says what a command needs, got:\n${live}`);
-		assert(request.system.includes("Bash and shell commands remain unavailable.") && !request.system.includes(BASH_ON_BOOT), "the boot prompt says Bash is unavailable");
+		assert(!live.includes("- Access:") && live.includes(COMMANDS_MAY_ASK), `the live part says the room may ask, got:\n${live}`);
+		assert(request.system.includes(COMMANDS_CANT_COME_ON) && !request.system.includes(BASH_ON_BOOT) && !request.system.includes("Bash switch"), "the boot prompt says commands are off and names no setting");
 	});
 
-	await scenario("Full access, Bash on: the room uses Bash when a task needs it", async () => {
+	await scenario("Commands on: the room runs a command when a task needs it", async () => {
 		const { request, copy } = await firstTurn("Bash Room", { mode: "localFiles", bash: true });
 		const live = currentWorkspace(copy);
-		assert(live.includes("- Bash/shell access: enabled\n") && !live.includes("Commands need"), `the live part says enabled and no more, got:\n${live}`);
+		assert(live.includes("- Commands: on\n") && !live.includes("ask_for_commands"), `the live part says enabled and no more, got:\n${live}`);
 		assert(request.system.includes(BASH_ON_BOOT), "the boot prompt lets the room use Bash");
 		assert(!request.system.includes("explicitly asks for shell execution"), "the boot prompt no longer asks for a second consent");
 	});

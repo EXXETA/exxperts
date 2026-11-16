@@ -1,6 +1,9 @@
 export const MAX_RESTORED_MESSAGES = 24;
 export const MAX_RESTORED_TOTAL_CHARS = 12_000;
 export const MAX_RESTORED_MESSAGE_CHARS = 1_200;
+/** The lines around the restored excerpt, which travels in front of the person's message. */
+export const RESTORED_CONTEXT_OPEN = "[RESTORED PERSISTENT ROOM LIVE THREAD CONTEXT]";
+export const RESTORED_CONTEXT_CLOSE = "[/RESTORED PERSISTENT ROOM LIVE THREAD CONTEXT]";
 
 export interface RestoredLiveThreadContextMetadata {
 	sourceItemCount: number;
@@ -132,7 +135,7 @@ export function buildPersistentRoomRestoredLiveThreadContext(items: unknown[], t
 	};
 
 	const lines = [
-		"[RESTORED PERSISTENT ROOM LIVE THREAD CONTEXT]",
+		RESTORED_CONTEXT_OPEN,
 		"This persistent-agent room was resumed from its saved live-thread transcript.",
 		"Use this bounded excerpt only as continuation context for the current thread.",
 		"Some older live-thread messages may be omitted when the transcript exceeds the restoration caps.",
@@ -153,7 +156,7 @@ export function buildPersistentRoomRestoredLiveThreadContext(items: unknown[], t
 	for (const message of includedMessages) {
 		lines.push(`${roleLabel(message.role)}: ${message.text}`);
 	}
-	lines.push("[/RESTORED PERSISTENT ROOM LIVE THREAD CONTEXT]");
+	lines.push(RESTORED_CONTEXT_CLOSE);
 
 	return {
 		block: lines.join("\n"),

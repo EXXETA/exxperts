@@ -43,7 +43,7 @@ export function ToastStack({ toasts }: Props) {
 						{toast.sub && <span className="room-toast-sub">{toast.sub}</span>}
 					</span>
 					{toast.action && (
-						<button type="button" className="room-toast-action" onClick={toast.action.onClick}>
+						<button type="button" className="rs-btn rs-btn-quiet rs-btn-sm room-toast-action" onClick={toast.action.onClick}>
 							{toast.action.label}
 						</button>
 					)}

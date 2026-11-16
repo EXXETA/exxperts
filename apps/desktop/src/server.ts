@@ -23,7 +23,7 @@ const STOP_LIMIT_MS = 5000;
 const SIGNAL_LIMIT_MS = 1000;
 const KILL_LIMIT_MS = 2000;
 
-// Packaged: the release-archive tree (app/ + vendor/node/) ships as an
+// Packaged: the release-archive tree (app/ + vendor/) ships as an
 // extraResource next to the asar, so the payload is exactly what the prebuilt
 // archives install. Dev: the repo checkout three levels up from dist/.
 export function serverRoot(): string {

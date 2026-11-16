@@ -5,8 +5,8 @@
 // a real room and a real websocket turn. The model is a synthetic gateway that
 // runs one bash command per turn and reads the tool's result back. Pinned:
 //
-// - the Folder pane shows the one plain line, in the summary and under the
-//   Bash switch, and only while no shell is found;
+// - the Folder pane shows the one plain line, under the Commands switch, and
+//   only while no shell is found;
 // - a command that finds no shell answers the chat and the model with that
 //   line; the runtime's settings.json advice reaches the server log only;
 // - Git installed while the app runs is found by the next command and the next
@@ -26,8 +26,9 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
 import { waitForTurnSettled } from "./smoke-turn-settle.js";
+import { COMMANDS } from "../src/room-box/card-text.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -164,7 +165,7 @@ async function requestJson(server: SmokeServer, pathname: string, init: AuthedFe
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-/** A room with a folder, Full access, Bash on and asking off, as a person would set it. */
+/** A room with a folder, Commands on and asking off, as a person would set it. */
 async function createBashRoom(server: SmokeServer, name: string): Promise<string> {
 	const room = await requestJson(server, "/api/persistent-agents", { method: "POST", body: JSON.stringify({ displayName: name, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
 	assert(room.status === 201, `room creation: expected 201, got ${room.status}: ${JSON.stringify(room.body)}`);
@@ -177,7 +178,7 @@ async function createBashRoom(server: SmokeServer, name: string): Promise<string
 		body: JSON.stringify({ root: workspaceRoot, displayLabel: "Shell Workspace", workspaceAccessMode: "localFiles", bashEnabled: true }),
 	});
 	assert(workspace.status === 200 && workspace.body?.policy?.bashEnabled === true, `workspace default PUT: got ${workspace.status}: ${JSON.stringify(workspace.body)}`);
-	const ask = await requestJson(server, `/api/persistent-agents/${encodeURIComponent(agentId)}/bash-settings`, { method: "PUT", body: JSON.stringify({ autoApprove: true }) });
+	const ask = await putRunWithoutAsking(`${server.baseUrl}/api/persistent-agents/${encodeURIComponent(agentId)}/bash-settings`, true);
 	assert(ask.status === 200, `bash-settings PUT: got ${ask.status}`);
 	return agentId;
 }
@@ -219,9 +220,9 @@ async function runTurn(server: SmokeServer, agentId: string, conversationId: str
 	throw new Error(`turn did not complete; frame types: ${frames.map((f) => f?.type).join(", ")}`);
 }
 
-type PaneLines = { summary: number; editor: number; text: string };
+type PaneLines = { count: number; underCommands: number; text: string };
 
-/** Opens Room settings on Folder, reads the line in the summary and in the editor; the editor stays open. */
+/** Opens Room settings on Folder and reads the line, and where it sits: under the Commands switch. Each open asks the server again. */
 async function readPane(page: any, server: SmokeServer, roomName: string): Promise<PaneLines> {
 	await page.goto(`${server.baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 	await page.waitForLoadState("networkidle");
@@ -231,26 +232,12 @@ async function readPane(page: any, server: SmokeServer, roomName: string): Promi
 	await page.waitForSelector(".settings-dialog", { timeout: 10000 });
 	await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 	const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
-	await pane.getByRole("button", { name: "Edit", exact: true }).waitFor({ timeout: 10000 });
-	await page.waitForTimeout(300);
+	const commands = pane.getByRole("switch", { name: COMMANDS, exact: true });
+	await commands.waitFor({ timeout: 10000 });
 	const line = pane.locator(".workspace-shell-missing");
-	const summary = await line.count();
-	const text = summary ? await line.first().innerText() : "";
-	await pane.getByRole("button", { name: "Edit", exact: true }).click();
-	await pane.getByLabel("Bash shell access").waitFor({ timeout: 10000 });
-	await page.waitForTimeout(500);
-	const editor = await line.count();
-	return { summary, editor, text };
-}
-
-/** With the dialog still open: leave the editor and open it again, which asks the server again. */
-async function reopenEditor(page: any): Promise<number> {
-	const pane = page.locator(".room-settings-section:not([hidden]) .room-workspace-section");
-	await pane.getByRole("button", { name: "Cancel" }).click();
-	await pane.getByRole("button", { name: "Edit", exact: true }).click();
-	await pane.getByLabel("Bash shell access").waitFor({ timeout: 10000 });
-	await page.waitForTimeout(500);
-	return pane.locator(".workspace-shell-missing").count();
+	const count = await line.count();
+	const underCommands = await pane.locator("label.settings-row").filter({ has: page.getByRole("switch", { name: COMMANDS, exact: true }) }).locator(".workspace-shell-missing").count();
+	return { count, underCommands, text: count ? await line.first().innerText() : "" };
 }
 
 let windowsServer: SmokeServer | undefined;
@@ -282,8 +269,7 @@ try {
 		if (browser) {
 			const page = openPage = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
 			const missing = await readPane(page, windowsServer, "Windows Room");
-			assert(missing.summary === 1 && missing.text === SENTENCE, `the summary must show the line under Bash on, got ${JSON.stringify(missing)}`);
-			assert(missing.editor === 1, `the editor must show the line under the Bash switch, got ${JSON.stringify(missing)}`);
+			assert(missing.count === 1 && missing.underCommands === 1 && missing.text === SENTENCE, `the pane must show the line once, under the Commands switch, got ${JSON.stringify(missing)}`);
 			console.log("ok: the pane shows the line while no shell is found");
 		} else {
 			console.log("pane checks skipped (Chromium not installed)");
@@ -297,10 +283,8 @@ try {
 		assert(!ran.isError && ran.text.includes(COMMAND_OUTPUT), `the next command must run once a shell is there, got ${JSON.stringify(ran.text)}`);
 		assert(ran.modelSaw.includes(COMMAND_OUTPUT), "the model must read the command's real output");
 		if (browser) {
-			assert((await reopenEditor(openPage)) === 0, "opening the editor again, in the same dialog, must ask again and drop the line");
-			const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
-			const found = await readPane(page, windowsServer, "Windows Room");
-			assert(found.summary === 0 && found.editor === 0, `with a shell found the pane must not show the line, got ${JSON.stringify(found)}`);
+			const found = await readPane(openPage, windowsServer, "Windows Room");
+			assert(found.count === 0, `with a shell found the pane must not show the line, got ${JSON.stringify(found)}`);
 		}
 		console.log("ok: a shell installed meanwhile runs the next command and clears the line, no restart");
 
@@ -324,7 +308,7 @@ try {
 		if (browser) {
 			const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
 			const lines = await readPane(page, plainServer, "Plain Room");
-			assert(lines.summary === 0 && lines.editor === 0, `on ${process.platform} the pane must not show the line, got ${JSON.stringify(lines)}`);
+			assert(lines.count === 0, `on ${process.platform} the pane must not show the line, got ${JSON.stringify(lines)}`);
 		}
 		console.log(`ok: on ${process.platform} the pane shows no line, even with a shell path that does not exist`);
 	} finally {

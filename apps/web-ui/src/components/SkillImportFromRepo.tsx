@@ -141,7 +141,7 @@ export function SkillImportFromRepo({ onImported }: { onImported?: (name: string
 									)}
 									<span className="skill-import-option-meta">
 										<span title={license.title}>{license.text}</span>
-										{skill.hasBundledScripts ? " · bundles scripts (won't run)" : ""}
+										{skill.hasBundledScripts ? " · comes with files that run only if you allow them" : ""}
 									</span>
 								</span>
 							</label>

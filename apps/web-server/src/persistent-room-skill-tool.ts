@@ -3,6 +3,7 @@ import type { ToolDefinition } from "@exxeta/exxperts-runtime";
 import { defangSkillBody } from "./skills-import.js";
 import { readPersistentRoomSkillSettings, isValidSkillName, type EnabledSkill } from "./persistent-room-skill-settings.js";
 import { sha256 } from "./skills-store.js";
+import { WINDOWS_SKILL_READ_ONLY_LINE, WINDOWS_SKILL_RUN_LINE } from "./room-box/windows/model-lines.js";
 
 /**
  * Skills MR-5 room wiring (spec §5, §7 musts 3–4): the L2 enabled-skills index
@@ -83,6 +84,8 @@ export interface SkillExecutionExposure {
 	skillDir: string;
 	/** The bundled files (paths relative to the skill dir), for orientation. */
 	files: string[];
+	/** In the Windows box: whether its protection was given the skill's folder, so its commands can run the files. */
+	windowsRuns?: boolean;
 }
 
 /**
@@ -104,6 +107,8 @@ export interface CreateReadSkillToolOptions {
 	telemetry?: ReadSkillTelemetry;
 	/** Absent = no execution exposure ever (the pre-feature behavior). */
 	resolveExecutionExposure?: SkillExecutionExposureResolver;
+	/** The room's commands run in the Windows box: the exposure says how they run a skill's files there, or that they can't, instead of naming the bash tool. */
+	windowsBox?: boolean;
 }
 
 /**
@@ -112,7 +117,10 @@ export interface CreateReadSkillToolOptions {
  * refusal (never a throw): the model should relay why the body is unavailable.
  */
 export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDefinition<any, any> {
-	const { agentId, lookupSkill, telemetry, resolveExecutionExposure } = options;
+	const { agentId, lookupSkill, telemetry, resolveExecutionExposure, windowsBox } = options;
+	// Where its files may be run from and written: the Windows box refuses any write in the skill's folder, so its line says where to write instead.
+	const writeOutputs = "Write any outputs into the room's folder, never into the skill's folder: the approval is pinned to the skill's exact files, so a new file there voids it.";
+	const runLine = (exposure: SkillExecutionExposure) => (!windowsBox ? `Read them with the read tool, and run them with the bash tool when the instructions call for it. ${writeOutputs}` : exposure.windowsRuns ? WINDOWS_SKILL_RUN_LINE : `${WINDOWS_SKILL_READ_ONLY_LINE} ${writeOutputs}`);
 	return {
 		name: READ_SKILL_TOOL_NAME,
 		label: "read enabled skill",
@@ -157,7 +165,7 @@ export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDe
 			// The appended paragraph is app-authored text, never skill content.
 			const exposure = resolveExecutionExposure?.(name) ?? null;
 			const exposureSection = exposure
-				? `\n\nThe user approved running this skill's bundled files in this room, for exactly this version. They live at:\n${exposure.skillDir}\nFiles: ${exposure.files.map((file) => JSON.stringify(file)).join(", ") || "(none)"}\nRead them with the read tool, and run them with the bash tool when the instructions call for it. Write any outputs into the room's workspace, never into the skill's folder: the approval is pinned to the skill's exact files, so a new file there voids it. Outputs you write to the workspace stay in the workspace folder on the user's computer and do NOT appear in this room's Attachments panel unless explicitly shelved; when you tell the user where an output landed, name the workspace folder path, never the Attachments panel. If this approval no longer appears in a later read of this skill, it was withdrawn or the files changed: do not run them from memory.`
+				? `\n\nThe user approved running this skill's bundled files in this room, for exactly this version. They live at:\n${exposure.skillDir}\nFiles: ${exposure.files.map((file) => JSON.stringify(file)).join(", ") || "(none)"}\n${runLine(exposure)} Outputs you write stay in the room's folder on the user's computer and do NOT appear in this room's Attachments panel unless explicitly shelved; when you tell the user where an output landed, name the folder's path, never the Attachments panel. If this approval no longer appears in a later read of this skill, it was withdrawn or the files changed: do not run them from memory.`
 				: "";
 			return {
 				content: [{

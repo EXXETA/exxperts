@@ -368,7 +368,7 @@ async function runIsolatedLifecycleWorker<TModelLock extends { provider: string;
 	workerLabel: string,
 	triggerPrompt: string,
 	emptyTextError: string,
-	attribution?: { agent: string; kind: UsageKind },
+	attribution?: { agent: string; kind: UsageKind; who?: { person: string; space: string } },
 	// A step that can be cancelled (the Memorize run) passes its signal, and a
 	// step with its own ceiling passes that; everything else keeps the shared
 	// maintenance timeout and no abort hook, exactly as before. A mechanical
@@ -400,15 +400,16 @@ async function runIsolatedLifecycleWorker<TModelLock extends { provider: string;
 			...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
 			...(options?.maxTokens ? { maxTokens: options.maxTokens } : {}),
 			...(callKind ? { callKind } : {}),
+			...(attribution ? { attribution } : {}),
 		});
 	} catch (error) {
 		// A failed call is paid for too: what it used before it failed is recorded, when it moved tokens.
 		logProviderCallFailed({ room: attribution?.agent, callKind, provider: modelLock.provider, model: modelLock.model }, error);
 		const usage = (error as { usage?: Parameters<typeof recordWorkerUsage>[3] })?.usage;
-		if (attribution && usage && !usageMovedNothing(usage)) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, usage, memoryCallKind);
+		if (attribution && usage && !usageMovedNothing(usage)) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, usage, memoryCallKind, attribution.who);
 		throw error;
 	}
-	if (attribution) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, result.usage, memoryCallKind);
+	if (attribution) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, result.usage, memoryCallKind, attribution.who);
 	return result;
 }
 

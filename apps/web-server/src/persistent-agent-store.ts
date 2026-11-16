@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeFileAtomic } from "@exxeta/exxperts-runtime";
 import { isRoomModelOffered } from "./room-models.js";
 import { maintenanceDiagnosticsDir } from "./maintenance-diagnostics.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
@@ -532,7 +533,7 @@ function checkpointEventRecordPath(root: PersistentAgentPathContext, checkpointI
 function writeCheckpointEventRecord(root: PersistentAgentPathContext, record: CheckpointEventRecord): string {
 	const file = checkpointEventRecordPath(root, record.checkpointId);
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+	writeFileAtomic(file, JSON.stringify(record, null, 2) + "\n");
 	return file;
 }
 
@@ -549,7 +550,7 @@ function mementoEventRecordPath(root: PersistentAgentPathContext, mementoId: str
 function writeMementoEventRecord(root: PersistentAgentPathContext, record: MementoEventRecord): string {
 	const file = mementoEventRecordPath(root, record.mementoId);
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+	writeFileAtomic(file, JSON.stringify(record, null, 2) + "\n");
 	return file;
 }
 
@@ -579,12 +580,6 @@ function slugTimestamp(date: Date): string {
 
 function shortRandomId(): string {
 	return Math.random().toString(36).slice(2, 8);
-}
-
-function writeFileAtomic(file: string, content: string): void {
-	const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-	fs.writeFileSync(tmp, content, { mode: 0o600 });
-	fs.renameSync(tmp, file);
 }
 
 export { MAX_PERSISTENT_AGENT_ID_LENGTH, PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE, PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE_ID, PERSISTENT_AGENT_THREAD_ITEM_CAP, RECENT_CONTEXT_HARD_CAP, RECENT_CONTEXT_SOFT_CAP, absorbEventRecordPath, activePersistentRoomLock, agentRootRelativePath, assertOfferedRoomModel, checkpointEventRecordPath, ensureDir, ensurePersistentAgentCanonicalScaffoldDirs, idlePersistentAgentTurnState, mementoEventRecordPath, normalizePersistentAgentActiveTurnToken, normalizePersistentAgentRootRelativePath, normalizeRuntimeModel, persistentAgentActiveTurnKey, persistentAgentActiveTurns, persistentAgentConflictError, persistentAgentInstanceFrom, persistentAgentModelLockLabel, persistentAgentTurnConflictError, persistentRoomLock, readJson, requestBodyModelLock, reviewEventRecordPath, safePersistentAgentEventRecordId, safeRuntimeThreadId, shortRandomId, slugTimestamp, writeCheckpointEventRecord, writeFileAtomic, writeMementoEventRecord };

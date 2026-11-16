@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CONNECTOR_FORM_LINES } from "../src/connector-form.js";
 
 async function main(): Promise<void> {
 	const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "exx-mcp-oauth-smoke-"));
@@ -68,11 +69,11 @@ async function main(): Promise<void> {
 	// Rejected combinations.
 	await assert.rejects(
 		addMcpServer({ name: "both", url: "https://example.com/mcp", bearerToken: "tok", oauth: { clientId: "x" } }),
-		(e: unknown) => e instanceof McpAdminError && /not both/.test((e as Error).message),
+		(e: unknown) => e instanceof McpAdminError && (e as Error).message === CONNECTOR_FORM_LINES.keyAndSignInApp,
 	);
 	await assert.rejects(
 		addMcpServer({ name: "secret-only", url: "https://example.com/mcp", oauth: { clientSecret: "shh" } }),
-		(e: unknown) => e instanceof McpAdminError && /client ID/.test((e as Error).message),
+		(e: unknown) => e instanceof McpAdminError && (e as Error).message === CONNECTOR_FORM_LINES.clientIdMissing,
 	);
 	await assert.rejects(
 		addMcpServer({ name: "local-oauth", command: "npx some-server", oauth: { clientId: "x" } }),

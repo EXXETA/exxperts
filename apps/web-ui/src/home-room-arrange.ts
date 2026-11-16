@@ -1,14 +1,15 @@
 /**
  * The arrangement being made in arrange mode: the rooms' ids, in the order
- * the user is putting them, from the moment arrange mode opened until Save
- * or Cancel. Plain and immutable (every move returns a new arrangement, or
- * the same one when nothing moved), so the smoke holds it on its own and the
- * home screen keeps it in one piece of state. It knows nothing of the saved
- * order: Save hands `ids()` to the home screen's controller as a choice
- * (home-room-order.ts), and the server merges it (mergeRoomOrderCustomOrder).
+ * the user is putting them, from the moment arrange mode opened until Done,
+ * Escape or leaving Home. Plain and immutable (every move returns a new
+ * arrangement, or the same one when nothing moved), so the smoke holds it on
+ * its own and the home screen keeps it in one piece of state. It knows
+ * nothing of the saved order: Done and leaving Home hand `ids()` to the home
+ * screen's controller as a choice (home-room-order.ts), and the server
+ * merges it (mergeRoomOrderCustomOrder).
  *
  * Its moves are the two ways a card is moved: one place with an arrow key
- * (`moveEarlier`, `moveLater`) and to a position with a drop or Home and End
+ * or a card's arrow (`moveEarlier`, `moveLater`) and to a position with a drop or Home and End
  * (`moveTo`, the drop that home-room-drag.ts ends in; `moveByKey` reads the
  * keys); both leave the same kind of arrangement, so nothing downstream
  * knows which way was used.
@@ -100,10 +101,17 @@ export function createRoomArrangement(onScreen: readonly string[]): RoomArrangem
 	return build(entry, entry);
 }
 
-/** The leave question, asked once when the screen is left with unsaved moves; with none, leaving just leaves. */
-export const ROOM_ARRANGE_LEAVE_QUESTION = "Your rooms are not saved in this order yet. Leave without saving?";
-
-/** True when leaving may go ahead: nothing to save, or the user said so. `ask` is the browser's confirm unless a smoke hands one in. */
-export function confirmLeavingArrangement(dirty: boolean, ask: (question: string) => boolean = (question) => window.confirm(question)): boolean {
-	return !dirty || ask(ROOM_ARRANGE_LEAVE_QUESTION);
-}
+/** Arranging's words, ONE place for the page and the smokes. The hint where a pointer hovers, and on a touch screen, where a finger holds a card or taps its arrows. */
+export const ROOM_ARRANGE_HINT_POINTER = "Drag rooms into order, or use Tab and the arrow keys.";
+export const ROOM_ARRANGE_HINT_TOUCH = "Hold a room and drag it, or tap its arrows.";
+/** Each card's two arrows: their names and their tooltips. */
+export const ROOM_ARRANGE_MOVE_EARLIER = "Move earlier";
+export const ROOM_ARRANGE_MOVE_LATER = "Move later";
+/**
+ * A failed save of an arrangement. The app cannot tell whether a save whose
+ * answer failed landed, so neither line says it was not saved. On Done, with
+ * the moves still on screen; at rest, on this visit or the next one when the
+ * save was made on the way out of Home.
+ */
+export const ROOM_ARRANGE_DONE_FAILED = "Your new order may not have been saved. Press Done to try again.";
+export const ROOM_ARRANGE_FAILED_AWAY = "Your new order may not have been saved. If it looks wrong, arrange your rooms again.";

@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "@exxeta/exxperts-runtime";
 import {
 	appendToArchive,
 	cloneDocument,
@@ -24,6 +25,7 @@ import {
 	type MemorySection,
 } from "./memory-entries.js";
 import { createPersistentAgentInstance, getPersistentAgentStatus, reviewTargetEstimatedTokensFromL1b, updateChronosForMemoryEdit, type PersistentAgentInstance } from "./persistent-agents.js";
+import { readJson } from "./persistent-agent-store.js";
 import { clearCommitIntent, readCommitIntent, registerCommitSettler, writeCommitIntent } from "./memory-commit.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 
@@ -209,12 +211,6 @@ export function memoryEntryAlreadyInCoreError(): Error {
 
 function ensureDir(dir: string): void {
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-}
-
-function writeFileAtomic(file: string, content: string): void {
-	const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-	fs.writeFileSync(tmp, content, { mode: 0o600 });
-	fs.renameSync(tmp, file);
 }
 
 function slugTimestamp(date: Date): string {
@@ -416,7 +412,7 @@ export function deleteArchivedEntry(agentIdRaw: string, entryId: string, now = n
 		},
 	};
 	ensureDir(path.dirname(eventRecordPath));
-	fs.writeFileSync(eventRecordPath, JSON.stringify(record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+	writeFileAtomic(eventRecordPath, JSON.stringify(record, null, 2) + "\n");
 
 	return {
 		agentId: files.agentId,
@@ -511,8 +507,9 @@ export function findMemoryEditRecord(agentIdRaw: string, matches: (record: Memor
 }
 
 /**
- * The one write, in this order: the intent (memory-commit.ts), the snapshot, the archive's new rows (a crash then costs a
- * duplicate, never a loss), the core as the commit point, then archive removals, the limit and the event record, which a crash leaves to the next request.
+ * The one write, in this order: the intent (memory-commit.ts), the snapshot, the core as the commit point, then the
+ * archive's new rows and removals, the limit and the event record, which a crash leaves to the next request. The intent
+ * carries the new rows, so a note leaving the core is never in both files and never in neither.
  */
 export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, options: MemoryWriteOptions): MemoryWriteResult {
 	const files = roomFiles(agentIdRaw);
@@ -548,7 +545,7 @@ export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, opt
 		currentL1b,
 		nextL1b,
 		archivedL1bPath,
-		...(options.archiveAppend?.length ? { archiveText: archiveTextWith(archiveBefore, options.archiveAppend, [], now).text } : {}),
+		...(options.archiveAppend?.length ? { archiveAppend: options.archiveAppend.map((append) => ({ ...append, archived: append.archived ?? isoDay(now) })) } : {}),
 		...(options.archiveRemoveIds?.length ? { archiveRemoveIds: [...options.archiveRemoveIds] } : {}),
 		...(options.limitTo !== undefined ? { limitTo: options.limitTo } : {}),
 		plan,
@@ -603,6 +600,8 @@ interface MemoryCommitIntent {
 	l1bSha256: string;
 	archivedL1bRelPath: string;
 	limitTo?: number;
+	/** Archive rows that join the archive after the core landed, each with its own day. */
+	archiveAppend?: MemoryArchiveAppend[];
 	/** Archive rows that leave the archive after the core landed. */
 	archiveRemoveIds?: string[];
 	eventRecordRelPath: string;
@@ -616,16 +615,17 @@ function sha256(text: string): string {
 }
 
 /**
- * The intent, the snapshot, the archive's new rows, the core (the commit point), then the rest. A failure after the core
+ * The intent, the snapshot, the core (the commit point), then the rest. A failure after the core
  * keeps its intent for the next request to finish, so the caller hears that the save landed, which is true.
  */
-function commitMemoryWrite(files: RoomFiles, input: { writeId: string; currentL1b: string; nextL1b: string; archivedL1bPath: string; archiveText?: string; archiveRemoveIds?: string[]; limitTo?: number; plan: MemoryEventRecordPlan }): void {
+function commitMemoryWrite(files: RoomFiles, input: { writeId: string; currentL1b: string; nextL1b: string; archivedL1bPath: string; archiveAppend?: MemoryArchiveAppend[]; archiveRemoveIds?: string[]; limitTo?: number; plan: MemoryEventRecordPlan }): void {
 	const rootDir = files.instance.rootDir;
 	const intent: MemoryCommitIntent = {
 		writeId: input.writeId,
 		l1bSha256: sha256(input.nextL1b),
 		archivedL1bRelPath: files.instance.rootRelativePath(input.archivedL1bPath),
 		...(input.limitTo !== undefined ? { limitTo: input.limitTo } : {}),
+		...(input.archiveAppend?.length ? { archiveAppend: input.archiveAppend } : {}),
 		...(input.archiveRemoveIds?.length ? { archiveRemoveIds: input.archiveRemoveIds } : {}),
 		eventRecordRelPath: files.instance.rootRelativePath(input.plan.eventRecordPath),
 		record: input.plan.record,
@@ -644,8 +644,7 @@ function commitMemoryWrite(files: RoomFiles, input: { writeId: string; currentL1
 	// Synchronous from the intent to its clear: the settle runs outside the save lock, so an await here would let a status request finish or drop this save mid-flight.
 	writeCommitIntent(rootDir, "memory", intent);
 	ensureDir(files.archiveDir);
-	fs.writeFileSync(input.archivedL1bPath, input.currentL1b, { mode: 0o600, flag: "wx" });
-	if (input.archiveText !== undefined) writeFileAtomic(files.archiveEntriesPath, input.archiveText);
+	writeFileAtomic(input.archivedL1bPath, input.currentL1b);
 	writeFileAtomic(files.l1bPath, input.nextL1b);
 	try {
 		finishMemoryCommit(files.agentId, rootDir, intent);
@@ -655,28 +654,34 @@ function commitMemoryWrite(files: RoomFiles, input: { writeId: string; currentL1
 	}
 }
 
+/** The archive's side of a save, safe to run twice. */
+function applyArchiveRows(agentId: string, appends: MemoryArchiveAppend[], removeIds: string[]): void {
+	if (appends.length === 0 && removeIds.length === 0) return;
+	const files = roomFiles(agentId);
+	const before = readArchiveText(files);
+	const held = parseArchive(before);
+	// A row already in: this step ran before.
+	const missing = appends.filter((append) => !held.some((row) => row.id === append.entry.id && row.archived === append.archived && row.why === append.why));
+	let text = archiveTextWith(before, missing, [], new Date()).text;
+	for (const id of removeIds) {
+		const removal = removeFromArchive(text, id);
+		if (removal.entry) text = removal.text; // already out: this step ran before
+	}
+	if (text !== before) writeFileAtomic(files.archiveEntriesPath, text);
+}
+
 /** What follows the core file, each step safe to run twice. */
 function finishMemoryCommit(agentId: string, rootDir: string, intent: MemoryCommitIntent): void {
 	if (intent.earlier) finishMemoryCommit(agentId, rootDir, intent.earlier);
-	if (intent.archiveRemoveIds?.length) {
-		const files = roomFiles(agentId);
-		let text = readArchiveText(files);
-		let removed = false;
-		for (const id of intent.archiveRemoveIds) {
-			const removal = removeFromArchive(text, id);
-			if (!removal.entry) continue; // already out: this step ran before
-			text = removal.text;
-			removed = true;
-		}
-		if (removed) writeFileAtomic(files.archiveEntriesPath, text);
-	}
+	applyArchiveRows(agentId, intent.archiveAppend ?? [], intent.archiveRemoveIds ?? []);
 	if (intent.limitTo !== undefined && readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens !== intent.limitTo) {
 		writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: intent.limitTo });
 	}
 	const eventRecordPath = path.join(rootDir, intent.eventRecordRelPath);
-	if (!fs.existsSync(eventRecordPath)) {
+	// A record a kill cut short before this write was atomic reads as none, and is written whole.
+	if (!readJson(eventRecordPath)) {
 		ensureDir(path.dirname(eventRecordPath));
-		fs.writeFileSync(eventRecordPath, JSON.stringify(intent.record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+		writeFileAtomic(eventRecordPath, JSON.stringify(intent.record, null, 2) + "\n");
 	}
 }
 
@@ -688,11 +693,24 @@ registerCommitSettler("memory", (agentId, rootDir, intent: MemoryCommitIntent) =
 	clearCommitIntent(rootDir, "memory");
 });
 
-/** The newest core that landed is finished with every earlier save it carries; one that did not land leaves its earlier saves to be settled on their own. */
+/** The newest core that landed is finished with every earlier save it carries; any other leaves its earlier saves to be settled on their own. */
 function settleMemoryIntent(agentId: string, rootDir: string, core: string, intent: MemoryCommitIntent): void {
 	if (sha256(core) === intent.l1bSha256) return finishMemoryCommit(agentId, rootDir, intent);
-	fs.rmSync(path.join(rootDir, intent.archivedL1bRelPath), { force: true });
+	const snapshot = path.join(rootDir, intent.archivedL1bRelPath);
+	if (fs.existsSync(snapshot) && fs.readFileSync(snapshot, "utf-8") !== core) settleRowByRow(agentId, core, intent);
+	fs.rmSync(snapshot, { force: true });
 	if (intent.earlier) settleMemoryIntent(agentId, rootDir, core, intent.earlier);
+}
+
+/**
+ * A core that is neither side of its save was changed after the kill, by a person or another writer, so it cannot say
+ * whether the save landed. Each row can: one leaving the core is owed to the archive once its id is gone from the core,
+ * and one coming back leaves the archive only once its id is in the core. No note ends in both files or in neither.
+ * The save's record and limit are dropped, since nothing shows they apply.
+ */
+function settleRowByRow(agentId: string, core: string, intent: MemoryCommitIntent): void {
+	const inCore = new Set(parseMemoryDocument(core).topics.flatMap((topic) => topic.entries.map((entry) => entry.id)));
+	applyArchiveRows(agentId, (intent.archiveAppend ?? []).filter((append) => !inCore.has(append.entry.id)), (intent.archiveRemoveIds ?? []).filter((id) => inCore.has(id)));
 }
 
 export interface MemoryRestoreOptions {

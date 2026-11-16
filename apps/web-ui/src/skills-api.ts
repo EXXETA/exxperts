@@ -66,6 +66,9 @@ export interface SkillCandidate {
 	/** Upload only: checkout token for the bundled files the zip carried. Passed back
 	 *  on accept so those files are vendored next to the SKILL.md. */
 	token?: string;
+	/** Upload only: the author's manual-only mark, passed back on accept so the new
+	 *  SKILL.md keeps it. */
+	disableModelInvocation?: boolean;
 }
 
 export function fetchSkills(): Promise<SkillListItem[]> {
@@ -119,6 +122,7 @@ export function acceptSkillCandidate(candidate: SkillCandidate): Promise<SkillLi
 			instructions: candidate.body,
 			source: candidate.source,
 			license: candidate.license,
+			disableModelInvocation: candidate.disableModelInvocation,
 			...(candidate.token ? { token: candidate.token } : {}),
 		}),
 	});

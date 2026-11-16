@@ -5,6 +5,7 @@ import { App } from "./App";
 import { AppErrorBoundary } from "./components/app-error-boundary";
 import { ConfirmDialogHost } from "./components/confirm-dialog";
 import { KeysList } from "./components/keys-list";
+import { HistoryArrows, installHistoryKeys } from "./history-arrows";
 import { SidebarCollapsedAffordance } from "./sidebar-collapse";
 import { installPhoneViewportTracking } from "./phone-viewport";
 
@@ -24,6 +25,8 @@ installPhoneViewportTracking();
 // A copy inside an answer leaves the page's look behind.
 installAnswerCopy();
 
+installHistoryKeys();
+
 createRoot(document.getElementById("root")!).render(
 	<React.StrictMode>
 		{/* Desktop-only window drag strip (display:none in browsers); a real
@@ -33,8 +36,9 @@ createRoot(document.getElementById("root")!).render(
 		<AppErrorBoundary>
 			<App />
 			{/* After the app: the mac app takes a no-drag box out of the drag area in the
-			    page's order, so a bar that drags and comes later would cover this button. */}
+			    page's order, so a bar that drags and comes later would cover these buttons. */}
 			<SidebarCollapsedAffordance />
+			<HistoryArrows />
 			<ConfirmDialogHost />
 			<KeysList />
 		</AppErrorBoundary>

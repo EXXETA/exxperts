@@ -150,8 +150,9 @@ app.delete("/api/persistent-agents/:id/tasks/:taskId", async (req, reply) => {
 	}
 });
 
-// Store-wide GC (assets contract §4): assessment is read-only; execution
-// deletes exactly the ids the client names, re-verified server-side.
+// Store-wide GC (assets contract §4): assessment deletes nothing of its own,
+// though it settles every room first (room-settle.ts); execution deletes
+// exactly the ids the client names, re-verified server-side.
 app.get("/api/task-store/gc", async () => {
 	return assessTaskStoreGc();
 });

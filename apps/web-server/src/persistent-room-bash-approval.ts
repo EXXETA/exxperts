@@ -2,12 +2,15 @@
  * Per-command bash approval for live Full-access rooms.
  *
  * Bash is the one tool whose blast radius is the whole machine, so a live
- * room session pauses every bash call on an approval card in the chat unless
+ * room session pauses every bash call on a question to the person unless
  * the room has been explicitly told to stop asking (the per-room auto-approve
- * setting, default off). The card rides the existing delegate-approval
- * machinery end to end: `ctx.ui.confirm` → `ui_request`/`ui_response` frames →
- * the web client's Approval card, whose `───` fence chrome renders the
- * model-written command as unverified text.
+ * setting, default off). Where commands run outside the box, auto-approve
+ * holds only while someone can see the room, unless the room is on Auto
+ * without protection: there a turn left running goes on, bounded by the away
+ * limits. Elsewhere a turn left running, or a page closed mid-answer, gets no
+ * command. The question is the bridge's own kind
+ * (`ctx.ui.askRun`): the page's panel draws the command whole in its own box,
+ * as the run-outside question does, so the command that runs is the one shown.
  *
  * Deliberately dependency-light (no imports from index.ts): the guard takes
  * its one live dependency — the current auto-approve answer — as a closure,
@@ -16,7 +19,7 @@
  */
 
 import { isNoShellFoundMessage } from "@exxeta/exxperts-runtime";
-import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "./room-approval-titles.js";
+import type { WebUiContext } from "./web-ui-context.js";
 
 export type PersistentRoomBashApprovalDecision = { allow: true } | { allow: false; reason: string };
 
@@ -24,7 +27,8 @@ export type PersistentRoomBashApprovalDecision = { allow: true } | { allow: fals
 export interface PersistentRoomBashApprovalContext {
 	hasUI?: boolean;
 	cwd?: string;
-	ui?: { confirm(title: string, message: string): Promise<boolean> };
+	/** The live room's WebUiContext: a person leaving detaches it, so `watcher()` turns "none" while `hasUI` stays true. */
+	ui?: Pick<WebUiContext, "askRun" | "watcher">;
 }
 
 export interface PersistentRoomBashApprovalGuard {
@@ -38,48 +42,44 @@ export interface CreatePersistentRoomBashApprovalGuardOptions {
 	 * with no session rebind.
 	 */
 	isAutoApproved: () => boolean;
+	/** Whether this session's commands run in the room's box, as its bind decided. Left out, they don't: a yes then needs someone watching. */
+	boxed?: () => boolean;
+	/** Whether a yes holds with nobody there outside the box too: a room without protection on Auto. Read at each command; left out, it doesn't. */
+	runsWhileAway?: () => boolean;
 }
-
-const COMMAND_PREVIEW_MAX_CHARS = 1_200;
 
 export function createPersistentRoomBashApprovalGuard(options: CreatePersistentRoomBashApprovalGuardOptions): PersistentRoomBashApprovalGuard {
 	return {
 		async beforeBashCall(command: string, ctx: PersistentRoomBashApprovalContext | undefined): Promise<PersistentRoomBashApprovalDecision> {
-			if (options.isAutoApproved()) return { allow: true };
-			if (!ctx?.hasUI) {
-				return { allow: false, reason: "Running commands requires the interactive room UI; there is no user here to approve them." };
+			if (options.isAutoApproved()) {
+				if (options.boxed?.() === true || someoneWatches(ctx) || options.runsWhileAway?.() === true) return { allow: true };
+				return { allow: false, reason: NOBODY_TO_APPROVE_COMMAND };
 			}
-			const commandText = String(command ?? "");
-			const commandPreview = commandText.length > COMMAND_PREVIEW_MAX_CHARS
-				? `${commandText.slice(0, COMMAND_PREVIEW_MAX_CHARS)}\n[command preview clipped]`
-				: commandText;
-			const cwd = typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : null;
-			// A client disconnect mid-card is NOT caught here: the web UI bridge
-			// rejects the pending confirm with its detach message, which surfaces
+			if (!ctx?.hasUI) {
+				return { allow: false, reason: NOBODY_TO_APPROVE_COMMAND };
+			}
+			const folder = typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : null;
+			// A client disconnect mid-question is NOT caught here: the web UI bridge
+			// rejects the pending question with its detach message, which surfaces
 			// as this tool call's error result, and the auto-declined-question log
 			// leaves the transcript system note — the same path every other
 			// detached dialog takes.
-			const approved = await ctx.ui!.confirm(
-				PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE,
-				[
-					...(cwd ? [`Runs in: ${cwd}`] : []),
-					"You can auto-approve bash for this room in Room settings, Folder.",
-					"",
-					// Anti-spoof separator: everything below is the room model's own
-					// text appended after the app-drawn facts above; a command that
-					// mimics those fact lines must not be able to pass as the app
-					// speaking.
-					"─── Command (written by the room's model; the app has not verified it) ───",
-					commandPreview,
-				].join("\n"),
-			);
+			const approved = await ctx.ui!.askRun({ command: String(command ?? ""), folder });
 			if (!approved) {
-				return { allow: false, reason: "The user declined this command. Do not run it or retry variants of it unless the user asks." };
+				return { allow: false, reason: `${COMMAND_DECLINED} Do not run it or retry variants of it unless the user asks.` };
 			}
 			return { allow: true };
 		},
 	};
 }
+
+function someoneWatches(ctx: PersistentRoomBashApprovalContext | undefined): boolean {
+	return ctx?.hasUI === true && typeof ctx.ui?.watcher === "function" && ctx.ui.watcher() !== "none";
+}
+
+/** The refusals the page reads as "not run"; the outside tool's card says them too. */
+export const COMMAND_DECLINED = "The user declined this command.";
+export const NOBODY_TO_APPROVE_COMMAND = "Running commands requires the interactive room UI; there is no user here to approve them.";
 
 // Set on a command's result details once it ran. The runtime gives a
 // refused, a missing and a failed command the same error result, and a
@@ -108,7 +108,7 @@ interface BashApprovalExtensionApi {
  * registered before the one that rewrites that failure's words, so it reads
  * them raw (persistent-room-shell-missing.ts).
  */
-export function createPersistentRoomBashApprovalExtension(guard: PersistentRoomBashApprovalGuard) {
+export function createPersistentRoomBashApprovalExtension(guard: PersistentRoomBashApprovalGuard, started: (toolCallId: string) => boolean = () => true) {
 	return async function persistentRoomBashApproval(pi: BashApprovalExtensionApi) {
 		pi.on("tool_call", async (event: any, ctx: any) => {
 			if (event?.toolName !== "bash") return undefined;
@@ -118,7 +118,9 @@ export function createPersistentRoomBashApprovalExtension(guard: PersistentRoomB
 			return { block: true, reason: decision.reason };
 		});
 		pi.on("tool_result", async (event: any) => {
-			if (event?.toolName !== "bash") return undefined;
+			if (event?.toolName !== "bash" && event?.toolName !== "run_outside_box") return undefined;
+			// Refused before it began: a card's Decline, or a box that didn't start.
+			if (!started(String(event?.toolCallId ?? ""))) return undefined;
 			const content: Array<{ type?: string; text?: string }> = Array.isArray(event.content) ? event.content : [];
 			if (event.isError === true && isNoShellFoundMessage(content.map((part) => (part?.type === "text" ? String(part.text ?? "") : "")).join("\n"))) return undefined;
 			const details = event.details && typeof event.details === "object" ? event.details as Record<string, unknown> : {};

@@ -1,3 +1,4 @@
+import type { QuestionAuthority } from "./web-ui-context.js";
 import type { PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import type { SteerRequest, SteerRouted } from "./steer-route.js";
 import type { ShownPrompt } from "./thread-items-by-id.js";
@@ -73,14 +74,14 @@ type DetachedCookingTurnHandle = {
 	readonly startedAt?: number;
 	/** Record who now owns the room-lock record (an ordinary web-over-web takeover) and how to release it; a previous claimant's release is invoked owner-checked, which only stops its now-pointless heartbeat, and the previous holder, ADOPTER or still-binding CLAIMANT, is told it was displaced through the hook it registered here (an adopter upgrades the hook at adopt time), so no window is ever left silently lock-less. */
 	claim: (connectionId: string, releaseLock: () => void, onDisplaced: () => void) => void;
-	/** Route future turn frames to `sink` and stand the away limits down (somebody is watching again). Returns false for a stale claimant or a settled turn. */
+	/** Route future turn frames to `sink`. Returns false for a stale claimant or a settled turn. */
 	adopt: (connectionId: string, sink: (frame: string) => void, hooks: { onSettled: () => void; onDisplaced: () => void }) => boolean;
-	/** The adopter left (or died) mid-cook: back to detached cooking with the away limits re-armed and frames buffer-only. No-op for a stale claimant. */
+	/** The adopter left (or died) mid-cook: back to detached cooking with the away limits re-armed, unless they still run, and frames buffer-only. No-op for a stale claimant. */
 	redetach: (connectionId: string) => void;
-	/** The adopter is ready for live frames (its replay is done): the turn's questions reach it again, and any still open are asked again there. An adopter that cannot answer (a viewing-only device) leaves them declined as if nobody were in the room. No-op for a stale claimant. */
-	attachQuestions: (connectionId: string, canAnswer: boolean) => void;
+	/** The adopter is ready for live frames (its replay is done): the away limits stand down, and the turn's questions reach it again, and any still open are asked again there. An adopter that cannot answer (a viewing-only device) leaves them declined as if nobody were in the room, and in a room on Auto without protection keeps the away limits running, or starts them again, since it can't stop the turn. No-op for a stale claimant. */
+	attachQuestions: (connectionId: string, canAnswer: boolean, authority: QuestionAuthority) => void;
 	/** The adopter's answer to one of the turn's questions. Ignored from any other connection, so only the window that holds the turn answers. */
-	answerQuestion: (connectionId: string, id: string, value: unknown) => void;
+	answerQuestion: (connectionId: string, id: string, value: unknown, answeredBy: QuestionAuthority) => void;
 	/** Stop the cooking turn through the same cancelling machinery the abort frame uses. Claimant-checked like adopt/redetach: a displaced connection's Stop must never abort the stream the current adopter is watching. `shown`: how much of the answer being written the page had shown; `forNext`: the person's waiting messages stopped it, not their Stop. */
 	stop: (connectionId: string, shown?: number, forNext?: boolean) => Promise<void>;
 	/** Stop after the answer ended, naming the part the page still revealed (`shown`: its characters kept), claimant-checked like stop. */

@@ -1,6 +1,10 @@
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { UsageRow } from "../src/usage-log.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -13,6 +17,8 @@ fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
 process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
 process.env.EXXPERTS_CODING_AGENT_DIR = path.join(tempHome, ".exxperts", "agent");
+process.env.EXXETA_PERSISTENT_AGENTS_ROOT = path.join(tempHome, ".exxperts", "app", "personalized-agents");
+process.env.EXXETA_HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 try {
 	const { appendUsage, loadUsage } = await import("../src/usage-log.js");
@@ -237,6 +243,272 @@ try {
 	const recentKimi = byName.recent.find((r: any) => r.model === "kimi-k2.5");
 	const recentSonnet = byName.recent.find((r: any) => r.model === "eu.anthropic.claude-sonnet-4-5-20250929-v1:0");
 	assert(recentKimi?.modelName === "Kimi K2.5" && recentSonnet?.modelName === "Claude Sonnet 4.5", `a recent turn carries its Wallet model name, got ${recentKimi?.modelName} and ${recentSonnet?.modelName}`);
+
+	// --- a start reads only the session files that changed since they were reconciled ---
+	const reconciledFile = path.join(tempHome, ".exxperts", "app", "usage-reconciled.json");
+	const realRead = fs.readFileSync;
+	let sessionReads: string[] = [];
+	fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+		if (String(file).includes("pi-sessions")) sessionReads.push(path.basename(String(file)));
+		return (realRead as (...args: unknown[]) => unknown)(file, ...rest);
+	}) as typeof fs.readFileSync;
+	const start = () => {
+		sessionReads = [];
+		const result = importHistoricalSessionUsage(agentsRoot, () => {});
+		return { rows: result?.rows, reads: [...sessionReads].sort() };
+	};
+	const everyFile = ["c_failed.jsonl", "c_thread1.jsonl", "cli_thread2.jsonl"];
+	const said = (value: unknown) => JSON.stringify(value);
+	const assistant = (id: string, ts: number, input: number, output: number, cacheRead = 0) => JSON.stringify({ id, parentId: "m1", timestamp: iso(ts), message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "An answer." }], usage: { input, output, cacheRead, cacheWrite: 0, cost: { total: 0.001 } } } }) + "\n";
+	const chatFile = path.join(sessionsDir, "c_thread1.jsonl");
+	const cliFile = path.join(sessionsDir, "cli_thread2.jsonl");
+	const rowsWith = (input: number) => loadUsage().filter((row) => row.input === input);
+	const walletBefore = said((await handlers.get("/api/usage")!({ query: {} })).totals);
+
+	start();
+	const quiet = start();
+	assert(quiet.rows === 0 && quiet.reads.length === 0, `a start with no session file changed reads none, got ${said(quiet)}`);
+	assert(said((await handlers.get("/api/usage")!({ query: {} })).totals) === walletBefore, "the Wallet's totals stay the same across starts on an unchanged ledger");
+
+	// A CLI turn written straight to its session file: that file alone is read, and its row comes back once.
+	fs.appendFileSync(cliFile, assistant("cli-new", now - 1000, 1501, 11));
+	const afterCli = start();
+	assert(afterCli.rows === 1 && said(afterCli.reads) === said(["cli_thread2.jsonl"]), `a changed file is read again, and only that one, got ${said(afterCli)}`);
+	assert(rowsWith(1501).length === 1 && rowsWith(1501)[0].kind === "cli", `the CLI turn reaches the ledger, got ${said(rowsWith(1501))}`);
+	assert(said(start()) === said({ rows: 0, reads: [] }), "a rerun after a CLI turn reads nothing and adds nothing");
+
+	// A chat turn whose row a crash dropped, with the same tokens as a turn another file already accounts for: it has a row of its own.
+	fs.appendFileSync(chatFile, assistant("chat-new", now - 900, 1501, 11));
+	const afterChat = start();
+	assert(afterChat.rows === 1 && said(afterChat.reads) === said(["c_thread1.jsonl"]) && rowsWith(1501).length === 2, `a turn a crash dropped comes back, its tokens matching an older file's turn, got ${said(afterChat)} and ${said(rowsWith(1501))}`);
+	assert(rowsWith(1501).filter((row) => row.kind === "chat").length === 1, "the dropped turn comes back as a chat row");
+	assert(said(start()) === said({ rows: 0, reads: [] }), "a rerun after a dropped turn reads nothing and adds nothing");
+
+	// A live turn with its row on the ledger: its file is read, and nothing is added.
+	fs.appendFileSync(chatFile, assistant("chat-live", now - 800, 1601, 12));
+	appendUsage({ ts: now - 800, agent: "room-a", persona: "business", model: "gpt-5.5", kind: "chat", input: 1601, output: 12, cacheRead: 0, cacheWrite: 0, cost: 0.001 });
+	const afterLive = start();
+	assert(afterLive.rows === 0 && rowsWith(1601).length === 1, `a turn that has its row is not counted again, got ${said(afterLive)}`);
+
+	// --- what records the reconciled state survives a kill ---
+	const whole = realRead(reconciledFile, "utf-8");
+	const ledgerRows = loadUsage().length;
+	for (const [what, damage] of [
+		["missing", () => fs.rmSync(reconciledFile)],
+		["torn", () => fs.writeFileSync(reconciledFile, whole.slice(0, Math.floor(whole.length / 2)))],
+		["empty", () => fs.writeFileSync(reconciledFile, "")],
+		["of another shape", () => fs.writeFileSync(reconciledFile, '{"files":{"room-a/c_thread1.jsonl":{"size":"big"},"room-a/cli_thread2.jsonl":7}}')],
+	] as const) {
+		damage();
+		const reread = start();
+		assert(reread.rows === 0 && said(reread.reads) === said(everyFile) && loadUsage().length === ledgerRows, `a record ${what} means the files are read again and no row is lost or doubled, got ${said(reread)} and ${loadUsage().length} rows`);
+		assert(said(start()) === said({ rows: 0, reads: [] }), `the start after a record ${what} reads nothing`);
+	}
+
+	// A kill after the rows but before the record: the file is read again and its row is not doubled.
+	const beforeTurn = realRead(reconciledFile, "utf-8");
+	fs.appendFileSync(chatFile, assistant("chat-kill", now - 700, 1701, 13));
+	assert(start().rows === 1, "the turn before the kill is imported");
+	fs.writeFileSync(reconciledFile, beforeTurn);
+	const afterKill = start();
+	assert(afterKill.rows === 0 && said(afterKill.reads) === said(["c_thread1.jsonl"]) && rowsWith(1701).length === 1, `a kill before the record doubles nothing, got ${said(afterKill)} and ${said(rowsWith(1701))}`);
+
+	// A kill in the middle of a row: the torn row comes back, and the row written after it is not lost with it.
+	const cleanRecord = realRead(reconciledFile, "utf-8");
+	fs.appendFileSync(chatFile, assistant("chat-torn-1", now - 600, 1801, 14) + assistant("chat-torn-2", now - 500, 1802, 14));
+	assert(start().rows === 2, "the two turns before the kill are imported");
+	fs.writeFileSync(reconciledFile, cleanRecord);
+	fs.truncateSync(ledgerFile, fs.statSync(ledgerFile).size - 25);
+	const afterTorn = start();
+	assert(afterTorn.rows === 1 && rowsWith(1801).length === 1 && rowsWith(1802).length === 1, `a torn row comes back once and its neighbour stays, got ${said(afterTorn)}, ${said(rowsWith(1801))} and ${said(rowsWith(1802))}`);
+	assert(said(start()) === said({ rows: 0, reads: [] }), "the start after a torn row reads nothing and adds nothing");
+
+	// A row that could not be written: the file stays unreconciled, so the next start brings the row back.
+	const realAppend = fs.appendFileSync;
+	fs.appendFileSync(chatFile, assistant("chat-full-disk", now - 400, 1901, 15));
+	fs.appendFileSync = ((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+		if (String(file) === ledgerFile) throw new Error("no space left on the disk");
+		return (realAppend as (...args: unknown[]) => unknown)(file, ...rest);
+	}) as typeof fs.appendFileSync;
+	start();
+	fs.appendFileSync = realAppend;
+	assert(rowsWith(1901).length === 0, "control: the row was not written");
+	const afterFullDisk = start();
+	assert(afterFullDisk.rows === 1 && rowsWith(1901).length === 1, `a row that could not be written comes back at the next start, got ${said(afterFullDisk)}`);
+
+	// A ledger that lost rows the record accounts for: the room's files are read and the rows come back.
+	const ledgerLines = realRead(ledgerFile, "utf-8").split("\n");
+	fs.writeFileSync(ledgerFile, ledgerLines.filter((line) => !line.includes('"input":1701,')).join("\n"));
+	assert(rowsWith(1701).length === 0, "control: the ledger lost the row");
+	const afterLoss = start();
+	assert(afterLoss.rows === 1 && rowsWith(1701).length === 1 && afterLoss.reads.includes("cli_thread2.jsonl") && !afterLoss.reads.includes("c_failed.jsonl"), `a row the ledger lost comes back, reading that room's files alone, got ${said(afterLoss)}`);
+	fs.readFileSync = realRead;
+
+	// --- a scheduled run writes its usage when it ends, and the import never counts it twice ---
+	// The stand-in model: each leg of a run's prompt spends its own tokens and calls a tool nobody has, then the last leg
+	// answers or never ends. The run is cut there, by the time limit or the stop, once the model is seen waiting.
+	const LEG_TOKENS = [{ prompt_tokens: 2100, completion_tokens: 21 }, { prompt_tokens: 2200, completion_tokens: 22 }];
+	let served = 0;
+	let atLastLeg = () => {};
+	const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+	const gateway = http.createServer((req, res) => {
+		let body = "";
+		req.on("data", (chunk) => (body += chunk));
+		req.on("end", () => {
+			const parsed = JSON.parse(body) as { model?: string; messages?: { role?: string; content?: unknown }[] };
+			const asked = JSON.stringify(parsed.messages ?? []);
+			// The legs of this try: a run that runs again holds the first try's tool results before its prompt.
+			const roles = (parsed.messages ?? []).map((message) => message.role);
+			const leg = roles.slice(roles.lastIndexOf("user")).filter((role) => role === "tool").length;
+			const legs = asked.includes("no-tokens") ? 0 : LEG_TOKENS.length;
+			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+			const base = { id: "cmpl", object: "chat.completion.chunk", created: 1, model: String(parsed.model) };
+			const finish = (reason: string, usage: { prompt_tokens: number; completion_tokens: number }) => {
+				res.write(sse({ ...base, choices: [{ index: 0, delta: {}, finish_reason: reason }], usage: { ...usage, total_tokens: usage.prompt_tokens + usage.completion_tokens } }));
+				res.end("data: [DONE]\n\n");
+			};
+			if (leg < legs) {
+				served += 1;
+				res.write(sse({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: `call_${leg}`, type: "function", function: { name: "no_such_tool", arguments: "{}" } }] }, finish_reason: null }] }));
+				return finish("tool_calls", LEG_TOKENS[leg]);
+			}
+			if (asked.includes("finishes")) {
+				served += 1;
+				res.write(sse({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "Done." }, finish_reason: null }] }));
+				return finish("stop", { prompt_tokens: 2300, completion_tokens: 23 });
+			}
+			res.flushHeaders();
+			atLastLeg();
+		});
+	});
+	await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
+	try {
+		const agentDir = process.env.EXXPERTS_CODING_AGENT_DIR!;
+		fs.mkdirSync(agentDir, { recursive: true });
+		fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: { "openai-compatible": { name: "Stand-in", baseUrl: `http://127.0.0.1:${(gateway.address() as AddressInfo).port}/v1`, api: "openai-completions", models: [{ id: "stand-in", name: "Stand-in" }] } } }));
+		fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ "openai-compatible": { type: "api_key", key: "synthetic-key" } }));
+		const appDir = path.join(tempHome, ".exxperts", "app");
+		fs.writeFileSync(path.join(appDir, "openai-compatible-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible", providerId: "openai-compatible", label: "Stand-in", roomModels: [{ modelId: "stand-in" }], maintenanceModel: "stand-in" }));
+		fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible" }));
+		const { createPersistentAgentFromScaffoldInput } = await import("../src/persistent-agents.js");
+		const { addPersistentRoomScheduleJob } = await import("../../../pi-package/extensions/schedule-prompt/index.js");
+		const { createScheduledPromptBackgroundRunPreflight } = await import("../src/scheduled-prompt-runs.js");
+		const { processScheduledPromptBackgroundRunExecutionOnce } = await import("../src/scheduled-prompt-background-execution.js");
+		const { readBackgroundRun, updateBackgroundRunStatus } = await import("../src/background-runs.js");
+		const { installServerStop } = await import("../src/server-stop.js");
+		const baseNow = new Date("2026-01-01T00:00:00.000Z");
+		const dueNow = new Date("2026-01-01T01:00:00.000Z");
+		const makeRun = (name: string, prompt: string) => {
+			const roomId = String(createPersistentAgentFromScaffoldInput({ displayName: name, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId);
+			const job = addPersistentRoomScheduleJob(roomId, { name, type: "once", schedule: "+30m", prompt, now: baseNow });
+			return { roomId, runId: createScheduledPromptBackgroundRunPreflight({ roomId, scheduleJobId: job.id, dueAt: String(job.nextRunAt), now: baseNow }).run.runId };
+		};
+		const tick = (options: Record<string, unknown> = {}) => processScheduledPromptBackgroundRunExecutionOnce({ workerId: "scheduler-execution:usage-ledger", now: dueNow, limit: 1, leaseMs: 60_000, heartbeatMs: 1_000, ...options });
+		// The limit's timer is fired by hand once the model is seen waiting, so the row does not race the run's start.
+		const LIMIT_MS = 987_654;
+		const cutByLimit = async (options: Record<string, unknown> = {}) => {
+			const realTimeout = globalThis.setTimeout;
+			let fireLimit = () => {};
+			globalThis.setTimeout = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+				if (ms === LIMIT_MS) fireLimit = fn;
+				return (realTimeout as (...args: unknown[]) => NodeJS.Timeout)(fn, ms, ...rest);
+			}) as typeof setTimeout;
+			atLastLeg = () => fireLimit();
+			try {
+				return await tick({ runLimitMs: LIMIT_MS, ...options });
+			} finally {
+				globalThis.setTimeout = realTimeout;
+			}
+		};
+		const roomRows = (roomId: string) => loadUsage().filter((row) => row.agent === roomId);
+		const tokens = (rows: { input: number; output: number }[]) => rows.reduce((sum, row) => sum + row.input + row.output, 0);
+		const LEG_SUM = LEG_TOKENS.reduce((sum, leg) => sum + leg.prompt_tokens + leg.completion_tokens, 0);
+		const quietStart = () => importHistoricalSessionUsage(agentsRoot, () => {});
+
+		// A finished run of several messages: one row, and the next import adds nothing beside it.
+		const finished = makeRun("Finished Run", "finishes after two tool calls");
+		const finishedTick = await tick();
+		assert(finishedTick.counts.succeeded === 1, `the run finishes, got ${said(finishedTick)}`);
+		const finishedRow = roomRows(finished.roomId);
+		assert(finishedRow.length === 1 && finishedRow[0].runId === finished.runId && finishedRow[0].input === 6600, `a finished run writes one row of all its messages, got ${said(finishedRow)}`);
+		quietStart();
+		assert(said(roomRows(finished.roomId)) === said(finishedRow), `the import adds nothing beside a finished run's row, got ${said(roomRows(finished.roomId))}`);
+
+		// Cut by the time limit: the row is there when the run ends, and the import counts nothing again.
+		const limited = makeRun("Limited Run", "runs until it is cut");
+		const limitTick = await cutByLimit();
+		assert(limitTick.processed[0]?.finalStatus === "failed" && limitTick.processed[0]?.reason === "time_limit", `the limit ends the run, got ${said(limitTick.processed)}`);
+		const limitRows = roomRows(limited.roomId);
+		assert(limitRows.length === 1 && limitRows[0].kind === "scheduled" && limitRows[0].runId === limited.runId && tokens(limitRows) === LEG_SUM && limitRows[0].model === "stand-in" && limitRows[0].provider === "openai-compatible", `a run cut by the limit writes its usage when it ends, got ${said(limitRows)}`);
+		quietStart();
+		assert(said(roomRows(limited.roomId)) === said(limitRows), `the next import never bills a cut run twice, got ${said(roomRows(limited.roomId))}`);
+
+		// The same run again, cut again: its one row stays, and what the second try spent is counted once, by the import.
+		const servedBefore = served;
+		const limitRecord = readBackgroundRun(limited.runId);
+		updateBackgroundRunStatus(limited.runId, "deferred", { reason: "lease_expired", target: limitRecord.target, artifacts: limitRecord.artifacts, now: dueNow });
+		await cutByLimit({ now: new Date(dueNow.getTime() + 60_000) });
+		assert(served === servedBefore + LEG_TOKENS.length, `control: the run ran again, served ${served - servedBefore} legs`);
+		assert(roomRows(limited.roomId).filter((row) => row.runId === limited.runId).length === 1, `a re-run never writes the run's row twice, got ${said(roomRows(limited.roomId))}`);
+		quietStart();
+		quietStart();
+		assert(tokens(roomRows(limited.roomId)) === 2 * LEG_SUM, `each try is billed once, got ${said(roomRows(limited.roomId))}`);
+
+		// Cut before the model moved a token: no row, then or at the next import.
+		const empty = makeRun("Empty Cut Run", "no-tokens: runs until it is cut");
+		const emptyTick = await cutByLimit();
+		assert(emptyTick.processed[0]?.reason === "time_limit", `the limit ends the empty run, got ${said(emptyTick.processed)}`);
+		assert(roomRows(empty.roomId).length === 0, `a cut run with no tokens moved writes no row, got ${said(roomRows(empty.roomId))}`);
+		quietStart();
+		assert(roomRows(empty.roomId).length === 0, `nor does the next import, got ${said(roomRows(empty.roomId))}`);
+
+		// Cut by a server stop, in this process as index.ts installs it, while something the cut cannot reach (a tool's slow
+		// page) holds the turn past the stop's ceiling, so the server exits first. Last, since the stop stays installed.
+		const stopped = makeRun("Stopped Run", "runs until the server stops");
+		let ticking = true;
+		let rowsAtExit: UsageRow[] | undefined;
+		const realExit = process.exit;
+		const runtime = (await import("@exxeta/exxperts-runtime")) as unknown as { AgentSession: { prototype: { prompt: (this: unknown, text: string, options?: unknown) => Promise<void> } } };
+		const realPrompt = runtime.AgentSession.prototype.prompt;
+		let letGo = () => {};
+		const held = new Promise<void>((resolve) => { letGo = resolve; });
+		runtime.AgentSession.prototype.prompt = async function (this: unknown, text: string, options?: unknown) {
+			await realPrompt.call(this, text, options);
+			await held;
+		};
+		process.exit = (() => {
+			process.emit("exit", 0);
+			rowsAtExit = roomRows(stopped.roomId);
+			letGo();
+		}) as typeof process.exit;
+		try {
+			installServerStop({
+				app: { close: async () => {}, server: { closeAllConnections: () => {} } } as unknown as Parameters<typeof installServerStop>[0]["app"],
+				sharedServer: false,
+				waitSeconds: () => 0,
+				turnsRunning: () => 0,
+				specialistTasksRunning: () => 0,
+				abortSpecialistTasks: () => {},
+				schedulerTickRunning: () => ticking,
+				stopLoops: () => {},
+			});
+			atLastLeg = () => process.emit("SIGTERM", "SIGTERM");
+			const stopTick = await tick();
+			ticking = false;
+			assert(rowsAtExit?.length === 1 && rowsAtExit[0].runId === stopped.runId && tokens(rowsAtExit) === LEG_SUM, `a run cut by a server stop has its row in the ledger when the server exits, got ${said(rowsAtExit)}`);
+			// Let go after the exit, the run still ends as the stop's, and nothing writes its usage again.
+			assert(stopTick.processed[0]?.finalStatus === "cancelled" && stopTick.processed[0]?.reason === "server_stopped", `the stop ends the run, got ${said(stopTick.processed)}`);
+			assert(said(roomRows(stopped.roomId)) === said(rowsAtExit), `the run's end writes no second row, got ${said(roomRows(stopped.roomId))}`);
+			quietStart();
+			assert(said(roomRows(stopped.roomId)) === said(rowsAtExit), `the next import never bills a stopped run twice, got ${said(roomRows(stopped.roomId))}`);
+		} finally {
+			process.exit = realExit;
+			runtime.AgentSession.prototype.prompt = realPrompt;
+		}
+	} finally {
+		(gateway as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
+		gateway.close();
+	}
 
 	console.log("usage ledger smoke passed");
 } finally {

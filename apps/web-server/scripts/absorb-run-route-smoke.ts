@@ -23,7 +23,8 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
+import { formatMaintenanceDraftError } from "../../web-ui/src/maintenance-errors.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, waitForServer } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "absorb-run-route-home-"));
@@ -107,6 +108,8 @@ const gatewayCalls: GatewayCall[] = [];
 let roomModelFoldsBeforeDown = Number.POSITIVE_INFINITY;
 // While set, fold calls wait for it before they answer.
 let foldsHeld: Promise<void> | null = null;
+// While set, a room's own turn waits for it before its model answers, so the turn stays in flight.
+let turnsHeld: Promise<void> | null = null;
 
 /** The prompt as the worker sent it, whatever shape the request wraps it in. */
 function promptTextOf(rawBody: string): string {
@@ -234,7 +237,7 @@ const gateway = http.createServer((req, res) => {
 		const base = { id: `cmpl_${gatewayCalls.length}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "room-model" };
 		// A fold call answers once the smoke lets folds go: the run must still be
 		// open when the smoke asks for a second one.
-		void (isFold && foldsHeld ? foldsHeld : Promise.resolve()).then(() => {
+		void ((isFold ? foldsHeld : kind === "other" ? turnsHeld : null) ?? Promise.resolve()).then(() => {
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }));
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { content: text }, finish_reason: null }] }));
@@ -302,6 +305,7 @@ async function settle(runUrl: string, label: string): Promise<any> {
 }
 
 let server: ChildProcessWithoutNullStreams | null = null;
+let busySocket: any = null;
 const serverOutput: string[] = [];
 const startedAt = Date.now();
 
@@ -586,6 +590,54 @@ try {
 	const savedRun = await requestJson(resumeRunUrl);
 	assert(savedRun.body.state === "saved" && !savedRun.body.stop, `a saved run offers no Try again, got ${JSON.stringify({ state: savedRun.body.state, stop: savedRun.body.stop })}`);
 
+	// --- 10. A turn in the room refuses the start the page sends ----------------
+	// Section 9 left the room model down; here it answers, or the turn would end at once.
+	roomModelFoldsBeforeDown = Number.POSITIVE_INFINITY;
+	const busyCreated = await requestJson("/api/persistent-agents", jsonBody("POST", { displayName: "Memorize Busy Smoke Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }));
+	const busyRoomId = String(busyCreated.body?.agent?.id ?? "");
+	assert(busyCreated.status === 201 && busyRoomId, `the busy room should be created, got ${busyCreated.status}: ${JSON.stringify(busyCreated.body)}`);
+	const busyRoom = `/api/persistent-agents/${busyRoomId}`;
+	fs.writeFileSync(path.join(agentsRoot, busyRoomId, "L1b", "current.md"), fixtureL1b(busyRoomId), { mode: 0o600 });
+	const conversationId = "smokeconv_busy_memorize";
+	const seeded = await requestJson(`${busyRoom}/threads/${conversationId}`, jsonBody("PUT", { state: "active", origin: "launcher", model: { provider: "openai-compatible", model: "room-model" }, items: [] }));
+	assert(seeded.status === 200, `seeding the busy room's conversation should return 200, got ${seeded.status}: ${JSON.stringify(seeded.body)}`);
+	const roomInFlight = async (): Promise<boolean> => {
+		const statuses = (await requestJson("/api/persistent-agents")).body;
+		const rows = statuses?.agents ?? statuses ?? [];
+		return (Array.isArray(rows) ? rows : []).find((row: any) => row.id === busyRoomId)?.activeThread?.inFlight === true;
+	};
+	let releaseTurn = () => {};
+	turnsHeld = new Promise<void>((resolve) => { releaseTurn = resolve; });
+	const WebSocketImpl: any = (await import("ws")).default;
+	busySocket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${busyRoomId}&conversationId=${conversationId}&modelProvider=openai-compatible&model=room-model&reattach=1`, { headers: { ...SMOKE_AUTH_HEADERS } });
+	const busyFrames: any[] = [];
+	busySocket.on("message", (data: unknown) => { try { busyFrames.push(JSON.parse(String(data))); } catch {} });
+	await waitUntil(() => busyFrames.some((frame) => frame?.type === "ready"), "the busy room's socket is ready");
+	busySocket.send(JSON.stringify({ type: "prompt", text: "Tell me about the renewal." }));
+	await waitUntil(roomInFlight, "the busy room reports a turn in flight");
+
+	const busyKeptDiscussion = path.join(agentsRoot, busyRoomId, "runtime", "memorize-discussion.json");
+	const keptWhileBusy = JSON.stringify({ read: { assessmentMarkdown } });
+	fs.writeFileSync(busyKeptDiscussion, keptWhileBusy);
+	const foldsBeforeBusyStart = gatewayCalls.filter((call) => call.kind === "fold").length;
+	const busyStart = await requestJson(`${busyRoom}/absorb/propose`, jsonBody("POST", { assessmentMarkdown }));
+	const BUSY_SENTENCE = "This room is in the middle of a turn. Wait for it to finish, then change the memory.";
+	assert(busyStart.status === 400 && busyStart.body?.code === "memory_room_busy" && busyStart.body?.error === BUSY_SENTENCE, `a start during a turn gets the room's own refusal, got ${busyStart.status}: ${JSON.stringify(busyStart.body)}`);
+	assert(fs.readFileSync(busyKeptDiscussion, "utf-8") === keptWhileBusy, "a refused start leaves the kept first read and discussion as they were");
+	assert(!fs.existsSync(path.join(agentsRoot, busyRoomId, "runtime", "memorize-run.json")) && gatewayCalls.filter((call) => call.kind === "fold").length === foldsBeforeBusyStart, "a refused start creates no run and reads nothing");
+	// What the page shows for that answer, and for an answer it has no words for.
+	assert(formatMaintenanceDraftError(busyStart.body.error) === BUSY_SENTENCE, `the page shows the refusal's own sentence, got ${JSON.stringify(formatMaintenanceDraftError(busyStart.body.error))}`);
+	assert(formatMaintenanceDraftError("Something nobody planned for happened.") === "This step could not finish. No memory was updated. Try again.", "any other failure keeps the page's general line");
+
+	turnsHeld = null;
+	releaseTurn();
+	await waitUntil(async () => !(await roomInFlight()), "the busy room's turn ends");
+	assert(JSON.stringify(busyFrames).includes("Nothing to do here."), `the turn the refusal waited on was answered, not failed, got ${JSON.stringify(busyFrames.slice(-5))}`);
+	const startAfterTurn = await requestJson(`${busyRoom}/absorb/propose`, jsonBody("POST", { assessmentMarkdown }));
+	assert(startAfterTurn.status === 202 && typeof startAfterTurn.body?.runId === "string", `once the turn has ended the same start works, got ${startAfterTurn.status}: ${JSON.stringify(startAfterTurn.body)}`);
+	const runAfterTurn = await settle(`${busyRoom}/absorb/runs/${startAfterTurn.body.runId}`, "the run started after the turn");
+	assert(runAfterTurn.state === "ready" && !runAfterTurn.stop && outcomes(runAfterTurn).length === 5 && outcomes(runAfterTurn).every((outcome: string) => outcome === "folded"), `the run started after the turn reads its pages, got ${JSON.stringify({ state: runAfterTurn.state, stop: runAfterTurn.stop, outcomes: outcomes(runAfterTurn) })}`);
+
 	console.log(`absorb-run-route-smoke: OK (${Math.round((Date.now() - startedAt) / 1000)}s, ${gatewayCalls.length} model calls)`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack || error.message : error);
@@ -594,6 +646,7 @@ try {
 	console.error(serverOutput.slice(-40).join(""));
 	process.exitCode = 1;
 } finally {
+	try { busySocket?.close(); } catch {}
 	await stopSmokeServer(server);
 	gateway.close();
 	if (process.exitCode !== 1) fs.rmSync(tempHome, { recursive: true, force: true });

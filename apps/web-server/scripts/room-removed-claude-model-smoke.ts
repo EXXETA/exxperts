@@ -14,7 +14,10 @@
 // - a scheduled run in that room is refused with the room's code;
 // - AI setup's default set to it says it is no longer offered.
 // The rest of the removed models are checked to be off the list and still in
-// the catalogue.
+// the catalogue. Fable 5 left the list later; the same three cases are
+// checked for it: a conversation started on it keeps answering, a room set
+// on it refuses a new one with the sentence, and a scheduled task there
+// waits with its line in the Scheduled tasks pane and is checked again.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -24,7 +27,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -64,8 +67,10 @@ process.env.USERPROFILE = tempHome;
 process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 
-const REMOVED_IDS = ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
+const REMOVED_IDS = ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5"];
 const REMOVED = { provider: "anthropic", model: "claude-opus-4-8" };
+const FABLE_5 = { provider: "anthropic", model: "claude-fable-5" };
+const FABLE_5_SENTENCE = "This room's model, Claude Fable 5, is no longer offered. Choose another model in Room settings, Model.";
 const CURRENT = { provider: "anthropic", model: "claude-opus-5-5" };
 const requests: string[] = [];
 
@@ -138,29 +143,47 @@ try {
 
 	// A room set on the removed model, with a conversation started on it as an
 	// earlier build wrote it: a standby thread with a real turn.
-	function roomOnRemovedModel(displayName: string, conversationId?: string): string {
+	function roomOnRemovedModel(displayName: string, conversationId?: string, removed = REMOVED): string {
 		const agentId = agents.createPersistentAgentFromScaffoldInput({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
-		roomModels.writeRoomModels(agentId, { conversation: REMOVED, memory: REMOVED });
+		roomModels.writeRoomModels(agentId, { conversation: removed, memory: removed });
 		if (conversationId) {
-			const created = agents.writePersistentAgentThread(agentId, conversationId, { state: "standby", origin: "home", model: REMOVED, items: [{ kind: "user", id: "u1", text: "Earlier question." }, { kind: "assistant", id: "a1", text: "Earlier answer." }] }, {
+			const created = agents.writePersistentAgentThread(agentId, conversationId, { state: "standby", origin: "home", model: removed, items: [{ kind: "user", id: "u1", text: "Earlier question." }, { kind: "assistant", id: "a1", text: "Earlier answer." }] }, {
 				createRuntime: ({ model }) => agents.createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: conversationId, model, cwd: threadCwd }),
 				allowInactiveProfileModel: true,
 			});
 			const seed = agents.openPersistentAgentPiSessionManager(agentId, created.thread.runtime as any, threadCwd);
 			seed.appendMessage({ role: "user", content: [{ type: "text", text: "Earlier question." }], timestamp: Date.now() } as any);
-			seed.appendMessage({ role: "assistant", content: [{ type: "text", text: "Earlier answer." }], api: "anthropic-messages", provider: REMOVED.provider, model: REMOVED.model, usage, stopReason: "stop", timestamp: Date.now() } as any);
+			seed.appendMessage({ role: "assistant", content: [{ type: "text", text: "Earlier answer." }], api: "anthropic-messages", provider: removed.provider, model: removed.model, usage, stopReason: "stop", timestamp: Date.now() } as any);
 		}
 		return agentId;
 	}
 	const startedRoom = roomOnRemovedModel("Started On Opus 4.8", "c_started_on_removed");
 	const emptyRoom = roomOnRemovedModel("Empty On Opus 4.8");
 	const rememberRoom = roomOnRemovedModel("Remembered On Opus 4.8", "c_remember_on_removed");
+	const fableStartedRoom = roomOnRemovedModel("Started On Fable 5", "c_started_on_fable_5", FABLE_5);
+	const fableEmptyRoom = roomOnRemovedModel("Empty On Fable 5", undefined, FABLE_5);
 
 	// --- A scheduled run in a room set on it ------------------------------------------------
 	let scheduled: unknown = null;
 	try { roomModels.resolveScheduledRoomModel(startedRoom); } catch (error) { scheduled = error; }
 	assert(scheduled instanceof roomModels.RoomModelUnavailableError && scheduled.code === "room_model_unavailable", `a scheduled run is refused with the room's code, got ${String(scheduled)}`);
 	pass("a scheduled run in a room set on Opus 4.8 is refused");
+
+	// A scheduled task in a room set on Fable 5 never runs on another model:
+	// its run waits, the room's Scheduled tasks pane says why, and the run is
+	// checked again.
+	const { addPersistentRoomScheduleJob } = await import("../../../pi-package/extensions/schedule-prompt/index.js");
+	const { createScheduledPromptBackgroundRunPreflight } = await import("../src/scheduled-prompt-runs.js");
+	const { reviveTransientlyBlockedBackgroundRuns } = await import("../src/background-runs.js");
+	const { formatFriendlyRunReason } = await import("../../web-ui/src/scheduled-run-reason.js");
+	const scheduledAt = new Date();
+	const fableJob = addPersistentRoomScheduleJob(fableEmptyRoom, { name: "Weekly summary", type: "once", schedule: "+30m", prompt: "Summarize the week.", now: scheduledAt });
+	const fableRun = createScheduledPromptBackgroundRunPreflight({ roomId: fableEmptyRoom, scheduleJobId: fableJob.id, dueAt: scheduledAt.toISOString(), now: scheduledAt }).run;
+	assert(fableRun.status === "blocked" && fableRun.reason === "model_policy_unavailable" && fableRun.message === FABLE_5_SENTENCE, `a scheduled run in a room set on Fable 5 waits with the sentence, got ${JSON.stringify({ status: fableRun.status, reason: fableRun.reason, message: fableRun.message })}`);
+	assert(formatFriendlyRunReason(fableRun as any) === "This room's model cannot run. See Room settings, Model.", `the Scheduled tasks pane says why, got ${JSON.stringify(formatFriendlyRunReason(fableRun as any))}`);
+	const revived = reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now: new Date(scheduledAt.getTime() + 5 * 60_000), limit: 100 });
+	assert(revived.some((run) => run.runId === fableRun.runId && run.status === "deferred"), `the waiting run is checked again, got ${JSON.stringify(revived.map((run) => [run.runId, run.status]))}`);
+	pass("a scheduled task in a room set on Fable 5 waits with its line in the pane, and is checked again");
 
 	// --- The list and the catalogue ------------------------------------------------------------
 	const { getModel } = await import("@exxeta/exxperts-ai");
@@ -169,7 +192,7 @@ try {
 		assert(!roomModels.isRoomModelOffered({ provider: "anthropic", model: id }, "conversation"), `${id} is offered to no new conversation`);
 		assert(getModel("anthropic" as any, id as any)?.id === id, `${id} keeps its catalogue row, so a conversation on it still runs`);
 	}
-	pass("the five Claude 4 models are off the list and keep their catalogue rows");
+	pass("the five Claude 4 models and Fable 5 are off the list and keep their catalogue rows");
 
 	// --- Remember leaves an empty conversation on the old lock ----------------------------
 	// Approval never invokes a model; with the room's pick unable to run, the
@@ -202,6 +225,11 @@ try {
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
 	await waitUntil(() => fetch(`${baseUrl}/healthz`).then((r) => r.ok).catch(() => false), "server ready");
+
+	// A new conversation in a room set on Fable 5 is refused with the sentence.
+	const fableNew = await api(`/api/persistent-agents/${fableEmptyRoom}/threads/c_new_on_fable_5`, { method: "PUT", body: { state: "active", origin: "launcher", items: [] } });
+	assert(fableNew.status === 409 && fableNew.body?.code === "room_model_unavailable" && fableNew.body.error === FABLE_5_SENTENCE, `a room set on Fable 5 refuses a new conversation with the sentence, got ${fableNew.status} ${JSON.stringify(fableNew.body)}`);
+	pass("a room set on Fable 5 refuses a new conversation with the sentence");
 
 	const afterRememberBind = await firstSessionFrame(rememberRoom, afterRemember);
 	assert(afterRememberBind.type === "error" && afterRememberBind.code === "room_model_unavailable", `the empty conversation after Remember waits with the room instead of binding on the old lock, got ${JSON.stringify(afterRememberBind)}`);
@@ -246,12 +274,32 @@ try {
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
 		await composer.fill("Still there?");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from claude-opus-4-8.").waitFor({ timeout: 20000 });
 		assert(requests[requests.length - 1] === REMOVED.model, `the turn ran on the conversation's own lock, got ${JSON.stringify(requests)}`);
 		assert((await page.locator(".room-model-notice").count()) === 0, "a started conversation shows no notice");
 		assert((await page.getByText("Earlier answer.").count()) === 1, "the earlier turn is still there");
 		pass("a conversation started on Opus 4.8 keeps its lock and keeps answering");
+
+		// --- A conversation started on Fable 5 keeps answering, and Home names the room's way out ---
+		await page.goto(`${baseUrl}/`);
+		await page.waitForLoadState("networkidle");
+		const fableCard = page.locator(".persistent-agent-card").filter({ hasText: "Empty On Fable 5" });
+		const fableEnter = fableCard.getByRole("button", { name: "Enter" });
+		await fableEnter.waitFor({ timeout: 15000 });
+		assert(await fableEnter.isDisabled(), "Enter waits while the room's model, Fable 5, cannot run");
+		assert(await fableEnter.getAttribute("title") === FABLE_5_SENTENCE, `Enter's title carries the sentence, got ${JSON.stringify(await fableEnter.getAttribute("title"))}`);
+		await page.locator(".persistent-agent-card").filter({ hasText: "Started On Fable 5" }).getByRole("button", { name: "Resume" }).click();
+		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
+		// The conversation has loaded once its earlier turn shows: a draft typed before that could be replaced.
+		await page.getByText("Earlier answer.").first().waitFor({ timeout: 15000 });
+		await composer.fill("Still there on Fable 5?");
+		await sendFromBox(page);
+		await page.getByText("Answer from claude-fable-5.").waitFor({ timeout: 20000 });
+		assert(requests[requests.length - 1] === FABLE_5.model, `the turn ran on Fable 5, the conversation's own lock, got ${JSON.stringify(requests)}`);
+		assert((await page.locator(".room-model-notice").count()) === 0, "a conversation started on Fable 5 shows no notice");
+		assert((await api(`/api/persistent-agents/${fableStartedRoom}/threads/c_started_on_fable_5`)).body?.thread?.model?.model === FABLE_5.model, "the conversation keeps its Fable 5 lock");
+		pass("a conversation started on Fable 5 keeps its lock and keeps answering; Home's Enter for a room set on it carries the sentence");
 
 		// --- The empty conversation a Remember left, in a room set on it ----------------------
 		const banner = page.locator(".room-model-notice");
@@ -285,7 +333,7 @@ try {
 		assert((await composer.inputValue()) === "A draft written while the room waits.", `the draft is kept, got ${JSON.stringify(await composer.inputValue())}`);
 		await page.waitForTimeout(800);
 		assert(await connectedAgain() === 0, `a model picked from the notice brings no "Connected again.", it showed ${await connectedAgain()} time(s)`);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from claude-opus-5-5.").waitFor({ timeout: 20000 });
 		assert(requests[requests.length - 1] === CURRENT.model, `the conversation runs on the new pick, got ${JSON.stringify(requests)}`);
 		assert((await api(`/api/persistent-agents/${rememberRoom}/threads/c_remember_on_removed`)).body?.thread?.model?.model === REMOVED.model, "the remembered conversation keeps its lock");
@@ -312,7 +360,7 @@ try {
 		assert(requests.length === requestsBefore, "nothing ran while the room waited");
 		await page.waitForTimeout(800);
 		await composer.fill("Hello.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await page.getByText("Answer from claude-opus-5-5.").waitFor({ timeout: 20000 });
 		assert(requests[requests.length - 1] === CURRENT.model, `the new conversation runs on the new pick, got ${JSON.stringify(requests)}`);
 		const started = await api(`/api/persistent-agents/${startedRoom}/threads/c_started_on_removed`);

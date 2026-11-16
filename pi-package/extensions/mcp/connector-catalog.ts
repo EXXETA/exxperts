@@ -3,9 +3,9 @@
  * the actual server (an MCP endpoint answers an initialize POST with 200, or
  * 401 when it wants OAuth/token auth) — keep it that way when adding entries.
  *
- * Order is the display order on both surfaces (web directory grid and the
- * CLI add view): most popular / highest value-add first, entries that need
- * manual setup last, so they sit next to the custom-connector card.
+ * Order is the display order of the directory on the Connectors page: most
+ * popular / highest value-add first, entries that need manual setup last, so
+ * they sit next to the custom-connector card.
  *
  * kind:
  * - "open"         — works immediately, no login
@@ -27,9 +27,9 @@ export interface ConnectorCatalogEntry {
 	url?: string;
 	tokenHint?: string;
 	docsUrl?: string;
-	/** One short line shown on the directory card. Keep it to a sentence. */
+	/** Shown on the directory card under its description: what it needs to connect, two short sentences at most. */
 	shortNote?: string;
-	/** Full setup instructions, shown in the add form (web) and the detail/prompt view (CLI). */
+	/** Full setup instructions, shown in the add form. */
 	guideNote?: string;
 }
 
@@ -55,7 +55,7 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		name: "Atlassian",
 		description: "Jira issues and Confluence pages from your Atlassian sites.",
 		kind: "oauth",
-		url: "https://mcp.atlassian.com/v1/sse",
+		url: "https://mcp.atlassian.com/v2/mcp",
 	},
 	{
 		id: "linear",
@@ -93,13 +93,6 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		url: "https://mcp.canva.com/mcp",
 	},
 	{
-		id: "asana",
-		name: "Asana",
-		description: "Coordinate tasks, projects, and goals in Asana.",
-		kind: "oauth",
-		url: "https://mcp.asana.com/sse",
-	},
-	{
 		id: "sentry",
 		name: "Sentry",
 		description: "Query errors and performance issues from Sentry.",
@@ -119,7 +112,7 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		description: "CRM context: contacts, companies, and deals.",
 		kind: "oauth-client",
 		url: "https://mcp.hubspot.com",
-		shortNote: "Needs an OAuth app from your HubSpot developer settings; the form walks you through it.",
+		shortNote: "Needs your own HubSpot app; the form walks you through it.",
 		guideNote:
 			"HubSpot has no automatic client registration. In HubSpot, go to Development, then MCP Auth Apps, create an app with redirect URL http://localhost:19876/callback, and paste its client ID and secret here. Grant the CRM read scopes on the consent screen when you log in.",
 		docsUrl: "https://developers.hubspot.com/mcp",
@@ -133,14 +126,25 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 	},
 	// Guided — need own credentials/tenant setup; kept last, next to Custom.
 	{
+		id: "asana",
+		name: "Asana",
+		description: "Coordinate tasks, projects, and goals in Asana.",
+		kind: "oauth-client",
+		url: "https://mcp.asana.com/v2/mcp",
+		shortNote: "Needs your own Asana app; the form walks you through it.",
+		guideNote:
+			"Asana has no one-click login here. Go to https://app.asana.com/0/my-apps, create an MCP app, add the redirect URL http://localhost:19876/callback under OAuth, choose your workspaces under Manage distribution, and paste its client ID and secret here.",
+		docsUrl: "https://developers.asana.com/docs/integrating-with-asanas-mcp-server",
+	},
+	{
 		id: "google-drive",
 		name: "Google Drive",
 		description: "Search, read, and organize files in your Drive.",
 		kind: "oauth-client",
 		url: "https://drivemcp.googleapis.com/mcp/v1",
-		shortNote: "Needs your own Google Cloud OAuth client; Google previews this server to enrolled accounts.",
+		shortNote: "Needs your own Google Cloud app; the form walks you through it. Only accounts in Google's preview program can use it.",
 		guideNote:
-			"Create an OAuth client in Google Cloud (redirect URL http://localhost:19876/callback) and enable the Drive MCP API in the same project, then paste the client ID and secret here. Google currently gates tool calls behind its Workspace Developer Preview Program.",
+			"Create an OAuth client in Google Cloud (redirect URL http://localhost:19876/callback), select “Use this client for an AI-powered agent” on it, and enable the Drive MCP API in the same project, then paste the client ID and secret here. Google currently gates tool calls behind its Workspace Developer Preview Program.",
 		docsUrl: "https://developers.google.com/workspace/drive/api/guides/configure-mcp-server",
 	},
 	{
@@ -149,9 +153,9 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		description: "Search threads, draft replies, and manage labels.",
 		kind: "oauth-client",
 		url: "https://gmailmcp.googleapis.com/mcp/v1",
-		shortNote: "Needs your own Google Cloud OAuth client; Google previews this server to enrolled accounts.",
+		shortNote: "Needs your own Google Cloud app; the form walks you through it. Only accounts in Google's preview program can use it.",
 		guideNote:
-			"Create an OAuth client in Google Cloud (redirect URL http://localhost:19876/callback) and enable the Gmail MCP API in the same project, then paste the client ID and secret here. Google currently gates tool calls behind its Workspace Developer Preview Program.",
+			"Create an OAuth client in Google Cloud (redirect URL http://localhost:19876/callback), select “Use this client for an AI-powered agent” on it, and enable the Gmail MCP API in the same project, then paste the client ID and secret here. Google currently gates tool calls behind its Workspace Developer Preview Program.",
 		docsUrl: "https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server",
 	},
 	{
@@ -159,7 +163,7 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		name: "Microsoft 365",
 		description: "Teams, SharePoint, OneDrive, and Outlook (Work IQ, preview).",
 		kind: "guided",
-		shortNote: "Per-tenant: needs Entra setup by your admin.",
+		shortNote: "Your organisation's Microsoft 365 admin has to set this up first.",
 		guideNote: "Per-tenant: needs Entra setup by your admin. See the guide, then add it as a custom connector.",
 		docsUrl: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview",
 	},

@@ -1,34 +1,61 @@
 /* The model per room: the picker, the Model pane, the card label. */
-/* The model picker: a quiet control naming the model, the provider as a
-   muted suffix after a middle dot, a chevron. Muted when the row inherits. */
+/* The model picker: the model's name, the provider as a muted suffix after
+   a middle dot, a chevron; muted when the row inherits. It has the quiet
+   button's look (01-base.css) in a value's weight rather than an action's:
+   no box at rest, the quiet fill when pointed at, focused by keyboard or
+   open, where the muted words take the soft text colour to keep 4.5:1.
+   Switched off it keeps its colours at rest, with no fill and no arrow: a
+   read-only picker is where a person reads the model. Its words keep the
+   row's text edge, the fill hanging past it by the small inset, as far as
+   the soft box's side (16 px, 12 px at 760 px and less:
+   23-room-settings.css) leaves the 4 px focus ring whole.
+   buttons-look-ui-smoke.ts holds this look. */
 .room-model-picker {
 	position: relative;
 }
 .room-model-pick {
+	--pick-muted: var(--muted);
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	height: 32px;
+	height: var(--exx-btn-h);
 	max-width: 320px;
-	padding: 0 10px;
-	border: 1px solid var(--border);
-	border-radius: 8px;
+	padding: 0 calc(var(--exx-btn-inset-sm) - 1px);
+	border: 1px solid transparent;
+	border-radius: var(--exx-radius-control);
 	background: none;
 	color: var(--fg);
 	font: inherit;
 	font-size: 13px;
 	white-space: nowrap;
 	cursor: pointer;
+	transition: background-color 120ms ease, color 120ms ease;
 }
-.room-model-pick:hover:not(:disabled),
-.room-model-pick:focus-visible {
-	border-color: color-mix(in srgb, var(--fg) 35%, var(--border));
+.room-model-row .room-model-pick {
+	--pick-pull: min(var(--exx-btn-inset-sm), 12px);
+	margin-right: calc(-1 * var(--pick-pull));
+}
+@media (max-width: 760px) {
+	.room-model-row .room-model-pick {
+		--pick-pull: min(var(--exx-btn-inset-sm), 8px);
+	}
+}
+@media (hover: hover) {
+	.room-model-pick:hover:not(:disabled) {
+		--pick-muted: var(--fg-soft);
+		background: var(--exx-quiet-fill);
+	}
+}
+.room-model-pick:focus-visible,
+.room-model-pick[aria-expanded="true"] {
+	--pick-muted: var(--fg-soft);
+	background: var(--exx-quiet-fill);
 }
 .room-model-pick:disabled {
 	cursor: default;
 }
 .room-model-pick.inherited {
-	color: var(--muted);
+	color: var(--pick-muted);
 }
 .room-model-pick-name {
 	min-width: 0;
@@ -36,7 +63,7 @@
 	text-overflow: ellipsis;
 }
 .room-model-pick-provider {
-	color: var(--muted);
+	color: var(--pick-muted);
 }
 .room-model-pick-provider::before {
 	content: "· ";
@@ -243,10 +270,17 @@
 	.room-model-row .settings-row-main {
 		flex-basis: 100%;
 	}
-	.room-model-pick {
-		max-width: 100%;
+	/* The picker starts the line under its label: its words start on the
+	   label's edge (its left padding is the pull), and it may be as wide as
+	   its value plus that pull. Its touch height takes no extra gap above. */
+	.room-model-row .room-model-pick {
+		max-width: calc(100% + var(--pick-pull));
+		margin-right: 0;
+		margin-left: calc(-1 * var(--pick-pull));
+		padding-left: calc(var(--pick-pull) - 1px);
 	}
 	.room-model-row .settings-row-value {
+		margin-top: calc((32px - var(--exx-btn-h)) / 2);
 		flex-wrap: wrap;
 		white-space: normal;
 	}
@@ -294,4 +328,22 @@
 	text-align: center;
 	font-size: 14px;
 	color: var(--muted);
+}
+
+/* A room the server refused: its sentence, and the way back. */
+.room-refused {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 16px;
+	max-width: 480px;
+	margin: 0 auto;
+	padding: 96px 24px;
+	text-align: center;
+}
+.room-refused p {
+	margin: 0;
+	font-size: 15px;
+	line-height: 1.5;
+	color: var(--fg);
 }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
+import { serverHooks } from "./server-hooks.js";
 
 /**
  * Saved OpenAI-compatible gateways (LiteLLM, vLLM, OpenRouter, company
@@ -38,6 +39,20 @@ import { productAppStatePath } from "../../../pi-package/product-state-paths.js"
  * rooms. Unreadable therefore surfaces as an error and refuses every write
  * until the file parses again.
  */
+
+/**
+ * The provider id of the gateway the server's start provides (server-hooks.ts,
+ * startGateway), or undefined: always on the desktop. While there is one, its
+ * key lives only in the runtime's memory and its address is the start's, so AI
+ * setup refuses a save of it that carries a key, a new label or a new address,
+ * its delete, and a key save for its provider; a save of its models passes.
+ */
+export function startGatewayProviderId(): string | undefined {
+	return serverHooks().startGateway?.()?.providerId;
+}
+
+/** The sentence each of those refusals answers. */
+export const START_GATEWAY_REFUSAL = "This gateway is set by your organisation's install, so it can't be changed here.";
 
 export const OPENAI_COMPATIBLE_AI_PROFILE_ID = "openai-compatible";
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";

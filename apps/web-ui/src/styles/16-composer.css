@@ -123,8 +123,7 @@
 	padding: 2px 6px;
 	font-family: inherit;
 	font-size: 14px;
-	/* Whole pixels: with a fraction (1.45 of the phone's 16px is 23.2px) a
-	   textarea and the layer over it round their lines to different pixels. */
+	/* Whole pixels: with a fraction (1.45 of the phone's 16px is 23.2px) each line rounds to a different pixel. */
 	line-height: 1.45;
 	line-height: round(1.45em, 1px);
 	/* The grow cap: the draft expands to 40% of the viewport, then scrolls. */
@@ -136,28 +135,87 @@
 	white-space: pre-wrap;
 	word-break: break-word;
 }
-/* The box and, over it, the layer that colours a picked room's name. The
-   layer takes the box's size and text metrics from alignMirror in
-   components/in-room-chat.tsx, so its letters sit where the box's would. */
+/* The box, with the room it asks on a label above the text. */
 .composer-input {
-	position: relative;
 	display: flex;
 	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
 	min-width: 0;
 }
-.composer-mirror {
-	position: absolute;
-	box-sizing: border-box;
-	overflow: hidden;
+.composer-input textarea {
+	align-self: stretch;
+}
+/* "Asking <room> ×": the message goes to that room, so it reads as an address on the box. */
+.composer-asking {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	max-width: 100%;
+	margin-left: 4px;
+	padding: 1px 2px 1px 10px;
+	border: 1px solid color-mix(in srgb, var(--exx-plan) 55%, transparent);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--exx-plan) 14%, transparent);
 	color: var(--fg);
-	pointer-events: none;
+	font-size: 13px;
+	line-height: 20px;
+	box-sizing: border-box;
 }
-.composer-mirror .composer-mention {
-	color: var(--exx-plan);
+.composer-asking-name {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
-/* While an input method composes the box draws its own text; the layer adds only the name. */
-.composer-mirror.name-only {
-	color: transparent;
+.composer-asking-off {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 999px;
+	background: none;
+	color: var(--fg-soft);
+	font: inherit;
+	font-size: 15px;
+	cursor: pointer;
+}
+.composer-asking-off:hover {
+	color: var(--fg);
+	background: color-mix(in srgb, var(--exx-plan) 22%, transparent);
+}
+.composer-asking-off:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 1px;
+}
+/* A finger needs more than the label's height to hit ×. */
+@media (hover: none) {
+	.composer-asking-off {
+		width: 32px;
+		height: 32px;
+		margin: -6px -2px -6px 0;
+	}
+}
+/* Lines about the message: how to ask a room a later '@' word names, what
+ * to do when Edit finds the box holding a message that goes elsewhere, and
+ * that the room on the label is no longer there. */
+/* Above the box, its words in line with the box's: the box's border and
+ * padding (.composer-box) and the textarea's own (.composer textarea). */
+.composer-ask-hint,
+.composer-edit-line,
+.composer-room-gone {
+	margin: 0 0 6px;
+	padding-left: calc(1px + 12px + 6px);
+	font-size: 12.5px;
+	color: var(--muted);
+}
+/* The narrower box's padding, set in 21-approval-preview.css. */
+@media (max-width: 900px) {
+	.composer-ask-hint,
+	.composer-edit-line,
+	.composer-room-gone { padding-left: calc(1px + 10px + 6px); }
 }
 .composer-box-bottom {
 	display: flex;
@@ -1134,13 +1192,6 @@
 }
 :root[data-theme="light"] .composer textarea::placeholder {
 	color: var(--dim);
-}
-/* With the layer over it, the box draws only its caret and its selection's
-   ground; the layer's letters show on top. After the light theme's textarea
-   colour, which this must outrank. */
-.composer .composer-input textarea.has-mention {
-	color: transparent;
-	caret-color: var(--fg);
 }
 :root[data-theme="light"] .composer-hint {
 	color: var(--dim);

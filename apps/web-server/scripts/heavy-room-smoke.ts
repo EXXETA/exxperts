@@ -292,7 +292,7 @@ try {
 
 	// --- Home again ---------------------------------------------------------------------
 	await timed("home", () => {
-		const rooms = pa.listPersistentAgents();
+		const rooms = pa.listPersistentAgents("every room");
 		assert(rooms.some((room) => room.id === agentId), "Home lists the heavy room");
 		pa.getPersistentAgentStatus(agentId);
 	});

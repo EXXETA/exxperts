@@ -101,7 +101,7 @@ export function RoomSessionSection({ status, answering, onRefresh, onMementoAppl
 							<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
 						</span>
 					</div>
-					<button className="rs-btn" disabled={submitting} onClick={() => void forgetConversation()}>{submitting ? "Forgetting…" : "Forget…"}</button>
+					<button className="rs-btn" disabled={submitting} onClick={() => void forgetConversation()}>{submitting ? "Forgetting…" : "Forget"}</button>
 				</div>
 			</div>
 			{message && <div className="workspaces-success">{message}</div>}

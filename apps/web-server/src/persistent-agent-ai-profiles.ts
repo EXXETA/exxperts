@@ -95,10 +95,10 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 			// keeps answering, and a new one is refused with a way out.
 			persistentRoom: [
 				{ provider: "anthropic", model: "claude-opus-5-5" },
-				{ provider: "anthropic", model: "claude-fable-5-1" },
+				{ provider: "anthropic", model: "claude-fable-5-2" },
 				{ provider: "anthropic", model: "claude-sonnet-5-5" },
 				{ provider: "anthropic", model: "claude-haiku-5-5" },
-				{ provider: "anthropic", model: "claude-fable-5" },
+				{ provider: "anthropic", model: "claude-fable-5-1" },
 				{ provider: "anthropic", model: "claude-opus-5" },
 				{ provider: "anthropic", model: "claude-sonnet-5" },
 			],

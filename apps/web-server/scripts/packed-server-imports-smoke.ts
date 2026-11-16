@@ -1,5 +1,6 @@
 // Releases bundle the server inside the packed install, so a file it imports by
-// path breaks them unless "files" in the root package.json packs it.
+// path breaks them unless "files" in the root package.json packs it. The same
+// pack carries the notices that go with LICENSE, so every copy has them too.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,6 +12,9 @@ import { loadRewritesPlugin } from "../../../scripts/bundle-server.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SERVER_SOURCE = "apps/web-server/src";
+// NOTICE points to the runtime's licence and notice: it is derived from Pi
+// under the MIT licence, whose notice has to travel with every copy.
+const NOTICES = ["NOTICE", "runtime/LICENSE", "runtime/NOTICE.md"];
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -71,6 +75,9 @@ for (const entry of entries) {
 	assert(packed.has(entry), `the package does not pack the server source file ${entry}`);
 }
 
+const unpackedNotices = NOTICES.filter((file) => !packed.has(file));
+assert(unpackedNotices.length === 0, `the release does not pack ${unpackedNotices.join(", ")}; add each to "files" in the root package.json`);
+
 const outside = Object.keys(inputs).filter((file) => !file.startsWith(`${SERVER_SOURCE}/`) && !file.split("/").includes("node_modules"));
 const notPacked = outside.filter((file) => !packed.has(file));
 const importers = (file: string) => Object.keys(inputs).filter((importer) => inputs[importer].imports.some((imported) => imported.path === file));
@@ -79,4 +86,4 @@ assert(
 	`the release does not pack ${notPacked.length} file(s) that the server imports; add each to "files" in the root package.json:\n${notPacked.map((file) => `  ${file}, imported by ${importers(file).join(", ")}`).join("\n")}`,
 );
 
-console.log(`packed-server-imports smoke: ok (${entries.length} server files, ${outside.length} files they import from outside the server folder, all packed)`);
+console.log(`packed-server-imports smoke: ok (${entries.length} server files, ${outside.length} files they import from outside the server folder and ${NOTICES.length} notices, all packed)`);

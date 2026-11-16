@@ -1,11 +1,13 @@
+import type { FastifyRequest } from "fastify";
 import { readGlobalInstructions, ROOM_INSTRUCTIONS_MAX_CHARS, writeGlobalInstructions } from "./persistent-room-instructions.js";
-import { type HiddenRooms, roomOrderPayload, readRoomOrder, saveRoomOrder, ROOM_ORDER_SAVE_FAILED_SENTENCE } from "./room-order-store.js";
+import { type HiddenRooms, type RoomOrderStorageOptions, roomOrderPayload, readRoomOrder, saveRoomOrder, ROOM_ORDER_SAVE_FAILED_SENTENCE } from "./room-order-store.js";
 import { readWebSearchSettings, writeWebSearchSettings, WebSearchSettingsError, WebSearchSettingsUnreadableError } from "./web-search-settings.js";
 import { resolveWhatsNew, acknowledgeWhatsNew } from "./whats-new.js";
 import { startSearxngSetup, searxngSetupStatus } from "./searxng-setup.js";
 import { REPO_ROOT } from "./server-install-root.js";
 import { app } from "./server-app.js";
 import { remoteRoomExposure } from "./request-checks.js";
+import { serverHooks } from "./server-hooks.js";
 
 // How the app's own web_search tool runs. Settable, and it takes effect on the
 // next search rather than the next launch: the tool re-reads the file. The
@@ -47,18 +49,34 @@ app.put("/api/settings/instructions", async (req, reply) => {
 	}
 });
 
-// The order of the rooms on the home screen: one saved preference for every
-// door, mode and arrangement. A remote device is told the arrangement without
-// its hidden rooms and may only arrange the rooms it sees; the merge in the
-// store keeps the hidden ones in place, its ceiling apart (room-order-store.ts).
-const roomOrderHiddenRooms = (req: unknown): HiddenRooms => ((req as { exxRemoteDevice?: unknown }).exxRemoteDevice ? (roomId: string) => remoteRoomExposure.isHidden(roomId) : null);
+// The order of the rooms on the home screen: one saved preference, mode and
+// arrangement, for every door or, where the roomOrderFolder hook names a folder,
+// for each folder it names. A remote device is told the arrangement without its
+// hidden rooms and may only arrange the rooms it sees, and so does a request the
+// roomViewer hook answers for; the merge in the store keeps the unseen ones in
+// place, its ceiling apart (room-order-store.ts). A server with that hook has no
+// remote devices: only the checks its edge hook replaces mark one.
+const roomOrderHiddenRooms = async (req: FastifyRequest): Promise<HiddenRooms> => {
+	const seen = await serverHooks().roomViewer?.(req);
+	if (seen) return (roomId: string) => !seen.has(roomId);
+	return (req as { exxRemoteDevice?: unknown }).exxRemoteDevice ? (roomId: string) => remoteRoomExposure.isHidden(roomId) : null;
+};
 
-app.get("/api/settings/room-order", async (req) => roomOrderPayload(readRoomOrder(), roomOrderHiddenRooms(req)));
+const roomOrderStorage = (req: FastifyRequest): RoomOrderStorageOptions => {
+	const appStateRoot = serverHooks().roomOrderFolder?.(req);
+	return appStateRoot === undefined ? {} : { appStateRoot };
+};
+
+// The viewer's answer comes first, so the read is not older than it.
+app.get("/api/settings/room-order", async (req) => {
+	const hidden = await roomOrderHiddenRooms(req);
+	return roomOrderPayload(readRoomOrder(roomOrderStorage(req)), hidden);
+});
 
 app.put("/api/settings/room-order", async (req, reply) => {
 	try {
-		const hidden = roomOrderHiddenRooms(req);
-		return roomOrderPayload(saveRoomOrder(req.body, {}, new Date(), hidden), hidden);
+		const hidden = await roomOrderHiddenRooms(req);
+		return roomOrderPayload(saveRoomOrder(req.body, roomOrderStorage(req), new Date(), hidden), hidden);
 	} catch (e) {
 		const statusCode = (e as any).statusCode;
 		if (statusCode === 400) return reply.code(400).send({ error: (e as Error).message });

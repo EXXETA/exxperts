@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 
 import type { PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentPurgeResponse, PersistentAgentRenameMemoryMention, PersistentAgentRenameResponse, PersistentAgentStatus } from "../types";
 import { renamePersistentRoom } from "../persistent-room-management-api";
 import { RoomSessionSection } from "./RoomSessionSection";
-import { ROOM_ANSWERING_SAVE_LINE, RoomWorkspaceSection } from "./RoomWorkspaceSection";
+import { RoomWorkspaceSection } from "./RoomWorkspaceSection";
 import { RoomMaintenanceSection } from "./RoomMaintenanceSection";
 import { RoomModelSection } from "./RoomModelSection";
 import { RoomInstructionsSection } from "./RoomInstructionsSection";
@@ -57,18 +57,6 @@ function highlightMention(text: string, name: string): ReactNode {
 
 export function RoomSettingsModal({ status, answering, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, onOpenConnectors, onOpenAiSetup, initialPane }: { status: PersistentAgentStatus; /** Whether the room is answering, from the open room's own turn; without it, the room's last read status says. */ answering?: boolean; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; onOpenConnectors?: () => void; /** Opens Settings, AI setup at a provider's row (a refused key's Replace key); without it the Model pane offers none. */ onOpenAiSetup?: (providerId: string) => void; initialPane?: SettingsPane }) {
 	const roomAnswering = answering ?? status.activeThread?.inFlight === true;
-	// Save and close waits like Save while the room answers: the unsaved question
-	// greys it, and lifts that the moment the answer has finished.
-	const answeringRef = useRef(roomAnswering);
-	const answeringWatchers = useRef(new Set<() => void>());
-	useEffect(() => {
-		answeringRef.current = roomAnswering;
-		for (const watcher of answeringWatchers.current) watcher();
-	}, [roomAnswering]);
-	const workspaceDirtyRef = useRef(false);
-	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
-	const workspaceSaveRef = useRef<(() => Promise<boolean>) | null>(null);
-	const registerWorkspaceSave = useCallback((save: () => Promise<boolean>) => { workspaceSaveRef.current = save; }, []);
 	const instructionsDirtyRef = useRef(false);
 	const handleInstructionsDirtyChange = useCallback((dirty: boolean) => { instructionsDirtyRef.current = dirty; }, []);
 	const instructionsSaveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -78,7 +66,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	useEffect(() => {
 		if (navigator.userAgent.includes("ExxpertsDesktop")) return;
 		const askBeforeLeaving = (event: BeforeUnloadEvent): void => {
-			if (!workspaceDirtyRef.current && !instructionsDirtyRef.current) return;
+			if (!instructionsDirtyRef.current) return;
 			event.preventDefault();
 			event.returnValue = "";
 		};
@@ -86,42 +74,24 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 		return () => window.removeEventListener("beforeunload", askBeforeLeaving);
 	}, []);
 	const [terminalOn, setTerminalOn] = useState<boolean | null>(null);
-	// The one question before closing over an unsaved draft, naming the pane
-	// that holds it; each pane reports its own flag and its save, this reads
-	// them all. Save and close runs every draft's save in turn; the first that
-	// fails keeps the dialog open on its pane, which shows the pane's error.
+	// The one question before closing over unsaved instructions. The Folder
+	// pane saves each change on its click, so it never has a draft. Save and
+	// close runs the draft's save; if it fails the dialog stays open on its
+	// pane, which shows the pane's error.
 	async function confirmLeavingUnsaved(): Promise<boolean> {
-		const drafts = [
-			workspaceDirtyRef.current ? { label: "The Folder pane", pane: "workspace" as const, save: workspaceSaveRef } : null,
-			instructionsDirtyRef.current ? { label: "The instructions", pane: "instructions" as const, save: instructionsSaveRef } : null,
-		].filter((draft) => draft !== null);
-		if (drafts.length === 0) return true;
-		const subject = drafts.length === 1 ? drafts[0].label : `${drafts[0].label} and ${drafts[1].label.toLowerCase()}`;
+		if (!instructionsDirtyRef.current) return true;
 		const choice = await confirmChoice({
 			title: "Unsaved changes",
-			body: `${subject} ${drafts.length === 1 && drafts[0].pane === "workspace" ? "has" : "have"} unsaved changes.`,
+			body: "The instructions have unsaved changes.",
 			confirmLabel: "Save and close",
 			alternateLabel: "Close without saving",
 			cancelLabel: "Keep editing",
-			...(workspaceDirtyRef.current ? {
-				hold: {
-					line: () => (answeringRef.current ? ROOM_ANSWERING_SAVE_LINE : null),
-					watch: (changed: () => void) => {
-						answeringWatchers.current.add(changed);
-						return () => { answeringWatchers.current.delete(changed); };
-					},
-				},
-			} : {}),
 		});
 		if (choice === "cancel") return false;
 		if (choice === "alternate") return true;
-		for (const draft of drafts) {
-			if (!(await draft.save.current?.())) {
-				setPane(draft.pane);
-				return false;
-			}
-		}
-		return true;
+		if (await instructionsSaveRef.current?.()) return true;
+		setPane("instructions");
+		return false;
 	}
 	// Callers that open the modal at a particular pane (the Memory tab's link
 	// into this room's memory) say so once; the nav owns it from then on.
@@ -292,7 +262,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	) : (
 		<div className="settings-dialog-title-row">
 			<h2 id="room-settings-title" className="settings-dialog-title">{currentName}</h2>
-			<button className="settings-dialog-title-action" type="button" aria-label="Rename room" title="Rename this room" onClick={startNameEdit}>Rename</button>
+			<button className="rs-btn rs-btn-quiet rs-btn-sm settings-dialog-title-action" type="button" aria-label="Rename room" title="Rename this room" onClick={startNameEdit}>Rename</button>
 			{status.status !== "ready" && (
 				<span className={`room-settings-status ${status.status}`}>{ROOM_STATE_BADGE[status.status]}</span>
 			)}
@@ -315,7 +285,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 		>
 			{/* Panes stay mounted so each section fetches once and keeps its edit state across switches. */}
 			<section className="room-settings-section" hidden={pane !== "workspace"}>
-				<RoomWorkspaceSection status={status} answering={roomAnswering} onRefresh={onRefresh} onDirtyChange={handleWorkspaceDirtyChange} registerSave={registerWorkspaceSave} onTerminalOnChange={setTerminalOn} />
+				<RoomWorkspaceSection status={status} answering={roomAnswering} onRefresh={onRefresh} onTerminalOnChange={setTerminalOn} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "model"}>
 				<RoomModelSection status={status} onRefresh={onRefresh} onOpenAiSetup={onOpenAiSetup ? (providerId) => closeThen(() => onOpenAiSetup(providerId)) : undefined} />

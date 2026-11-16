@@ -1,6 +1,8 @@
 /* Arrange mode (home screen, room sorting slice 3) ----------------- */
-/* The arrange line replaces the sort control: what to do, then Cancel and
-   Save as at the end of a form, on the hint's baseline. */
+/* The arrange line replaces the sort control: what to do, then Done in
+   Arrange's place, on the hint's baseline. The row reaches past the head's
+   end as Sort and Arrange's does (24-home-sort-help.css), so "Done" keeps
+   the text edge "Arrange" had. */
 .room-arrange-line { align-items: flex-end; }
 .room-arrange-line-row {
 	display: flex;
@@ -8,16 +10,11 @@
 	justify-content: flex-end;
 	flex-wrap: wrap;
 	gap: 8px;
+	margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 12px));
 }
 .room-arrange-hint {
 	font-size: 12.5px;
 	color: var(--muted);
-}
-/* The pair wraps as one, never Cancel on one row and Save on the next. */
-.room-arrange-buttons {
-	display: inline-flex;
-	align-items: baseline;
-	gap: 8px;
 }
 /* A card fills its grid cell as on Home, so the grid's columns and gaps are
    the same as when not arranging: nothing reflows on entry. The slot is
@@ -64,6 +61,29 @@
 	opacity: 0.45;
 	pointer-events: none;
 }
+/* The arrows take the model label's place at the end of the actions' row;
+   the foot becomes that row (why Maintain is greyed keeps a line of its
+   own above it). Beside each other they point left and right; in one
+   column, up and down: the grid is marked so as laid out (landing.tsx,
+   useOneColumn). A finger's size comes from the button family. */
+.persistent-agent-card.arranging .persistent-agent-model { display: none; }
+.persistent-agent-card.arranging .persistent-agent-foot {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: 9px;
+}
+.persistent-agent-card.arranging .persistent-agent-maintain-why { flex-basis: 100%; }
+.persistent-agent-card.arranging .persistent-agent-actions { flex: 1 1 0; }
+.room-arrange-arrows {
+	display: flex;
+	gap: 4px;
+	margin-left: auto;
+}
+.room-arrange-arrow.is-earlier > svg { transform: rotate(90deg); }
+.room-arrange-arrow.is-later > svg { transform: rotate(-90deg); }
+.landing-grid.is-one-column .room-arrange-arrow.is-earlier > svg { transform: rotate(180deg); }
+.landing-grid.is-one-column .room-arrange-arrow.is-later > svg { transform: none; }
 .add-room-card:disabled {
 	cursor: default;
 	opacity: 0.5;

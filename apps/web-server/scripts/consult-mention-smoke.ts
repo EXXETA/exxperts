@@ -1,14 +1,16 @@
-// Smoke for the composer @-mention consult popover pure logic
-// (apps/web-ui/src/mention-popover.ts, Consult MR-3 spec §4.3).
+// Smoke for asking another room from the message box: the '@' list, the room
+// on the box as a label, and the rest of the consult flow the page draws.
 //
-// Covers: trigger-regex positions (only at the message's start, where a
-// leading mention consults; caret in the middle), candidate filtering/ordering (excludes the
-// current room + archived rooms, includes needs_absorb, prefix matching),
-// mention completion text, leading-mention resolution incl. the stripped
-// question, and the never-submit invariant at the logic level. Then what the
-// picker and the consult card read, rendered from their components, the
-// message box's Send waiting for a question after a room's name, and the
-// picked name in the effort dial's colour, in a room as the page draws it.
+// Covers: where the list opens (only at the message's start, staying open
+// on the space after a word two rooms fit), filtering and ordering, which
+// room a word names (exact name or id first, else one that starts with it,
+// never one of two), the label at the first space, the line for a later '@'
+// word, a consult as the server keeps it and as it goes back into the box.
+// Then the picker and the consult card rendered from their components, the
+// message box in a JSDOM window as a person types into it, and the box in a
+// room as the page draws it, on a real server, with a room whose id carries a
+// tail: picked, sent, kept through leaving the room, queued while the room
+// answers, handed back by Stop, refused while a card is open.
 //
 // Run: npm run smokes -- consult-mention   (or tsx this file)
 
@@ -24,13 +26,22 @@ import { readPageStyles } from "./page-styles.js";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 import {
-	completeMention,
+	ANOTHER_ROOM,
+	askHint,
+	askingWords,
 	detectMentionQuery,
+	draftAfterPick,
 	filterMentionCandidates,
+	fitRoom,
+	labelAtFirstSpace,
+	laterMentionRoom,
 	memoryFreshnessHint,
-	resolveLeadingMention,
+	ROOM_GONE,
+	TYPE_QUESTION,
 	type MentionCandidateRoom,
 } from "../../web-ui/src/mention-popover.js";
+import { boxWithHandBack, consultOf, consultText, EDIT_NEEDS_BOX, queuedBubbles, type OutgoingMessage } from "../../web-ui/src/outgoing-messages.js";
+import { failureLineText } from "../../web-ui/src/turn-failure-line.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -49,28 +60,39 @@ const rooms: MentionCandidateRoom[] = [
 	{ id: "zeta", displayName: "Zeta", status: "ready", lastCheckpointAt: null },
 ];
 
+// Rooms as a shared server names them: each id carries a random tail, which no person ever sees.
+const TAIL = "7f3a2c9d";
+const HERE = `pricing-notes-${TAIL}`;
+const BID_X = { id: `bid-for-client-x-${TAIL}`, displayName: "Bid for Client X" };
+const BID = { id: `bid-1a2b3c4d`, displayName: "Bid" };
+const tailed: MentionCandidateRoom[] = [
+	BID_X,
+	BID,
+	{ id: `budget-review-5e6f7a8b`, displayName: "Budget review" },
+	{ id: HERE, displayName: "Pricing notes" },
+	{ id: `old-bid-0c0c0c0c`, displayName: "Old bid", archived: true },
+];
+
 try {
-	// ---- trigger regex positions -----------------------------------------
-	// start of text
+	// ---- where the list opens ------------------------------------------------
 	const atStart = detectMentionQuery("@eu", 3);
 	assert(atStart && atStart.query === "eu" && atStart.start === 0 && atStart.caret === 3, "trigger at start of text");
 
-	// Only a message that begins with the mention consults, so an '@' anywhere
+	// Only a message that begins with '@' opens the list, so an '@' anywhere
 	// else is plain text: after other words, on a later line, after a leading
 	// space, or glued to a word (an email).
-	// Each of these, finished as "@euler hi", sends as an ordinary message.
 	for (const draft of ["hi @eu", "Can you check @eu", "line1\n@eu", " @eu", "\n@eu", "email@eu"]) {
 		assert(detectMentionQuery(draft, draft.length) === null, `no trigger in ${JSON.stringify(draft)}`);
-		assert(resolveLeadingMention(draft.replace(/@eu$/, "@euler hi"), rooms, CURRENT) === null, `and no consult from ${JSON.stringify(draft)}`);
 	}
-	// A second mention in a question that already begins with one opens nothing either.
 	assert(detectMentionQuery("@euler what about\n@eu", 21) === null, "no trigger for a later mention on a later line");
 
-	// caret in the middle of the mention → query is only the part before the caret
+	// caret in the middle of the word → the query is only the part before the caret
 	const midCaret = detectMentionQuery("@euler test", 3);
 	assert(midCaret && midCaret.query === "eu" && midCaret.start === 0, "caret in the middle of the mention");
 
-	// caret after a completed word + space → no open trigger
+	// The one space after the word keeps it open, for a word two rooms fit; the next letter closes it.
+	assert(detectMentionQuery("@bi ", 4)?.query === "bi", "the space after the word keeps the list open on the word");
+	assert(detectMentionQuery("@bi w", 5) === null, "a letter after the space closes it");
 	assert(detectMentionQuery("@euler test", 11) === null, "no trigger once the caret sits after a following word");
 
 	// bare '@' → empty query, popover would open on all candidates
@@ -102,59 +124,69 @@ try {
 	const idPrefixRooms: MentionCandidateRoom[] = [{ id: "euler", displayName: "The Pricing Room", status: "ready", lastCheckpointAt: null }];
 	assert(filterMentionCandidates(idPrefixRooms, "eul", CURRENT).map((r) => r.id).join(",") === "euler", "id prefix match when displayName diverges");
 
-	// ---- mention completion ----------------------------------------------
-	// completes to '@<id> ' with a trailing space, caret after it
-	const c1 = detectMentionQuery("@eu", 3)!;
-	const done1 = completeMention("@eu", c1, rooms[0]);
-	assert(done1.text === "@euler " && done1.caret === 7, `completion appends '@euler '; got "${done1.text}" @${done1.caret}`);
+	// ---- which room a word names ---------------------------------------------
+	const fits = (word: string, list = tailed) => fitRoom(word, list, HERE)?.displayName ?? null;
+	assert(fits("bu") === "Budget review", `a short word names the one room that starts with it, got ${fits("bu")}`);
+	assert(fits("BUDGET") === "Budget review" && fits("BiD") === "Bid", `capitals name the same room, got ${fits("BUDGET")}, ${fits("BiD")}`);
+	assert(fits("bid") === "Bid", `Bid beside Bid for Client X: "bid" names Bid, its exact name, got ${fits("bid")}`);
+	assert(fits("bi") === null, `two rooms start with "bi": none is named, got ${fits("bi")}`);
+	assert(fits("bid-for") === "Bid for Client X" && fits(BID_X.id.toUpperCase()) === "Bid for Client X", "the id names its room too, whole or its start");
+	assert(fits("nobody") === null && fits("") === null, "a word no room fits names none");
+	assert(fits("pricing") === null && fits("old") === null, "this room and an archived room are never named");
+	assert(fits("bid", [...tailed, { id: "bid-9e9e9e9e", displayName: "bid" }]) === null, "two rooms with the exact name: none is named");
 
-	// completes mid-text without doubling the following space
-	const c2 = detectMentionQuery("@eu rest", 3)!;
-	const done2 = completeMention("@eu rest", c2, rooms[0]);
-	assert(done2.text === "@euler rest" && done2.caret === 7, `mid-text completion keeps a single space; got "${done2.text}" @${done2.caret}`);
+	// The label forms at the first space, typed or pasted with the rest; never again in text already written.
+	const labelled = (previous: string, next: string) => {
+		const result = labelAtFirstSpace(previous, next, tailed, HERE);
+		return result ? `${result.room.displayName}|${result.rest}` : null;
+	};
+	assert(labelled("@bu", "@bu ") === "Budget review|", `"@bu " labels Budget review, got ${labelled("@bu", "@bu ")}`);
+	assert(labelled("", "@bid what is the deadline?") === "Bid|what is the deadline?", `pasted, the rest stays, got ${labelled("", "@bid what is the deadline?")}`);
+	assert(labelled("@bid", "@bid\nwhat?") === "Bid|what?", "a line break ends the word as a space does");
+	assert(labelled("@bi", "@bi ") === null, "two fit: no label");
+	assert(labelled("@nobody", "@nobody ") === null, "none fits: no label");
+	assert(labelled("@bid x", "@bid xy") === null && labelled("@bid ", "@bid  ") === null, "the space was there before the edit: no label");
+	assert(draftAfterPick("@bi what") === "what" && draftAfterPick("@") === "" && draftAfterPick("@bi ") === "", "picking from the list leaves only what follows the word");
 
-	// ---- leading-mention resolution --------------------------------------
-	const resolved = resolveLeadingMention("@euler what did we decide about pricing?", rooms, CURRENT);
-	assert(resolved?.kind === "consult" && resolved.room.id === "euler", "leading mention resolves to the room");
-	assert(resolved.question === "what did we decide about pricing?", `question is stripped of the mention; got "${resolved.question}"`);
-
-	// token match is case-insensitive
-	assert(resolveLeadingMention("@EULER hello", rooms, CURRENT)?.room.id === "euler", "leading mention token is case-insensitive");
-
-	// not resolved: unknown room, current room, archived room
-	assert(resolveLeadingMention("@nobody hi", rooms, CURRENT) === null, "unknown room does not resolve → normal send");
-	assert(resolveLeadingMention("@morpheus hi", rooms, CURRENT) === null, "current room does not resolve → normal send");
-	assert(resolveLeadingMention("@oldroom hi", rooms, CURRENT) === null, "archived room does not resolve → normal send");
-
-	// not resolved: mention not at the start of the draft
-	assert(resolveLeadingMention("please ask @euler about x", rooms, CURRENT) === null, "non-leading mention does not route");
-
-	// a known room's name with no question after it waits for one (Send greys),
-	// with or without the space the completion leaves; an unknown name stays an
-	// ordinary message
-	for (const draft of ["@euler ", "@euler", "@EULER", "@euler  \n "]) {
-		const waiting = resolveLeadingMention(draft, rooms, CURRENT);
-		assert(waiting?.kind === "awaiting-question" && waiting.room.id === "euler", `${JSON.stringify(draft)} waits for a question; got ${JSON.stringify(waiting)}`);
+	// A later '@' word that names one room: the line names it.
+	const later = (text: string) => laterMentionRoom(text, tailed, HERE)?.displayName ?? null;
+	assert(later("hello @bid can you reply here") === "Bid", `a later "@bid" names Bid, got ${later("hello @bid can you reply here")}`);
+	assert(later("is it fine, @budget.") === "Budget review" && later("hi\n@BUDGET") === "Budget review", "after a line break, with a full stop, in capitals");
+	for (const text of ["hello @bi can", "hello @nobody", "@bid hi", "mail me at me@bid", "hi @pricing"]) {
+		assert(later(text) === null, `${JSON.stringify(text)} shows no line, got ${later(text)}`);
 	}
-	assert(resolveLeadingMention("@nobody", rooms, CURRENT) === null, "an unknown name alone is an ordinary message");
-	assert(resolveLeadingMention("@morpheus ", rooms, CURRENT) === null, "the current room's name alone is an ordinary message");
-	assert(resolveLeadingMention("@eul", rooms, CURRENT) === null, "part of a room's name is no room yet");
+	assert(askHint("Bid") === "To ask Bid, start the message with @.", `the line's words, got ${askHint("Bid")}`);
 
-	// ---- never-submit invariant (logic level) ----------------------------
-	// While a trigger is active mid-typing, the draft is NOT a routable consult:
-	// Enter selects a row (completion), it never resolves+submits.
-	const typing = "@eu";
-	assert(detectMentionQuery(typing, typing.length) !== null, "an active trigger means the popover is open");
-	assert(resolveLeadingMention(typing, rooms, CURRENT)?.kind !== "consult", "an active trigger draft never routes a consult");
+	// ---- a consult as the server keeps it, and back into the box ----------------
+	const names = new Map(tailed.filter((room) => room.id !== HERE).map((room) => [room.id, room.displayName]));
+	const consult = { roomId: BID_X.id, question: "what is the deadline?" };
+	assert(JSON.stringify(consultOf({ text: consultText(consult) }, names)) === JSON.stringify(consult), "a held consult the server lists reads back to its room and question");
+	assert(consultOf({ text: "@nobody hi" }, names) === null && consultOf({ text: `@${HERE} hi` }, names) === null, "words naming no other room stay words");
+	assert(consultOf({ text: consultText(consult), consult: null }, names) === null, "words the page sent to this room stay words, even when they read like an address");
+	const queuedList: OutgoingMessage[] = [
+		{ id: "q1", text: consultText(consult), state: "consult", consult },
+		{ id: "q2", text: consultText(consult), state: "held" },
+		{ id: "q3", text: consultText({ roomId: "gone-1234abcd", question: "still there?" }), state: "consult", consult: { roomId: "gone-1234abcd", question: "still there?" } },
+		{ id: "q4", text: "and the budget?", state: "later" },
+	];
+	const bubbles = queuedBubbles(queuedList, names);
+	assert(JSON.stringify(bubbles.map((bubble) => [bubble.text, bubble.asking ?? null])) === JSON.stringify([["what is the deadline?", "Bid for Client X"], ["what is the deadline?", "Bid for Client X"], ["still there?", ANOTHER_ROOM], ["and the budget?", null]]), `a queued consult shows its room's name and its question, never the id: ${JSON.stringify(bubbles)}`);
+	assert(!JSON.stringify(bubbles).includes(TAIL) && !JSON.stringify(bubbles).includes("gone-1234abcd"), `no id in a bubble: ${JSON.stringify(bubbles)}`);
 
-	// Selecting a room mutates the draft (keeps the mention text) rather than sending.
-	const selection = completeMention(typing, detectMentionQuery(typing, typing.length)!, rooms[0]);
-	assert(selection.text.includes("@euler"), "selection completes the mention in the draft");
-
-	// And the just-completed draft neither keeps the popover open nor routes yet
-	// (no question yet) — so completing a mention can never submit.
-	assert(detectMentionQuery(selection.text, selection.caret) === null, "completing a mention closes the popover");
-	assert(resolveLeadingMention(selection.text, rooms, CURRENT)?.kind === "awaiting-question", "a completed mention with no question does not route");
+	const handed = (messages: { id: string; text: string; consult?: typeof consult }[], box: { text: string; asking: string | null }) => {
+		const back = boxWithHandBack(messages.map((message) => ({ ...message, consult: message.consult ?? null })), box);
+		return JSON.stringify(back);
+	};
+	const toBid = { id: "c", text: consultText(consult), consult };
+	const plain = { id: "p", text: "and the budget?" };
+	assert(handed([toBid], { text: "", asking: null }) === JSON.stringify({ box: { text: "what is the deadline?", asking: BID_X.id }, taken: ["c"], held: [] }), `into an empty box, a consult puts its room on the label: ${handed([toBid], { text: "", asking: null })}`);
+	assert(handed([toBid], { text: "", asking: BID_X.id }) === JSON.stringify({ box: { text: "what is the deadline?", asking: BID_X.id }, taken: ["c"], held: [] }), "into a box asking its room");
+	assert(handed([toBid], { text: "more?", asking: BID_X.id }) === JSON.stringify({ box: { text: "what is the deadline?\n\nmore?", asking: BID_X.id }, taken: ["c"], held: [] }), "above what is typed for its room");
+	assert(handed([plain, toBid], { text: "", asking: null }) === JSON.stringify({ box: { text: "and the budget?", asking: null }, taken: ["p"], held: ["c"] }), "after an ordinary message, a consult stays held: the box goes to this room");
+	assert(handed([toBid, plain], { text: "", asking: null }) === JSON.stringify({ box: { text: "what is the deadline?", asking: BID_X.id }, taken: ["c"], held: ["p"] }), "after a consult, an ordinary message stays held: the box asks the room");
+	assert(handed([toBid], { text: "typed here", asking: null }) === JSON.stringify({ box: { text: "typed here", asking: null }, taken: [], held: ["c"] }), "a consult never joins words typed for this room");
+	assert(handed([plain], { text: "", asking: BID.id }) === JSON.stringify({ box: { text: "", asking: BID.id }, taken: [], held: ["p"] }), "an ordinary message never joins a box asking a room");
+	assert(handed([plain], { text: "typed", asking: null }) === JSON.stringify({ box: { text: "and the budget?\n\ntyped", asking: null }, taken: ["p"], held: [] }), "an ordinary message goes above what is typed, as before");
 
 	// ---- freshness hint ---------------------------------------------------
 	assert(memoryFreshnessHint(null, NOW) === null, "unknown checkpoint → no hint");
@@ -267,9 +299,10 @@ try {
 		}
 	}
 
-	// ---- Send waits for a question after the room's name -------------------
-	// The message box as the room draws it, in a JSDOM window: pick a room with
-	// Enter, then press Enter and click Send as the person does.
+
+	// ---- the message box as a person types into it -------------------------
+	// The box as the room draws it, in a JSDOM window: pick from the list, type
+	// a word and a space, take the label off, and send as the person does.
 	{
 		const { JSDOM } = await import("jsdom");
 		const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://page.test/" });
@@ -292,117 +325,158 @@ try {
 		const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value")!.set!;
 		const sent: string[] = [];
 		const asked: string[] = [];
+		const told: (string | null)[] = [];
+		let accept = true;
 		let root: any = null;
 		let container: HTMLElement | null = null;
+		let lastProps: Record<string, unknown> = {};
+		const mentionWith = (extra: Record<string, unknown> = {}) => ({ candidates: tailed, currentRoomId: HERE, busy: false, busyTitle: "", activeConsultDisplayName: null, onConsultRequest: (id: string, question: string, now: boolean) => { asked.push(`${id}: ${question}${now ? " (now)" : ""}`); return accept; }, ...extra });
+		const render = (props: Record<string, unknown>) => {
+			lastProps = props;
+			return act(async () => root.render(createElement(ComposerInput, { onSend: (draft: string) => { sent.push(draft); return true; }, onAskingChange: (id: string | null) => told.push(id), placeholder: "Ask", mention: mentionWith(), ...props })));
+		};
 		const mount = async (props: Record<string, unknown> = {}) => {
 			if (root) await act(async () => root.unmount());
 			container?.remove();
 			sent.length = 0;
 			asked.length = 0;
+			told.length = 0;
+			accept = true;
 			container = dom.window.document.createElement("div");
 			dom.window.document.body.append(container);
 			root = createRoot(container);
-			const mention = { candidates: rooms, currentRoomId: CURRENT, busy: false, busyTitle: "", activeConsultDisplayName: null, onConsultRequest: (id: string, question: string) => { asked.push(`${id}: ${question}`); return true; } };
-			await act(async () => root.render(createElement(ComposerInput, { onSend: (draft: string) => { sent.push(draft); return true; }, placeholder: "Ask", mention, ...props })));
+			await render(props);
 		};
 		const box = () => container!.querySelector("textarea") as HTMLTextAreaElement;
 		const send = () => container!.querySelector("button.send-btn") as HTMLButtonElement;
-		const type = (value: string) => act(async () => {
+		const label = () => container!.querySelector(".composer-asking-name")?.textContent ?? null;
+		const hint = () => container!.querySelector(".composer-ask-hint")?.textContent ?? null;
+		const rows = () => [...container!.querySelectorAll(".mention-row .m-name")].map((node) => node.textContent);
+		const type = (value: string, caret = value.length) => act(async () => {
 			setValue.call(box(), value);
-			box().setSelectionRange(value.length, value.length);
+			box().setSelectionRange(caret, caret);
 			box().dispatchEvent(new dom.window.Event("input", { bubbles: true }));
 		});
-		const press = (key: string) => act(async () => { box().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+		// Letter by letter, as a keyboard types: each edit sees the one before it.
+		const typeOn = async (letters: string) => {
+			for (const letter of letters) await type(box().value + letter);
+		};
+		const press = (key: string, init: Record<string, unknown> = {}) => act(async () => { box().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
 		const clickSend = () => act(async () => send().click());
-		const shows = () => `box ${JSON.stringify(box().value)}, Send ${send().disabled ? "greyed" : "active"} "${send().title}", sent ${JSON.stringify(sent)}, asked ${JSON.stringify(asked)}`;
-		const WAIT = "Type your question after the name";
+		const shows = () => `label ${JSON.stringify(label())}, box ${JSON.stringify(box().value)}, line ${JSON.stringify(hint())}, list ${JSON.stringify(rows())}, Send ${send().disabled ? "greyed" : "active"} "${send().title}", sent ${JSON.stringify(sent)}, asked ${JSON.stringify(asked)}`;
+		// No room id anywhere a person reads, the label, the list and the box's own words included.
+		const noId = (when: string) => {
+			const seen = `${container!.textContent} ${box().value} ${[...container!.querySelectorAll("[aria-label],[title]")].map((node) => `${node.getAttribute("aria-label")} ${node.getAttribute("title")}`).join(" ")}`;
+			assert(!seen.includes(TAIL) && !seen.includes(BID.id), `${when}: no room id shows: ${seen}`);
+		};
 		try {
-			// Picked from the picker: "@euler " greys Send, and neither Enter nor Send sends.
+			// Picked from the list: the room is a label on the box and the draft holds only the question.
 			await mount();
-			await type("@eu");
-			assert(container!.querySelector(".mention-pop"), `typing "@eu" opens the picker: ${shows()}`);
+			await typeOn("@bi");
+			assert(rows().join("|") === "Bid|Bid for Client X", `"@bi" lists both rooms: ${shows()}`);
+			noId("the list");
+			await press("ArrowDown");
 			await press("Enter");
+			assert(label() === askingWords("Bid for Client X") && box().value === "" && sent.length === 0 && asked.length === 0, `Enter picks the room as a label, the box empty: ${shows()}`);
+			assert(told.at(-1) === BID_X.id, `the box tells the page the room's id: ${JSON.stringify(told)}`);
+			assert(container!.querySelector(".composer-asking-off")?.getAttribute("aria-label") === "Don't ask Bid for Client X", `× says what it does: ${shows()}`);
+			noId("the label");
+			// Send waits for the question, files or not, and an '@' typed now opens nothing.
 			await press("Enter");
 			await clickSend();
-			assert(box().value === "@euler " && send().disabled && send().title === WAIT && sent.length === 0 && asked.length === 0, `a picked room with no question greys Send and sends nothing: ${shows()}`);
-			// The name typed out, no space, picker dismissed: still waiting.
-			await type("@euler");
-			await press("Escape");
-			assert(!container!.querySelector(".mention-pop"), `Esc closes the picker: ${shows()}`);
-			await press("Enter");
+			assert(send().disabled && send().title === TYPE_QUESTION && sent.length === 0 && asked.length === 0, `with only the label, Send waits: ${shows()}`);
+			await typeOn("@bu");
+			assert(rows().length === 0 && !container!.querySelector(".mention-pop") && label() === askingWords("Bid for Client X"), `with the label on, an '@' opens nothing: ${shows()}`);
+			await type("what is the deadline?");
+			assert(!send().disabled && send().title === "Send" && hint() === null, `a question lights Send: ${shows()}`);
+			noId("the label and the question");
 			await clickSend();
-			assert(send().disabled && send().title === WAIT && sent.length === 0 && asked.length === 0, `"@euler" alone greys Send and sends nothing: ${shows()}`);
-			// A question after it: Send works and the consult goes out, by click and by Enter.
-			await type("@euler what about pricing?");
-			assert(!send().disabled && send().title === "Send", `a question after the name makes Send work: ${shows()}`);
-			await clickSend();
-			assert(asked.join("|") === "euler: what about pricing?" && sent.length === 0 && box().value === "", `Send asks the room: ${shows()}`);
-			await type("@euler and the deadline?");
-			await press("Enter");
-			assert(asked.join("|") === "euler: what about pricing?|euler: and the deadline?" && sent.length === 0, `Enter asks the room: ${shows()}`);
-			// An unknown name is an ordinary message, as before.
-			asked.length = 0;
-			await type("@nobody");
-			assert(!send().disabled && send().title === "Send", `an unknown name leaves Send working: ${shows()}`);
-			await press("Enter");
-			assert(sent.join("|") === "@nobody" && asked.length === 0, `an unknown name sends as an ordinary message: ${shows()}`);
-			// The picked room's name shows in the effort dial's colour: a layer over
-			// the box draws its text, the name in a span of its own. Only a known
-			// room's name at the start, as it routes the send, and it follows each edit.
-			const layer = () => {
-				const mirror = container!.querySelector(".composer-mirror");
-				return { name: mirror?.querySelector(".composer-mention")?.textContent ?? null, text: mirror?.textContent ?? null, box: box().className };
-			};
-			const NONE = JSON.stringify({ name: null, text: null, box: "" });
-			await mount();
-			assert(JSON.stringify(layer()) === NONE, `an empty box has no layer: ${JSON.stringify(layer())}`);
-			await type("@eu");
-			assert(JSON.stringify(layer()) === NONE, `"@eu" with the picker open is not coloured: ${JSON.stringify(layer())}`);
-			await press("Enter");
-			assert(JSON.stringify(layer()) === JSON.stringify({ name: "@euler", text: "@euler ", box: "has-mention" }), `the picked "@euler " shows its name coloured: ${JSON.stringify(layer())}`);
-			await type("@euler what about pricing?");
-			assert(JSON.stringify(layer()) === JSON.stringify({ name: "@euler", text: "@euler what about pricing?", box: "has-mention" }), `the question after the name stays plain: ${JSON.stringify(layer())}`);
-			await type("@EULER hi");
-			assert(layer().name === "@EULER", `the name as typed, in any case: ${JSON.stringify(layer())}`);
-			await type("@eule");
-			assert(JSON.stringify(layer()) === NONE, `a letter of the name deleted, the colour goes: ${JSON.stringify(layer())}`);
-			await press("Enter");
-			assert(JSON.stringify(layer()) === JSON.stringify({ name: "@euler", text: "@euler ", box: "has-mention" }), `picked again, the colour comes back: ${JSON.stringify(layer())}`);
-			for (const draft of ["@nobody hi", "@eul hi", "@morpheus hi", "Can you check @euler", " @euler hi", "hi\n@euler hi"]) {
-				await type(draft);
-				assert(JSON.stringify(layer()) === NONE, `${JSON.stringify(draft)} is not coloured: ${JSON.stringify(layer())}`);
+			assert(asked.join("|") === `${BID_X.id}: what is the deadline?` && sent.length === 0 && box().value === "" && label() === null, `Send asks the room by its id, and the box empties: ${shows()}`);
+			assert(told.at(-1) === null, `the page is told the label went: ${JSON.stringify(told)}`);
+
+			// A word and a space: the label forms when exactly one room fits.
+			for (const [letters, room] of [["@bu ", "Budget review"], ["@BUDGET ", "Budget review"], ["@bid ", "Bid"], ["@Bid-For ", "Bid for Client X"]] as const) {
+				await mount();
+				await typeOn(letters);
+				assert(label() === askingWords(room) && box().value === "" && rows().length === 0, `${JSON.stringify(letters)} puts ${room} on the box: ${shows()}`);
+				await typeOn("when?");
+				await press("Enter");
+				assert(asked.slice().length === 1 && asked[0].endsWith(": when?") && fitRoom(room, tailed, HERE)?.id === asked[0].split(":")[0] && sent.length === 0, `Enter asks ${room}: ${shows()}`);
 			}
-			// The box shows a line after a final line break, so the layer does too.
-			await type("@euler hi\n");
-			assert(layer().text === "@euler hi\n\u200b", `a final line break gets its line in the layer: ${JSON.stringify(layer())}`);
-			// While an input method composes, the box draws its own text and the layer only the name.
-			const nameOnly = () => container!.querySelector(".composer-mirror")?.classList.contains("name-only") ?? false;
-			await act(async () => { box().dispatchEvent(new dom.window.CompositionEvent("compositionstart", { bubbles: true })); });
-			assert(layer().name === "@euler" && layer().box === "" && nameOnly(), `while composing, the box draws its own text and the layer the name: ${JSON.stringify(layer())}`);
-			await act(async () => { box().dispatchEvent(new dom.window.CompositionEvent("compositionend", { bubbles: true, data: "" })); });
-			assert(layer().box === "has-mention" && !nameOnly(), `the composition done, the layer draws the text again: ${JSON.stringify(layer())}`);
-			// Text selected: the box draws its own text, in the system's selection colours.
-			const selectThrough = (end: number) => act(async () => {
-				box().setSelectionRange(0, end);
-				box().dispatchEvent(new dom.window.KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
-			});
-			await selectThrough(box().value.length);
-			assert(JSON.stringify(layer()) === NONE, `with text selected, the box draws its own text: ${JSON.stringify(layer())}`);
-			await selectThrough(0);
-			assert(layer().box === "has-mention", `nothing selected, the name is coloured again: ${JSON.stringify(layer())}`);
-			// Attached files do not change it: a consult needs a question.
-			await mount({ allowEmptySend: true });
-			assert(!send().disabled, `files attached let an empty box send: ${shows()}`);
-			await type("@euler ");
+			// Pasted whole: the word becomes the label, the question stays.
+			await mount();
+			await type("@bid what is the deadline?");
+			assert(label() === askingWords("Bid") && box().value === "what is the deadline?", `a pasted "@bid question" labels Bid: ${shows()}`);
+
+			// Two rooms that fit: the list stays open on the space, and nothing is picked.
+			await mount();
+			await typeOn("@bi ");
+			assert(label() === null && box().value === "@bi " && rows().join("|") === "Bid|Bid for Client X", `"@bi " keeps the list open: ${shows()}`);
 			await press("Enter");
-			assert(send().disabled && send().title === WAIT && sent.length === 0 && asked.length === 0, `with files attached, a room's name alone still waits: ${shows()}`);
-			// An '@' after other text, on the first line or a later one, is plain
-			// typing: no picker, the arrows, Tab and Esc are the box's own, and
-			// Enter sends the message as written.
-			for (const draft of ["Can you check @eu", "Can you check\n@eu"]) {
+			assert(label() === askingWords("Bid") && box().value === "", `Enter then picks from it: ${shows()}`);
+			await mount();
+			await typeOn("@bi what");
+			assert(label() === null && rows().length === 0 && !send().disabled && hint() === null, `typed on, it is an ordinary message: ${shows()}`);
+			await press("Enter");
+			assert(sent.join("|") === "@bi what" && asked.length === 0, `and goes to this room: ${shows()}`);
+			// Two rooms with the exact name: the same.
+			await mount({ mention: mentionWith({ candidates: [...tailed, { id: "bid-9e9e9e9e", displayName: "Bid" }] }) });
+			await typeOn("@bid ");
+			assert(label() === null && box().value === "@bid " && rows().length === 3, `two rooms named Bid: no label, the list open: ${shows()}`);
+
+			// A word no room fits is an ordinary message: Send on, no line.
+			await mount();
+			await typeOn("@nobody hi");
+			assert(label() === null && hint() === null && !send().disabled && send().title === "Send", `"@nobody hi" stays an ordinary message: ${shows()}`);
+			await press("Enter");
+			assert(sent.join("|") === "@nobody hi" && asked.length === 0, `and goes to this room: ${shows()}`);
+			// Esc on the list: the space after it labels nothing.
+			await mount();
+			await typeOn("@bu");
+			assert(rows().length > 0, `"@bu" opens the list: ${shows()}`);
+			await press("Escape");
+			assert(rows().length === 0 && !container!.querySelector(".mention-pop"), `Esc closes the list: ${shows()}`);
+			await typeOn(" hi");
+			assert(label() === null && box().value === "@bu hi", `after Esc, the word stays a word: ${shows()}`);
+
+			// × takes the label off and keeps the text, which then goes to this room.
+			await mount();
+			await typeOn("@bid what is the deadline?");
+			await act(async () => (container!.querySelector(".composer-asking-off") as HTMLButtonElement).click());
+			assert(label() === null && box().value === "what is the deadline?" && told.at(-1) === null, `× takes the label off, the text stays: ${shows()}`);
+			await press("Enter");
+			assert(sent.join("|") === "what is the deadline?" && asked.length === 0, `the message goes to this room: ${shows()}`);
+			// Backspace at the start does the same; anywhere else it is the box's own.
+			await mount();
+			await typeOn("@bid what?");
+			await act(async () => box().setSelectionRange(2, 2));
+			const inside = new dom.window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+			await act(async () => { box().dispatchEvent(inside); });
+			assert(!inside.defaultPrevented && label() === askingWords("Bid"), `Backspace inside the text is the box's own: ${shows()}`);
+			await act(async () => box().setSelectionRange(0, 0));
+			await press("Backspace");
+			assert(label() === null && box().value === "what?", `Backspace at the start takes the label off: ${shows()}`);
+			await act(async () => box().setSelectionRange(0, box().value.length));
+			const selected = new dom.window.KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true });
+			await act(async () => { box().dispatchEvent(selected); });
+			assert(!selected.defaultPrevented, "with no label, Backspace is the box's own");
+
+			// A later '@' word that fits one room: the line, Send on, and the message goes to this room.
+			await mount();
+			await type("hello @bid can you reply here");
+			assert(hint() === askHint("Bid") && label() === null && !send().disabled, `a later "@bid" shows the line: ${shows()}`);
+			await press("Enter");
+			assert(sent.join("|") === "hello @bid can you reply here" && asked.length === 0, `Send goes to this room: ${shows()}`);
+			for (const draft of ["hello @bi can", "hello @nobody", "mail me@bid"]) {
+				await type(draft);
+				assert(hint() === null, `${JSON.stringify(draft)} shows no line: ${shows()}`);
+			}
+			// An '@' after other text, on the first line or a later one, is plain typing: no list,
+			// the arrows, Tab and Esc are the box's own, and Enter sends the message as written.
+			for (const draft of ["Can you check @bi", "Can you check\n@bi"]) {
 				await mount();
 				await type(draft);
-				assert(!container!.querySelector(".mention-pop"), `${JSON.stringify(draft)} opens no picker: ${shows()}`);
+				assert(!container!.querySelector(".mention-pop") && label() === null, `${JSON.stringify(draft)} opens no list: ${shows()}`);
 				for (const key of ["ArrowDown", "ArrowUp", "Tab", "Escape"]) {
 					const event = new dom.window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
 					await act(async () => { box().dispatchEvent(event); });
@@ -411,19 +485,66 @@ try {
 				await press("Enter");
 				assert(sent.join("|") === draft && asked.length === 0, `Enter sends ${JSON.stringify(draft)} as written: ${shows()}`);
 			}
-			// While the room answers, the greyed affordance shows for an '@' at the
-			// start only.
-			await mount({ mention: { candidates: rooms, currentRoomId: CURRENT, busy: true, busyTitle: "Wait for the room's answer", activeConsultDisplayName: null, onConsultRequest: () => true } });
-			await type("@eu");
-			assert(container!.querySelector(".mention-pop-disabled") && !container!.querySelector(".mention-row"), `while busy, "@eu" shows the greyed affordance: ${shows()}`);
-			await type("Can you check @eu");
-			assert(!container!.querySelector(".mention-pop"), `while busy, an '@' after other text shows nothing: ${shows()}`);
-			// While busy the draft goes as an ordinary message, so the name is not coloured.
-			await type("@euler hi");
-			assert(!container!.querySelector(".composer-mirror") && box().className === "", `while busy, "@euler hi" is not coloured: ${shows()}`);
+			await type("");
+			await typeOn("@bid hello @budget");
+			assert(label() === askingWords("Bid") && hint() === null, `with the label on, a later word shows no line: ${shows()}`);
+
+			// Files attached: a consult still needs a question.
+			await mount({ allowEmptySend: true });
+			assert(!send().disabled, `files attached let an empty box send: ${shows()}`);
+			await typeOn("@bid ");
+			await press("Enter");
+			assert(send().disabled && send().title === TYPE_QUESTION && sent.length === 0 && asked.length === 0, `with files attached, a label alone still waits: ${shows()}`);
+
+			// Refused (one already open, or no connection): the label and the question stay.
+			await mount();
+			await typeOn("@bid what is the deadline?");
+			accept = false;
+			await press("Enter");
+			assert(asked.slice().length === 1 && label() === askingWords("Bid") && box().value === "what is the deadline?", `a refused question stays, with its label: ${shows()}`);
+			// A card open: refused with a line, nothing asked.
+			await mount({ mention: mentionWith({ activeConsultDisplayName: "Budget review" }) });
+			await typeOn("@bid what is the deadline?");
+			await press("Enter");
+			assert(asked.length === 0 && label() === askingWords("Bid") && box().value === "what is the deadline?" && container!.querySelector(".composer-consult-gate"), `with a card open, the question stays: ${shows()}`);
+
+			// Cmd/Ctrl+Enter: asked now.
+			await mount({ onSendNow: (text: string) => { sent.push(`now: ${text}`); return true; } });
+			await typeOn("@bid when?");
+			// The chord as the page reads it: ⌘ where the browser says Macintosh, Ctrl elsewhere.
+			await press("Enter", (globalThis as any).navigator.userAgent.includes("Macintosh") ? { metaKey: true } : { ctrlKey: true });
+			assert(asked.join("|") === `${BID.id}: when? (now)` && sent.length === 0, `the chord asks the room now: ${shows()}`);
+
+			// Filled again by the page (back in the room, a message handed back): the label comes with its words.
+			await mount();
+			await render({ ...lastProps, initialDraftValue: "what is the deadline?", initialAsking: BID_X.id, draftResetKey: 1 });
+			assert(label() === askingWords("Bid for Client X") && box().value === "what is the deadline?" && told.at(-1) === BID_X.id, `the box filled again shows its label: ${shows()}`);
+			noId("the box filled again");
+			await press("Enter");
+			assert(asked.join("|") === `${BID_X.id}: what is the deadline?`, `and asks that room: ${shows()}`);
+			await render({ ...lastProps, initialDraftValue: "plain words", initialAsking: null, draftResetKey: 2 });
+			assert(label() === null && box().value === "plain words", `filled again with plain words, no label: ${shows()}`);
+			// A room the list no longer has keeps its label, without its id.
+			await render({ ...lastProps, initialDraftValue: "still there?", initialAsking: "gone-1234abcd", draftResetKey: 3 });
+			assert(label() === askingWords(ANOTHER_ROOM) && !container!.textContent!.includes("gone-1234abcd"), `a room gone from the list: ${shows()}`);
+			// Send is off for it, with the reason, and neither Enter nor the chord asks it.
+			assert(send().disabled && send().title === ROOM_GONE, `a room gone from the list: Send is off with the reason: ${shows()}`);
+			await press("Enter");
+			await press("Enter", (globalThis as any).navigator.userAgent.includes("Macintosh") ? { metaKey: true } : { ctrlKey: true });
+			assert(asked.slice().length === 1 && box().value === "still there?", `a room gone from the list is never asked: ${shows()}`);
+			// × takes the label off and keeps the words, which then go to this room.
+			await act(async () => (container!.querySelector(".composer-asking-off") as HTMLButtonElement).click());
+			assert(label() === null && box().value === "still there?" && !send().disabled, `× keeps the words: ${shows()}`);
+
+			// While the room answers, the greyed affordance shows for an '@' at the start only, and no label forms.
+			await mount({ mention: mentionWith({ busy: true, busyTitle: "Wait for the room's answer" }) });
+			await typeOn("@bu");
+			assert(container!.querySelector(".mention-pop-disabled") && !container!.querySelector(".mention-row"), `while busy, "@bu" shows the greyed affordance: ${shows()}`);
+			await typeOn(" hi");
+			assert(label() === null, `while busy, no label: ${shows()}`);
 			// No connection: its own title stays.
 			await mount({ sendUnavailable: true, sendTitle: "Waiting for the connection" });
-			await type("@euler ");
+			await typeOn("@bid ");
 			assert(send().disabled && send().title === "Waiting for the connection", `no connection keeps its own title: ${shows()}`);
 		} finally {
 			if (root) await act(async () => root.unmount());
@@ -446,12 +567,13 @@ try {
 	process.exitCode = 1;
 }
 
-// ---- the picked name's colour, in a room as the page draws it --------------
-// A real server on a scratch home with two rooms and a synthetic model; the
-// room's message box at desktop and phone width, light and dark: the name in
-// the effort dial's colour at 4.5:1 or more, the layer's letters exactly where
-// the box draws its own (pixel for pixel, wrapped and scrolled), and typing,
-// an input method, paste, undo and Send as before.
+// ---- the box in a room as the page draws it --------------------------------
+// A real server on a scratch home, a synthetic model, and a room to ask whose
+// id carries a tail as on a shared server. At desktop and phone width, light
+// and dark: picked from the list, the room is a label with its name, measured
+// against the box, and Send asks it. Then, in one room, what a draft lives
+// through: leaving the room and coming back, a question queued while the room
+// answers, Stop handing it back, a card already open.
 async function checkMessageBox(chromium: BrowserType): Promise<void> {
 	const waitUntil = waitEvery(100, 15_000);
 	const webServerDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -466,14 +588,45 @@ async function checkMessageBox(chromium: BrowserType): Promise<void> {
 	process.env.USERPROFILE = tempHome;
 	process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 	process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
-	// The model: every question gets "Done.".
+	// The model: every question gets "Done.", except in a conversation where the
+	// person said "Take your time": its answer starts and waits until the case lets it go.
+	// A last question "Say nothing yet" waits with no words, and fails once let go.
+	const SLOW = "Take your time";
+	const QUIET = "Say nothing yet";
+	// Whether a held answer waits now: the cases go on once the model has the question.
+	let holding = false;
+	let release = () => {};
+	// Held answers the server cut before they were let go: a Stop or a Send now.
+	let cut = 0;
 	const gateway = http.createServer((req, res) => {
-		req.resume();
-		req.on("end", () => {
+		let body = "";
+		req.on("data", (chunk) => { body += chunk; });
+		req.on("end", async () => {
 			if (req.method !== "POST" || !String(req.url ?? "").endsWith("/chat/completions")) return void res.writeHead(404).end();
+			let parsed: any = {};
+			try { parsed = JSON.parse(body); } catch {}
+			const asked = (Array.isArray(parsed?.messages) ? parsed.messages : []).filter((message: any) => message?.role === "user");
+			const users = JSON.stringify(asked);
+			const hold = () => new Promise<void>((resolve) => {
+				holding = true;
+				const letGo = () => { holding = false; res.off("close", cutHere); resolve(); };
+				const cutHere = () => { cut += 1; letGo(); };
+				release = letGo;
+				res.once("close", cutHere);
+			});
+			if (JSON.stringify(asked.at(-1) ?? null).includes(QUIET)) {
+				await hold();
+				if (!res.destroyed && !res.writableEnded) res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "The model refused the request.", type: "invalid_request_error" } }));
+				return;
+			}
 			const sse = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 			const base = { id: `cmpl_${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "gpt-fake" };
+			if (users.includes(SLOW)) {
+				sse({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "Working on it" }, finish_reason: null }] });
+				await hold();
+				if (res.destroyed || res.writableEnded) return;
+			}
 			sse({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "Done." }, finish_reason: null }] });
 			sse({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105 } });
 			res.write("data: [DONE]\n\n");
@@ -493,19 +646,42 @@ async function checkMessageBox(chromium: BrowserType): Promise<void> {
 			{ id: "custom-fake-gpt", providerId: "fake-gpt", label: "Fake GPT", roomModels: ["gpt-fake"], learnModel: "gpt-fake", reviewMemoryModel: "gpt-fake" },
 		] }, null, 2), { mode: 0o600 });
 		fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "custom-fake-gpt" }, null, 2), { mode: 0o600 });
-		const agents = await import("../src/persistent-agents.js");
+		const { createPersistentAgentFromScaffoldInput } = await import("../src/persistent-agent-create.js");
 		const roomModels = await import("../src/room-models.js");
-		const create = (displayName: string) => {
-			const agentId = agents.createPersistentAgentFromScaffoldInput({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
+		const create = (displayName: string, idTail?: () => string) => {
+			const agentId = createPersistentAgentFromScaffoldInput({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }, idTail ? { idTail } : {}).agent.agentId;
 			roomModels.writeRoomModels(agentId, { conversation: { provider: "fake-gpt", model: "gpt-fake" } });
 			return agentId;
 		};
 		// A room per pass, so each opens a fresh conversation with no consult card docked.
 		const PASSES = [[1280, "light"], [1280, "dark"], [390, "light"], [390, "dark"]] as const;
 		for (const [width, theme] of PASSES) create(`Desk ${width} ${theme}`);
-		const target = create("Client Contracts");
-		assert(target === "client-contracts", `the room to consult is client-contracts, got ${target}`);
-		const NAME = `@${target}`;
+		create("Desk flow");
+		const target = create("Bid for Client X", () => TAIL);
+		assert(target === `bid-for-client-x-${TAIL}`, `the room to ask carries a tail, got ${target}`);
+		const NAME = "Bid for Client X";
+		// Rooms that go while their label is on the box, at each width: one archived, one deleted.
+		const goneAt = {
+			1280: [
+				{ id: create("Old pricing", () => TAIL), name: "Old pricing", word: "@old", way: "archive", confirm: (id: string) => `DELETE ${id}` },
+				{ id: create("Scratch notes", () => TAIL), name: "Scratch notes", word: "@scr", way: "purge", confirm: (id: string) => `DELETE ${id} FOREVER` },
+			],
+			390: [
+				{ id: create("Past offers", () => TAIL), name: "Past offers", word: "@pas", way: "archive", confirm: (id: string) => `DELETE ${id}` },
+				{ id: create("Draft ideas", () => TAIL), name: "Draft ideas", word: "@dra", way: "purge", confirm: (id: string) => `DELETE ${id} FOREVER` },
+			],
+		};
+		// The room archived or deleted as another window does it.
+		const roomGoes = async (page: Page, id: string, way: string, confirmation: string, refresh = true) => {
+			const status = await page.evaluate(async ([id, way, confirmation]) => (await fetch(`/api/persistent-agents/${encodeURIComponent(id)}/${way}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmation }) })).status, [id, way, confirmation]);
+			assert(status < 300, `the room ${way}d, got ${status}`);
+			// Back to the window: the page reads the room list again.
+			if (refresh) await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+		};
+		// A room asked from the queue, archived before the answer here ends.
+		const spare = create("Spare notes", () => TAIL);
+		// The same, while this window can't read the room list.
+		const last = create("Last notes", () => TAIL);
 
 		const port = await freePort();
 		const baseUrl = `http://127.0.0.1:${port}`;
@@ -519,219 +695,461 @@ async function checkMessageBox(chromium: BrowserType): Promise<void> {
 		server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
 		await waitForServer(server, baseUrl, 30_000);
 
-		// Scrollbars drawn, as on a real screen (headless hides them), at a Mac's and a phone's pixel density.
-		const browser = await chromium.launch({ ignoreDefaultArgs: ["--hide-scrollbars"] });
+		const browser = await chromium.launch();
 		try {
 			for (const [width, theme] of PASSES) {
 				const label = `${width} ${theme}`;
-				const desk = `Desk ${label}`;
 				const phone = width === 390;
 				const ctx = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: theme, deviceScaleFactor: phone ? 3 : 2, ...(phone ? { isMobile: true, hasTouch: true } : {}) });
 				try {
 					const page = await ctx.newPage();
-					await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
-					await page.waitForLoadState("networkidle");
-					const dismiss = page.locator(".whats-new-close");
-					if (await dismiss.count()) await dismiss.click();
-					await page.locator(".persistent-agent-card").filter({ hasText: desk }).getByRole("button", { name: "Enter" }).click();
-					const composer = page.locator(".composer textarea").first();
-					await composer.waitFor({ timeout: 20_000 });
+					const composer = await enterRoom(page, baseUrl, `Desk ${label}`);
 					assert(await page.evaluate(() => document.documentElement.dataset.theme) === theme, `${label}: the page shows the ${theme} theme`);
 					await composer.click();
 
-					// The list after "@cl": no dot before its row.
-					await page.keyboard.type("@cl");
-					await page.locator(".mention-row").first().waitFor({ timeout: 5000 });
-					assert(await page.locator(".mention-row .m-dot").count() === 0, `${label}: the list's rows show no dot`);
-					assert(await layerOf(page) === null, `${label}: "@cl" is not coloured`);
-					await page.keyboard.press("Enter");
-					await waitUntil(async () => (await composer.inputValue()) === `${NAME} `, `${label}: Enter picks the room`);
-					const picked = await layerOf(page);
-					assert(picked?.name === NAME && picked.text === `${NAME} `, `${label}: the picked name is coloured: ${JSON.stringify(picked)}`);
-					assert(picked.nameColor === picked.plan && picked.restColor === picked.fg && picked.boxColor === "rgba(0, 0, 0, 0)", `${label}: the name in --exx-plan, the rest in the box's own colour: ${JSON.stringify(picked)}`);
-					assert(picked.contrast >= 4.5, `${label}: the name reads at 4.5:1 or more against the box, got ${picked.contrast.toFixed(2)}:1 (${picked.nameColor} on ${picked.background})`);
-					console.log(`  ${label}: the name ${picked.nameColor} on the box ${picked.background}: ${picked.contrast.toFixed(2)}:1`);
-					assert(await page.locator("button.send-btn").isDisabled(), `${label}: with only the name, Send waits`);
-					await expectAligned(page, `${label}, the name picked`);
-
-					// A question long enough to wrap: the layer wraps with the box.
-					await page.keyboard.type("what does clause 7.2 of the framework agreement say about liability caps, and does it differ for the regional agreements signed after the merger?");
-					const wrapped = await page.evaluate(() => {
-						const box = document.querySelector(".composer textarea") as HTMLTextAreaElement;
-						return box.scrollHeight / parseFloat(getComputedStyle(box).lineHeight);
-					});
-					assert(wrapped >= 2, `${label}: the question wraps onto a second line, got ${wrapped.toFixed(1)} lines`);
-					const asked = await layerOf(page);
-					assert(asked?.name === NAME && asked.restColor === asked.fg, `${label}: the question stays in the box's colour: ${JSON.stringify(asked)}`);
-					await expectAligned(page, `${label}, a wrapped question`);
-
-					// Past the box's height it scrolls: the layer scrolls with it.
-					await composer.fill(`${NAME} ${Array.from({ length: 40 }, (_, i) => `line ${i + 1} of a long question`).join("\n")}`);
-					await composer.evaluate((node: HTMLTextAreaElement) => { node.scrollTop = node.scrollHeight; });
-					await waitUntil(() => scrolledTogether(page, true), `${label}: the layer follows the box to its end`);
-					await expectAligned(page, `${label}, scrolled to the end`);
-					await composer.evaluate((node: HTMLTextAreaElement) => { node.scrollTop = 40; });
-					await waitUntil(() => scrolledTogether(page, false), `${label}: the layer follows the box back up`);
-					await expectAligned(page, `${label}, scrolled part way`);
-
-					// The colour follows edits: a letter of the name deleted, it goes; picked again, it comes back.
-					await composer.fill(`${NAME} what about pricing?`);
-					await composer.evaluate((node: HTMLTextAreaElement, at: number) => { node.focus(); node.setSelectionRange(at, at); }, NAME.length);
-					await page.keyboard.press("Backspace");
-					await waitUntil(async () => (await layerOf(page)) === null, `${label}: a letter of the name deleted, the colour goes`);
-					assert(await composer.evaluate((node) => getComputedStyle(node).color) === picked.fg, `${label}: the box draws its own text again`);
-					await page.locator(".mention-row").first().waitFor({ timeout: 5000 });
-					await page.keyboard.press("Enter");
-					await waitUntil(async () => (await layerOf(page))?.name === NAME, `${label}: picked again, the colour comes back`);
-					assert(await composer.inputValue() === `${NAME} what about pricing?`, `${label}: picking again keeps the question, got ${JSON.stringify(await composer.inputValue())}`);
-					for (const draft of ["@nobody what about pricing?", `Can you ask ${NAME} about pricing?`]) {
-						await composer.fill(draft);
-						assert(await layerOf(page) === null && await composer.evaluate((node) => getComputedStyle(node).color) === picked.fg, `${label}: ${JSON.stringify(draft)} is not coloured`);
+					// A room on the label archived or deleted meanwhile: the line above the box says so, the label
+					// stays, Send is off with the reason, and × takes the label and the line off and keeps the
+					// words, which then go to this room.
+					const send = page.locator(".composer-box .send-btn");
+					const goneLine = page.locator(".composer-room-gone");
+					if (theme === "light") for (const room of goneAt[width]) {
+						const row = `${label}, ${room.way}`;
+						await composer.pressSequentially(`${room.word} what changed?`);
+						await waitUntil(async () => (await asking(page)) === askingWords(room.name) && (await composer.inputValue()) === "what changed?", `${row}: the room is on the box`);
+						assert((await goneLine.count()) === 0, `${row}: no line while the room is there`);
+						await roomGoes(page, room.id, room.way, room.confirm(room.id));
+						await waitUntil(async () => (await asking(page)) === askingWords(ANOTHER_ROOM) && (await send.isDisabled()) && (await send.getAttribute("title")) === ROOM_GONE && (await goneLine.count()) === 1, `${row}: the line shows, the label stays, and Send is off with the reason`).catch(async (error) => {
+							throw new Error(`${error.message}: label ${JSON.stringify(await asking(page))}, box ${JSON.stringify(await composer.inputValue())}, Send ${(await send.isDisabled()) ? "off" : "on"} ${JSON.stringify(await send.getAttribute("title"))}, lines ${JSON.stringify(await page.locator("[role=status]").allInnerTexts())}`);
+						});
+						assert((await goneLine.innerText()) === `${ROOM_GONE}.`, `${row}: the line's words, got ${JSON.stringify(await goneLine.innerText())}`);
+						const look = await lineLook(page, ".composer-room-gone");
+						assert(look.ratio >= 4.5, `${row}: the line reads at 4.5:1 or more, got ${look.ratio.toFixed(2)}:1 (${JSON.stringify(look)})`);
+						assert(look.bottom <= look.boxTop && look.left >= look.textLeft - 1 && look.left <= look.textLeft + 1, `${row}: the line sits above the box, in line with its words: ${JSON.stringify(look)}`);
+						await composer.press("Enter");
+						assert((await page.locator(".consult-card").count()) === 0 && (await composer.inputValue()) === "what changed?", `${row}: Enter asks nothing`);
+						await expectNoId(page, `${row}, the label`);
+						await page.getByRole("button", { name: `Don't ask ${ANOTHER_ROOM}` }).click();
+						await waitUntil(async () => (await asking(page)) === null && (await composer.inputValue()) === "what changed?" && !(await send.isDisabled()) && (await goneLine.count()) === 0, `${row}: × takes the line off, keeps the words, and Send is on`);
+						await composer.fill("");
 					}
 
-					// Text selected: the box draws it with the system's selection colours, as
-					// before the layer; the name's colour comes back once nothing is selected.
-					await composer.fill(`${NAME} what about pricing?`);
-					await composer.press("ControlOrMeta+A");
-					await waitUntil(() => composer.evaluate((node: HTMLTextAreaElement) => node.selectionStart === 0 && node.selectionEnd === node.value.length), `${label}: the whole text is selected`);
-					await waitUntil(async () => (await layerOf(page)) === null, `${label}: with text selected, the box draws its own text`);
-					const selected = await differsFromOwnText(page, "");
-					assert(selected === 0, `${label}: the selected text looks as the box draws it, but ${selected} pixels differ`);
-					// A click puts the caret back; on a phone, where a tap inside a selection
-					// keeps it, the system clears it as it does when the selection is let go.
-					if (phone) await composer.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(node.value.length, node.value.length));
-					else await composer.click();
-					await waitUntil(async () => (await layerOf(page))?.name === NAME, `${label}: nothing selected, the name is coloured again`);
-
-					if (width === 1280 && theme === "dark") {
-						// An input method: the box draws the composing word with its underline, the name coloured again once it is done.
-						await composer.fill(`${NAME} `);
-						await composer.focus();
-						const cdp = await ctx.newCDPSession(page);
-						await cdp.send("Input.imeSetComposition", { text: "しつもん", selectionStart: 4, selectionEnd: 4 });
-						await waitUntil(async () => (await composer.inputValue()) === `${NAME} しつもん`, `${label}: the input method composes in the box`);
-						const composing = await layerOf(page);
-						assert(composing?.name === NAME && composing.restColor === "rgba(0, 0, 0, 0)" && composing.boxColor === picked.fg, `${label}: while composing, the box draws its own text (the input method's underline with it) and the layer only the name: ${JSON.stringify(composing)}`);
-						await cdp.send("Input.insertText", { text: "質問" });
-						await waitUntil(async () => (await composer.inputValue()) === `${NAME} 質問` && (await layerOf(page))?.text === `${NAME} 質問`, `${label}: the word done, the layer shows it with the name coloured`);
-						// Paste, then undo it.
-						await ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseUrl });
-						await page.evaluate((text) => navigator.clipboard.writeText(text), " and clause 7.2?");
-						await composer.press("ControlOrMeta+V");
-						await waitUntil(async () => (await composer.inputValue()) === `${NAME} 質問 and clause 7.2?`, `${label}: paste lands in the box`);
-						assert((await layerOf(page))?.text === `${NAME} 質問 and clause 7.2?`, `${label}: the layer shows the pasted text`);
-						await composer.press("ControlOrMeta+Z");
-						await waitUntil(async () => (await composer.inputValue()) === `${NAME} 質問`, `${label}: undo takes the paste back`);
-						assert((await layerOf(page))?.text === `${NAME} 質問`, `${label}: the layer follows the undo`);
-						await expectAligned(page, `${label}, after an input method, paste and undo`);
-					}
-
-					// Send: the consult goes out, the box empties and draws its own text again.
-					await composer.fill(`${NAME} what about pricing?`);
+					// Picked from the list: the label names the room, the box holds only the question.
+					await page.keyboard.type("@bi");
+					await page.locator(".mention-row").first().waitFor({ timeout: 5000 });
+					await expectNoId(page, `${label}, the list`);
 					await page.keyboard.press("Enter");
-					await waitUntil(async () => (await composer.inputValue()) === "", `${label}: Enter sends the consult`);
+					await waitUntil(async () => (await asking(page)) === askingWords(NAME), `${label}: Enter puts the room on the box`);
+					assert(await composer.inputValue() === "", `${label}: the box holds no name, got ${JSON.stringify(await composer.inputValue())}`);
+					assert(await page.locator("button.send-btn").isDisabled(), `${label}: with only the label, Send waits`);
+					await page.keyboard.type("what is the deadline?");
+					await expectNoId(page, `${label}, the label and the question`);
+					const look = await labelLook(page);
+					for (const [part, ratio] of [["name", look.name], ["×", look.off]] as const) {
+						assert(ratio >= 4.5, `${label}: the label's ${part} reads at 4.5:1 or more, got ${ratio.toFixed(2)}:1 (${JSON.stringify(look)})`);
+					}
+					assert(look.offSize >= (phone ? 32 : 22), `${label}: × is big enough to hit, got ${look.offSize}px`);
+					console.log(`  ${label}: label name ${look.name.toFixed(2)}:1, × ${look.off.toFixed(2)}:1 on ${look.ground}`);
+
+					// Send asks that room: its card opens with its name.
+					await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+					await composer.press("Enter");
 					await page.locator(".consult-card").first().waitFor({ timeout: 10_000 });
-					assert(await page.locator(".composer-mirror").count() === 0, `${label}: the empty box has no layer`);
+					await waitUntil(async () => (await page.locator(".consult-card").first().innerText()).includes(NAME), `${label}: the card names ${NAME}`);
+					assert(await composer.inputValue() === "" && (await asking(page)) === null, `${label}: the box empties and its label goes`);
+
+					// A later '@' word that names the room: the line, and Send stays on.
+					await composer.fill("hello @bid can you reply here");
+					await waitUntil(async () => (await page.locator(".composer-ask-hint").count()) === 1, `${label}: the line shows`);
+					assert(await page.locator(".composer-ask-hint").innerText() === askHint(NAME), `${label}: the line's words`);
+					const line = await lineLook(page);
+					assert(line.ratio >= 4.5, `${label}: the line reads at 4.5:1 or more, got ${line.ratio.toFixed(2)}:1 (${JSON.stringify(line)})`);
+					console.log(`  ${label}: the line ${line.ratio.toFixed(2)}:1 on ${line.ground}`);
+					// Above the box, outside its border, starting where the box's words start.
+					assert(line.bottom <= line.boxTop && line.left >= line.textLeft - 1 && line.left <= line.textLeft + 1, `${label}: the line sits above the box, in line with its words: ${JSON.stringify(line)}`);
+					assert(!(await page.locator("button.send-btn").isDisabled()), `${label}: with the line, Send stays on`);
+
+					// With a card open, a new question is refused and stays in the box with its label.
+					await composer.fill("");
+					await composer.pressSequentially("@bid and the budget?");
+					await waitUntil(async () => (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "and the budget?", `${label}: "@bid " labels the room`);
+					await composer.press("Enter");
+					await page.locator(".composer-consult-gate").waitFor({ timeout: 5000 });
+					assert((await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "and the budget?", `${label}: refused, the question stays with its label`);
 				} finally {
 					await ctx.close();
 				}
 			}
+
+			// What the draft lives through, in one room.
+			const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+			try {
+				const page = await ctx.newPage();
+				// A failed message the server handed back, as the page hears it: its place is settled after that.
+				let handedBack = 0;
+				page.on("websocket", (socket) => socket.on("framereceived", (frame) => { if (String(frame.payload).includes('"type":"prompt_returned"')) handedBack += 1; }));
+				let composer = await enterRoom(page, baseUrl, "Desk flow");
+				await composer.click();
+				await composer.pressSequentially("@bid what is the deadline?");
+				await waitUntil(async () => (await asking(page)) === askingWords(NAME), "flow: the room is on the box");
+
+				// Leaving the room and coming back.
+				await page.getByRole("button", { name: "Home", exact: true }).first().click();
+				await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
+				composer = await enterRoom(page, baseUrl, "Desk flow", false);
+				await waitUntil(async () => (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "what is the deadline?", "back in the room, the label and the question are there");
+				await page.getByRole("button", { name: `Don't ask ${NAME}` }).click();
+				await composer.fill("");
+
+				// An input method composing the start word with its space: the words stay as composed while
+				// the word is open, and the room goes on the box once it is done.
+				const cdp = await ctx.newCDPSession(page);
+				await composer.focus();
+				await cdp.send("Input.imeSetComposition", { text: "@bid しつもん", selectionStart: 9, selectionEnd: 9 });
+				await waitUntil(async () => (await composer.inputValue()) === "@bid しつもん", "the input method composes in the box").catch(async (error) => {
+					throw new Error(`${error.message}: box ${JSON.stringify(await composer.inputValue())}, label ${JSON.stringify(await asking(page))}`);
+				});
+				assert((await asking(page)) === null, `while the word is open, no label: label ${JSON.stringify(await asking(page))}, box ${JSON.stringify(await composer.inputValue())}`);
+				await cdp.send("Input.insertText", { text: "@bid 質問" });
+				await waitUntil(async () => (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "質問", "the word done, the room is on the box with the question").catch(async (error) => {
+					throw new Error(`${error.message}: box ${JSON.stringify(await composer.inputValue())}, label ${JSON.stringify(await asking(page))}`);
+				});
+				await page.getByRole("button", { name: `Don't ask ${NAME}` }).click();
+				await composer.fill("");
+				// Esc on the list, then the space and the question composed: the word stays a word, and Enter
+				// sends to this room.
+				await composer.pressSequentially("@bid");
+				await page.locator(".mention-row").first().waitFor({ timeout: 5000 });
+				await composer.press("Escape");
+				await page.locator(".mention-pop").waitFor({ state: "detached", timeout: 5000 });
+				await cdp.send("Input.imeSetComposition", { text: " しつもん", selectionStart: 5, selectionEnd: 5 });
+				await waitUntil(async () => (await composer.inputValue()) === "@bid しつもん", "after Esc, the input method composes in the box");
+				await cdp.send("Input.insertText", { text: " 質問" });
+				await waitUntil(async () => (await composer.inputValue()) === "@bid 質問", "after Esc, the composed word is done").catch(async (error) => {
+					throw new Error(`${error.message}: box ${JSON.stringify(await composer.inputValue())}, label ${JSON.stringify(await asking(page))}`);
+				});
+				assert((await asking(page)) === null, `after Esc, a composed space labels nothing: label ${JSON.stringify(await asking(page))}, box ${JSON.stringify(await composer.inputValue())}`);
+				await composer.fill("");
+
+				// Queued while the room answers: the bubble names the room, never its id.
+				const queued = page.locator(".bubble-row.user.queued");
+				const askWhileAnswering = async () => {
+					await composer.fill(SLOW);
+					await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+					await composer.press("Enter");
+					await waitUntil(() => holding, "the room's answer has started");
+					await composer.pressSequentially("@bid what is the deadline?");
+					await waitUntil(async () => (await asking(page)) === askingWords(NAME), "flow: labelled while the room answers");
+					await composer.press("Enter");
+					await waitUntil(async () => (await queued.count()) === 1 && (await composer.inputValue()) === "" && (await asking(page)) === null, "the question waits as a queued message, the box empty").catch(async (error) => {
+						throw new Error(`${error.message}: ${await queued.count()} queued, box ${JSON.stringify(await composer.inputValue())}, label ${JSON.stringify(await asking(page))}, Send ${await page.locator(".send-btn").getAttribute("title")}, ${await page.locator(".composer-consult-gate").count()} gate lines`);
+					});
+				};
+				await askWhileAnswering();
+				assert(await queued.locator(".bubble-asking").innerText() === askingWords(NAME), `the queued bubble names the room: ${await queued.innerText()}`);
+				assert((await queued.locator(".bubble").innerText()).includes("what is the deadline?"), `the queued bubble shows the question: ${await queued.innerText()}`);
+				const caption = await page.evaluate(`(() => {${contrastHelpers()} return ratio(document.querySelector(".bubble-row.user.queued .bubble-asking")); })()`) as { ratio: number; ground: string };
+				assert(caption.ratio >= 4.5, `the queued bubble's room reads at 4.5:1 or more, got ${caption.ratio.toFixed(3)}:1 on ${caption.ground}`);
+				await expectNoId(page, "flow, a queued question");
+
+				// Stop hands it back: the label comes back with the question.
+				await page.locator(".composer-box .stop-btn").click();
+				release();
+				await waitUntil(async () => (await queued.count()) === 0 && (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "what is the deadline?", "Stop hands the question back with its label");
+				await expectNoId(page, "flow, a handed-back question");
+				await page.locator(".composer-box .stop-btn").waitFor({ state: "detached", timeout: 15000 });
+				await page.getByRole("button", { name: `Don't ask ${NAME}` }).click();
+				await composer.fill("");
+
+				// Words that only look like an address, typed after Esc, go to this room: queued, they show as
+				// written, and Stop hands them back with no label.
+				const asWritten = `@${target} is this one ours?`;
+				await composer.fill(SLOW);
+				await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+				await composer.press("Enter");
+				await waitUntil(() => holding, "the room's answer has started");
+				await composer.pressSequentially(`@${target}`);
+				await page.locator(".mention-row").first().waitFor({ timeout: 5000 });
+				await composer.press("Escape");
+				await page.locator(".mention-pop").waitFor({ state: "detached", timeout: 5000 });
+				await composer.pressSequentially(" is this one ours?");
+				assert((await asking(page)) === null && (await composer.inputValue()) === asWritten, `after Esc, the words stay as written: label ${JSON.stringify(await asking(page))}, box ${JSON.stringify(await composer.inputValue())}`);
+				await composer.press("Enter");
+				await waitUntil(async () => (await queued.count()) === 1 && (await composer.inputValue()) === "", "the words wait as a queued message");
+				assert((await queued.locator(".bubble-asking").count()) === 0 && (await queued.locator(".bubble").innerText()).includes(asWritten), `the queued words show as written, asking no room: ${await queued.innerText()}`);
+				await page.locator(".composer-box .stop-btn").click();
+				release();
+				await waitUntil(async () => (await queued.count()) === 0 && (await composer.inputValue()) === asWritten, "Stop hands the words back").catch(async (error) => {
+					throw new Error(`${error.message}: ${await queued.count()} queued, box ${JSON.stringify(await composer.inputValue())}, label ${JSON.stringify(await asking(page))}`);
+				});
+				assert((await asking(page)) === null, `handed back, the words ask no room: label ${JSON.stringify(await asking(page))}`);
+				await page.locator(".composer-box .stop-btn").waitFor({ state: "detached", timeout: 15000 });
+				await composer.fill("");
+
+				// A room picked while a message to this room fails: the label stays, and the message stays above.
+				await composer.fill(QUIET);
+				const handedBefore = handedBack;
+				await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+				await composer.press("Enter");
+				await waitUntil(() => holding, "the quiet answer waits");
+				await composer.pressSequentially("@bid ");
+				await waitUntil(async () => (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "", "labelled while the message waits");
+				release();
+				await page.locator(".composer-box .stop-btn").waitFor({ state: "detached", timeout: 15000 });
+				const above = page.locator(".bubble-row.user:not(.queued)").filter({ hasText: QUIET });
+				await waitUntil(() => handedBack > handedBefore, "the server hands the failed message back");
+				// The page draws what it heard by the next frame.
+				await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
+				assert((await page.locator(".failure-line").filter({ hasText: failureLineText({ cause: "" }, "above") }).count()) === 1, `the line says the message is still above: label ${JSON.stringify(await asking(page))}, box ${JSON.stringify(await composer.inputValue())}`);
+				assert((await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "" && (await above.count()) === 1, `the failed message stays above and the label stays: label ${JSON.stringify(await asking(page))}, box ${JSON.stringify(await composer.inputValue())}, ${await above.count()} above`);
+				await page.getByRole("button", { name: `Don't ask ${NAME}` }).click();
+
+				// Edit on a message the box can't take, since the box's message goes elsewhere: the message
+				// stays exactly as it was, and the line above the box says what to do. Queued for the answer's
+				// end, held, and in the running answer's queue; and the box takes each once it can.
+				const editLine = page.locator(".composer-edit-line");
+				const useEdit = (bubble: ReturnType<Page["locator"]>) => waitUntil(async () => {
+					await bubble.hover();
+					return bubble.getByRole("button", { name: "Edit" }).click({ timeout: 1_000 }).then(() => true, () => false);
+				}, "Edit on the queued message");
+				const where = async () => `box ${JSON.stringify(await composer.inputValue())}, label ${JSON.stringify(await asking(page))}, line ${JSON.stringify(await editLine.allInnerTexts())}, bubbles ${JSON.stringify(await queued.evaluateAll((rows) => rows.map((row) => `${row.textContent}${(row as HTMLElement).dataset.held ? " (held)" : ""}`)))}`;
+				const refusedEdit = async (bubble: ReturnType<Page["locator"]>, box: string, label: string | null, when: string) => {
+					await useEdit(bubble);
+					await waitUntil(async () => (await editLine.count()) === 1, `${when}: the line says what to do`).catch(async (error) => { throw new Error(`${error.message}: ${await where()}`); });
+					assert((await editLine.innerText()) === EDIT_NEEDS_BOX && (await composer.inputValue()) === box && (await asking(page)) === label, `${when}: the line's words, and the box as it was: ${await where()}`);
+				};
+				const consultBubble = queued.filter({ hasText: "what is the deadline?" });
+				await composer.fill(SLOW);
+				await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+				await composer.press("Enter");
+				await waitUntil(() => holding, "the room's answer has started");
+				await composer.pressSequentially("@bid what is the deadline?");
+				await waitUntil(async () => (await asking(page)) === askingWords(NAME), "edit: labelled while the room answers");
+				await composer.press("Enter");
+				await waitUntil(async () => (await queued.count()) === 1 && (await composer.inputValue()) === "", "edit: the question waits for the answer's end");
+				// Queued: words for this room in the box.
+				await composer.fill("plain words");
+				await refusedEdit(consultBubble, "plain words", null, "edit, a queued question");
+				assert((await consultBubble.getAttribute("data-held")) === null, `edit, a queued question: it stays queued, not held: ${await where()}`);
+				// Typing takes the line away.
+				await composer.pressSequentially(" here");
+				await waitUntil(async () => (await editLine.count()) === 0, `edit: typing takes the line away: ${await where()}`);
+				// Held: Esc stops the answer (Stop shows only in an empty box) and hands back what the box
+				// can't take as held messages.
+				await composer.press("Escape");
+				release();
+				await page.locator(".composer-box .stop-btn").waitFor({ state: "detached", timeout: 15000 });
+				await waitUntil(async () => (await consultBubble.getAttribute("data-held")) === "true", `edit: Stop holds the question: ${await where()}`);
+				await refusedEdit(consultBubble, "plain words here", null, "edit, a held question");
+				assert((await consultBubble.getAttribute("data-held")) === "true", `edit, a held question: it stays held: ${await where()}`);
+				// Cleared, the box takes it, with its label.
+				await composer.fill("");
+				await useEdit(consultBubble);
+				await waitUntil(async () => (await queued.count()) === 0 && (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "what is the deadline?" && (await editLine.count()) === 0, `edit: the empty box takes the held question: ${await where()}`);
+				await page.getByRole("button", { name: `Don't ask ${NAME}` }).click();
+				await composer.fill("");
+				// In the running answer's queue: a room on the box's label.
+				const plainBubble = queued.filter({ hasText: "plain two" });
+				await composer.fill(SLOW);
+				await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+				await composer.press("Enter");
+				await waitUntil(() => holding, "the room's answer has started");
+				await composer.fill("plain two");
+				await composer.press("Enter");
+				await waitUntil(async () => (await plainBubble.getByRole("button", { name: "Edit", includeHidden: true }).count()) === 1, `edit: the answer holds the message: ${await where()}`);
+				await composer.pressSequentially("@bid other question");
+				await waitUntil(async () => (await asking(page)) === askingWords(NAME), "edit: labelled while the message waits");
+				await refusedEdit(plainBubble, "other question", askingWords(NAME), "edit, a message in the answer's queue");
+				assert((await queued.count()) === 1 && (await plainBubble.getAttribute("data-held")) === null, `edit, a message in the answer's queue: it stays there: ${await where()}`);
+				// The label off, the box takes it out of the answer's queue, above what is typed.
+				await page.getByRole("button", { name: `Don't ask ${NAME}` }).click();
+				await waitUntil(async () => (await editLine.count()) === 0, `edit: the label off takes the line away: ${await where()}`);
+				await useEdit(plainBubble);
+				await waitUntil(async () => (await queued.count()) === 0 && (await composer.inputValue()) === "plain two\n\nother question", `edit: the box takes the message: ${await where()}`);
+				await composer.fill("");
+				await page.locator(".composer-box .stop-btn").click();
+				release();
+				await page.locator(".composer-box .stop-btn").waitFor({ state: "detached", timeout: 15000 });
+
+				// Queued again, and the answer ends: the question goes to that room. With it queued, the
+				// label alone waits for a question: Cmd/Ctrl+Enter sends nothing now.
+				await askWhileAnswering();
+				await composer.pressSequentially("@bid ");
+				await waitUntil(async () => (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "", "labelled again, with no question");
+				const cutBefore = cut;
+				await composer.press("ControlOrMeta+Enter");
+				await page.getByRole("button", { name: `Don't ask ${NAME}` }).click();
+				release();
+				await page.locator(".consult-card").first().waitFor({ timeout: 15000 });
+				await waitUntil(async () => (await page.locator(".consult-card").first().innerText()).includes(NAME) && (await queued.count()) === 0, "once the answer ends, the queued question asks the room");
+				assert(cut === cutBefore && holding === false, `the label alone sent nothing now: ${cut - cutBefore} answers cut`);
+				await expectNoId(page, "flow, the card asked from the queue");
+
+				// Every text the consult card shows from here, as it changes, so a line shown for one frame counts too.
+				const watchCard = () => page.evaluate(() => {
+					const seen: string[] = [];
+					(window as any).cardSaid = seen;
+					new MutationObserver(() => { for (const card of document.querySelectorAll(".consult-card")) seen.push(card.textContent ?? ""); }).observe(document.body, { subtree: true, childList: true, characterData: true });
+				});
+				const cardSaid = async () => page.evaluate(() => ((window as any).cardSaid as string[]).join("\n"));
+				await page.locator(".consult-card").getByRole("button", { name: "Dismiss" }).click();
+				await page.locator(".consult-card").waitFor({ state: "detached", timeout: 10_000 });
+				// Asked from the queue, and the room archived in another window before the answer here ends,
+				// this window not told: the card never shows the room's id or the server's words for it, and
+				// once the page has read the room list it says "another room" and that the room is gone.
+				await composer.fill(SLOW);
+				await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+				await composer.press("Enter");
+				await waitUntil(() => holding, "the room's answer has started");
+				await composer.pressSequentially("@spa what changed?");
+				await waitUntil(async () => (await asking(page)) === askingWords("Spare notes"), "spare: the room is on the box");
+				await composer.press("Enter");
+				await waitUntil(async () => (await queued.count()) === 1, "spare: the question waits for the answer's end");
+				await roomGoes(page, spare, "archive", `DELETE ${spare}`, false);
+				// The room list held until the card is up, as on a busy server: the card shows before the page knows.
+				const roomList = (url: URL) => url.pathname === "/api/persistent-agents";
+				let letList = () => {};
+				const listHeld = new Promise<void>((resolve) => { letList = resolve; });
+				await page.route(roomList, async (route) => {
+					if (route.request().method() === "GET") await listHeld;
+					await route.continue();
+				});
+				await watchCard();
+				release();
+				await page.locator(".consult-card").first().waitFor({ timeout: 15000 });
+				const card = page.locator(".consult-card").first();
+				await waitUntil(async () => (await card.innerText()).includes("Consult failed."), "spare: before the list is read, the card says the consult failed").catch(async (error) => {
+					throw new Error(`${error.message}: ${JSON.stringify(await card.innerText())}`);
+				});
+				// Let go, the hold passes every later read straight on.
+				letList();
+				await waitUntil(async () => (await card.innerText()).includes(ROOM_GONE), "spare: the card says the room is gone").catch(async (error) => {
+					throw new Error(`${error.message}: ${JSON.stringify(await card.innerText())}`);
+				});
+				const said = await card.innerText();
+				assert(said.includes(ANOTHER_ROOM) && !said.includes("Spare notes"), `spare: the card names another room: ${JSON.stringify(said)}`);
+				await expectNoId(page, "spare, the card");
+				const spareSaid = await cardSaid();
+				assert(!spareSaid.includes(TAIL) && !spareSaid.includes("persistent agent"), `spare: the card never showed the id or the server's words: ${JSON.stringify(spareSaid.split("\n").filter((line) => line.includes(TAIL) || line.includes("persistent agent")))}`);
+				// The same while the room list can't be read: the card says the plain failure, never the server's words.
+				await card.getByRole("button", { name: "Dismiss" }).click();
+				await card.waitFor({ state: "detached", timeout: 10_000 });
+				await composer.fill(SLOW);
+				await page.locator(".send-btn:enabled").first().waitFor({ timeout: 15000 });
+				await composer.press("Enter");
+				await waitUntil(() => holding, "the room's answer has started");
+				await composer.pressSequentially("@las what changed?");
+				await waitUntil(async () => (await asking(page)) === askingWords("Last notes"), "last: the room is on the box");
+				await composer.press("Enter");
+				await waitUntil(async () => (await queued.count()) === 1, "last: the question waits for the answer's end");
+				// The reads held until the card is up, then failed: what the card says after the failed read is what counts.
+				let letFail = () => {};
+				const failHeld = new Promise<void>((resolve) => { letFail = resolve; });
+				await page.route(roomList, async (route) => {
+					if (route.request().method() !== "GET") return route.continue();
+					await failHeld;
+					await route.fulfill({ status: 503, body: "{}" });
+				});
+				await roomGoes(page, last, "archive", `DELETE ${last}`, false);
+				await watchCard();
+				release();
+				await card.waitFor({ timeout: 15000 });
+				await waitUntil(async () => (await card.innerText()).includes("Consult failed."), "last: before the list is read, the card says the consult failed").catch(async (error) => {
+					throw new Error(`${error.message}: ${JSON.stringify(await card.innerText())}`);
+				});
+				const failedRead = page.waitForResponse((response) => roomList(new URL(response.url())) && response.status() === 503, { timeout: 10_000 });
+				letFail();
+				await failedRead;
+				// Two frames: the page has drawn what the failed read left it with.
+				await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+				assert((await card.innerText()).includes("Consult failed."), `last: after the list can't be read, the card still says the consult failed: ${JSON.stringify(await card.innerText())}`);
+				const lastSaid = await cardSaid();
+				assert(!lastSaid.includes(TAIL) && !lastSaid.includes("persistent agent"), `last: the card never showed the id or the server's words: ${JSON.stringify(lastSaid.split("\n").filter((line) => line.includes(TAIL) || line.includes("persistent agent")))}`);
+				await page.unrouteAll({ behavior: "ignoreErrors" });
+			} finally {
+				await ctx.close();
+			}
 		} finally {
+			release();
 			await browser.close();
 		}
 	} catch (error) {
 		console.error(serverOutput.join("").split("\n").filter((line) => !line.includes("token=")).join("\n").slice(-4000));
 		throw error;
 	} finally {
+		release();
 		await stopSmokeServer(server);
 		await new Promise<void>((resolve) => gateway.close(() => resolve()));
 		fs.rmSync(tempRoot, { recursive: true, force: true });
 	}
 }
 
-/** What the layer over the message box draws, with the colours it uses; null with no layer. */
-async function layerOf(page: Page) {
-	return page.evaluate(`(() => {
-		const mirror = document.querySelector(".composer-mirror");
-		if (!mirror) return null;
-		const name = mirror.querySelector(".composer-mention");
-		const box = document.querySelector(".composer textarea");
-		const probe = (value) => { const node = document.createElement("span"); node.style.color = value; document.body.append(node); const color = getComputedStyle(node).color; node.remove(); return color; };
-		const rgb = (color) => color.match(/[\\d.]+/g).slice(0, 3).map(Number);
-		const luminance = (color) => { const [r, g, b] = rgb(color).map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
-		const nameColor = name ? getComputedStyle(name).color : null;
-		const background = getComputedStyle(document.querySelector(".composer-box")).backgroundColor;
-		const [hi, lo] = nameColor ? [luminance(nameColor), luminance(background)].sort((a, b) => b - a) : [0, 0];
-		return {
-			name: name ? name.textContent : null,
-			text: mirror.textContent,
-			nameColor,
-			restColor: getComputedStyle(mirror).color,
-			boxColor: getComputedStyle(box).color,
-			plan: probe("var(--exx-plan)"),
-			fg: probe("var(--fg)"),
-			background,
-			contrast: (hi + 0.05) / (lo + 0.05),
-		};
-	})()`) as Promise<{ name: string | null; text: string; nameColor: string; restColor: string; boxColor: string; plan: string; fg: string; background: string; contrast: number } | null>;
+/** Opens a room from Home and waits for its box; signs in first unless `fresh` is false. */
+async function enterRoom(page: Page, baseUrl: string, name: string, fresh = true) {
+	if (fresh) {
+		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+		await page.waitForLoadState("networkidle");
+		const dismiss = page.locator(".whats-new-close");
+		if (await dismiss.count()) await dismiss.click();
+	}
+	await page.locator(".persistent-agent-card").filter({ hasText: name }).getByRole("button", { name: "Enter" }).click();
+	const composer = page.locator(".composer textarea").first();
+	await composer.waitFor({ timeout: 20_000 });
+	return composer;
 }
 
-async function scrolledTogether(page: Page, atEnd: boolean): Promise<boolean> {
-	return page.evaluate(`(() => {
-		const box = document.querySelector(".composer textarea");
-		const mirror = document.querySelector(".composer-mirror");
-		const top = box.scrollTop;
-		return Boolean(mirror) && top > 0 && mirror.scrollTop === top && (${atEnd} ? top + box.clientHeight >= box.scrollHeight - 1 : top + box.clientHeight < box.scrollHeight - 1);
-	})()`) as Promise<boolean>;
+/** The label's words, or null with no room on the box. */
+async function asking(page: Page): Promise<string | null> {
+	const name = page.locator(".composer-asking-name");
+	return (await name.count()) ? name.innerText() : null;
 }
 
-/**
- * How many pixels of the box differ between the page as drawn (with `layerCss`
- * added) and the box drawing its own text with the layer hidden; the caret
- * hidden in both.
- */
-async function differsFromOwnText(page: Page, layerCss: string): Promise<number> {
-	const clip = await page.locator(".composer textarea").evaluate((node) => { const r = node.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; });
-	const common = await page.addStyleTag({ content: `.composer textarea { caret-color: transparent !important; } ${layerCss}` });
-	const asDrawn = await page.screenshot({ clip, animations: "disabled" });
-	const own = await page.addStyleTag({ content: ".composer-mirror { visibility: hidden !important; } .composer .composer-input textarea.has-mention { color: var(--fg) !important; }" });
-	const byBox = await page.screenshot({ clip, animations: "disabled" });
-	await own.evaluate((node) => (node as Element).remove());
-	await common.evaluate((node) => (node as Element).remove());
-	return page.evaluate(`(async () => {
-		const pixels = async (data) => {
-			const image = new Image();
-			image.src = "data:image/png;base64," + data;
-			await image.decode();
-			const canvas = document.createElement("canvas");
-			canvas.width = image.width;
-			canvas.height = image.height;
-			const context = canvas.getContext("2d");
-			context.drawImage(image, 0, 0);
-			return context.getImageData(0, 0, image.width, image.height).data;
-		};
-		const a = await pixels(${JSON.stringify(asDrawn.toString("base64"))});
-		const b = await pixels(${JSON.stringify(byBox.toString("base64"))});
-		let count = 0;
-		for (let i = 0; i < a.length; i += 4) if (Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2])) > 32) count++;
-		return count;
-	})()`) as Promise<number>;
+/** No room id in what the page shows or names for a reader: its text, the box's words, labels and tooltips. */
+async function expectNoId(page: Page, when: string): Promise<void> {
+	const seen = await page.evaluate(`(() => [
+		document.body.innerText,
+		...[...document.querySelectorAll("textarea, input")].map((node) => node.value),
+		...[...document.querySelectorAll("[aria-label], [title], [placeholder]")].map((node) => [node.getAttribute("aria-label"), node.getAttribute("title"), node.getAttribute("placeholder")].join(" ")),
+	].join("\\n"))()`) as string;
+	assert(!seen.includes(TAIL), `${when}: no room id shows, but the page says ${JSON.stringify(seen.split("\\n").filter((line) => line.includes(TAIL)))}`);
 }
 
-/**
- * The layer's letters sit exactly where the box would draw its own: the layer
- * drawing (the name in the text's colour, so only placement can differ)
- * against the box drawing. The name's own span starts a new run of text, so a
- * few letters after it can land a fraction of a pixel apart and shade a pixel
- * or two differently; a letter or a line out of place changes far more. So
- * the same layer one pixel off is the yardstick: it must differ plainly, and
- * the real layer by less than a twentieth of that.
- */
-async function expectAligned(page: Page, label: string): Promise<void> {
-	const shifted = (x: number) => differsFromOwnText(page, `.composer-mirror .composer-mention { color: inherit !important; } .composer-mirror { translate: ${x}px 0; }`);
-	const aligned = await shifted(0);
-	const off = await shifted(1);
-	assert(off > 50, `${label}: one pixel off, the comparison sees it (${off} pixels differ)`);
-	assert(aligned * 20 < off, `${label}: the layer's letters sit where the box draws its own, but ${aligned} pixels differ (one pixel off: ${off})`);
-	console.log(`  ${label}: ${aligned} pixels differ from the box's own text (one pixel off: ${off})`);
+// The page's colours as drawn: a colour over a see-through ground is mixed with what is under it.
+// A function, so the checks above can use it: they run before this file's later constants exist.
+function contrastHelpers(): string {
+	return `
+	const parse = (color) => {
+		const srgb = /color\\(srgb ([\\d.]+) ([\\d.]+) ([\\d.]+)(?: \\/ ([\\d.]+))?\\)/.exec(color);
+		if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] === undefined ? 1 : Number(srgb[4])];
+		const parts = color.match(/[\\d.]+/g).map(Number);
+		return [parts[0], parts[1], parts[2], parts[3] === undefined ? 1 : parts[3]];
+	};
+	const over = (top, under) => { const [r, g, b, a] = parse(top); const [R, G, B] = under; return [r * a + R * (1 - a), g * a + G * (1 - a), b * a + B * (1 - a)]; };
+	const ground = (node) => { const chain = []; for (let at = node; at; at = at.parentElement) chain.unshift(getComputedStyle(at).backgroundColor); return chain.reduce((under, color) => over(color, under), [255, 255, 255]); };
+	const luminance = (rgb) => { const [r, g, b] = rgb.map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+	const ratio = (node) => { const back = ground(node); const fore = over(getComputedStyle(node).color, back); const [hi, lo] = [luminance(fore), luminance(back)].sort((a, b) => b - a); return { ratio: (hi + 0.05) / (lo + 0.05), ground: "rgb(" + back.map(Math.round).join(", ") + ")" }; };
+`;
+}
+
+/** The label's name and × against the label's ground on the box. */
+async function labelLook(page: Page) {
+	return page.evaluate(`(() => {${contrastHelpers()}
+		const name = ratio(document.querySelector(".composer-asking-name"));
+		const off = document.querySelector(".composer-asking-off");
+		const box = off.getBoundingClientRect();
+		return { name: name.ratio, off: ratio(off).ratio, ground: name.ground, offSize: Math.min(box.width, box.height) };
+	})()`) as Promise<{ name: number; off: number; ground: string; offSize: number }>;
+}
+
+/** The line above the box against its ground. */
+async function lineLook(page: Page, selector = ".composer-ask-hint") {
+	return page.evaluate(`(() => {${contrastHelpers()}
+		const line = document.querySelector(${JSON.stringify(selector)});
+		const box = document.querySelector(".composer-box").getBoundingClientRect();
+		const field = document.querySelector(".composer textarea");
+		const words = field.getBoundingClientRect().left + parseFloat(getComputedStyle(field).paddingLeft);
+		const own = line.getBoundingClientRect();
+		const text = document.createRange();
+		text.selectNodeContents(line);
+		return { ...ratio(line), bottom: own.bottom, boxTop: box.top, left: text.getBoundingClientRect().left, textLeft: words };
+	})()`) as Promise<{ ratio: number; ground: string; bottom: number; boxTop: number; left: number; textLeft: number }>;
 }

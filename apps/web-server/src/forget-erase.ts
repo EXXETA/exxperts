@@ -18,6 +18,7 @@ import path from "node:path";
 
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 import { heldMessageFiles } from "./held-messages-store.js";
+import { turnPieceFiles } from "./turn-pieces-store.js";
 
 function readJson(file: string): any {
 	try {
@@ -131,10 +132,12 @@ function eraseWords(agentId: string, roomDir: string, threadId: string, legacySe
 	erased = remove(path.join(runtime, "remember", threadId)) || erased;
 	erased = remove(path.join(runtime, "workspace-policies", `${threadId}.json`)) || erased;
 	for (const file of heldMessageFiles(roomDir, threadId)) erased = remove(file) || erased;
+	for (const file of turnPieceFiles(roomDir, threadId)) erased = remove(file) || erased;
 	// The conversation's task notes and task folders.
+	// The folder first: the note is how a rerun finds it, so a kill between the two leaves the note.
 	for (const task of stores.tasks.get(threadId) ?? []) {
+		if (typeof task.taskId === "string") erased = removeTaskFolder(task.taskId) || erased;
 		erased = remove(task.file) || erased;
-		if (typeof task.taskId === "string") eraseForgottenTask(roomDir, task.taskId);
 	}
 	// A scheduled run keeps its status line, not its prompt and answer.
 	for (const runDir of stores.runs.get(threadId) ?? []) {
@@ -159,8 +162,12 @@ function eraseWords(agentId: string, roomDir: string, threadId: string, legacySe
 /** A forgotten conversation's task: its note and its folder. A task that ends after the Forget calls it again for what it wrote late. */
 export function eraseForgottenTask(roomDir: string, taskId: string): void {
 	if (!/^[\w-]{1,80}$/.test(taskId)) return;
-	remove(productAppStatePath("artifacts", "tasks", taskId));
+	removeTaskFolder(taskId);
 	remove(path.join(roomDir, "runtime", "task-ledger", `${taskId}.json`));
+}
+
+function removeTaskFolder(taskId: string): boolean {
+	return /^[\w-]{1,80}$/.test(taskId) && remove(productAppStatePath("artifacts", "tasks", taskId));
 }
 
 /** True when the conversation was forgotten: what a task started from it hands back is thrown away. */

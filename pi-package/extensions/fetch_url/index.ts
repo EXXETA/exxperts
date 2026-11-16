@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { Readability } from "@mozilla/readability";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
+import { classifyAddress } from "./address-class.js";
 
 // Curated, JS-native single-purpose "fetch a URL" tool. Sibling to `web_search`
 // in the room web-research lane: outbound-only, no filesystem, no shell. Web
@@ -101,72 +102,8 @@ function hostAllowed(hostname: string): boolean {
 	return list.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
-function ipv4IsPrivate(ip: string): boolean {
-	const parts = ip.split(".").map((n) => Number(n));
-	if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-	const [a, b] = parts;
-	if (a === 0) return true; // 0.0.0.0/8
-	if (a === 10) return true; // 10.0.0.0/8
-	if (a === 127) return true; // loopback
-	if (a === 169 && b === 254) return true; // link-local incl. 169.254.169.254 metadata
-	if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
-	if (a === 192 && b === 168) return true; // 192.168.0.0/16
-	if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
-	if (a >= 224) return true; // multicast + reserved
-	return false;
-}
-
-// Expand an IPv6 literal into its 8 16-bit groups. Handles "::" compression,
-// a trailing embedded dotted IPv4 ("::ffff:1.2.3.4"), and zone suffixes.
-// Returns null when the address is not parseable.
-function parseIpv6Groups(ip: string): number[] | null {
-	let addr = ip.toLowerCase().replace(/^\[|\]$/g, "");
-	const zone = addr.indexOf("%");
-	if (zone !== -1) addr = addr.slice(0, zone);
-	const dotted = addr.match(/(\d+\.\d+\.\d+\.\d+)$/);
-	if (dotted) {
-		const parts = dotted[1].split(".").map((n) => Number(n));
-		if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
-		const hexTail = `${(((parts[0] << 8) | parts[1]) >>> 0).toString(16)}:${(((parts[2] << 8) | parts[3]) >>> 0).toString(16)}`;
-		addr = addr.slice(0, addr.length - dotted[1].length) + hexTail;
-	}
-	const halves = addr.split("::");
-	if (halves.length > 2) return null;
-	const head = halves[0] ? halves[0].split(":") : [];
-	const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
-	if (halves.length === 2 ? head.length + tail.length > 7 : head.length !== 8) return null;
-	const fill = halves.length === 2 ? new Array(8 - head.length - tail.length).fill("0") : [];
-	const groups: number[] = [];
-	for (const g of [...head, ...fill, ...tail]) {
-		if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
-		groups.push(Number.parseInt(g, 16));
-	}
-	return groups;
-}
-
-function ipv6IsPrivate(ip: string): boolean {
-	const groups = parseIpv6Groups(ip);
-	if (!groups) return true; // unparseable → refuse
-	// IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) addresses embed a
-	// v4 address in the low 32 bits; judge that v4 in ANY spelling — `new URL()`
-	// normalises "[::ffff:169.254.169.254]" to the hex form "::ffff:a9fe:a9fe",
-	// so matching only the dotted spelling is bypassable. This also covers
-	// "::1" / "::" (loopback / unspecified) via ipv4IsPrivate's 0.0.0.0/8 rule.
-	if (groups.slice(0, 5).every((g) => g === 0) && (groups[5] === 0xffff || groups[5] === 0)) {
-		const v4 = `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
-		return ipv4IsPrivate(v4);
-	}
-	if ((groups[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
-	if ((groups[0] & 0xfe00) === 0xfc00) return true; // unique local fc00::/7
-	return false;
-}
-
-
 function ipIsBlocked(ip: string): boolean {
-	const kind = net.isIP(ip);
-	if (kind === 4) return ipv4IsPrivate(ip);
-	if (kind === 6) return ipv6IsPrivate(ip);
-	return true; // not a recognisable IP → refuse
+	return classifyAddress(ip) !== "public";
 }
 
 // DNS-rebinding-safe dispatcher: the address is validated inside the connection's
@@ -197,9 +134,17 @@ function guardedLookup(
 
 const guardedDispatcher = new Agent({ connect: { lookup: guardedLookup as any } });
 
-// Resolve and validate the host. Returns an error string if the URL must be
-// refused, or null if it is safe to fetch.
-async function guardUrl(raw: string): Promise<string | null> {
+export const FETCH_DISABLED = "URL fetching is disabled in this environment.";
+
+/**
+ * What no yes could open, judged from the address alone with no name lookup:
+ * fetching switched off, another scheme, an internal name, a private or
+ * reserved IP literal, a host the operator's list refuses. Null when the
+ * address may go on to be judged; the room's web reader runs this before it
+ * decides whether to ask, so a card never offers what can't be opened.
+ */
+export function refusedWithoutLookup(raw: string): string | null {
+	if (isDisabled()) return FETCH_DISABLED;
 	let parsed: URL;
 	try {
 		parsed = new URL(raw);
@@ -225,12 +170,18 @@ async function guardUrl(raw: string): Promise<string | null> {
 	if (!hostAllowed(hostname)) {
 		return `Host "${hostname}" is not in the configured fetch allowlist.`;
 	}
+	if (net.isIP(hostname) && !allowPrivate && ipIsBlocked(hostname)) return `Refusing to fetch private/reserved address "${hostname}".`;
+	return null;
+}
 
-	// Literal IP in the URL — check directly.
-	if (net.isIP(hostname)) {
-		if (!allowPrivate && ipIsBlocked(hostname)) return `Refusing to fetch private/reserved address "${hostname}".`;
-		return null;
-	}
+// Resolve and validate the host. Returns an error string if the URL must be
+// refused, or null if it is safe to fetch.
+async function guardUrl(raw: string): Promise<string | null> {
+	const refused = refusedWithoutLookup(raw);
+	if (refused) return refused;
+	const hostname = new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+	if (net.isIP(hostname)) return null;
+	const allowPrivate = allowPrivateHosts();
 
 	// Hostname — resolve every address and block if any is private/reserved.
 	let addrs: string[];
@@ -270,6 +221,52 @@ async function readCapped(res: Response): Promise<{ text: string; truncatedBytes
 	return { text: Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf-8"), truncatedBytes };
 }
 
+/** The port a connection to this address uses: its own, or its scheme's. */
+export function effectivePort(url: URL): number {
+	return url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+}
+
+/**
+ * Whether a redirect stays where the call was judged: the same host and port,
+ * or the one upgrade from http on port 80 to https on port 443 of the same
+ * host. Anywhere else is judged afresh, as a call of its own, unless the call
+ * follows other hosts (`FOLLOWS_OTHER_HOSTS`).
+ */
+export function redirectStays(from: URL, to: URL): boolean {
+	if (from.hostname !== to.hostname) return false;
+	if (effectivePort(from) === effectivePort(to)) return true;
+	return from.protocol === "http:" && effectivePort(from) === 80 && to.protocol === "https:" && effectivePort(to) === 443;
+}
+
+/** An address with its fragment cut: a fragment never goes to the site, and two addresses that differ only there are one page. */
+export function withoutFragment(url: URL): string {
+	const copy = new URL(url);
+	copy.hash = "";
+	return copy.toString();
+}
+
+/**
+ * The mark the room's web reader puts on a call's input when its address was
+ * free by its exact address: the person's own message or a search result. The
+ * static fetch then follows a redirect to another host or port, each hop still
+ * checked, and the browser renders where it ended; a redirect only the browser
+ * meets is handed back as before. A symbol, so no input the model writes can
+ * carry it.
+ */
+export const FOLLOWS_OTHER_HOSTS = Symbol.for("exxperts.fetch_url.followsOtherHosts");
+
+/** A redirect away from the judged host or port: the call ends and the model is told where the page went. */
+class MovedAway extends Error {
+	constructor(readonly from: string, readonly to: string) {
+		super(`The page moved to ${to}`);
+	}
+}
+
+/** What the model reads when a page sent it somewhere else, which this call didn't open. */
+export function movedAwayLine(from: string, to: string): string {
+	return `The page at ${from} sent the reader to another address, ${to}, which was not opened. To read it, open that address in a new call.`;
+}
+
 interface FetchOutcome {
 	finalUrl: string;
 	status: number;
@@ -280,7 +277,7 @@ interface FetchOutcome {
 }
 
 // Static fetch with manual redirect handling so every hop is SSRF-revalidated.
-async function fetchStatic(startUrl: string, signal?: AbortSignal): Promise<FetchOutcome> {
+async function fetchStatic(startUrl: string, followsOtherHosts: boolean, signal?: AbortSignal): Promise<FetchOutcome> {
 	let currentUrl = startUrl;
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
 		const guardError = await guardUrl(currentUrl);
@@ -316,8 +313,10 @@ async function fetchStatic(startUrl: string, signal?: AbortSignal): Promise<Fetc
 				const location = res.headers.get("location");
 				if (!location) throw new Error(`Redirect (${res.status}) from ${currentUrl} had no Location header.`);
 				if (hop === MAX_REDIRECTS) throw new Error(`Too many redirects (>${MAX_REDIRECTS}) starting from ${startUrl}.`);
-				currentUrl = new URL(location, currentUrl).toString();
 				await res.body?.cancel().catch(() => {});
+				const next = new URL(location, currentUrl);
+				if (!followsOtherHosts && !redirectStays(new URL(currentUrl), next)) throw new MovedAway(currentUrl, withoutFragment(next));
+				currentUrl = withoutFragment(next);
 				continue;
 			}
 
@@ -521,13 +520,15 @@ async function dismissConsent(page: any): Promise<void> {
 // Render a URL in headless Chromium and return the fully-hydrated HTML. Returns
 // null when the browser is unavailable, disabled, at the concurrency cap, or the
 // render fails — every one of which falls back to the static result.
-async function renderWithBrowser(url: string): Promise<{ html: string; finalUrl: string } | null> {
+async function renderWithBrowser(url: string): Promise<{ html: string; finalUrl: string } | MovedAway | null> {
 	if (!browserFallbackEnabled()) return null;
 	if (activeRenders >= MAX_CONCURRENT_RENDERS) return null;
 	// Claim the render slot before the first await — otherwise concurrent calls
 	// all pass the check above before any of them counts itself, exceeding the cap.
 	activeRenders++;
 	let browser: any = null;
+	// A top-level navigation that leaves the judged host or port: it is never made, and the call ends with where it went.
+	let movedAway: MovedAway | null = null;
 	try {
 		const chromium = await loadChromium();
 		if (!chromium) return null;
@@ -555,7 +556,17 @@ async function renderWithBrowser(url: string): Promise<{ html: string; finalUrl:
 				if (reqUrl.startsWith("data:") || reqUrl.startsWith("blob:")) return route.continue();
 				const type = req.resourceType();
 				if (type === "image" || type === "media" || type === "font") return route.abort();
+				let topLevel = false;
+				try {
+					topLevel = req.isNavigationRequest() && req.frame() === page.mainFrame();
+				} catch {
+					// A request with no frame is not a top-level navigation.
+				}
 				let hopUrl = reqUrl;
+				if (topLevel && !redirectStays(new URL(url), new URL(hopUrl))) {
+					movedAway ??= new MovedAway(url, withoutFragment(new URL(hopUrl)));
+					return route.abort();
+				}
 				let res: any = null;
 				for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
 					const guardError = await guardUrl(hopUrl);
@@ -565,7 +576,12 @@ async function renderWithBrowser(url: string): Promise<{ html: string; finalUrl:
 					const location = res.headers()["location"];
 					if (!location) break;
 					if (hop === MAX_REDIRECTS) return route.abort();
-					hopUrl = new URL(location, hopUrl).toString();
+					const next = new URL(location, hopUrl);
+					if (topLevel && !redirectStays(new URL(hopUrl), next)) {
+						movedAway ??= new MovedAway(hopUrl, withoutFragment(next));
+						return route.abort();
+					}
+					hopUrl = next.toString();
 				}
 				return route.fulfill({ response: res });
 			} catch {
@@ -597,11 +613,12 @@ async function renderWithBrowser(url: string): Promise<{ html: string; finalUrl:
 				}
 			})
 			.catch(() => {});
+		if (movedAway) return movedAway;
 		const html: string = await page.content();
 		const finalUrl: string = page.url();
 		return { html, finalUrl };
 	} catch {
-		return null;
+		return movedAway;
 	} finally {
 		if (browser) await browser.close().catch(() => {});
 		activeRenders--;
@@ -618,17 +635,19 @@ export default function (pi: ExtensionAPI) {
 			// Deliberately does not name the search tool: a room whose model
 			// searches through its own provider has no `web_search` registered, and
 			// a description that pointed at it would be naming something absent.
-			"Use `fetch_url` to read a specific web page or API the user references by URL, or to open a page you found or were given, for example a search result. It returns readable Markdown, not raw HTML, and can render JavaScript-heavy pages. It cannot reach internal/private hosts and does not download binary files. When you use anything from a fetched page in your answer, cite it as a clickable Markdown link to the exact URL you fetched — [page title](https://the-actual-url) — so the user can click through. Never mention tool or function names (e.g. `fetch_url`) anywhere in your answer, not even to describe how you got the content — say it in plain language instead (\"I read the page at …\"). Never present a URL as plain or code-formatted text; always make it a Markdown link.",
+			"Use `fetch_url` to read a specific web page or API the user references by URL, or to open a page you found or were given, for example a search result. It returns readable Markdown, not raw HTML, and can render JavaScript-heavy pages. It cannot reach internal/private hosts and does not download binary files. An address you build yourself, or find in a file, a fetched page or a tool's answer, may ask the person first, and one that asks isn't opened when nobody is there to answer; one the person gave in their own message, a search result, or a site the room allows opens at once. A page the person gave or a search found is followed when it sends you to another site; any other page that does isn't followed, and you are told the new address. When you use anything from a fetched page in your answer, cite it as a clickable Markdown link to the exact URL you fetched, [page title](https://the-actual-url), so the user can click through. Never mention tool or function names (e.g. `fetch_url`) anywhere in your answer, not even to describe how you got the content; say it in plain language instead (\"I read the page at …\"). Never present a URL as plain or code-formatted text; always make it a Markdown link.",
 		parameters: Type.Object({
 			url: Type.String({ description: "The absolute http(s) URL to fetch." }),
 			max_chars: Type.Optional(
 				Type.Number({ description: `Maximum characters of content to return. Default ${DEFAULT_MAX_CHARS}, max ${HARD_MAX_CHARS}.` }),
 			),
 		}),
-		async execute(_id, { url, max_chars }, signal): Promise<any> {
+		async execute(_id, params, signal): Promise<any> {
+			const { url, max_chars } = params;
+			const followsOtherHosts = (params as Record<symbol, unknown>)[FOLLOWS_OTHER_HOSTS] === true;
 			if (isDisabled()) {
 				return {
-					content: [{ type: "text", text: "URL fetching is disabled in this environment." }],
+					content: [{ type: "text", text: FETCH_DISABLED }],
 					details: { disabled: true },
 					isError: true,
 				};
@@ -636,10 +655,24 @@ export default function (pi: ExtensionAPI) {
 
 			const limit = Math.max(500, Math.min(HARD_MAX_CHARS, Math.floor(Number(max_chars ?? DEFAULT_MAX_CHARS)) || DEFAULT_MAX_CHARS));
 
+			const raw = String(url).trim();
+			let target = raw;
+			try {
+				target = withoutFragment(new URL(raw));
+			} catch {
+				// Not an address: the guard says so.
+			}
+			const movedAway = (moved: MovedAway) => ({
+				content: [{ type: "text", text: movedAwayLine(moved.from, moved.to) }],
+				details: { url, movedTo: moved.to },
+				isError: true,
+			});
+
 			let outcome: FetchOutcome;
 			try {
-				outcome = await fetchStatic(String(url).trim(), signal);
+				outcome = await fetchStatic(target, followsOtherHosts, signal);
 			} catch (e) {
+				if (e instanceof MovedAway) return movedAway(e);
 				return {
 					content: [{ type: "text", text: `Fetch failed: ${(e as Error).message}` }],
 					details: { url, error: (e as Error).message },
@@ -708,6 +741,7 @@ export default function (pi: ExtensionAPI) {
 			if (staticGarbled || extracted.textLength < THIN_TEXT_THRESHOLD || BLOCKED_STATUSES.has(outcome.status)) {
 				browserWanted = true;
 				const rendered = await renderWithBrowser(outcome.finalUrl);
+				if (rendered instanceof MovedAway) return movedAway(rendered);
 				if (rendered) {
 					const reExtracted = extractReadable(rendered.html, rendered.finalUrl);
 					if (reExtracted.textLength > extracted.textLength) {

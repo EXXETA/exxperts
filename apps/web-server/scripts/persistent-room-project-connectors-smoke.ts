@@ -220,22 +220,22 @@ try {
 	}
 
 	// 1 + 2. A web room session start with a folder connector file starts nothing.
-	const rootRoom = await createRoom("Folder Root", path.join(tempRoot, "ws-root"));
-	writeFolderConnectorFile(path.join(tempRoot, "ws-root"), ".mcp.json", "web-root");
+	const rootRoom = await createRoom("Folder Root", path.join(tempHome, "ws-root"));
+	writeFolderConnectorFile(path.join(tempHome, "ws-root"), ".mcp.json", "web-root");
 	await openRoom(rootRoom, "conv-root", "hello");
 	check(markerText("web-root") === null, `a web room must not use its folder's .mcp.json (marker: ${markerText("web-root")})`);
 
-	const piRoom = await createRoom("Folder Pi", path.join(tempRoot, "ws-pi"));
-	writeFolderConnectorFile(path.join(tempRoot, "ws-pi"), ".pi/mcp.json", "web-pi");
+	const piRoom = await createRoom("Folder Pi", path.join(tempHome, "ws-pi"));
+	writeFolderConnectorFile(path.join(tempHome, "ws-pi"), ".pi/mcp.json", "web-pi");
 	await openRoom(piRoom, "conv-second", "hello");
 	check(markerText("web-pi") === null, `a web room must not use its folder's .pi/mcp.json (marker: ${markerText("web-pi")})`);
 
 	// 3. A granted name is the person's connector, whatever the folder says; and a
 	// connector from the person's settings starts in the folder it always did.
-	const grantRoom = await createRoom("Folder Grant", path.join(tempRoot, "ws-grant"));
+	const grantRoom = await createRoom("Folder Grant", path.join(tempHome, "ws-grant"));
 	await grant(grantRoom, "github");
 	await grant(grantRoom, "cwd-probe");
-	writeFolderConnectorFile(path.join(tempRoot, "ws-grant"), ".mcp.json", "shadow", "github", "lazy");
+	writeFolderConnectorFile(path.join(tempHome, "ws-grant"), ".mcp.json", "shadow", "github", "lazy");
 	const hitsBefore = githubHits;
 	const shadowResults = await openRoom(grantRoom, "conv-grant", "CONNECT github");
 	check(markerText("shadow") === null, `a folder file must not replace a granted connector (marker: ${markerText("shadow")}; tool results: ${shadowResults.join(" | ")})`);
@@ -245,8 +245,8 @@ try {
 	check(startedIn.length > 0 && startedIn.every((dir) => fs.realpathSync(dir) === fs.realpathSync(webServerDir)), `a connector from the person's settings must start in the server's working folder, got: ${JSON.stringify(startedIn)}`);
 
 	// 4. A scheduled background run of a room with a folder connector file starts nothing.
-	const backgroundRoom = await createRoom("Folder Background", path.join(tempRoot, "ws-bg"));
-	writeFolderConnectorFile(path.join(tempRoot, "ws-bg"), ".mcp.json", "background");
+	const backgroundRoom = await createRoom("Folder Background", path.join(tempHome, "ws-bg"));
+	writeFolderConnectorFile(path.join(tempHome, "ws-bg"), ".mcp.json", "background");
 	const backgroundStartsBefore = countLines(serverOutput, EAGER_DONE) + countLines(serverOutput, EAGER_AFTER_SESSION);
 	const schedule = await requestJson(`/api/persistent-agents/${encodeURIComponent(backgroundRoom)}/schedules`, { method: "POST", body: JSON.stringify({ name: "folder check", type: "once", schedule: "+3s", prompt: "hello", enabled: true }) });
 	assert(schedule.status === 201, `schedule create: expected 201, got ${schedule.status}: ${JSON.stringify(schedule.body).slice(0, 300)}`);
@@ -268,7 +268,7 @@ try {
 	// 5. A bounded room's write tool cannot create a connector file in its folder.
 	const { createPersistentRoomCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");
 	const { createPersistentRoomWorkspaceTools } = await import("../src/persistent-room-workspace-tools.js");
-	const boundedRoot = path.join(tempRoot, "ws-bounded");
+	const boundedRoot = path.join(tempHome, "ws-bounded");
 	fs.mkdirSync(boundedRoot, { recursive: true });
 	const policy = createPersistentRoomCapabilityPolicy({
 		agentId: "room-connectors-bounded",

@@ -7,6 +7,7 @@
  * until the provider reports configured.
  */
 import { ANTHROPIC_API_KEY_PROVIDER, AuthStorage, isApiKeyLoginProvider, ModelRegistry } from "@exxeta/exxperts-runtime";
+import { normalizeDomain } from "@exxeta/exxperts-ai/oauth";
 import { anthropicKeyNeedsWorkspace } from "./model-not-offered.js";
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
@@ -22,6 +23,8 @@ export class ProviderAuthError extends Error {
 
 type PendingLogin = {
 	provider: string;
+	/** Copilot's company GitHub, null for github.com and for every other provider. */
+	companyDomain: string | null;
 	url: string | null;
 	instructions: string | null;
 	abort: AbortController;
@@ -31,6 +34,51 @@ type PendingLogin = {
 };
 
 let pending: PendingLogin | null = null;
+
+/**
+ * GitHub Copilot can sign in at a company's own GitHub (an address like
+ * yourcompany.ghe.com) instead of github.com: the runtime asks for it with an
+ * optional prompt, which the address answers. The words below are the page's
+ * lines for that sign-in's failures; github.com keeps the runtime's own.
+ */
+export const COPILOT_PROVIDER_ID = "github-copilot";
+const GITHUB_COM_HOSTS = new Set(["github.com", "www.github.com"]);
+export const COMPANY_ADDRESS_REFUSED = "This isn't a web address. Type it like yourcompany.ghe.com, or leave it empty for github.com.";
+/** Why a sign-in at a company's GitHub failed, as far as the runtime's error tells. */
+type CompanySignInFailure = "not-started" | "refused" | "unfinished";
+export const COMPANY_SIGN_IN_FAILED: Record<CompanySignInFailure, (address: string) => string> = {
+	"not-started": (address) => `Can't start a GitHub sign-in at ${address}. Check the address, then try again.`,
+	refused: (address) => `GitHub at ${address} turned this sign-in away. If your account there should have Copilot, ask your GitHub admin.`,
+	unfinished: (address) => `Signing in at ${address} didn't finish. Try again.`,
+};
+
+/** The line under the Copilot model list when it shows only the account's own models. */
+export const COPILOT_ACCOUNT_MODELS_NOTE = "Showing the models your Copilot account can use.";
+
+/**
+ * Before the runtime hands back the code page, nothing tells a wrong address
+ * from one whose GitHub turns this sign-in away: nothing answered there, or not
+ * as GitHub does, so the person checks the address. After it, an HTTP refusal
+ * (the runtime's HTTP errors start with the status) comes from that GitHub,
+ * either while the person signs in or from the Copilot token request once they
+ * have; nothing tells the two apart, and the second, an account without
+ * Copilot there, is its admin's to fix. Anything else is a sign-in that did not
+ * finish (declined on GitHub's page, the code expired, the network).
+ */
+function companySignInFailure(error: unknown, codeShown: boolean): CompanySignInFailure {
+	if (!codeShown) return "not-started";
+	const status = /^(\d{3}) /.exec(error instanceof Error ? error.message : "")?.[1];
+	return status === "401" || status === "403" || status === "404" ? "refused" : "unfinished";
+}
+
+/** The company address a Copilot sign-in asks at, or null for github.com; other providers take none. */
+function companyGitHubDomain(providerId: string, companyAddress: string | undefined): string | null {
+	if (providerId !== COPILOT_PROVIDER_ID || !companyAddress?.trim()) return null;
+	const domain = normalizeDomain(companyAddress);
+	if (!domain) throw new ProviderAuthError(COMPANY_ADDRESS_REFUSED, 400);
+	// github.com typed out is the empty field: as a company domain the runtime would store it and use another API address for it.
+	return GITHUB_COM_HOSTS.has(domain) ? null : domain;
+}
 
 export function knownOAuthProviderIds(): string[] {
 	return AuthStorage.create().getOAuthProviders().map((provider) => provider.id);
@@ -42,20 +90,25 @@ export function providerLoginState(): { pending: boolean; provider?: string; url
 	return { pending: true, provider: pending.provider, url: pending.url, instructions: pending.instructions };
 }
 
-/** `onSignedIn` runs once the new credentials are stored. */
-export async function startProviderLogin(providerId: string, onSignedIn?: () => void): Promise<{ url: string; instructions?: string | null }> {
+/** `onSignedIn` runs once the new credentials are stored. `companyAddress` is Copilot's company GitHub, empty for github.com. */
+export async function startProviderLogin(providerId: string, companyAddress: string | undefined, onSignedIn?: () => void): Promise<{ url: string; instructions?: string | null }> {
 	if (!knownOAuthProviderIds().includes(providerId)) {
 		throw new ProviderAuthError(`Unknown OAuth provider: ${providerId}`, 400);
 	}
+	const companyDomain = companyGitHubDomain(providerId, companyAddress);
 	if (pending && !pending.done) {
-		// Re-requesting the same provider is a retry from the UI: hand back the URL.
-		if (pending.provider === providerId && pending.url) return { url: pending.url, instructions: pending.instructions };
-		throw new ProviderAuthError("Another sign-in is already in progress. Cancel it first.", 409);
+		const sameProvider = pending.provider === providerId;
+		// Re-requesting the same sign-in is a retry from the UI: hand back the URL.
+		if (sameProvider && pending.companyDomain === companyDomain && pending.url) return { url: pending.url, instructions: pending.instructions };
+		// Copilot at another address is a new sign-in: the one in flight gives way to it.
+		if (sameProvider && pending.companyDomain !== companyDomain) cancelProviderLogin();
+		else throw new ProviderAuthError("Another sign-in is already in progress. Cancel it first.", 409);
 	}
 
 	const abort = new AbortController();
 	const entry: PendingLogin = {
 		provider: providerId,
+		companyDomain,
 		url: null,
 		instructions: null,
 		abort,
@@ -78,9 +131,23 @@ export async function startProviderLogin(providerId: string, onSignedIn?: () => 
 		resolveUrl = resolve;
 		rejectUrl = reject;
 	});
-	const urlTimeout = setTimeout(() => rejectUrl(new Error("The sign-in flow did not produce a login URL in time.")), URL_WAIT_TIMEOUT_MS);
+	// An address that takes the request and never answers would otherwise hold
+	// this sign-in, and refuse every retry, until the login deadline.
+	const urlTimeout = setTimeout(() => {
+		if (!entry.done) {
+			abort.abort();
+			entry.done = true;
+			entry.error = companyDomain ? COMPANY_SIGN_IN_FAILED["not-started"](companyDomain) : "The sign-in flow did not produce a login URL in time.";
+			clearTimeout(entry.timeout);
+		}
+		rejectUrl(new Error(entry.error ?? "Sign-in was cancelled."));
+	}, URL_WAIT_TIMEOUT_MS);
 
-	AuthStorage.create()
+	// The flow signs in to a store of its own; only a sign-in still current when it
+	// ends reaches the shared one. One cancelled, settled past a deadline or replaced
+	// by another address ends unseen rather than overwriting what came after it.
+	const signedIn = AuthStorage.inMemory();
+	signedIn
 		.login(providerId, {
 			onAuth: (info) => {
 				entry.url = info.url;
@@ -89,11 +156,12 @@ export async function startProviderLogin(providerId: string, onSignedIn?: () => 
 				entry.instructions = info.instructions ?? null;
 				resolveUrl(info.url);
 			},
-			// Optional prompts (e.g. Copilot's GitHub Enterprise domain) take
-			// their default; there is no interactive input in the web flow, so
-			// a required prompt ends the flow with the reason instead of hanging.
+			// Optional prompts take their default, except Copilot's GitHub
+			// Enterprise domain, which the company address answers; there is no
+			// interactive input in the web flow, so a required prompt ends the
+			// flow with the reason instead of hanging.
 			onPrompt: async (prompt) => {
-				if (prompt.allowEmpty) return "";
+				if (prompt.allowEmpty) return companyDomain ?? "";
 				throw new Error(`Sign-in needs input that is not available here (${prompt.message}).`);
 			},
 			// The flows race the callback server against this promise and tear
@@ -109,13 +177,23 @@ export async function startProviderLogin(providerId: string, onSignedIn?: () => 
 			signal: abort.signal,
 		})
 		.then(() => {
+			const credentials = signedIn.get(providerId);
+			if (entry.done || pending !== entry || !credentials) return;
+			AuthStorage.create().set(providerId, credentials);
 			entry.done = true;
 			onSignedIn?.();
 		})
 		.catch((error: unknown) => {
-			entry.done = true;
-			entry.error = abort.signal.aborted ? "Sign-in was cancelled." : (error as Error).message;
-			rejectUrl(new Error(entry.error));
+			// A sign-in already settled (cancelled, or past a deadline) keeps its line.
+			if (!entry.done) {
+				entry.done = true;
+				entry.error = abort.signal.aborted
+					? "Sign-in was cancelled."
+					: companyDomain
+						? COMPANY_SIGN_IN_FAILED[companySignInFailure(error, entry.url !== null)](companyDomain)
+						: (error as Error).message;
+			}
+			rejectUrl(new Error(entry.error ?? "Sign-in was cancelled."));
 		})
 		.finally(() => {
 			clearTimeout(entry.timeout);
@@ -132,8 +210,7 @@ export async function startProviderLogin(providerId: string, onSignedIn?: () => 
 export function cancelProviderLogin(): { cancelled: boolean } {
 	if (!pending || pending.done) return { cancelled: false };
 	// The runtime login flow does not observe the abort signal, so settle the
-	// tracked state here; a late completion still stores credentials, which is
-	// harmless (the UI refresh would simply show the profile as signed in).
+	// tracked state here; a late completion then stores nothing.
 	pending.abort.abort();
 	pending.done = true;
 	pending.error = "Sign-in was cancelled.";
@@ -149,17 +226,34 @@ export function knownApiKeyProviderIds(): string[] {
 	return [...providerIds].filter((providerId) => isApiKeyLoginProvider(providerId, oauthProviderIds)).sort();
 }
 
+// No real key comes near this; a key over 1 MiB would stop a shared server's next start as an unreadable file.
+const API_KEY_MAX_BYTES = 8 * 1024;
+
+/**
+ * Why the save refuses a trimmed key, or null. A line break or other control
+ * character reaches an error sentence through a header's error, so neither the
+ * save nor the check below takes such a key. The Anthropic provider treats any
+ * key holding "sk-ant-oat" as a sign-in token, so one pasted under either Claude
+ * id would send a subscription through the key.
+ */
+export function apiKeyRefusal(providerId: string, trimmedKey: string): string | null {
+	if (Buffer.byteLength(trimmedKey) > API_KEY_MAX_BYTES || /[\p{Cc}\u2028\u2029]/u.test(trimmedKey)) {
+		return "This doesn't look like an API key: it's too long or holds a line break or other hidden character. Copy the key again and paste only the key.";
+	}
+	if ((providerId === ANTHROPIC_API_KEY_PROVIDER || providerId === "anthropic") && trimmedKey.includes("sk-ant-oat")) {
+		return "This looks like a Claude sign-in token, not an API key. Create an API key at console.anthropic.com.";
+	}
+	return null;
+}
+
 export function saveProviderApiKey(providerId: string, key: string): void {
 	const trimmedKey = key.trim();
 	if (!trimmedKey) throw new ProviderAuthError("API key is required.", 400);
 	if (!knownApiKeyProviderIds().includes(providerId)) {
 		throw new ProviderAuthError(`Provider does not support API-key sign-in: ${providerId}`, 400);
 	}
-	// The Anthropic provider treats any key holding "sk-ant-oat" as a sign-in
-	// token, so one pasted here would send a subscription through the key.
-	if (providerId === ANTHROPIC_API_KEY_PROVIDER && trimmedKey.includes("sk-ant-oat")) {
-		throw new ProviderAuthError("This looks like a Claude sign-in token, not an API key. Create an API key at console.anthropic.com.", 400);
-	}
+	const refusal = apiKeyRefusal(providerId, trimmedKey);
+	if (refusal) throw new ProviderAuthError(refusal, 400);
 	AuthStorage.create().set(providerId, { type: "api_key", key: trimmedKey });
 }
 
@@ -182,7 +276,7 @@ const ANTHROPIC_KEY_CHECK_TIMEOUT_MS = 10_000;
  */
 export async function checkProviderApiKey(providerId: string, key: string, onFailed?: (failure: unknown) => void): Promise<string | null> {
 	const trimmedKey = key.trim();
-	if (providerId !== ANTHROPIC_API_KEY_PROVIDER || !trimmedKey || trimmedKey.includes("sk-ant-oat")) return null;
+	if (providerId !== ANTHROPIC_API_KEY_PROVIDER || !trimmedKey || apiKeyRefusal(providerId, trimmedKey)) return null;
 	const configured = ModelRegistry.create(AuthStorage.inMemory()).getAll().find((model) => model.provider === ANTHROPIC_API_KEY_PROVIDER)?.baseUrl;
 	const baseUrl = (configured || "https://api.anthropic.com").replace(/\/+$/, "");
 	let response: Response;

@@ -443,6 +443,8 @@ export type AssistantMessageEvent =
 export interface OpenAICompletionsCompat {
 	/** Whether the provider supports the `store` field. Default: auto-detected from URL. */
 	supportsStore?: boolean;
+	/** Whether the provider takes the `user` field, sent from `metadata.user_id`. Default: auto-detected from URL; off when `supportsStore` is set to false and this is not set. */
+	supportsUser?: boolean;
 	/** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
 	supportsDeveloperRole?: boolean;
 	/** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */

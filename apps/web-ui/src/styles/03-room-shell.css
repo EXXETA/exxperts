@@ -90,41 +90,14 @@
 	margin-left: auto;
 	flex-shrink: 0;
 }
-/* Ghost: no resting border or fill, just the glyph. The 1px border box stays
-   so nothing shifts when hover paints it. */
-.topbar-actions .icon-btn {
-	background: transparent;
-	border-color: transparent;
-	color: var(--fg-soft);
-}
-.topbar-actions .icon-btn:hover:not(:disabled),
-.topbar-actions .icon-btn:focus-visible {
-	background: color-mix(in srgb, var(--fg) 12%, transparent);
-	border-color: transparent;
-	color: var(--fg);
-	outline: none;
-}
-/* Keyboard focus still needs an edge: a wash alone is not a ring. */
-.topbar-actions .icon-btn:focus-visible {
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
-}
-/* Forget is the one destructive action up here, so it warms red rather than
-   neutral: red glyph on a faint red wash, no red outline. */
-.topbar-actions .icon-btn-danger:hover:not(:disabled),
-.topbar-actions .icon-btn-danger:focus-visible {
-	background: color-mix(in srgb, var(--exx-danger) 14%, transparent);
-	border-color: transparent;
-	color: var(--exx-danger);
-}
-.topbar-actions .icon-btn-danger:focus-visible {
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--exx-danger) 40%, transparent);
-}
 /* The command-mode chip: only rooms with Bash on wear it. It sits in the
    message box's rows, which give it their look (16-composer.css); here is
    what it is wherever it sits. A keyboard focus still gets an edge. */
 .bash-mode-chip-anchor {
 	position: relative;
 	display: flex;
+	align-items: center;
+	gap: 2px;
 	flex-shrink: 0;
 }
 .bash-mode-chip {
@@ -139,12 +112,15 @@
 	outline: none;
 	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
 }
-/* Two choices, one popover, right-aligned to the chip so it never leaves
-   the viewport; the box's rows open it upwards (16-composer.css). */
+/* The modes, one popover, right-aligned to the chip so it never leaves
+   the viewport; the box's rows open it upwards (16-composer.css). Each mode
+   is its name over its line, so the popover is as wide as a line reads well,
+   and never wider than the page beside it. */
 .bash-mode-menu {
 	position: absolute;
 	right: 0;
-	min-width: 216px;
+	width: 300px;
+	max-width: calc(100vw - 32px);
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: 12px;
@@ -192,6 +168,37 @@
 	color: var(--success);
 }
 .bash-mode-option.is-current:disabled { color: var(--dim); }
+.bash-mode-option-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.bash-mode-option-name {
+	font-weight: 600;
+}
+/* The mode's line stays regular and muted, whichever item is current. */
+.bash-mode-option-line {
+	color: var(--muted);
+	font-size: 11.5px;
+	font-weight: 400;
+}
+.bash-mode-option:disabled .bash-mode-option-line { color: var(--dim); }
+/* Away from the computer the menu is only read: its modes stay as legible as the lines under them. */
+.bash-mode-menu.is-read-only .bash-mode-option:disabled,
+.bash-mode-menu.is-read-only .bash-mode-option:disabled .bash-mode-option-line { color: var(--muted); }
+.bash-mode-option-line,
+.bash-mode-menu-line { text-wrap: pretty; }
+.bash-mode-menu-line + .bash-mode-menu-note { margin-top: 8px; }
+/* Under the modes: what holds in every one, or what commands reach without protection. */
+.bash-mode-menu-line {
+	margin: 4px 0 2px;
+	padding: 6px 10px 0;
+	border-top: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.35;
+}
 .bash-mode-menu-note {
 	margin: 2px 0 4px;
 	padding: 0 10px;
@@ -205,6 +212,7 @@
 	color: var(--error);
 	font-size: 11px;
 	line-height: 1.35;
+	text-wrap: balance;
 }
 .theme-toggle {
 	background: transparent;
@@ -233,19 +241,6 @@
 	color: var(--bg);
 	border-color: var(--fg);
 	outline: none;
-}
-.icon-btn.accent {
-	background: var(--fg);
-	color: var(--bg);
-	border-color: var(--fg);
-}
-.icon-btn.danger {
-	border-color: var(--error);
-	color: var(--error);
-}
-.icon-btn.danger:hover {
-	background: var(--error);
-	color: var(--bg);
 }
 
 .messages-frame {

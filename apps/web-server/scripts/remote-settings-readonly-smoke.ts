@@ -31,6 +31,10 @@ function assert(condition: unknown, message: string): asserts condition {
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ "openai-codex": { type: "api_key", key: "sk-smoke" } }), { mode: 0o600 });
+// One added web connector whose last check found no address there, so on
+// the computer its row offers Change address; port 9 is closed, nothing is reached.
+fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { "readonly-notes": { url: "http://127.0.0.1:9/mcp", displayName: "Readonly notes" } } }));
+fs.writeFileSync(path.join(agentDir, "mcp-connector-checks.json"), JSON.stringify({ schemaVersion: 1, checks: { "readonly-notes": { at: Date.now(), ok: false, httpStatus: 404, error: "HTTP 404" } } }));
 
 let server: ChildProcessWithoutNullStreams | null = null;
 
@@ -49,7 +53,7 @@ const SECTIONS: Array<{ tab: string; honest: string; absent: string[] }> = [
 	{
 		tab: "Connectors",
 		honest: "Connectors are set up and signed in on the computer itself.",
-		absent: [".connector-row-actions button", ".connector-dir-search", ".connector-dir-row button"],
+		absent: [".connector-item-slot button", "button.connector-item-more", ".pane-head-actions button", ".connector-dir-search", ".connector-dir-row button"],
 	},
 	{
 		tab: "Skills",
@@ -111,6 +115,15 @@ try {
 				const count = await page.locator(`.settings-overlay ${selector}`).count();
 				assert(count === 0, `${section.tab}: local-only control still renders remotely (${selector}, ${count} found)`);
 			}
+			if (section.tab === "Connectors") {
+				// The row is there and opens, but offers no way to change it.
+				const rows = page.locator(".settings-overlay .connector-item");
+				assert((await rows.count()) === 1, `Connectors: expected the one added connector's row, saw ${await rows.count()}`);
+				await rows.first().locator(".connector-item-hit").click();
+				await page.locator(".settings-overlay .connector-details").waitFor({ timeout: 10000 });
+				const ways = await page.locator(".settings-overlay .connector-way").count();
+				assert(ways === 0, `Connectors: an opened row offers a change remotely (${ways} found)`);
+			}
 			const back = page.locator(".settings-dialog-back");
 			if (await back.count()) await back.click();
 			await page.waitForTimeout(200);
@@ -155,6 +168,9 @@ try {
 		await localPage.waitForTimeout(700);
 		assert((await localPage.locator(".add-provider-toggle").count()) === 1, "loopback: Add another provider must render");
 		assert((await localPage.locator(".settings-overlay").getByText(SECTIONS[0].honest, { exact: true }).count()) === 0, "loopback: the remote honest line must not render");
+		await localPage.locator(".settings-dialog-nav button").filter({ hasText: "Connectors" }).first().click();
+		await localPage.locator(".settings-overlay button.connector-item-more").waitFor({ timeout: 10000 });
+		assert((await localPage.locator(".settings-overlay .pane-head-actions button").count()) === 1, "loopback: the Connectors title-row button must render");
 		await localCtx.close();
 		// Loopback Remote access with a tunnel found and remote access off: the
 		// Tunnel row says what the phone needs and claims nothing about who can

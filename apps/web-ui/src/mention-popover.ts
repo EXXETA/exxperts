@@ -33,40 +33,71 @@ export interface MentionQueryMatch {
 	query: string;
 }
 
-// A leading mention of a known room: with a question after it the draft consults
-// the room; with none yet Send waits for one, since a consult needs a question.
-export type ResolvedLeadingMention =
-	| { kind: "consult"; room: MentionCandidateRoom; question: string }
-	| { kind: "awaiting-question"; room: MentionCandidateRoom };
-
-export interface MentionCompletion {
-	text: string;
-	caret: number;
-}
-
-// The characters of a mention token: the room id the completion inserts (see
-// completeMention). The trigger and the leading mention share it.
-const MENTION_TOKEN = "[a-zA-Z0-9._-]";
+// The characters of a room word after '@': letters and digits in any script,
+// and the '.', '_' and '-' a room's id may hold. The trigger, the label at the
+// first space and the line for a later word share it.
+const WORD = "[\\p{L}\\p{N}._-]";
 
 // The trigger: the text BEFORE the caret is an '@' at the very start of the
-// draft, then the token typed so far. Only a leading mention consults (see
-// resolveLeadingMention), so an '@' anywhere else is plain text and opens no
-// picker.
-const MENTION_TRIGGER = new RegExp(`^@(${MENTION_TOKEN}*)$`);
+// draft, the word typed so far, and at most the one space after it, so the list
+// stays open when that space found no single room (see labelAtFirstSpace). An
+// '@' anywhere else opens no list.
+const MENTION_TRIGGER = new RegExp(`^@(${WORD}*) ?$`, "u");
 
-// A leading mention: the draft begins with '@<token>', then whitespace and the
-// question, or nothing yet.
-const LEADING_MENTION = new RegExp(`^@(${MENTION_TOKEN}+)(?:\\s+([\\s\\S]*))?$`);
+// A word at the start of the draft with the whitespace after it, then the rest.
+const LEADING_WORD = new RegExp(`^@(${WORD}+)\\s+`, "u");
+
+// An '@' word after the start: at a line's start or after a space, never glued to a word (an email).
+const LATER_WORD = new RegExp(`(?<=\\s)@(${WORD}+)`, "gu");
 
 // Detect an active mention trigger against the text BEFORE the caret. Returns
 // null when no trigger is open (the draft does not begin with '@', or the caret
-// sits past the token).
+// sits past the word and its space).
 export function detectMentionQuery(text: string, caretIndex: number): MentionQueryMatch | null {
 	const caret = Math.max(0, Math.min(caretIndex, text.length));
 	const before = text.slice(0, caret);
 	const match = MENTION_TRIGGER.exec(before);
 	if (!match) return null;
 	return { start: 0, caret, query: match[1] };
+}
+
+// The one room a word names: the room whose name or id is the word, ignoring
+// case; with none, the room whose name or id starts with it. Two that fit
+// either way name none: the page never picks between them.
+export function fitRoom(word: string, candidates: MentionCandidateRoom[], currentRoomId: string): MentionCandidateRoom | null {
+	const needle = word.toLowerCase();
+	if (!needle) return null;
+	const eligible = candidates.filter((room) => !isExcluded(room, currentRoomId));
+	const exact = eligible.filter((room) => room.id.toLowerCase() === needle || room.displayName.toLowerCase() === needle);
+	if (exact.length > 0) return exact.length === 1 ? exact[0] : null;
+	const starts = eligible.filter((room) => room.id.toLowerCase().startsWith(needle) || room.displayName.toLowerCase().startsWith(needle));
+	return starts.length === 1 ? starts[0] : null;
+}
+
+// The draft after picking a room from the list: the '@' word and the space
+// after it go, since the room sits on the box as a label.
+export function draftAfterPick(text: string): string {
+	return text.replace(new RegExp(`^@${WORD}*\\s*`, "u"), "");
+}
+
+// The room a word at the start names, once the space after it arrives (typed,
+// or pasted with the rest): the draft keeps only what follows. Null while that
+// space was already there before this edit, so a room is never picked again
+// from text the person has gone on writing.
+export function labelAtFirstSpace(previous: string, next: string, candidates: MentionCandidateRoom[], currentRoomId: string): { room: MentionCandidateRoom; rest: string } | null {
+	const match = LEADING_WORD.exec(next);
+	if (!match || LEADING_WORD.test(previous)) return null;
+	const room = fitRoom(match[1], candidates, currentRoomId);
+	return room ? { room, rest: next.slice(match[0].length) } : null;
+}
+
+// The first room a later '@' word names, for the line that says how to ask it.
+export function laterMentionRoom(text: string, candidates: MentionCandidateRoom[], currentRoomId: string): MentionCandidateRoom | null {
+	for (const match of text.matchAll(LATER_WORD)) {
+		const room = fitRoom(match[1].replace(/\.+$/, ""), candidates, currentRoomId);
+		if (room) return room;
+	}
+	return null;
 }
 
 function isExcluded(room: MentionCandidateRoom, currentRoomId: string): boolean {
@@ -106,34 +137,28 @@ export function filterMentionCandidates(
 		});
 }
 
-// Complete the mention in the draft: replace the '@query' span with '@<id> '
-// (trailing space) and report the caret position after it. The mention token is
-// the room id — it always matches the trigger charset, unlike displayNames which
-// may contain spaces or punctuation.
-export function completeMention(text: string, match: MentionQueryMatch, room: MentionCandidateRoom): MentionCompletion {
-	const before = text.slice(0, match.start);
-	const after = text.slice(match.caret).replace(/^\s+/, ""); // avoid a doubled space when completing mid-text
-	const token = `@${room.id} `;
-	const nextText = `${before}${token}${after}`;
-	return { text: nextText, caret: before.length + token.length };
+// Send's hover while a room is on the box and no question is typed yet.
+export const TYPE_QUESTION = "Type your question";
+
+// The label's name for a room the list no longer has (archived or gone since it was picked).
+export const ANOTHER_ROOM = "another room";
+
+// While the room on the box is one the list no longer has: Send's hover, and with a full stop the line above the box and the card's line.
+export const ROOM_GONE = "That room is no longer available";
+
+// The room on the box's label, while the list still has it: null for one archived or gone since.
+export function listedRoom(roomId: string, candidates: readonly MentionCandidateRoom[], currentRoomId: string): MentionCandidateRoom | null {
+	return candidates.find((room) => room.id === roomId && !isExcluded(room, currentRoomId)) ?? null;
 }
 
-// Resolve a leading mention at the START of the draft to a known room and strip
-// it, yielding the question to consult with, or "awaiting-question" while none
-// follows. Returns null (→ normal send) when the draft does not begin with a
-// mention or the token names no known/eligible room.
-export function resolveLeadingMention(
-	text: string,
-	candidates: MentionCandidateRoom[],
-	currentRoomId: string,
-): ResolvedLeadingMention | null {
-	const match = LEADING_MENTION.exec(text);
-	if (!match) return null;
-	const token = match[1].toLowerCase();
-	const room = candidates.find((candidate) => !isExcluded(candidate, currentRoomId) && candidate.id.toLowerCase() === token);
-	if (!room) return null;
-	const question = (match[2] ?? "").trim();
-	return question ? { kind: "consult", room, question } : { kind: "awaiting-question", room };
+// Where a message goes, on the box's label and on a queued bubble.
+export function askingWords(roomName: string): string {
+	return `Asking ${roomName}`;
+}
+
+// The line above the box while a later '@' word names one of the person's rooms.
+export function askHint(roomName: string): string {
+	return `To ask ${roomName}, start the message with @.`;
 }
 
 // How many leading characters of the displayName the query matches, for the lila

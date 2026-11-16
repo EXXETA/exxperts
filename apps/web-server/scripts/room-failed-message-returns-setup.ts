@@ -11,7 +11,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, killSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 import { closeBrowser } from "./smoke-close-context.js";
 
 export function assert(condition: unknown, message: string): asserts condition {
@@ -271,10 +271,7 @@ export async function openFailureRoom() {
 		const send = async (text: string, reaches = true) => {
 			const before = requestUserTexts.length;
 			await composer.fill(text);
-			// Enter sends only while Send is enabled, and Send waits for the room's connection: entering a room can
-			// replace its first socket at once, and Send shows before the new one is up.
-			await waitUntil(() => page.getByRole("button", { name: "Send", exact: true }).isEnabled(), "Send is enabled with the message typed");
-			await composer.press("Enter");
+			await sendFromBox(page);
 			if (reaches) await waitUntil(() => requestUserTexts.slice(before).some((texts) => texts.some((typed) => typed.includes(text))), `"${text}" reached the model`);
 		};
 		// The newest line shows its button in place of where it is; the conversation keeps every word.

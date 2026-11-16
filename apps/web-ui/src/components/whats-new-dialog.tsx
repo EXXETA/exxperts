@@ -153,7 +153,7 @@ export function WhatsNewDialog({ sections, onClose }: { sections: WhatsNewSectio
 	return (
 		<div className="whats-new-backdrop" onClick={close}>
 			<div ref={dialogRef} tabIndex={-1} className="whats-new-dialog" role="dialog" aria-modal="true" aria-label="What's new" onClick={(e) => e.stopPropagation()}>
-				<button type="button" className="whats-new-close" onClick={close} aria-label="Close">✕</button>
+				<button type="button" className="rs-btn rs-btn-icon whats-new-close" onClick={close} aria-label="Close">✕</button>
 				<h1 className="whats-new-title">What's new</h1>
 				<div className="whats-new-entries">
 					{sections.major.length > 0 && (

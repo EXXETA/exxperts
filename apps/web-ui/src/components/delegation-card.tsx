@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { MarkdownRenderer } from "./Markdown";
 import { canFollowUp, canTransferConsult, consultHasDrift, type ConsultExchange, type ConsultState } from "../consult-stream";
+import { ANOTHER_ROOM, ROOM_GONE } from "../mention-popover";
 
 /**
  * The DelegationCard family (Consult MR-4). One base component with slots;
@@ -77,6 +78,8 @@ export function DelegationCard({ speaker, subline, headerTools, question, histor
 
 export interface ConsultDockProps {
 	state: ConsultState;
+	/** The asked room is archived or deleted: the card says "another room", never its name or id. */
+	roomGone?: boolean;
 	onMinimize: () => void;
 	onOpen: () => void;
 	onStop: () => void;
@@ -111,13 +114,13 @@ export function consultSourceLine(owner: string, asOfIso: string | null, now: nu
 	return `From ${possessive} memory · ${day}`;
 }
 
-function consultSpeaker(state: ConsultState): string {
-	return `@${state.targetDisplayName ?? state.targetRoomId ?? "room"}`;
+function consultSpeaker(state: ConsultState, roomGone: boolean): string {
+	return roomGone || !state.targetDisplayName ? ANOTHER_ROOM : `@${state.targetDisplayName}`;
 }
 
 /** The consulted room's name for the source line ("euler's memory …"). */
-function consultOwner(state: ConsultState): string {
-	return state.targetDisplayName ?? state.targetRoomId ?? "the room";
+function consultOwner(state: ConsultState, roomGone: boolean): string {
+	return roomGone || !state.targetDisplayName ? ANOTHER_ROOM : state.targetDisplayName;
 }
 
 function ConsultAnswer({ state }: { state: ConsultState }) {
@@ -214,7 +217,7 @@ function ConsultFollowUp({ speaker, onFollowUp }: { speaker: string; onFollowUp:
 					}
 				}}
 			/>
-			<button className="btn" type="button" onClick={submit} disabled={!draft.trim()}>
+			<button className="rs-btn btn" type="button" onClick={submit} disabled={!draft.trim()}>
 				Ask a follow-up
 			</button>
 		</div>
@@ -225,11 +228,11 @@ function ConsultFollowUp({ speaker, onFollowUp }: { speaker: string; onFollowUp:
  * The docked consult surface (variant A): the expanded card, or — when
  * minimized — the folded pill. Renders nothing when there is no consult.
  */
-export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTransfer, onFollowUp }: ConsultDockProps) {
+export function ConsultDock({ state, roomGone = false, onMinimize, onOpen, onStop, onDismiss, onTransfer, onFollowUp }: ConsultDockProps) {
 	if (state.phase === "none") return null;
 
-	const speaker = consultSpeaker(state);
-	const owner = consultOwner(state);
+	const speaker = consultSpeaker(state, roomGone);
+	const owner = consultOwner(state, roomGone);
 
 	if (state.minimized) {
 		let pill: ReactNode;
@@ -269,7 +272,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 	}
 
 	const headerTools = (
-		<button className="mini-btn" type="button" onClick={onMinimize} title="Minimize. The consult keeps running." aria-label="Minimize consult">
+		<button className="rs-btn rs-btn-icon rs-btn-sm mini-btn" type="button" onClick={onMinimize} title="Minimize. The consult keeps running." aria-label="Minimize consult">
 			–
 		</button>
 	);
@@ -293,7 +296,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 			</span>
 		);
 		footerActions = (
-			<button className="btn" type="button" onClick={onStop} title="Stop the answer — what has arrived stays">
+			<button className="rs-btn rs-btn-sm btn" type="button" onClick={onStop} title="Stop the answer: what has arrived stays">
 				Stop
 			</button>
 		);
@@ -307,10 +310,10 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 		footerMeta = undefined;
 		footerActions = (
 			<>
-				<button className="btn" type="button" onClick={onDismiss} title="Discard this consult — nothing enters the conversation">
+				<button className="rs-btn rs-btn-sm btn" type="button" onClick={onDismiss} title="Discard this consult: nothing enters the conversation">
 					Dismiss
 				</button>
-				<button className="btn btn-primary" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
+				<button className="rs-btn rs-btn-primary rs-btn-sm btn" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
 					Add to this conversation
 				</button>
 			</>
@@ -334,18 +337,20 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 		// greyed. §8.1: a failed/stopped FOLLOW-UP preserves the stack, so Transfer
 		// is still offered (footer below) and the follow-up input re-enables; only
 		// exchange 1 failing (empty stack) keeps the dismiss-only footer.
-		subline = state.errorMessage ?? (state.phase === "stopped" ? "Consult stopped." : "Consult failed.");
+		// A room gone meanwhile: the server's words for it name the room's id, so they wait for the list to have the room.
+		if (state.phase === "failed") subline = roomGone ? `${ROOM_GONE}.` : state.failureRead === "listed" ? state.errorMessage ?? "Consult failed." : "Consult failed.";
+		else subline = state.errorMessage ?? "Consult stopped.";
 		footerActions = showTransfer ? (
 			<>
-				<button className="btn" type="button" onClick={onDismiss} title="Discard this consult — nothing enters the conversation">
+				<button className="rs-btn rs-btn-sm btn" type="button" onClick={onDismiss} title="Discard this consult: nothing enters the conversation">
 					Dismiss
 				</button>
-				<button className="btn btn-primary" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
+				<button className="rs-btn rs-btn-primary rs-btn-sm btn" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
 					Add to this conversation
 				</button>
 			</>
 		) : (
-			<button className="btn" type="button" onClick={onDismiss} title="Discard this consult — nothing enters the conversation">
+			<button className="rs-btn rs-btn-sm btn" type="button" onClick={onDismiss} title="Discard this consult: nothing enters the conversation">
 				Dismiss
 			</button>
 		);

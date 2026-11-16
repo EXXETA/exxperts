@@ -196,7 +196,7 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 			    ids appear here. */}
 			<header className="artifact-viewer-head">
 				{onBack && (
-					<button type="button" className="att-icon artifact-viewer-back" onClick={onBack} aria-label="Back to Attachments" title="Back to Attachments">
+					<button type="button" className="rs-btn rs-btn-icon rs-btn-sm artifact-viewer-back" onClick={onBack} aria-label="Back to Attachments" title="Back to Attachments">
 						<BackArrowIcon />
 					</button>
 				)}
@@ -217,7 +217,7 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 						    maximize — file ACTIONS live in the footer. */}
 						<button
 							type="button"
-							className="artifact-viewer-icon artifact-viewer-open-tab"
+							className="rs-btn rs-btn-icon rs-btn-sm artifact-viewer-open-tab"
 							onClick={openInTab}
 							disabled={!routeUrl}
 							aria-label="Open in a new tab"
@@ -237,7 +237,7 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maxim
 						</button>
 						<button
 							type="button"
-							className="artifact-viewer-close"
+							className="rs-btn rs-btn-icon rs-btn-sm artifact-viewer-close"
 							onClick={onClose}
 							aria-label={isUserFile ? "Close file viewer" : "Close artifact viewer"}
 						>

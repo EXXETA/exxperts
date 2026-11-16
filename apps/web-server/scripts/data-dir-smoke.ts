@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { BOX_ROOT_NAME } from "../src/room-box/windows/box-root.js";
 import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 // Pins EXXPERTS_DATA_DIR: one configured directory carries the
@@ -172,7 +173,9 @@ try {
 	assert(code === stateProfiles.SWITCH_EXIT_CODE, `switch must exit with the sentinel code, got ${code}`);
 	server = null;
 	assert(stateProfiles.readActiveProfile(dataDir) === "Demo", "the active-profile pointer must live inside the data dir");
-	assert(fs.readdirSync(decoyHome).length === 0, "the original home must stay byte-untouched");
+	// On a Windows 11 PC the protection's own folder is made in the login home at start, whichever home the data lives under.
+	const leftInHome = fs.readdirSync(decoyHome).filter((name) => name !== BOX_ROOT_NAME);
+	assert(leftInHome.length === 0, `the original home must stay byte-untouched: ${leftInHome.join(", ")}`);
 
 	console.log("data-dir smoke: OK");
 } finally {

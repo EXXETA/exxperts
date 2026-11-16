@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { PaneHeader } from "./pane-header";
-import type { AppearancePreference } from "./product-shell";
+import { type AppearancePreference, THEME_CHOICES } from "./product-shell";
 
 /** The room's reading column: Standard is 768 px, Wide is 960 px (01-base.css). */
 type ChatWidth = "standard" | "wide";
@@ -18,12 +18,6 @@ function savedChatWidth(): ChatWidth {
 // Set as this file loads, before the first render, so a room never opens at
 // one width and jumps to the other.
 document.documentElement.dataset.chatWidth = savedChatWidth();
-
-const THEMES: { id: AppearancePreference; label: string }[] = [
-	{ id: "system", label: "System" },
-	{ id: "light", label: "Light" },
-	{ id: "dark", label: "Dark" },
-];
 
 const CHAT_WIDTHS: { id: ChatWidth; label: string; title: string }[] = [
 	{ id: "standard", label: "Standard", title: "The reading width of most AI apps" },
@@ -52,7 +46,7 @@ export function AppearancePane({ appearance, onSetAppearance }: { appearance: Ap
 						<span className="settings-row-sub">System follows this device's light or dark setting.</span>
 					</div>
 					<div className="settings-segments" role="group" aria-label="Theme">
-						{THEMES.map((theme) => (
+						{THEME_CHOICES.map((theme) => (
 							<button key={theme.id} type="button" className={`settings-segment${appearance === theme.id ? " active" : ""}`} aria-pressed={appearance === theme.id} onClick={() => onSetAppearance(theme.id)}>{theme.label}</button>
 						))}
 					</div>

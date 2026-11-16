@@ -82,13 +82,13 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 			</div>
 			{error && <div className="create-room-message error">{error}</div>}
 			<div className="create-room-actions">
-				<button className="inline-action" type="button" disabled={submitting} onClick={onClose}>Cancel</button>
-				<button className="landing-action" type="submit" disabled={submitting}>{submitting ? "Creating…" : "Create room"}</button>
+				<button className="rs-btn inline-action" type="button" disabled={submitting} onClick={onClose}>Cancel</button>
+				<button className="rs-btn rs-btn-primary landing-action" type="submit" disabled={submitting}>{submitting ? "Creating…" : "Create room"}</button>
 			</div>
 		</form>
 	);
 	const body = !open ? (
-		<button className="landing-action create-room-open-action" onClick={onOpen}>{successName ? "Create another room" : "Create room"}</button>
+		<button className="rs-btn rs-btn-primary landing-action create-room-open-action" onClick={onOpen}>{successName ? "Create another room" : "Create room"}</button>
 	) : form;
 	const successMessage = successName ? <div className="create-room-message success">Created {successName}. The room card is now available.</div> : null;
 

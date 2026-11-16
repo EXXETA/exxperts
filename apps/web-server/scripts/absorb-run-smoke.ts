@@ -53,6 +53,7 @@ const {
 	approveAbsorbRun,
 	cancelAbsorbRun,
 	getAbsorbRun,
+	hasActiveAbsorbRun,
 	keepAbsorbRunEntries,
 	editAbsorbRunEntry,
 	parseAbsorbRunProposeRequest,
@@ -1508,6 +1509,44 @@ try {
 	fs.writeFileSync(journalP, JSON.stringify({ schemaVersion: 1, slot: { run: { runId: "absorbrun_prepass", agentId: roomP.agentId, state: "prepass", sessions: [], rereads: [] } } }));
 	expectThrows(() => getAbsorbRun(roomP.agentId, "absorbrun_prepass"), /no longer open|not found/i, "a run journaled in its first pass");
 	assert(!fs.existsSync(journalP), "the journal a restart ignores is deleted");
+
+	// --- 40. A turn in the room refuses a start, and the same start works once the turn has ended ---
+	const BUSY_SENTENCE = "This room is in the middle of a turn. Wait for it to finish, then change the memory.";
+	const assertBusyRefusal = (refused: () => unknown, label: string): void => {
+		let error: (Error & { code?: string; statusCode?: number }) | null = null;
+		try { refused(); } catch (caught) { error = caught as Error; }
+		assert(error?.code === "memory_room_busy" && error.statusCode === 400 && error.message === BUSY_SENTENCE, `${label} is refused with the room's own refusal, got ${JSON.stringify({ code: error?.code, statusCode: error?.statusCode, message: error?.message })}`);
+	};
+	const roomT = createRoom("Absorb Run Busy Start Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: false, sessions: numbersR.map((n) => fixtureSession(`RC-000${n}`, `2026-09-1${n}`, `Restart session ${n}`, `Session ${n} was talked through.`, [`Durable point ${n}.`])) }));
+	const journalT = path.join(path.dirname(path.dirname(roomT.l1bPath)), "runtime", "memorize-run.json");
+	let callsT = 0;
+	const countsT: AbsorbRunGenerate = (prompt, model, options) => { callsT += 1; return scriptedR(prompt, model, options); };
+	const startT = () => startAbsorbRun({ agentId: roomT.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: countsT, now: RUN_CLOCK });
+	const turnT = beginTurn(roomT.agentId, "absorb_run_smoke_turn_t");
+	assertBusyRefusal(startT, "a start during a turn");
+	assert(callsT === 0 && !hasActiveAbsorbRun(roomT.agentId) && !fs.existsSync(journalT), `a refused start creates no run and makes no call, got ${JSON.stringify({ calls: callsT, active: hasActiveAbsorbRun(roomT.agentId), journal: fs.existsSync(journalT) })}`);
+	turnT.finish();
+	const startedT = startT();
+	const doneT = await settle(roomT.agentId, startedT.runId, "the start after the turn");
+	assert(doneT.state === "ready" && doneT.progress.folded === 5 && callsT >= 5, `once the turn has ended the same start reads every page, got ${JSON.stringify({ state: doneT.state, folded: doneT.progress.folded, calls: callsT })}`);
+	resetAbsorbRunsForTests();
+
+	// --- 41. A turn in the room refuses a Continue and leaves the run as it was; Continue works once the turn has ended ---
+	const roomU = createRoom("Absorb Run Busy Continue Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: false, sessions: numbersR.map((n) => fixtureSession(`RC-000${n}`, `2026-09-1${n}`, `Restart session ${n}`, `Session ${n} was talked through.`, [`Durable point ${n}.`])) }));
+	const firstU = startAbsorbRun({ agentId: roomU.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: hangsOnFour, now: RUN_CLOCK });
+	await waitUntil(() => sessionView(getAbsorbRun(roomU.agentId, firstU.runId), "RC-0004")?.outcome === "folding", "page four is in flight");
+	resetAbsorbRunsForTests(); // the server restarts with page four in flight
+	const pausedU = JSON.stringify(getAbsorbRun(roomU.agentId, firstU.runId));
+	assert((JSON.parse(pausedU) as any).stop?.kind === "restart", "the card offers Continue");
+	let callsU = 0;
+	const countsU: AbsorbRunGenerate = (prompt, model, options) => { callsU += 1; return scriptedR(prompt, model, options); };
+	const turnU = beginTurn(roomU.agentId, "absorb_run_smoke_turn_u");
+	assertBusyRefusal(() => resumeAbsorbRun(roomU.agentId, firstU.runId, MODEL, RUN_CLOCK(), { generate: countsU }), "a Continue during a turn");
+	assert(callsU === 0 && JSON.stringify(getAbsorbRun(roomU.agentId, firstU.runId)) === pausedU, `a refused Continue makes no call and leaves the run as it was, got ${callsU} calls and ${JSON.stringify(getAbsorbRun(roomU.agentId, firstU.runId))}`);
+	turnU.finish();
+	resumeAbsorbRun(roomU.agentId, firstU.runId, MODEL, RUN_CLOCK(), { generate: countsU });
+	const doneU = await settle(roomU.agentId, firstU.runId, "the Continue after the turn");
+	assert(doneU.state === "ready" && doneU.progress.folded === 5 && callsU >= 2, `once the turn has ended the same Continue reads the rest, got ${JSON.stringify({ state: doneU.state, folded: doneU.progress.folded, calls: callsU })}`);
 
 	resetAbsorbRunsForTests();
 	console.log("absorb-run-smoke: OK");

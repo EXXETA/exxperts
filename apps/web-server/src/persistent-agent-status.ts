@@ -1,28 +1,36 @@
 import fs from "node:fs";
+import type { FastifyRequest } from "fastify";
 import { settleMemoryBudget } from "./memory-entries-store.js";
 import { notesToSortCount } from "./absorb-reread.js";
 import { countRecentContextEntries } from "./recent-context-entries.js";
 import path from "node:path";
 import { readPersistentRoomMaintenanceSettings, overMemoryBudget } from "./persistent-room-maintenance-settings.js";
-import { settleCommits } from "./memory-commit.js";
-import { sweepForgotten } from "./forget-erase.js";
+import { settleRoom } from "./room-settle.js";
 import { readPersistentRoomLastUsed } from "./persistent-room-last-used.js";
 import { type PersistentRoomScheduleSummary, summarizePersistentRoomScheduleJobs, listPersistentRoomScheduleJobs } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { type PersistentAgentPromptBudget, type PersistentAgentStatus, type PersistentAgentStatusValue, REQUIRED_L1B_SECTIONS } from "./persistent-agent-types.js";
-import { type AgentJson, createPersistentAgentInstance, defaultPersistentAgentRuntimeState, getPersistentAgentRuntimeState, isPersistentAgentArchived, isValidPersistentAgentId, PERSISTENT_AGENTS_ROOT, readJson, RECENT_CONTEXT_BLOCK_CAP, RECENT_CONTEXT_HARD_CAP, RECENT_CONTEXT_SOFT_CAP } from "./persistent-agent-store.js";
+import { type AgentJson, type PersistentAgentInstance, createPersistentAgentInstance, defaultPersistentAgentRuntimeState, getPersistentAgentRuntimeState, isPersistentAgentArchived, isValidPersistentAgentId, PERSISTENT_AGENTS_ROOT, readJson, RECENT_CONTEXT_BLOCK_CAP, RECENT_CONTEXT_HARD_CAP, RECENT_CONTEXT_SOFT_CAP } from "./persistent-agent-store.js";
 import { activeThreadSummaryForRuntime } from "./persistent-agent-threads.js";
 import { clearPersistentAgentUnseenLandedAnswer, estimatePersistentRoomLastUsed, getPersistentAgentUnseenLandedAnswer, unseenLandedAnswerStillReachable } from "./persistent-agent-turns.js";
 import { buildMemoryStatus, extractChronosLine, extractMarkdownSections, reviewTargetEstimatedTokensFromL1b } from "./persistent-agent-memory-files.js";
 import { buildPersistentAgentBootContext } from "./persistent-agent-boot.js";
+import { serverHooks } from "./server-hooks.js";
+import { cachedListRow, type ListRowReadTimeParts } from "./persistent-agent-row-cache.js";
 
 export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentStatus {
+	settleRoom(agentIdRaw);
+	return describePersistentAgent(agentIdRaw);
+}
+
+/**
+ * The room as its files stand, nothing settled first: for a reader that has called `settleRoom` itself.
+ * `forList` skips the reads only the fields a room list leaves out need (the prompt budget preview,
+ * the memory files' sizes), and so the warning a failed preview adds; `listPersistentAgents` then
+ * strips the rest with `listRowOf`.
+ */
+export function describePersistentAgent(agentIdRaw: string, { forList = false }: { forList?: boolean } = {}): PersistentAgentStatus {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const root = instance.rootDir;
-	// Status is what every route, the scheduler's classification and the CLI
-	// bootstrap read first: a save a crash left pending is settled before the
-	// room is described, so nobody sees it half done.
-	settleCommits(instance.agentId, root);
-	sweepForgotten(instance.agentId, root);
 	let scheduleSummary: PersistentRoomScheduleSummary = summarizePersistentRoomScheduleJobs([]);
 	const agentJsonPath = instance.agentJsonPath();
 	const fallbackL1aPath = path.join(root, "L1a.md");
@@ -116,7 +124,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	// Prompt-budget preview estimates prompt layers only. The required boot contract model is
 	// an inert preview placeholder; agent.json.model is optional legacy/status metadata and
 	// must not become runtime execution config.
-	if (meta && l1aExists && l1bExists) {
+	if (!forList && meta && l1aExists && l1bExists) {
 		try {
 			promptBudget = buildPersistentAgentBootContext({
 				agentId: instance.agentId,
@@ -130,7 +138,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	}
 
 	try {
-		scheduleSummary = summarizePersistentRoomScheduleJobs(listPersistentRoomScheduleJobs(instance.agentId));
+		scheduleSummary = scheduleSummaryOf(instance.agentId);
 	} catch (error) {
 		warnings.push(`schedule summary unavailable: ${(error as Error).message}`);
 	}
@@ -151,9 +159,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	}
 	if (l1bExists && !(archivedAt > 0)) settleMemoryBudget(instance.agentId);
 	const maintenanceSettings = readPersistentRoomMaintenanceSettings(instance.agentId);
-	// A room never stamped (every room on upgrade day) is given an estimate,
-	// once; an archived room is left alone until it is restored.
-	const lastUsed = readPersistentRoomLastUsed(instance.agentId) ?? (archivedAt > 0 ? null : estimatePersistentRoomLastUsed(instance));
+	const lastUsed = lastUsedOf(instance, archivedAt > 0);
 	return {
 		id: instance.agentId,
 		exists: true,
@@ -175,8 +181,8 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		...(archivedReason ? { archivedReason } : {}),
 		lastUsedAt: lastUsed?.lastUsedAt ?? null,
 		lastUsedIsEstimate: lastUsed?.door === "estimate",
-		l1a: { path: l1aPath, exists: l1aExists, bytes: l1aExists ? fs.statSync(l1aPath).size : undefined },
-		l1b: { path: l1bPath, exists: l1bExists, bytes: l1bExists ? fs.statSync(l1bPath).size : undefined, sections, missingSections },
+		l1a: { path: l1aPath, exists: l1aExists, bytes: !forList && l1aExists ? fs.statSync(l1aPath).size : undefined },
+		l1b: { path: l1bPath, exists: l1bExists, bytes: !forList && l1bExists ? fs.statSync(l1bPath).size : undefined, sections, missingSections },
 		sectionRegistry: { path: registryPath, exists: registryExists, missingSections: registryMissingSections },
 		recentContext: { fullEntries, softCap: RECENT_CONTEXT_SOFT_CAP, hardCap: RECENT_CONTEXT_HARD_CAP, blockCap: RECENT_CONTEXT_BLOCK_CAP },
 		memoryStatus: buildMemoryStatus(fullEntries, RECENT_CONTEXT_SOFT_CAP, RECENT_CONTEXT_HARD_CAP, typeof meta?.lastCheckpointId === "string" ? meta.lastCheckpointId : null, lastCheckpointAt, lastMemoryWriteAt, notesToSort),
@@ -194,6 +200,19 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		errors,
 		warnings,
 	};
+}
+
+/** The schedule summary: an interval job's next time moves with the clock. */
+function scheduleSummaryOf(agentId: string): PersistentRoomScheduleSummary {
+	return summarizePersistentRoomScheduleJobs(listPersistentRoomScheduleJobs(agentId));
+}
+
+/**
+ * A room never stamped (every room on upgrade day) is given an estimate,
+ * once; an archived room is left alone until it is restored.
+ */
+function lastUsedOf(instance: PersistentAgentInstance, archived: boolean) {
+	return readPersistentRoomLastUsed(instance.agentId) ?? (archived ? null : estimatePersistentRoomLastUsed(instance));
 }
 
 /**
@@ -244,8 +263,64 @@ export function listPersistentAgentIds(): string[] {
 	return ids.sort((a, b) => a.localeCompare(b));
 }
 
-export function listPersistentAgents(): PersistentAgentStatus[] {
-	return listPersistentAgentIds()
-		.map((id) => getPersistentAgentStatus(id))
-		.filter((status) => !isPersistentAgentArchived(status));
+/**
+ * Who a room list answers for: the rooms they may see, or every room. Never
+ * optional: if a missing viewer could mean every room, a forgotten one would too.
+ */
+export type RoomViewer = ReadonlySet<string> | "every room";
+
+/**
+ * Who this request's person is, as a room list's viewer: the roomViewer slot's
+ * set, or every room where the slot is empty (the desktop). The one way a route
+ * turns the slot into a viewer; ask it once per request.
+ */
+export async function viewerOf(req: FastifyRequest): Promise<RoomViewer> {
+	return (await serverHooks().roomViewer?.(req)) ?? "every room";
+}
+
+/**
+ * The room folders a viewer sees. It runs on the ids, before any room is read,
+ * since reading a room's status also writes to it. Smokes run through tsx with
+ * no type check, and `any`-typed callers pass it with no viewer, so anything
+ * else throws here.
+ */
+export function roomIdsForViewer(viewer: RoomViewer): string[] {
+	if (viewer !== "every room" && !(viewer instanceof Set)) throw new TypeError("a room list needs a viewer: a set of room ids, or \"every room\"");
+	const ids = listPersistentAgentIds();
+	// The id check and a room's instance both trim, so a padded folder name in the
+	// set would open the real room of that name, which may be outside the set.
+	return viewer === "every room" ? ids : ids.filter((id) => viewer.has(id) && id === id.trim());
+}
+
+/**
+ * A room list's row: the one-room status without what no caller of a list reads
+ * (the page, the server's own callers, the desktop app). The one-room status
+ * (`getPersistentAgentStatus`, the status route) keeps the full row.
+ */
+export type PersistentAgentListRow = Omit<PersistentAgentStatus, "root" | "l1a" | "l1b" | "sectionRegistry" | "promptBudget" | "memoryBudgetTokens" | "role" | "model" | "lastUsedIsEstimate"> & {
+	l1b: Pick<PersistentAgentStatus["l1b"], "sections">;
+};
+
+export function listRowOf({ root, l1a, l1b, sectionRegistry, promptBudget, memoryBudgetTokens, role, model, lastUsedIsEstimate, ...row }: PersistentAgentStatus): PersistentAgentListRow {
+	return { ...row, l1b: { sections: l1b.sections } };
+}
+
+/**
+ * The live rooms a viewer sees, as list rows. Every room is settled first,
+ * archived ones included; an archived room is then known by its agent.json
+ * alone and never described. A live room's row comes from the row cache,
+ * which describes the room again when one of its files changed.
+ */
+export function listPersistentAgents(viewer: RoomViewer): PersistentAgentListRow[] {
+	const rows: PersistentAgentListRow[] = [];
+	for (const id of roomIdsForViewer(viewer)) {
+		settleRoom(id);
+		const instance = createPersistentAgentInstance(id);
+		if (isPersistentAgentArchived(readJson(instance.agentJsonPath()))) continue;
+		rows.push(cachedListRow(id, {
+			describe: () => listRowOf(describePersistentAgent(id, { forList: true })),
+			readTime: (): ListRowReadTimeParts => ({ scheduleSummary: scheduleSummaryOf(instance.agentId), lastUsedAt: lastUsedOf(instance, false)?.lastUsedAt ?? null }),
+		}));
+	}
+	return rows;
 }

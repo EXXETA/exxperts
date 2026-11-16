@@ -15,8 +15,8 @@
 //   that line is gone once the full answer arrives, also when it gave up
 //   before any text, the answer landed meanwhile or replayed after Reconnect;
 // - a replayed frame that comes twice never shows its text twice;
-// - an answer the server lost (it died mid-answer and came back) says the
-//   connection was lost;
+// - an answer the server lost (it died mid-answer and came back) says once
+//   that it stopped before it finished, as a clean stop does;
 // - a window another took the room from keeps what it showed, offers no Stop,
 //   and "Open here" takes the room back.
 //
@@ -31,6 +31,8 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page, type WebSocketRoute } from "playwright";
 import { authedFetch, killSmokeServer, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { sendFromBox } from "./smoke-wait.js";
+import { STOP_CUT_ANSWER_SENTENCE } from "../src/turn-ended-by.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -363,7 +365,7 @@ try {
 		const send = async (page: Page, text: string) => {
 			const composer = page.locator("textarea").first();
 			await composer.fill(text);
-			await composer.press("Enter");
+			await sendFromBox(page);
 			await waitUntil(async () => (await page.locator(".bubble-row.user").filter({ hasText: text }).count()) > 0, `"${text}" is sent`);
 			await waitUntil(() => open !== null, "the gated answer has begun");
 		};
@@ -585,7 +587,7 @@ try {
 		const moving = await enter("Home Room");
 		const mp = moving.page;
 		await mp.locator("textarea").first().fill("A plain question.");
-		await mp.locator("textarea").first().press("Enter");
+		await sendFromBox(mp);
 		await mp.locator(".messages .assistant-markdown").filter({ hasText: "OK." }).first().waitFor({ timeout: 25_000 });
 		await waitUntil(async () => (await mp.locator(".stop-btn").count()) === 0, "the plain answer's turn has ended");
 		await mp.waitForTimeout(1500);
@@ -938,10 +940,14 @@ try {
 		await crash.page.waitForTimeout(1500);
 		const readiesBeforeCrash = crash.readies();
 		await startServer();
-		await row("an answer the server lost while the page reconnected says the connection was lost", async () => {
+		await row("an answer the server lost while the page reconnected says once that it stopped before it finished", async () => {
 			await waitUntil(() => crash.readies() > readiesBeforeCrash, "the room reconnects to the restarted server", 60_000);
-			await crash.page.getByText(CONNECTION_LOST).first().waitFor({ timeout: 15_000 }).catch(() => {});
-			if ((await shownCount(crash.page, CONNECTION_LOST)) === 0) return "the half-written answer ends with no line, so it looks finished";
+			// Its two sentences are drawn apart: counted in the conversation's words.
+			const stopLinesShown = () => crash.page.evaluate((sentence) => (document.querySelector(".messages")?.textContent ?? "").replace(/\s+/g, "").split(sentence.replace(/\s+/g, "")).length - 1, STOP_CUT_ANSWER_SENTENCE);
+			await waitUntil(async () => (await stopLinesShown()) > 0, "the stop line shows", 15_000).catch(() => {});
+			const stopped = await stopLinesShown();
+			if (stopped !== 1) return stopped === 0 ? "the half-written answer ends with no line, so it looks finished" : `the line shows ${stopped} times`;
+			if ((await shownCount(crash.page, CONNECTION_LOST)) > 0) return "the answer also says the connection was lost";
 			if (!(await lineShown(crash.page, crashed))) return "the answer it had is gone";
 			return (await crash.page.locator(".turn-status-line").count()) === 0 && (await crash.page.locator(".stop-btn").count()) === 0 ? null : "the room still waits on the lost turn";
 		});

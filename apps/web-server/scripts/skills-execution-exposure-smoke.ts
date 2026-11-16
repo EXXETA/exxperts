@@ -39,7 +39,7 @@ const tempHome = path.join(tempRoot, "home");
 const agentsRoot = path.join(tempHome, ".exxperts", "app", "personalized-agents");
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const productAppRoot = path.join(tempHome, ".exxperts", "app");
-const workspaceRoot = path.join(tempRoot, "workspace");
+const workspaceRoot = path.join(tempHome, "workspace");
 fs.mkdirSync(agentsRoot, { recursive: true, mode: 0o700 });
 fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 fs.mkdirSync(productAppRoot, { recursive: true, mode: 0o700 });

@@ -103,6 +103,12 @@ export interface ConsultState {
 	/** The server's plain message for the stopped/failed subline. */
 	errorMessage: string | null;
 	/**
+	 * A failure's read of the room list, which says whether the asked room is
+	 * still there: the server's words for a gone room name its id, so the card
+	 * shows them only once the list has the room. Null when nothing failed.
+	 */
+	failureRead: "checking" | "listed" | "unread" | null;
+	/**
 	 * Stacked consult (§8.1): the earlier COMPLETED exchanges, oldest-first. The
 	 * current exchange (question/text/fingerprint above) is NOT in here until a
 	 * follow-up supersedes it. A failed/stopped follow-up preserves this stack.
@@ -117,7 +123,7 @@ export interface ConsultState {
 }
 
 export type ConsultAction =
-	/** The composer resolved a leading mention and handed off (Consult MR-3). */
+	/** The box asked the room on its label and handed off. */
 	| {
 			type: "request";
 			consultId: string;
@@ -132,6 +138,8 @@ export type ConsultAction =
 	| { type: "end"; consultId: string; text: string; l1bFingerprint: L1bFingerprint; generatedAt: string; warnings?: string[] }
 	/** `code` distinguishes machine reasons (e.g. "prompt_overflow", §8.6) from plain failures. */
 	| { type: "error"; consultId: string; message: string; code?: string }
+	/** The room list read after a failure ended: read, or could not be read. */
+	| { type: "failure_read"; consultId: string; read: "listed" | "unread" }
 	/**
 	 * Stacked consult (§8.1): ask the SAME room a follow-up. Legal only from `done`,
 	 * or as a RETRY from a failed/stopped follow-up that still has a completed stack
@@ -190,6 +198,7 @@ export function createConsultState(): ConsultState {
 		warnings: [],
 		stopRequested: false,
 		errorMessage: null,
+		failureRead: null,
 		exchanges: [],
 		overflow: false,
 	};
@@ -345,9 +354,19 @@ export function reduceConsult(previous: ConsultState, action: ConsultAction): Co
 			// touch `exchanges` here. §8.6: an overflow error (machine code) flags the
 			// card to show the "no longer fits" state and disable the follow-up input.
 			return {
-				state: { ...previous, phase: previous.stopRequested ? "stopped" : "failed", errorMessage: action.message, overflow: action.code === "prompt_overflow" },
+				state: { ...previous, phase: previous.stopRequested ? "stopped" : "failed", errorMessage: action.message, failureRead: previous.stopRequested ? null : "checking", overflow: action.code === "prompt_overflow" },
 				effects,
 			};
+		}
+
+		case "failure_read": {
+			if (!isForActiveConsult(previous, action.consultId)) {
+				effects.push({ kind: "dropped", reason: "room list read for a non-active consult", consultId: action.consultId });
+				return { state: previous, effects };
+			}
+			// The read decides once: "unread" follows every read's end, and never undoes "listed".
+			if (previous.failureRead !== "checking") return { state: previous, effects };
+			return { state: { ...previous, failureRead: action.read }, effects };
 		}
 
 		case "followUp": {
@@ -379,6 +398,7 @@ export function reduceConsult(previous: ConsultState, action: ConsultAction): Co
 				warnings: [],
 				stopRequested: false,
 				errorMessage: null,
+				failureRead: null,
 				overflow: false,
 			};
 			effects.push({

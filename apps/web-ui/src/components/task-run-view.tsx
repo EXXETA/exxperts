@@ -54,7 +54,7 @@ export function TaskRunView({ state, onStop, onClose, maximized, onToggleMaximiz
 						>
 							{maximized ? "⤡" : "⤢"}
 						</button>
-						<button type="button" className="artifact-viewer-close" onClick={onClose} aria-label="Close run view. The task keeps running." title="Close — the task keeps running">
+						<button type="button" className="rs-btn rs-btn-icon rs-btn-sm artifact-viewer-close" onClick={onClose} aria-label="Close run view. The task keeps running." title="Close: the task keeps running">
 							✕
 						</button>
 					</div>
@@ -79,7 +79,7 @@ export function TaskRunView({ state, onStop, onClose, maximized, onToggleMaximiz
 				<div className="artifact-viewer-foot">
 					<div className="asset-viewer-footer">
 						<div className="asset-viewer-footer-row">
-							<button type="button" className="artifact-viewer-action asset-viewer-delete" onClick={onStop} title="Stop this task. Files it already wrote are kept.">
+							<button type="button" className="rs-btn rs-btn-danger rs-btn-sm asset-viewer-delete" onClick={onStop} title="Stop this task. Files it already wrote are kept.">
 								Stop
 							</button>
 						</div>

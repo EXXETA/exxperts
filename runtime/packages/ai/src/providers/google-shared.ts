@@ -3,7 +3,7 @@
  */
 
 import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
-import type { Context, ImageContent, Model, StopReason, TextContent, Tool } from "../types.js";
+import type { Context, ImageContent, Model, ModelThinkingLevel, StopReason, TextContent, Tool } from "../types.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -13,7 +13,28 @@ type GoogleApiType = "google-generative-ai" | "google-vertex";
  * Thinking level for Gemini 3 models.
  * Mirrors Google's ThinkingLevel enum values.
  */
-export type GoogleThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+export type GoogleThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | "XHIGH";
+
+export function isGemini4Model(model: Model<GoogleApiType>): boolean {
+	return /gemini-4(?:\.\d+)?-/.test(model.id.toLowerCase());
+}
+
+// Gemini 4 takes low, medium and high, and Hydrogen xhigh too. Its row offers
+// no off and no minimal, so those reach here only as a request to stop, which
+// it answers with its lowest level.
+export function getGemini4ThinkingLevel(level: ModelThinkingLevel): GoogleThinkingLevel {
+	switch (level) {
+		case "medium":
+			return "MEDIUM";
+		case "high":
+			return "HIGH";
+		case "xhigh":
+		case "max":
+			return "XHIGH";
+		default:
+			return "LOW";
+	}
+}
 
 /**
  * Determines whether a streamed Gemini `Part` should be treated as "thinking".

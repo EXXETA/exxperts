@@ -237,6 +237,11 @@
 label.settings-row {
 	cursor: pointer;
 }
+/* Red words that end a row end on its right edge (--exx-btn-inset), or as
+   near as the rows' box leaves the focus ring whole: 16 px less the ring. */
+.settings-row > .rs-btn-danger:not(.rs-btn-primary, .rs-btn-sm):last-child {
+	margin-right: calc(-1 * min(var(--exx-btn-inset), 12px));
+}
 .settings-row-main {
 	min-width: 0;
 	flex: 1 1 auto;
@@ -246,7 +251,7 @@ label.settings-row {
 }
 .settings-row-label {
 	font-size: 14px;
-	font-weight: 500;
+	font-weight: 400;
 }
 .settings-row-sub {
 	color: var(--muted);
@@ -268,35 +273,6 @@ label.settings-row {
 	color: var(--muted);
 	font-size: 13px;
 	white-space: nowrap;
-}
-/* A long folder name ends with "…" inside the pane, with the whole name in
-   its title; the access tag stays in view. */
-.settings-row-value.workspace-folder-value {
-	flex: 0 1 auto;
-	min-width: 0;
-	max-width: 50%;
-}
-/* The line beside the name wraps before a name that fits is cut, and its
-   last line keeps more than one word. */
-.settings-row:has(> .workspace-folder-value) > .settings-row-main {
-	flex-basis: 0;
-}
-.settings-row:has(> .workspace-folder-value) > .settings-row-main > .settings-row-sub {
-	text-wrap: pretty;
-}
-/* A folder name with no spaces wraps inside the Folder row's column instead
-   of running past it. */
-.settings-row:has(> .workspace-folder-value) > .settings-row-main > .settings-row-sub,
-.settings-row:has(> .workspace-folder-field) > .settings-row-main > .settings-row-sub {
-	overflow-wrap: anywhere;
-}
-.workspace-folder-name {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.workspace-folder-value .settings-row-tag {
-	flex-shrink: 0;
 }
 /* A long subline (a directory blurb) held to two lines; the full text is
    in its title. */
@@ -329,6 +305,7 @@ label.settings-row {
 	color: var(--muted);
 	font-size: 13px;
 	line-height: 1.45;
+	text-wrap: pretty;
 }
 /* The one disclosure chevron: 12 px, pointing right while shut and down
    while open, on a toggle's aria-expanded or a details element's open. */
@@ -363,7 +340,7 @@ label.settings-row {
    row label and the subline sizes. */
 .settings-dialog :is(.ai-profile-name, .memory-topic-title) {
 	font-size: 14px;
-	font-weight: 500;
+	font-weight: 400;
 }
 .settings-dialog .memory-entry-text {
 	font-size: 14px;
@@ -372,9 +349,10 @@ label.settings-row {
 	font-size: 13px;
 	line-height: 1.45;
 }
-/* One control height in both dialogs: every field, select and button in a
-   row, a header or a form is 32 px tall; text areas keep their own. */
-.settings-dialog-pane :is(.rs-btn, input:not([type="checkbox"], [type="radio"], [type="range"]), select) {
+/* One control height in both dialogs: every field and select in a row, a
+   header or a form is 32 px tall; text areas keep their own, buttons
+   their family's (01-base.css). */
+.settings-dialog-pane :is(input:not([type="checkbox"], [type="radio"], [type="range"]), select) {
 	box-sizing: border-box;
 	height: 32px;
 }
@@ -389,107 +367,8 @@ label.settings-row {
 	border-color: var(--exx-focus);
 	box-shadow: 0 0 0 3px color-mix(in srgb, var(--exx-focus) 22%, transparent);
 }
-/* The one button of both settings dialogs and the Maintain screens:
-   sentence case, one small size, outlined; the primary one is filled and
-   the destructive one red. Text links are only for navigation. */
-.rs-btn {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 6px;
-	background: none;
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	color: var(--fg);
-	font: inherit;
-	font-size: 12.5px;
-	font-weight: 700;
-	line-height: 1.2;
-	box-sizing: border-box;
-	min-height: 32px;
-	padding: 6px 12px;
-	white-space: nowrap;
-	text-decoration: none;
-	cursor: pointer;
-	flex-shrink: 0;
-}
-.rs-btn:hover:not(:disabled),
-.rs-btn:focus-visible {
-	border-color: var(--fg);
-}
-.rs-btn:disabled {
-	opacity: 0.45;
-	cursor: default;
-}
-/* The one action a form or a question is for, filled the way the app fills
-   a primary button. */
-.rs-btn.rs-btn-primary {
-	background: var(--fg);
-	border-color: var(--fg);
-	color: var(--bg);
-}
-.rs-btn.rs-btn-primary:hover:not(:disabled),
-.rs-btn.rs-btn-primary:focus-visible {
-	background: color-mix(in srgb, var(--fg) 88%, var(--bg));
-}
-.rs-btn-danger {
-	color: var(--error-text);
-	border-color: color-mix(in srgb, var(--error) 40%, transparent);
-}
-.rs-btn-danger:hover:not(:disabled),
-.rs-btn-danger:focus-visible {
-	border-color: var(--error);
-}
-/* The destructive confirmation of a dialog: filled red. */
-.rs-btn.rs-btn-primary.rs-btn-danger:not(:disabled) {
-	background: var(--error);
-	border-color: var(--error);
-	color: #ffffff;
-}
-/* Dark's red is a light coral, under white words at 3.1:1: the fill takes a
-   deeper red there, 5.1:1 (the light theme's red already reads at 6.6:1). */
-:root:not([data-theme="light"]) .rs-btn.rs-btn-primary.rs-btn-danger:not(:disabled) {
-	background: #d03030;
-	border-color: #d03030;
-}
 .confirm-dialog-backdrop .checkpoint-preview-actions {
 	justify-content: flex-end;
-}
-.rs-quiet {
-	background: none;
-	border: none;
-	padding: 0;
-	margin: 0;
-	font: inherit;
-	font-size: 13px;
-	color: var(--muted);
-	text-decoration: underline;
-	text-underline-offset: 3px;
-	cursor: pointer;
-	flex-shrink: 0;
-}
-.rs-quiet:hover:not(:disabled),
-.rs-quiet:focus-visible {
-	color: var(--fg);
-}
-.rs-quiet:disabled {
-	opacity: 0.45;
-	cursor: default;
-}
-/* A row's own actions in the dialogs are quiet words, not underlined: a
-   line under a word is kept for a link that leaves the page. */
-.settings-dialog-pane button.rs-quiet {
-	text-decoration: none;
-}
-.settings-dialog-pane :has(> button.rs-quiet) {
-	column-gap: 14px;
-}
-.rs-quiet-danger {
-	color: color-mix(in srgb, var(--error) 75%, var(--muted));
-}
-.rs-quiet-danger:hover:not(:disabled),
-.rs-quiet-danger:focus-visible {
-	color: var(--error);
 }
 .room-workspace-section,
 .room-schedules-section,
@@ -635,10 +514,17 @@ label.settings-row {
 	font-size: 11px;
 	overflow-wrap: anywhere;
 }
+/* Edit starts on the task's text edge (--exx-btn-inset-sm), or as near as the
+   list's box leaves its focus ring whole: its 16 px side less the 4 px ring. */
 .room-schedules-job-actions {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
+	margin-left: calc(-1 * min(var(--exx-btn-inset-sm), 12px));
+}
+/* The confirm's own box: 10 px of side less the ring. */
+.room-schedules-delete-confirm .room-schedules-job-actions {
+	margin-left: calc(-1 * min(var(--exx-btn-inset-sm), 6px));
 }
 .room-schedules-delete-confirm {
 	border: 1px solid color-mix(in srgb, var(--error) 24%, var(--border-soft));
@@ -764,6 +650,20 @@ label.settings-row {
 	border-color: color-mix(in srgb, var(--warning) 24%, transparent);
 	color: var(--warning);
 }
+/* The connector picker's last line: the way to add one that isn't listed.
+   The button drops under the sentence where the two don't fit side by side. */
+.room-connectors-picker-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	border-top: 1px solid var(--border-soft);
+	padding-top: 8px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
 @media (max-width: 720px) {
 	.room-settings-overlay {
 		padding: 12px;
@@ -794,7 +694,7 @@ label.settings-row {
 :root:not([data-theme="light"]) .settings-dialog {
 	--exx-danger: var(--error-text);
 }
-.settings-dialog :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-table, .skill-table) {
+.settings-dialog :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-list, .skill-table) {
 	background: var(--settings-box-fill);
 	border-radius: 12px;
 	padding: 0 16px;
@@ -803,11 +703,27 @@ label.settings-row {
 .settings-dialog :is(.settings-rows, .room-skills-rows):empty {
 	display: none;
 }
+/* On Settings > Connectors and a room's Skills and Connectors panes, the
+   empty list's line sits in the box the list would fill; on a room's
+   Connectors pane so does the line for a room with none enabled yet. */
+.settings-dialog :is(.connector-list-section, .room-skills-section) > .settings-empty,
+.settings-dialog .room-connectors-section > .room-skills-empty {
+	margin-top: 4px;
+	padding: 18px 16px;
+	border-radius: 12px;
+	background: var(--settings-box-fill);
+}
+@media (max-width: 760px) {
+	.settings-dialog :is(.connector-list-section, .room-skills-section) > .settings-empty,
+	.settings-dialog .room-connectors-section > .room-skills-empty {
+		padding: 16px 12px;
+	}
+}
 /* A table's head sits inside the box, clear of its edge. */
-.settings-dialog :is(.skill-table, .connector-table) {
+.settings-dialog .skill-table {
 	padding-top: 10px;
 }
-.settings-dialog :is(.settings-rows > * + *, .ai-profile-row-group + .ai-profile-row-group, .connector-rows > .connector-row + .connector-row) {
+.settings-dialog :is(.settings-rows > * + *, .ai-profile-row-group + .ai-profile-row-group) {
 	border-top: none;
 }
 .settings-dialog .settings-row {
@@ -848,13 +764,13 @@ label.settings-row {
 .rs-shell .room-model-section .pane-head + .settings-rows {
 	margin-top: 20px;
 }
-/* The chosen side of a switch in dark, as Remote access's rooms have it
-   (35-sidebar-remote.css): the quiet fill sits too close to the box. So does
-   the soft edge. */
-:root:not([data-theme="light"]) .settings-dialog .settings-segment.active {
+/* The chosen side of a switch in dark, in Settings and the gear menu's theme
+   row, as Remote access's rooms have it (35-sidebar-remote.css): the quiet
+   fill sits too close to the box. So does the soft edge. */
+:root:not([data-theme="light"]) :is(.settings-dialog, .sidebar-config-menu) .settings-segment.active {
 	background: color-mix(in srgb, var(--fg) 20%, var(--panel));
 }
-:root:not([data-theme="light"]) .settings-dialog :is(.settings-segments, .settings-segment + .settings-segment) {
+:root:not([data-theme="light"]) :is(.settings-dialog, .sidebar-config-menu) :is(.settings-segments, .settings-segment + .settings-segment) {
 	border-color: var(--border);
 }
 @media (min-width: 761px) {
@@ -870,11 +786,15 @@ label.settings-row {
 	.settings-dialog .settings-chat-width-row {
 		display: none;
 	}
-	.settings-dialog :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-table, .skill-table) {
+	.settings-dialog :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-list, .skill-table) {
 		padding: 0 12px;
 	}
-	/* These tables have no head on a phone, so their first row needs the room. */
-	.settings-dialog :is(.connector-table, .skill-table) {
+	/* A task's actions inside that 12 px side, less the 4 px ring. */
+	.room-schedules-job-actions {
+		margin-left: calc(-1 * min(var(--exx-btn-inset-sm), 8px));
+	}
+	/* This table has no head on a phone, so its first row needs the room. */
+	.settings-dialog .skill-table {
 		padding-block: 6px;
 	}
 	/* A switch is a finger's target here. */
@@ -896,5 +816,219 @@ label.settings-row {
 	}
 	.settings-dialog .state-profiles .settings-row-value:has(input) {
 		flex: 1 1 100%;
+	}
+}
+/* The Folder pane's Also allowed list: a group of its own under the room's
+   folder, with its heading and Add a folder above its own box. */
+.also-allowed {
+	margin-top: 20px;
+}
+/* Positioned, so its hidden live line stays inside it. */
+.room-workspace-section {
+	position: relative;
+}
+/* Why the list can't be changed now (a phone, the room answering). */
+.also-allowed-elsewhere {
+	margin: 0 0 8px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+/* Add a folder sits centred on the heading and its line, as each row's
+   control is centred on its words. */
+.also-allowed .group-head {
+	align-items: center;
+}
+/* The heading's words take the width the button leaves, so its line stays one line where it fits. */
+.also-allowed .group-head > .pane-head-text {
+	flex: 1 1 0;
+}
+/* Narrow: the heading's words take the whole width, and Add a folder goes under them. */
+@media (max-width: 760px) {
+	.also-allowed .group-head {
+		flex-wrap: wrap;
+	}
+	.also-allowed .group-head > .pane-head-text {
+		flex-basis: 100%;
+	}
+}
+.also-allowed-add .ui-icon {
+	margin-left: -3px;
+}
+/* Each row: the icon, the name with the access words under it, and its own
+   actions at the end, the cross always at the right edge. The name takes the
+   width the row's actions leave. The icon and the actions sit centred on the
+   names, however far the name wraps. */
+.settings-dialog .also-allowed-list {
+	list-style: none;
+	margin: 0;
+}
+.also-allowed-row {
+	display: grid;
+	grid-template-columns: 30px minmax(0, 1fr) auto;
+	column-gap: 14px;
+	align-items: center;
+	padding: 12px 0;
+}
+.also-allowed-icon {
+	display: grid;
+	place-items: center;
+	width: 30px;
+	height: 30px;
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--fg) 7%, transparent);
+	color: var(--muted);
+}
+/* A long name wraps between words, and inside a word only if that word
+   alone is wider than the row. */
+.also-allowed-name {
+	overflow-wrap: break-word;
+}
+.also-allowed-access {
+	color: var(--fg-soft);
+}
+/* A row's own actions, at its right edge:
+   an outlined button where there is one, then the cross that removes it.
+   The cross is the same in every row, so the crosses make one column, and
+   it stands where its middle meets the switches' middle above it. */
+.also-allowed-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	min-height: 30px;
+}
+.also-allowed-cross {
+	/* A switch's middle is 22px in from the row's edge: its 3px margin and
+	   half its 38px; the cross's middle meets it. */
+	margin-right: 8px;
+}
+/* A finger's cross is 44px: its middle is already 22px in, and it reaches
+   past the row's height without making the row taller. */
+@media (hover: none), (max-width: 760px) {
+	.also-allowed-cross {
+		margin: -8px 0;
+	}
+}
+/* While a change saves, the other controls wait. A save is quick, so they
+   grey only if it takes long enough to notice, and never flash. */
+.also-allowed-saving :disabled {
+	transition: opacity 150ms ease 400ms;
+}
+.settings-row-sub.also-allowed-failed {
+	color: var(--error-text);
+}
+.also-allowed > .also-allowed-failed {
+	display: block;
+	margin: -4px 0 8px;
+}
+/* Right after the cross: one line in the row's place, from its left edge where the icon stood, with Undo. */
+.also-allowed-removed > .settings-row-main {
+	grid-column: 1 / 3;
+}
+/* Narrow: the cross keeps the row's right edge, centred on the names, and a
+   button goes under them; the icon stays centred on the names. */
+@media (max-width: 760px) {
+	.also-allowed-row > .also-allowed-actions {
+		display: contents;
+	}
+	.also-allowed-row > .also-allowed-actions > .rs-btn {
+		grid-column: 2;
+		grid-row: 2;
+		justify-self: start;
+		margin-top: 6px;
+	}
+	.also-allowed-row > .also-allowed-actions > .also-allowed-cross {
+		grid-column: 3;
+		grid-row: 1;
+	}
+	/* Undo, under the line, starts from the same edge. */
+	.also-allowed-removed > .also-allowed-actions > .rs-btn {
+		grid-column: 1 / 3;
+	}
+}
+
+/* The Folder pane: Location, Can change files, Commands and the protection
+   row in one box, then Also allowed. Each change saves on its click. */
+/* Why the pane can't be changed now (a phone, the room answering): it
+   belongs to the box under it. */
+.folder-pane-elsewhere {
+	margin: 0 0 12px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+/* Shown, not changeable here: no wait cursor, as nothing is coming. */
+.room-workspace-section .workspaces-tool-switch:disabled {
+	cursor: default;
+}
+/* An off switch is the only sign a row is off, Protection's included: its
+   edge in the muted text colour stands out from the card in both themes. */
+.room-workspace-section .workspaces-tool-switch:not(:checked) {
+	border-color: var(--muted);
+}
+/* Location: the line under the label, the actions at the right edge centred
+   on the row's words, as the switches below are. */
+.settings-row.folder-pane-location {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0 20px;
+	align-items: center;
+}
+.folder-pane-location .settings-row-sub {
+	overflow-wrap: anywhere;
+}
+/* The room's folder name reads as a name, in the darker colour of a listed
+   folder's access, not the grey of the lines under a row. */
+.workspace-folder-name {
+	color: var(--fg-soft);
+}
+/* A switch row's line wraps without leaving a word alone on its last line
+   (balance, as pretty leaves a two-line line as it was). */
+.folder-pane-switch-row .settings-row-sub {
+	text-wrap: balance;
+}
+/* Where the folder window can't open: its reason, then the box and its
+   button, across the whole row. */
+.folder-pane-typed {
+	grid-column: 1 / -1;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 8px;
+}
+.folder-pane-typed-field {
+	display: flex;
+	gap: 8px;
+}
+.folder-pane-typed-field input {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+/* A switch row: the switch centred on its words, and a line under the words,
+   so the switch doesn't move when one comes. */
+.settings-row.folder-pane-switch-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0 20px;
+	align-items: center;
+}
+.folder-pane-line {
+	display: block;
+	margin-top: 2px;
+}
+/* While a change saves, the other controls wait. A save is quick, so they
+   grey only if it takes long enough to notice, and never flash. */
+.folder-pane-saving :disabled {
+	transition: opacity 150ms ease 400ms;
+}
+/* Narrow: Location's actions go under its words. */
+@media (max-width: 760px) {
+	.settings-row.folder-pane-location {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.folder-pane-location > .also-allowed-actions {
+		justify-content: flex-start;
+		margin-top: 8px;
 	}
 }

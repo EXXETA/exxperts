@@ -139,6 +139,7 @@ exxperts/
   exxperts          POSIX launcher shim (exxperts.cmd on Windows)
   app/              the installed package tree, prod deps included, no symlinks
   vendor/node/      pinned Node runtime (bin/node plus LICENSE; node.exe on Windows)
+  vendor/document-tools/  the document packages, one built file each, with their licences
 ```
 
 The shim runs `vendor/node/bin/node app/bin/exxperts.cjs`, and because the launcher chain spawns all children via its own `process.execPath`, everything downstream, the web server included, uses the vendored Node. The Node version is pinned in `scripts/release-node-version.json` together with the per-target sha256 of the nodejs.org archive (checked weekly by `scripts/check-node-currency.mjs`), and the download is verified against that pinned hash.

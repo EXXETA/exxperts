@@ -21,6 +21,7 @@ const emptyUsage: Usage = {
 
 const compat: Required<OpenAICompletionsCompat> = {
 	supportsStore: true,
+	supportsUser: true,
 	supportsDeveloperRole: true,
 	supportsReasoningEffort: true,
 	supportsUsageInStreaming: true,

@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-app",
-  "version": "0.15.2",
+  "version": "0.16.0",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -26,7 +26,10 @@
   "overrides": {
     "@hono/node-server": "^2.0.5",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "basic-ftp": "6.2.1"
+    "basic-ftp": "6.2.6",
+    "@anthropic-ai/sandbox-runtime": {
+      "zod": "^4.6.7"
+    }
   },
   "bin": {
     "exxperts": "bin/exxperts.cjs"
@@ -54,7 +57,10 @@
     "runtime/packages/tui/package.json",
     "docs/*.md",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "NOTICE",
+    "runtime/LICENSE",
+    "runtime/NOTICE.md"
   ],
   "scripts": {
     "build": "npm run build --workspace @exxeta/exxperts-ai && npm run build --workspace @exxeta/exxperts-core && npm run build --workspace @exxeta/exxperts-tui && npm run build --workspace @exxeta/exxperts-runtime && npm run build --workspace @exxeta/pi-web-ui",
@@ -68,14 +74,17 @@
     "typecheck:scripts": "tsc --noEmit -p apps/web-server/tsconfig.scripts.json"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@anthropic-ai/sdk": "^0.91.1",
     "@aws-sdk/client-bedrock-runtime": "^3.1030.0",
+    "@earendil-works/pi-ai": "0.74.2",
     "@exxeta/exxperts-ai": "file:runtime/packages/ai",
     "@exxeta/exxperts-core": "file:runtime/packages/agent",
     "@exxeta/exxperts-runtime": "file:runtime/packages/coding-agent",
     "@exxeta/exxperts-tui": "file:runtime/packages/tui",
     "@fastify/websocket": "^11.2.0",
     "@google/genai": "^1.40.0",
+    "@microsoft/mxc-sdk": "1.0.1",
     "@mistralai/mistralai": "^2.2.0",
     "@mozilla/readability": "^0.6.0",
     "@silvia-odwyer/photon-node": "^0.3.4",
@@ -128,6 +137,7 @@
     "esbuild": true,
     "fsevents": true,
     "koffi": true,
+    "node-pty": false,
     "protobufjs": true
   },
   "optionalDependencies": {

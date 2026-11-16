@@ -19,7 +19,9 @@ import { assert, countOccurrences, createRoom, deltaText, expectedText, type Gat
 //      the partial lands with that limit's line, and the lock releases.
 // Slice 3 (completion signal) rides the same sections: the landing records an
 // unseen-landed-answer marker on the room status (threadId/turnId/terminal
-// reason), binding a new session clears it, a cancelled turn never writes one,
+// reason), a hidden page's bind keeps it, a page coming into view on that
+// conversation or binding while in view clears it (unless another tab took the
+// room after it bound), a cancelled turn never writes one,
 // and the away-limit landing records the marker with terminalReason failed.
 // Stepping back into a room extends the run:
 //   2. (rewritten) a connection for the SAME conversation no longer bounces
@@ -143,10 +145,14 @@ try {
 	assert(reopenPut.status === 200, `resume PUT should succeed, got ${reopenPut.status}`);
 	const ws3 = await WsHarness.connect(roomId, conversationId);
 	await ws3.waitFor((frame) => frame.type === "ready", "resume ready frame");
-	// Slice 3: binding a session to the room clears the marker (the user is
-	// looking at the landed answer now).
-	const boundStatus = await getStatus(roomId);
-	assert(!boundStatus.unseenLandedAnswer, `binding a session should clear the unseen marker, got ${JSON.stringify(boundStatus.unseenLandedAnswer)}`);
+	// A bind that does not say its page is in view (a hidden tab reconnecting
+	// by itself) keeps the marker and the badge: nobody has looked yet.
+	const hiddenBoundStatus = await getStatus(roomId);
+	assert(hiddenBoundStatus.unseenLandedAnswer?.turnId === status.unseenLandedAnswer.turnId, `a hidden page's bind must keep the unseen marker, got ${JSON.stringify(hiddenBoundStatus.unseenLandedAnswer)}`);
+	// The page comes into view on that conversation and says so once: the
+	// marker clears (the user is looking at the landed answer now).
+	ws3.send({ type: "conversation_seen" });
+	await waitUntil(async () => !(await getStatus(roomId)).unseenLandedAnswer, "a page coming into view clears the unseen marker", 10_000);
 
 	// Slice 3 self-heal: a marker whose thread is no longer the room's active
 	// thread (read in the CLI, thread retired from another door) must be
@@ -213,6 +219,12 @@ try {
 	// must survive the wire.
 	assert(afterHangStatus.unseenLandedAnswer?.terminalReason === "failed", `the away-limit landing should record an unseen marker with terminalReason failed, got ${JSON.stringify(afterHangStatus.unseenLandedAnswer)}`);
 	assert(afterHangStatus.unseenLandedAnswer.threadId === conversationId, `the away-limit marker should name the landed thread, got ${JSON.stringify(afterHangStatus.unseenLandedAnswer)}`);
+	// A page in view binding to that conversation clears the marker at once.
+	const wsSeen = await WsHarness.connect(roomId, conversationId, { extraParams: "&visible=1" });
+	await wsSeen.waitFor((frame) => frame.type === "ready", "visible page ready frame");
+	const seenBoundStatus = await getStatus(roomId);
+	assert(!seenBoundStatus.unseenLandedAnswer, `a visible page's bind should clear the unseen marker, got ${JSON.stringify(seenBoundStatus.unseenLandedAnswer)}`);
+	wsSeen.close();
 
 	// --- 7. Full reattach: watch the answer land -----------------------------
 	// A fresh room so the landing assertions cannot be polluted by earlier
@@ -319,7 +331,7 @@ try {
 		const room9 = await createRoom(`Reattach Race Room ${raceProbes.indexOf(probe) + 1}`);
 		const conv9 = `smokeconv9_${Date.now().toString(36)}`;
 		await putThread(room9, conv9, []);
-		let ws9 = await WsHarness.connect(room9, conv9);
+		let ws9 = await WsHarness.connect(room9, conv9, { extraParams: "&visible=1" });
 		await ws9.waitFor((frame) => frame.type === "ready", "room9 ready frame");
 		const requestsBefore9 = gatewayRequests.length;
 		ws9.send({ type: "prompt", text: `Race the landing. ${SLOW_MARKER}` });
@@ -328,7 +340,7 @@ try {
 		const request9 = gatewayRequests.slice(requestsBefore9).find((row) => row.slow)!;
 		probe.release(request9);
 		await waitUntil(() => probe.trigger(request9), `room9 race trigger (${probe.label})`, 30_000);
-		ws9 = await WsHarness.connect(room9, conv9);
+		ws9 = await WsHarness.connect(room9, conv9, { extraParams: "&visible=1" });
 		probe.onConnect(request9);
 		await ws9.waitFor((frame) => frame.type === "ready", "room9 race ready frame");
 		await waitUntil(async () => (await getStatus(room9)).activeThread?.inFlight === false, "room9 race turn settled", 30_000);
@@ -359,6 +371,100 @@ try {
 		ws9.close();
 		await waitUntil(async () => !(await getStatus(room9)).activeLock, "room9 lock released after the racing session left", 20_000);
 	}
+
+	// --- 10. An older tab coming into view sees only its own conversation ---
+	// Tab A sits hidden on one conversation; tab B takes the room over on
+	// another, asks, and leaves while the answer is written. When tab A comes
+	// into view it has not shown B's answer: the mark stays.
+	const room10 = await createRoom("Seen Elsewhere Room");
+	const convA = `smokeconv10a_${Date.now().toString(36)}`;
+	const convB = `smokeconv10b_${Date.now().toString(36)}`;
+	await putThread(room10, convA, []);
+	const wsA = await WsHarness.connect(room10, convA);
+	await wsA.waitFor((frame) => frame.type === "ready", "room10 tab A ready frame");
+	await putThread(room10, convB, []);
+	const wsB = await WsHarness.connect(room10, convB, { extraParams: "&visible=1" });
+	await wsB.waitFor((frame) => frame.type === "ready", "room10 tab B ready frame");
+	const requestsBefore10 = gatewayRequests.length;
+	wsB.send({ type: "prompt", text: `Answer while I am gone. ${SLOW_MARKER}` });
+	await wsB.waitFor((frame) => deltaText(frame).length > 0, "room10 first delta");
+	wsB.close();
+	await waitDetached(room10, "room10");
+	gatewayRequests.slice(requestsBefore10).find((row) => row.slow)!.release();
+	await waitUntil(async () => (await getStatus(room10)).unseenLandedAnswer?.threadId === convB, "room10 answer landed unseen in tab B's conversation", 30_000);
+	wsA.send({ type: "conversation_seen" });
+	// The same socket answers its frames in order: an effort frame after it shows the seen frame was handled.
+	wsA.send({ type: "effort", level: "medium" });
+	await wsA.waitFor((frame) => frame.type === "effort", "room10 tab A handled its frames");
+	const status10 = await getStatus(room10);
+	assert(status10.unseenLandedAnswer?.threadId === convB, `a tab coming into view on another conversation must keep the mark, got ${JSON.stringify(status10.unseenLandedAnswer)}`);
+	wsA.close();
+
+	// --- 11. An older tab coming into view after another took its conversation ---
+	// Tab A sits hidden on a conversation; tab B takes the room over on the
+	// same conversation, asks, and leaves while the answer is written. Tab A,
+	// still connected, never got that answer: coming into view keeps the mark.
+	// The control: a page that binds hidden after the landing, and so loads it,
+	// clears the mark when it comes into view.
+	const room11 = await createRoom("Seen Taken Over Room");
+	const conv11 = `smokeconv11_${Date.now().toString(36)}`;
+	await putThread(room11, conv11, []);
+	const wsA11 = await WsHarness.connect(room11, conv11);
+	await wsA11.waitFor((frame) => frame.type === "ready", "room11 tab A ready frame");
+	const wsB11 = await WsHarness.connect(room11, conv11, { extraParams: "&visible=1" });
+	await wsB11.waitFor((frame) => frame.type === "ready", "room11 tab B ready frame");
+	const requestsBefore11 = gatewayRequests.length;
+	wsB11.send({ type: "prompt", text: `Answer while I am gone. ${SLOW_MARKER}` });
+	await wsB11.waitFor((frame) => deltaText(frame).length > 0, "room11 first delta");
+	wsB11.close();
+	await waitDetached(room11, "room11");
+	gatewayRequests.slice(requestsBefore11).find((row) => row.slow)!.release();
+	await waitUntil(async () => (await getStatus(room11)).unseenLandedAnswer?.threadId === conv11, "room11 answer landed unseen", 30_000);
+	assert(!wsA11.frames.some((frame) => frame.type === "event" && frame.event?.type === "agent_end"), "room11 tab A must not have received tab B's answer");
+	wsA11.send({ type: "conversation_seen" });
+	wsA11.send({ type: "effort", level: "medium" });
+	await wsA11.waitFor((frame) => frame.type === "effort", "room11 tab A handled its frames");
+	const status11 = await getStatus(room11);
+	assert(status11.unseenLandedAnswer?.threadId === conv11, `a tab another took its conversation from must keep the mark when it comes into view, got ${JSON.stringify(status11.unseenLandedAnswer)}`);
+	wsA11.close();
+	const wsC11 = await WsHarness.connect(room11, conv11);
+	await wsC11.waitFor((frame) => frame.type === "ready", "room11 control ready frame");
+	assert((await getStatus(room11)).unseenLandedAnswer?.threadId === conv11, "room11 control: a hidden bind must keep the mark");
+	wsC11.send({ type: "conversation_seen" });
+	wsC11.send({ type: "effort", level: "medium" });
+	await wsC11.waitFor((frame) => frame.type === "effort", "room11 control handled its frames");
+	assert(!(await getStatus(room11)).unseenLandedAnswer, `room11 control: a page that bound after the landing clears the mark when it comes into view, got ${JSON.stringify((await getStatus(room11)).unseenLandedAnswer)}`);
+	wsC11.close();
+
+	// --- 12. An older tab that loaded the answer, after a takeover with no new one ---
+	// The answer lands unseen; tab A binds hidden and so loads it; tab B binds
+	// hidden on the same conversation and leaves without asking. Tab A coming
+	// into view shows that same answer: the mark goes.
+	const room12 = await createRoom("Seen After Quiet Takeover Room");
+	const conv12 = `smokeconv12_${Date.now().toString(36)}`;
+	await putThread(room12, conv12, []);
+	const wsAsk12 = await WsHarness.connect(room12, conv12, { extraParams: "&visible=1" });
+	await wsAsk12.waitFor((frame) => frame.type === "ready", "room12 asking tab ready frame");
+	const requestsBefore12 = gatewayRequests.length;
+	wsAsk12.send({ type: "prompt", text: `Answer while I am gone. ${SLOW_MARKER}` });
+	await wsAsk12.waitFor((frame) => deltaText(frame).length > 0, "room12 first delta");
+	wsAsk12.close();
+	await waitDetached(room12, "room12");
+	gatewayRequests.slice(requestsBefore12).find((row) => row.slow)!.release();
+	await waitUntil(async () => (await getStatus(room12)).unseenLandedAnswer?.threadId === conv12, "room12 answer landed unseen", 30_000);
+	await waitUntil(async () => !(await getStatus(room12)).activeLock, "room12 lock released after the landing", 20_000);
+	const wsA12 = await WsHarness.connect(room12, conv12);
+	await wsA12.waitFor((frame) => frame.type === "ready", "room12 tab A ready frame");
+	const wsB12 = await WsHarness.connect(room12, conv12);
+	await wsB12.waitFor((frame) => frame.type === "ready", "room12 tab B ready frame");
+	wsB12.close();
+	assert((await getStatus(room12)).unseenLandedAnswer?.threadId === conv12, "room12: two hidden binds must keep the mark");
+	wsA12.send({ type: "conversation_seen" });
+	wsA12.send({ type: "effort", level: "medium" });
+	await wsA12.waitFor((frame) => frame.type === "effort", "room12 tab A handled its frames");
+	const status12 = await getStatus(room12);
+	assert(!status12.unseenLandedAnswer, `a tab coming into view on the answer it loaded must clear the mark after a takeover with no new answer, got ${JSON.stringify(status12.unseenLandedAnswer)}`);
+	wsA12.close();
 
 
 	console.log("persistent-room detached turn smoke passed");

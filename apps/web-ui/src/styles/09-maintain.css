@@ -102,24 +102,6 @@
 	margin: 0;
 	line-height: 1.55;
 }
-/* Why the question's primary answer is greyed, under the buttons. */
-.maintain-confirm-card .confirm-dialog-hold {
-	color: var(--muted);
-	font-size: 13px;
-	line-height: 1.45;
-	text-align: right;
-	text-wrap: balance;
-}
-/* On a phone the primary answer is the top button, so the reason goes
-   right above it. */
-@media (max-width: 760px) {
-	.confirm-dialog-three .checkpoint-preview-actions:has(+ .confirm-dialog-hold) {
-		order: 1;
-	}
-	.maintain-confirm-card .confirm-dialog-hold {
-		text-align: left;
-	}
-}
 /* The header's text and button line up with the 900px column the cards use,
  * instead of hugging the window edge while the cards sit in the middle. */
 /* The chooser is laid out like Home: one left-aligned column, the page title
@@ -276,7 +258,6 @@
 }
 .absorb-run-change { text-align: left; }
 .absorb-run-change-edit {
-	display: inline-block;
 	margin-top: 4px;
 }
 /* The discussion: the first read on the left, the chat on the right, one
@@ -354,9 +335,6 @@
 	flex-direction: row;
 	justify-content: flex-end;
 	gap: 10px;
-}
-.absorb-discussion-composer .absorb-discussion-actions .absorb-discussion-generate {
-	padding: 11px 16px;
 }
 .absorb-discussion-transcript .absorb-discussion-messages {
 	/* Full width of the panel, so the person's bubble sits at the right edge
@@ -487,7 +465,6 @@
 }
 .maintain-action-aside {
 	flex: 0 0 auto;
-	height: 32px;
 	margin-right: 26px;
 }
 .maintain-action:hover:not(:disabled),
@@ -533,7 +510,7 @@
 	border-radius: 999px;
 	padding: 3px 9px;
 }
-/* Drawn like the one button (.rs-btn): sentence case, 32 px. */
+/* A span drawn as a button, 32 px, in sentence case. */
 .maintain-action-go {
 	flex: 0 0 auto;
 	display: inline-flex;
@@ -552,6 +529,19 @@
 	background: var(--exx-action-primary-bg);
 	border-color: var(--exx-action-primary-bg);
 	color: var(--exx-action-primary-fg);
+}
+/* On a phone a chooser card's words take its full width: Start goes under
+   them, a finger's height like Discuss first, and Discuss first under the
+   card, on the words' edge. Start sits inside the card's own button, so no
+   line holds both. Review's depth picker shares the card's classes and keeps
+   its own layout. */
+@media (max-width: 760px) {
+	.maintain-chooser-column .maintain-action { flex-wrap: wrap; row-gap: 16px; }
+	.maintain-chooser-column .maintain-action-body { flex-basis: 100%; }
+	.maintain-chooser-column .maintain-action-go { height: 44px; }
+	.maintain-action-row { flex-wrap: wrap; }
+	.maintain-action-row > .maintain-action { flex-basis: 100%; padding-right: 26px; padding-bottom: 12px; }
+	.maintain-action-aside { margin: 0 26px 24px; }
 }
 .maintain-footnote {
 	margin: 0;

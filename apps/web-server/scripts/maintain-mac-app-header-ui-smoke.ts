@@ -3,13 +3,15 @@
 // y 18-32pt (trafficLightPosition 18,18; 14pt buttons, 23pt apart). On the
 // chooser, Memorize's first read and discussion, and Review's discussion, at
 // 100%, at 83% zoom (two Zoom Out presses) and at the next level out, 69.4%, no header text sits under the
-// buttons, and off the discussion step the title keeps the content's left
-// edge; the header still drags the window and its buttons still click. The
+// buttons or the back and forward arrows beside them, and off the discussion
+// step the title keeps the content's left edge; the header still drags the window and its buttons still click. The
 // window's drag strip is as tall as the window buttons' row (centre 25, so 50
 // window points) and drags. In the browser the header keeps its centred
 // padding and its 34px top. Zoom only
 // scales CSS px to points, so the 83% window is its size in CSS px with the
-// buttons' box divided by the zoom. Offline: one synthetic provider.
+// buttons' box divided by the zoom. In the Windows app, at 80%, 100% and 125%
+// zoom, no header text sits under the arrows on the same screens. Offline: one
+// synthetic provider.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -55,6 +57,7 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 
 const MODEL = { provider: "fake-claude", model: "claude-fake" };
 const MAC_APP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 ExxpertsDesktop/0.14.3";
+const WINDOWS_APP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 ExxpertsDesktop/0.14.3";
 const REVIEW_FIRST_READ = "## First read\n\n### Could be shorter\n- Renewals says one thing twice.\n\n### Looks stale or contradicts itself\n- None\n\n### Needs your call\nNone\n\n### Topics to tidy\nRenewals\n";
 const MEMORIZE_FIRST_READ = "## Absorb assessment\n\nI found 1 Recent Context entries. Here is the proposed direction.\n\n### What to remember\n\n- The venue plan.\n\n### What to forget\n\n- The small talk.\n\n### What changes in stable memory\n\n- Deep Memory: the venue plan.\n\n### Needs your judgment\n\n- None\n";
 // The window at 100% (the app's default size), and his window at 83% and at the next zoom out, 69.4%, in points.
@@ -99,6 +102,7 @@ type HeaderLook = {
 	paddingTop: string;
 	headerRegion: string;
 	buttonRegions: string[];
+	arrows: { left: number; top: number; right: number; bottom: number };
 };
 
 /** The header's text boxes (outside its buttons), the title's and the content's left edges, and the drag regions. */
@@ -124,6 +128,7 @@ function lookAtHeader(page: Page): Promise<HeaderLook> {
 			paddingTop: cs.paddingTop,
 			headerRegion: cs.getPropertyValue("-webkit-app-region"),
 			buttonRegions: [...header.querySelectorAll("button")].map((b) => getComputedStyle(b).getPropertyValue("-webkit-app-region")),
+			arrows: document.querySelector(".history-arrows")!.getBoundingClientRect().toJSON(),
 		};
 	});
 }
@@ -132,12 +137,17 @@ function lookAtHeader(page: Page): Promise<HeaderLook> {
 async function checkMacHeader(page: Page, screen: string, discussion: boolean): Promise<void> {
 	for (const z of ZOOMS) {
 		await page.setViewportSize({ width: Math.round(z.width / z.zoom), height: Math.round(z.height / z.zoom) });
+		// The row is set in window points: a page with no title bar overlay reads the zoom from here.
+		await page.evaluate((zoom) => document.documentElement.style.setProperty("--window-zoom", String(zoom)), z.zoom);
 		await page.waitForTimeout(300);
 		const look = await lookAtHeader(page);
 		const [x0, x1, y0, y1] = [18 / z.zoom, 78 / z.zoom, 18 / z.zoom, 32 / z.zoom];
 		const under = look.texts.filter((t) => t.left < x1 && t.right > x0 && t.top < y1 && t.bottom > y0);
 		assert(look.texts.length > 0, `${screen} at ${z.label}: the header has text`);
 		assert(under.length === 0, `${screen} at ${z.label}: no header text under the window buttons (x ${x0.toFixed(0)}-${x1.toFixed(0)}, y ${y0.toFixed(0)}-${y1.toFixed(0)}), got ${JSON.stringify(under)}`);
+		assert(Math.abs(look.arrows.left * z.zoom - 117) <= 1, `${screen} at ${z.label}: the arrows sit 117 window points in, got ${(look.arrows.left * z.zoom).toFixed(1)}`);
+		const underArrows = look.texts.filter((t) => t.left < look.arrows.right && t.right > look.arrows.left && t.top < look.arrows.bottom && t.bottom > look.arrows.top);
+		assert(underArrows.length === 0, `${screen} at ${z.label}: no header text under the arrows (${JSON.stringify(look.arrows)}), got ${JSON.stringify(underArrows)}`);
 		if (!discussion) {
 			assert(look.contentLeft !== null && Math.abs(look.titleLeft - look.contentLeft) <= 1, `${screen} at ${z.label}: the title keeps the content's left edge, got title ${look.titleLeft}, content ${look.contentLeft}`);
 		}
@@ -148,8 +158,23 @@ async function checkMacHeader(page: Page, screen: string, discussion: boolean): 
 		}
 	}
 	await page.setViewportSize({ width: 1440, height: 920 });
+	await page.evaluate(() => document.documentElement.style.removeProperty("--window-zoom"));
 	await page.waitForTimeout(200);
-	console.log(`  ok  ${screen}: clear of the window buttons at 100%, 83% and 69.4%${discussion ? "" : ", the title on the content's edge"}`);
+	console.log(`  ok  ${screen}: clear of the window buttons and the arrows at 100%, 83% and 69.4%${discussion ? "" : ", the title on the content's edge"}`);
+}
+
+/** The Windows app's 1440x920 window at 80%, 100% and 125% zoom, and a window 800 wide: zoom only scales CSS px, so the page is the window over the zoom. */
+async function checkWindowsHeader(page: Page, screen: string): Promise<void> {
+	for (const [label, width, height] of [["80%", 1800, 1150], ["100%", 1440, 920], ["125%", 1152, 736], ["800 wide", 800, 700]] as const) {
+		await page.setViewportSize({ width, height });
+		await page.waitForTimeout(300);
+		const look = await lookAtHeader(page);
+		const underArrows = look.texts.filter((t) => t.left < look.arrows.right && t.right > look.arrows.left && t.top < look.arrows.bottom && t.bottom > look.arrows.top);
+		assert(look.texts.length > 0, `${screen} in the Windows app at ${label}: the header has text`);
+		assert(underArrows.length === 0, `${screen} in the Windows app at ${label}: no header text under the arrows (${JSON.stringify(look.arrows)}), got ${JSON.stringify(underArrows)}`);
+	}
+	await page.setViewportSize({ width: 1440, height: 920 });
+	console.log(`  ok  ${screen} in the Windows app: clear of the arrows at 80%, 100% and 125%, and 800 wide`);
 }
 
 let server: ChildProcessWithoutNullStreams | undefined;
@@ -178,8 +203,11 @@ try {
 		fs.writeFileSync(l1bPath, `${text.slice(0, recent.index + recent[0].length)}\n\n${pages.join("\n")}\n`, "utf-8");
 	};
 	const note = (id: string, text: string) => `<!-- e: id=${id} kind=fact saved=2026-09-01 -->\n${text}\n`;
-	createRoom("Review Room", ["### Renewals", "", note("m-0201", "- The Nordwind contract renews in May, and the renewal is in May."), ""].join("\n"), [conversationPage("RC-0001", "2026-09-09", "The renewal call", "We went through the renewals.", "- The Nordwind renewal is in May.")]);
+	createRoom("Review Room for the whole design team offsite", ["### Renewals", "", note("m-0201", "- The Nordwind contract renews in May, and the renewal is in May."), ""].join("\n"), [conversationPage("RC-0001", "2026-09-09", "The renewal call", "We went through the renewals.", "- The Nordwind renewal is in May.")]);
 	createRoom("Memorize Room", ["### Billing", "", note("m-0301", "- Invoices are sent by email."), ""].join("\n"), [conversationPage("RC-0001", "2026-09-11", "The venue plan", "We settled the venue.", "- The venue is Lueneburg.")]);
+	// The same two rooms again for the Windows app, so each app starts its own Memorize and Review.
+	createRoom("Review on Windows", ["### Renewals", "", note("m-0401", "- The Nordwind contract renews in May, and the renewal is in May."), ""].join("\n"), [conversationPage("RC-0001", "2026-09-09", "The renewal call", "We went through the renewals.", "- The Nordwind renewal is in May.")]);
+	createRoom("Memorize on Windows", ["### Billing", "", note("m-0501", "- Invoices are sent by email."), ""].join("\n"), [conversationPage("RC-0001", "2026-09-11", "The venue plan", "We settled the venue.", "- The venue is Lueneburg.")]);
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
@@ -195,6 +223,8 @@ try {
 	try {
 		const open = async (userAgent?: string): Promise<Page> => {
 			const page = await (await browser.newContext({ viewport: { width: 1440, height: 920 }, ...(userAgent ? { userAgent } : {}) })).newPage();
+			// A browser tab has no title bar overlay; the mac app's window has one outside fullscreen.
+			if (userAgent === MAC_APP_UA) await page.addInitScript(() => Object.defineProperty(navigator, "windowControlsOverlay", { value: Object.assign(new EventTarget(), { visible: true }) }));
 			await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 			await page.waitForLoadState("networkidle");
 			const dismiss = page.locator(".whats-new-close");
@@ -211,12 +241,12 @@ try {
 		assert(await mac.evaluate(() => document.documentElement.classList.contains("desktop-app-mac")), "the Mac app's user agent turns on the desktop CSS");
 		await openChooser(mac, "Memorize Room");
 		await checkMacHeader(mac, "the chooser", false);
-		// The strip in window points: CSS px times the zoom the page measured from its window.
+		// The strip in window points: this page is at 100%, so CSS px are window points.
 		const strip = await mac.evaluate(() => {
 			const element = document.querySelector(".desktop-drag-strip");
-			return { height: element?.getBoundingClientRect().height ?? 0, region: element ? getComputedStyle(element).getPropertyValue("-webkit-app-region") : "missing", zoom: Number(getComputedStyle(document.documentElement).getPropertyValue("--window-zoom")) || 1 };
+			return { height: element?.getBoundingClientRect().height ?? 0, region: element ? getComputedStyle(element).getPropertyValue("-webkit-app-region") : "missing" };
 		});
-		assert(Math.abs(strip.height * strip.zoom - 50) <= 0.5, `the drag strip is as tall as the window buttons' row (50 window points), got ${(strip.height * strip.zoom).toFixed(1)} at zoom ${strip.zoom}`);
+		assert(Math.abs(strip.height - 50) <= 0.5, `the drag strip is as tall as the window buttons' row (50 window points), got ${strip.height.toFixed(1)}`);
 		assert(strip.region === "drag", `the drag strip drags the window, got ${strip.region || "unset"}`);
 		console.log("  ok  the drag strip is the window buttons' row, 50 window points tall, and drags");
 		await mac.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();
@@ -238,6 +268,33 @@ try {
 		await macReview.locator(".maintain-workspace .absorb-discussion-page").waitFor({ timeout: 15_000 });
 		await checkMacHeader(macReview, "Review's discussion", true);
 		await macReview.context().close();
+
+		// The Windows app: the same screens, its own title bar above the page.
+		const win = await open(WINDOWS_APP_UA);
+		await openChooser(win, "Memorize on Windows");
+		await checkWindowsHeader(win, "the chooser");
+		await win.getByRole("button", { name: "Hide sidebar" }).first().click();
+		await win.locator(".sidebar-toggle-floating").waitFor({ timeout: 5_000 });
+		await checkWindowsHeader(win, "the chooser with the sidebar hidden");
+		await win.getByRole("button", { name: "Show sidebar" }).first().click();
+		await win.locator(".sidebar-toggle-floating").waitFor({ state: "detached", timeout: 5_000 });
+		await win.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();
+		const winMemorize = win.locator('[aria-label="Memory absorption workflow"]');
+		await winMemorize.getByText("The venue plan.").first().waitFor({ timeout: 40_000 });
+		await checkWindowsHeader(win, "Memorize's first read");
+		await winMemorize.getByRole("button", { name: "Discuss first" }).click();
+		await win.locator(".maintain-workspace .absorb-workspace-header.compact").waitFor({ timeout: 15_000 });
+		await win.locator(".maintain-workspace .absorb-discussion-page").waitFor({ timeout: 15_000 });
+		await checkWindowsHeader(win, "Memorize's discussion");
+		await win.context().close();
+		const winReview = await open(WINDOWS_APP_UA);
+		await openChooser(winReview, "Review on Windows");
+		await winReview.locator(".maintain-action").filter({ hasText: "Review" }).first().click();
+		await winReview.locator('[aria-label="Review workflow"]').getByRole("button", { name: "Discuss first" }).click({ timeout: 40_000 });
+		await winReview.locator(".maintain-workspace .absorb-workspace-header.compact").waitFor({ timeout: 15_000 });
+		await winReview.locator(".maintain-workspace .absorb-discussion-page").waitFor({ timeout: 15_000 });
+		await checkWindowsHeader(winReview, "Review's discussion");
+		await winReview.context().close();
 
 		// The browser: no desktop CSS.
 		const web = await open();

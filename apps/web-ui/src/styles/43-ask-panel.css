@@ -1,0 +1,110 @@
+/* The room's question, docked right above the message box (ask-panel.tsx): a
+   calm raised panel as wide as the box, the question, its facts, its lines, and
+   its answers with the main one at the right edge. The buttons are the app's
+   own (.rs-btn); this file only places them. */
+.ask-panel {
+	container-type: inline-size;
+	align-self: center;
+	box-sizing: border-box;
+	width: calc(100% - 36px);
+	max-width: min(calc(var(--chat-rail-width) + 48px), calc(100% - 36px));
+	/* Never more than about half of what shows, the phone's keyboard taken off (phone-viewport.ts). The question's line and the answers keep their place and only the facts between them scroll. Where even the line and the answers can't fit (a short phone with its keyboard up), the whole panel scrolls, from its top, so every answer can still be reached. */
+	max-height: calc((100dvh - var(--phone-keyboard-lift, 0px)) / 2);
+	margin: 0 18px 8px;
+	overflow: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 16px 18px 14px;
+	border: 1px solid var(--border-soft);
+	border-radius: 14px;
+	background: var(--panel);
+	color: var(--fg);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.05);
+	animation: wk-fade 200ms both;
+}
+/* The facts: they give way first, keeping at least a line in view. Each end has a fade slot that stands in the gap beside it: in its place it covers nothing, and while words wait past that end it holds still over the last words in view and fades them into the panel. The slot takes 8px of the 12px gap, so the 4px next to the question's line and to the answers stay clear for a focus ring. */
+.ask-panel-in { flex: 0 1 auto; min-height: 35px; margin: -8px 0; overflow: auto; overscroll-behavior: contain; }
+.ask-words { display: grid; gap: 12px; }
+.ask-fade { position: sticky; z-index: 1; display: block; height: 8px; pointer-events: none; }
+.ask-fade[data-end="top"] { top: 0; background: linear-gradient(var(--panel) 25%, transparent); }
+.ask-fade[data-end="bottom"] { bottom: 0; background: linear-gradient(transparent, var(--panel) 75%); }
+.ask-title, .ask-actions, .ask-more { flex: none; }
+.ask-title { display: flex; gap: 10px; align-items: flex-start; margin: 0; font-size: 15px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
+.ask-title .wk-ic { margin-top: 3px; color: var(--muted); }
+.ask-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; gap: 6px 14px; align-items: baseline; margin: 0; }
+.ask-fact { display: contents; }
+.ask-fact dt { color: var(--muted); font-size: 13px; }
+.ask-fact dd { min-width: 0; margin: 0; color: var(--fg); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A fact with no answer of its own takes the row; one with an answer (the folder shown, and Choose another folder) keeps it at its end. */
+.ask-fact:not(.ask-fact-with-answer) dd { grid-column: 2 / -1; }
+.ask-fact > .rs-btn { align-self: center; margin-block: -4px; }
+/* The folder's path beside its name, whole: a long one wraps, never cut. */
+/* The gap sits after the name and the line may break there, so a path that doesn't fit starts its own line whole. */
+.ask-fact dd .ask-name { margin-right: 8px; }
+/* The path moves whole to its own line when it doesn't fit beside the name, and a long one wraps there after its separators. An inline table, not an inline block: its baseline is its first line, so a label beside a path that wraps stands at the path's first line, not its last. */
+.ask-fact dd .ask-path { display: inline-table; max-width: 100%; color: var(--muted); font-size: 13px; }
+/* A fact whose label is a sentence (the model's reason) puts its label on a line of its own. */
+.ask-fact.ask-fact-stacked > dt, .ask-fact.ask-fact-stacked > dd { grid-column: 1 / -1; }
+/* The model's reason can run long: it scrolls in its own few lines. */
+.ask-fact.ask-fact-stacked > dd { max-height: 6lh; overflow-y: auto; overscroll-behavior: contain; }
+/* A command to run outside the room, whole and as written: it wraps, so nothing runs off the side, and a long one scrolls in its own box, never taller than a quarter of the window. */
+.ask-command { margin: 0; max-height: min(240px, 25dvh); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-family: var(--exx-font-mono); font-size: 12.5px; color: var(--fg); white-space: break-spaces; overflow-wrap: anywhere; }
+/* A command or an address, as written: a long one scrolls in its own few lines. */
+.ask-fact dd code { display: block; max-height: 4.5lh; overflow: auto; font-family: var(--exx-font-mono); font-size: 12.5px; color: var(--fg-soft); }
+.ask-line { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+/* What just happened (a folder the room can't use), and what a yes gives where commands reach all of a person's files, read louder than the standing lines, by weight: the text colour is the room's own words'. */
+.ask-line.ask-warning, .ask-line.ask-risk { font-weight: 600; }
+/* Where the answers don't fit on one line (the narrowest desktop window with the wider Windows hint), the yeses drop to a second line, still at the right edge. */
+.ask-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.ask-actions-end { display: flex; flex-grow: 1; justify-content: flex-end; align-items: center; gap: 8px; }
+.ask-more { margin: 0; color: var(--muted); font-size: 12.5px; }
+/* A key's hint on its button, a space after its words (the family's button lays them out inline), never on touch. */
+.ask-panel kbd { margin-left: 8px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font-family: inherit; font-size: 11px; font-weight: 400; line-height: 1.2; opacity: 0.7; }
+/* An answer's words with its key's hint, and its words alone, in one cell: the first always sets the width, so the answer keeps its size and place whether the hint shows or not, and only one shows, the words alone centred. */
+.ask-key-slot { display: inline-grid; }
+.ask-key-slot > span { grid-area: 1 / 1; }
+.ask-key-slot > .ask-key-alone { justify-self: center; visibility: hidden; }
+/* The chord's hint shows while the chord would answer (ask-panel.tsx sets data-on), Esc's while Esc reaches the question: the box is empty, or the focus is in the panel. */
+.ask-chord-slot[data-on="0"] > .ask-key-with, .ask-panel:not([data-box-empty="1"]):not(:focus-within) .ask-esc-slot > .ask-key-with { visibility: hidden; }
+.ask-chord-slot[data-on="0"] > .ask-key-alone, .ask-panel:not([data-box-empty="1"]):not(:focus-within) .ask-esc-slot > .ask-key-alone { visibility: visible; }
+@media (hover: none), (max-width: 720px) {
+	.ask-panel kbd { display: none; }
+}
+/* A narrow panel stacks its answers full width, the main one on top and the no at the bottom. */
+@container (max-width: 420px) {
+	.ask-actions, .ask-actions-end { flex-direction: column-reverse; align-items: stretch; }
+	.ask-actions .rs-btn { width: 100%; }
+	/* A fact's own answer goes under it. */
+	.ask-facts { grid-template-columns: max-content minmax(0, 1fr); }
+	/* Quiet, it starts a line under the name: its words keep the name's edge and sit against the path, its fill hangs into the gaps and its tap height stays. */
+	.ask-fact > .rs-btn { grid-column: 2; justify-self: start; margin-block: -12px 0; margin-inline-start: calc(-1 * var(--exx-btn-inset-sm)); }
+}
+@media (max-width: 760px) {
+	/* The keyboard lifts the dock and the box by its height and the room's frame stays put (38-phone.css), so a dock taller than the room left above the keyboard would ride over the room's header. While a question is open the conversation's frame keeps at least the lift, so the lifted dock's top stops at the header's bottom edge, and the dock and the panel give way inside what is left. */
+	.main:has(.ask-panel) .messages-frame { min-height: var(--phone-keyboard-lift, 0px); }
+	/* Lifted, the dock and the box sit over the conversation, which keeps its place while an answer is under way: they carry the page's ground so none of it shows through. */
+	.above-composer-dock:has(.ask-panel), .main:has(.ask-panel) .composer { background: var(--bg); }
+	.above-composer-dock:has(.ask-panel) { min-height: 0; }
+	/* The draft's cap counts only what shows above the keyboard (16-composer.css caps it at 40% of the whole screen), so a long draft keeps the box's buttons above the keyboard. */
+	.main:has(.ask-panel) .composer textarea { max-height: min(40vh, calc((100dvh - var(--phone-keyboard-lift, 0px)) * 0.4)); }
+	/* As wide as the message box, which keeps 10px at each side here. */
+	.ask-panel { width: calc(100% - 20px); max-width: calc(100% - 20px); margin: 0 10px 8px; padding: 14px 14px 12px; }
+	/* On a phone a command's box gives way first: it shrinks, down to one line with its padding and border, before the words around it scroll, so only the box scrolls and the words under it keep their place above the answers. For that the box and those words stand in one column with the fades, the same space apart as before. */
+	.ask-panel-in:has(.ask-command) { display: flex; flex-direction: column; }
+	.ask-panel-in:has(.ask-command) > .ask-words { display: contents; }
+	.ask-panel-in:has(.ask-command) .ask-words > * + * { margin-top: 12px; }
+	.ask-panel-in:has(.ask-command) > .ask-fade { flex: none; }
+	.ask-panel-in .ask-command { min-height: calc(1lh + 18px); }
+}
+/* A narrow screen no taller than 740px, where a phone's keyboard leaves too little height for two stacked answers: a question with two answers keeps them on one row, Not now left, sharing it evenly where the panel would stack them, and the facts give way down to what is left between the question's line and the answers. Nothing a press changes, such as where the focus is, decides this, so an answer never moves under the finger or the pointer that presses it. */
+@media (max-width: 760px) and (max-height: 740px) {
+	.ask-panel:has(.ask-actions-end > :only-child) .ask-panel-in { min-height: 0; }
+	@container (max-width: 420px) {
+		.ask-actions:has(.ask-actions-end > :only-child) { flex-direction: row; flex-wrap: nowrap; }
+		.ask-actions:has(.ask-actions-end > :only-child) > * { flex: 1 1 50%; }
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.ask-panel { animation-duration: 120ms; }
+}

@@ -38,7 +38,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { chromium, type Page } from "playwright";
+import { chromium, type Page, type Request } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 
@@ -226,38 +226,59 @@ async function rowInPage(page: Page, providerId: string): Promise<{ line: string
 
 const REFUSED_LINE = "Anthropic did not accept the saved key.";
 
-/** Opens a picker and reads each of the key provider's models: its name, and its mark ("" for none). */
-async function keyModelsInPicker(page: Page, trigger: ReturnType<Page["locator"]>): Promise<string[]> {
+/** The page's reads of the refusals: how many it has made, and how many are out. */
+const refusalReads = { made: 0, out: 0 };
+function watchRefusalReads(page: Page): void {
+	const isRead = (request: Request) => request.url().endsWith("/api/persistent-agent-ai-profile");
+	const ended = (request: Request) => { if (isRead(request)) refusalReads.out -= 1; };
+	page.on("request", (request) => { if (isRead(request)) { refusalReads.made += 1; refusalReads.out += 1; } });
+	page.on("requestfinished", ended);
+	page.on("requestfailed", ended);
+}
+
+/** Once a read made since `madeBefore` and every other one are in and drawn: the page keeps the newest read's answer, so only then does no line or no mark mean none is due. */
+async function refusalsDrawn(page: Page, madeBefore: number): Promise<void> {
+	await waitUntil(() => refusalReads.made > madeBefore && refusalReads.out === 0, "the refusals are read");
+	await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+}
+
+/** Opens a picker and reads each of the key provider's models: its name, and its mark ("" for none). `refused`: the marks are due; without it, the read the open asks for is waited out, so none showing means none came. */
+async function keyModelsInPicker(page: Page, trigger: ReturnType<Page["locator"]>, refused: boolean): Promise<string[]> {
+	const madeBefore = refusalReads.made;
 	if (!(await page.locator(".room-model-menu").count())) await trigger.click();
 	const group = page.locator(".room-model-menu .room-model-menu-group[aria-label=\"Claude API key\"]");
 	await group.waitFor({ timeout: 10_000 });
+	if (refused) await group.locator(".room-model-option.marked").first().waitFor({ timeout: 10_000 });
+	else await refusalsDrawn(page, madeBefore);
 	const options = await group.locator(".room-model-option").evaluateAll((els) => els.map((el) => `${el.querySelector(".room-model-option-name")?.textContent ?? ""}|${el.classList.contains("marked") ? el.querySelector(".room-model-option-reason")?.textContent ?? "" : ""}`));
 	await page.keyboard.press("Escape");
 	return options;
 }
 
-/** Room settings, Model of a room on the key, and AI setup's default models, as the page draws them. */
-async function modelsInPage(page: Page, roomName: string): Promise<{ line: string | null; buttons: string[]; pane: string[]; defaults: string[] }> {
+/** Room settings, Model of a room on the key, and AI setup's default models, as the page draws them. `refused`: whether the last call refused the key, so the line and the marks are due. */
+async function modelsInPage(page: Page, roomName: string, refused: boolean): Promise<{ line: string | null; buttons: string[]; pane: string[]; defaults: string[] }> {
 	await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 	await page.waitForLoadState("networkidle");
 	const dismiss = page.locator(".whats-new-close");
 	if (await dismiss.count()) await dismiss.click();
+	const madeBefore = refusalReads.made;
 	await page.locator(".persistent-agent-card").filter({ hasText: roomName }).locator(".card-gear-btn").click();
 	await page.waitForSelector(".settings-dialog", { timeout: 10_000 });
 	await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Model$/ }).first().click();
 	const row = page.locator(".room-settings-section:not([hidden]) .room-model-row").first();
 	await row.locator(".room-model-pick:not([disabled])").waitFor({ timeout: 10_000 });
 	// The refusals are read beside the models; the line, when there is one, follows them.
-	await page.waitForLoadState("networkidle");
-	const refused = row.locator(".room-model-refused");
-	const line = (await refused.count()) ? (await refused.locator("span").first().innerText()).trim() : null;
-	const buttons = (await refused.locator("button").allInnerTexts()).map((text) => text.trim());
+	const refusedLine = row.locator(".room-model-refused");
+	if (refused) await refusedLine.waitFor({ timeout: 10_000 });
+	else await refusalsDrawn(page, madeBefore);
+	const line = (await refusedLine.count()) ? (await refusedLine.locator("span").first().innerText()).trim() : null;
+	const buttons = (await refusedLine.locator("button").allInnerTexts()).map((text) => text.trim());
 	// "Choose another" opens the row's own picker.
 	if (buttons.includes("Choose another")) {
-		await refused.getByRole("button", { name: "Choose another" }).click();
+		await refusedLine.getByRole("button", { name: "Choose another" }).click();
 		await page.locator(".room-model-menu").waitFor({ timeout: 10_000 });
 	}
-	const pane = await keyModelsInPicker(page, row.locator(".room-model-pick"));
+	const pane = await keyModelsInPicker(page, row.locator(".room-model-pick"), refused);
 	await page.keyboard.press("Escape");
 	await page.waitForSelector(".settings-dialog", { state: "detached", timeout: 10_000 });
 	await page.locator(".product-sidebar-footer button").first().click();
@@ -266,8 +287,7 @@ async function modelsInPage(page: Page, roomName: string): Promise<{ line: strin
 	await page.locator(".settings-dialog-nav button").filter({ hasText: "AI setup" }).first().click();
 	const defaultsTrigger = page.locator(".ai-defaults-group .room-model-pick:not([disabled])").first();
 	await defaultsTrigger.waitFor({ timeout: 15_000 });
-	await page.waitForLoadState("networkidle");
-	const defaults = await keyModelsInPicker(page, defaultsTrigger);
+	const defaults = await keyModelsInPicker(page, defaultsTrigger, refused);
 	return { line, buttons, pane, defaults };
 }
 
@@ -313,12 +333,13 @@ try {
 
 	const chromiumPath = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
 	const page = chromiumPath && fs.existsSync(chromiumPath) ? await (await (browser = await chromium.launch()).newContext({ viewport: { width: 1280, height: 900 } })).newPage() : null;
+	if (page) watchRefusalReads(page);
 	if (!page) console.log("  skip AI setup's row in the page (Chromium not installed)");
 
 	await turnIn(room, "c_key_0001", "A question the key answers.");
 	assert(clearRow(await keyRow()), `with the key answering, its row is ready and says nothing more, got ${said(await keyRow())}`);
 	pass("a key that answers: its row is ready");
-	const answering = page ? await modelsInPage(page, "Key Room") : null;
+	const answering = page ? await modelsInPage(page, "Key Room", false) : null;
 	if (answering) {
 		assert(answering.line === null, `with the key answering, the Model pane's row has no refused line, got "${answering.line}"`);
 		const unmarked = (options: string[]) => options.length > 0 && options.every((option) => option.endsWith("|"));
@@ -337,7 +358,7 @@ try {
 		assert(drawn.line === ROW_LINE, `the row's line is "${ROW_LINE}", got "${drawn.line}"`);
 		assert(drawn.replaceOpensForm, "the row offers Replace key, which opens the key form");
 		pass(`AI setup's row reads "${ROW_LINE}" beside Replace key, which opens the key form`);
-		const refusedModels = await modelsInPage(page, "Key Room");
+		const refusedModels = await modelsInPage(page, "Key Room", true);
 		assert(refusedModels.line === REFUSED_LINE, `the Model pane's row reads "${REFUSED_LINE}", got "${refusedModels.line}"`);
 		assert(JSON.stringify(refusedModels.buttons) === JSON.stringify(["Choose another"]), `without a way to AI setup the line offers Choose another alone, got ${JSON.stringify(refusedModels.buttons)}`);
 		const marked = (options: string[]) => options.length > 0 && options.every((option) => option.endsWith("|Key refused"));
@@ -456,7 +477,12 @@ try {
 
 	// A new sign-in through the app, its code exchanged at the same local endpoint.
 	refuseRefresh = false;
-	const login = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ provider: SIGN_IN_PROVIDER }) });
+	// The callback's port is the provider's own, one per machine: another run's sign-in can hold it for a moment.
+	let login = { status: 0, body: null as any };
+	await waitUntil(async () => {
+		login = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ provider: SIGN_IN_PROVIDER }) });
+		return !String(login.body?.error).includes("EADDRINUSE");
+	}, "the sign-in's port is free", 30_000);
 	assert(login.status === 200 && typeof login.body?.url === "string", `the sign-in starts, got ${login.status}`);
 	const state = new URL(login.body.url).searchParams.get("state");
 	const callback = await fetch(`${SIGN_IN_CALLBACK}?code=synthetic-code&state=${encodeURIComponent(String(state))}`);

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -169,7 +169,7 @@ try {
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await page.waitForTimeout(800);
 		await composer.fill("We moved the launch to May.");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Answer from claude-fake.").count()) === 1, "the answer");
 		await page.waitForTimeout(800);
 		await page.getByRole("button", { name: "Remember", exact: true }).click();
@@ -184,7 +184,7 @@ try {
 
 		// The question: the room searches its memory.
 		await composer.fill(QUESTION);
-		await composer.press("Enter");
+		await sendFromBox(page);
 		// The search itself takes a moment only, so the running label is read where the step takes it.
 		const { MEMORY_RECALL_STEP } = await import("../../web-ui/src/memory-recall-display.js");
 		assert(MEMORY_RECALL_STEP.running === "Searching memory", `the running step says Searching memory, got ${JSON.stringify(MEMORY_RECALL_STEP.running)}`);

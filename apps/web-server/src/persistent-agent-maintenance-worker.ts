@@ -2,6 +2,7 @@ import { type DiscussionTranscriptMessage, type DiscussionTranscriptReduction, D
 import { type MaintenanceDiagnosticsProcess, recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
 import type { AbsorbGenerateResult, CheckpointCompressionGenerateResult, CheckpointModelWindow } from "./persistent-agent-memory-types.js";
 import { createPersistentAgentInstance } from "./persistent-agent-store.js";
+import { ModelUnreachableError, providerFailureLogFields } from "./model-call-causes.js";
 import { checkpointPromptTokenBudget } from "./persistent-agent-boot.js";
 
 export class MaintenancePromptOverflowError extends Error {
@@ -205,6 +206,8 @@ function assessmentDraftScore(text: string, parseWarnings: string[]): number {
 async function generateWorkerDraftWithRetry<TResult extends AssessmentWorkerResult, TParsed>(input: {
 	agentId: string;
 	processLabel: string;
+	/** The model the drafts are asked of: its provider reads a failed retry's codes for the log. */
+	model: { provider: string; model: string };
 	/** The prompt actually sent first (may already carry a user-requested Retry Notice). */
 	prompt: string;
 	/** The same prompt without any Retry Notice — the retry is rebuilt from it so two notices never stack. */
@@ -265,7 +268,12 @@ async function generateWorkerDraftWithRetry<TResult extends AssessmentWorkerResu
 			// A failed retry must not destroy a usable first draft: on main this
 			// user saw their draft with a warning, and still does.
 			if (!firstUsable) throw error;
-			console.warn(`[${input.logTag ?? "worker-draft-retry-failed"}] agent=${input.agentId} process=${input.processLabel}: ${(error as Error).message}`);
+			// The log keeps the codes only: the provider's words go to the warning the person sees.
+			// A model the patience gave up on hands up its own error: the provider's codes are on the failure beneath it.
+			const logged = error instanceof ModelUnreachableError
+				? { ...providerFailureLogFields(error.last, input.model.provider), cause: `unreachable:${error.details.detail}` }
+				: providerFailureLogFields(error, input.model.provider) ?? { cause: "cancelled" };
+			console.warn(`[${input.logTag ?? "worker-draft-retry-failed"}] agent=${input.agentId} process=${input.processLabel}: ${JSON.stringify(logged)}`);
 			warnings.push(input.copy.retryFailed((error as Error).message.replace(/\s+No memory has been written\.?$/, "")));
 		}
 	}

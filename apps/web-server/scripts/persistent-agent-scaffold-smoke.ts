@@ -141,7 +141,7 @@ function assertGenericAgent(agentId: string, expected: { displayName: string; us
 	assertIncludes(l1a, `refer to the user as **${expected.preferredAddress}**`, `${agentId}: L1a preferred address instruction`);
 	const expectedMode = expected.mode ?? "default";
 	assert(meta.mode === expectedMode, `${agentId}: agent.json mode should be ${expectedMode}`);
-	assertIncludes(l1a, `template_version=4 mode=${expectedMode}`, `${agentId}: L1a template version marker`);
+	assertIncludes(l1a, `template_version=5 mode=${expectedMode}`, `${agentId}: L1a template version marker`);
 	assertIncludes(l1a, `l1a-mode-begin id=${expectedMode}`, `${agentId}: L1a mode slot begin marker`);
 	assertIncludes(l1a, "l1a-mode-end", `${agentId}: L1a mode slot end marker`);
 	assertIncludes(l1a, MODE_BODY_SENTINELS[expectedMode], `${agentId}: L1a mode body should match ${expectedMode} preset`);
@@ -162,7 +162,7 @@ function assertGenericAgent(agentId: string, expected: { displayName: string; us
 }
 
 try {
-	const initiallyListed = listPersistentAgents();
+	const initiallyListed = listPersistentAgents("every room");
 	assert(Array.isArray(initiallyListed) && initiallyListed.length === 0, "fresh empty agents root should list no rooms");
 	assert(roomFolders().length === 0, `a fresh listing creates no room folder, got ${JSON.stringify(roomFolders())}`);
 
@@ -264,7 +264,7 @@ try {
 	const madeIds = [tom, atlas, accented, nfdIntake, mentor].map((made) => made.agent.agentId).sort();
 	assert(JSON.stringify(roomFolders()) === JSON.stringify(madeIds), `only the rooms asked for have folders, got ${JSON.stringify(roomFolders())}`);
 
-	const listed = listPersistentAgents();
+	const listed = listPersistentAgents("every room");
 	const listedIds = listed.map((status: any) => status.id);
 	const sortedListedIds = [...listedIds].sort((a, b) => a.localeCompare(b));
 	assert(JSON.stringify(listedIds) === JSON.stringify(sortedListedIds), "listPersistentAgents should be sorted deterministically");

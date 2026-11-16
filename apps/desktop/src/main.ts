@@ -167,9 +167,9 @@ function wireContextMenu(win: BrowserWindow): void {
 // exxperts:// deep links. Two producers: the OS (protocol handler, e.g. a
 // notification clicked or a link from another app) and the web-ui itself,
 // which navigates to exxperts://focus as its only channel to say "show the
-// window" (sandboxed page, no preload IPC). The SPA has no URL routing, so a
-// deep link shows the window in whatever room the page is in; notifications
-// are fired from the open room, which makes that the right room.
+// window" (sandboxed page, no preload IPC). A deep link carries no page
+// address, so it shows the window on whatever screen the page is on;
+// notifications are fired from the open room, which makes that the right room.
 let smokeDeepLink = false;
 
 function handleDeepLink(rawUrl: string): void {
@@ -262,8 +262,9 @@ function createMainWindow(): BrowserWindow {
     // Real-app look on macOS: no title bar, traffic lights inset over the
     // sidebar; the web-ui provides the drag region (desktop-gated CSS).
     // Traffic lights pinned explicitly so the in-chrome toggle's CSS offsets
-    // align deterministically (the hiddenInset default varies).
-    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 18, y: 18 } } : {}),
+    // align deterministically (the hiddenInset default varies). The overlay
+    // gives the page's CSS the lights' row in its own pixels at any zoom.
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 18, y: 18 }, titleBarOverlay: true } : {}),
     webPreferences: { sandbox: true, spellcheck: true },
   });
   if (saved.maximized) {
@@ -978,8 +979,7 @@ async function smokeReport(): Promise<void> {
       const strip = document.querySelector(".desktop-drag-strip");
       const ss = strip ? getComputedStyle(strip) : null;
       // The strip is the window buttons' row, 50 window points tall: its CSS height times the page's zoom.
-      const windowZoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--window-zoom")) || 1;
-      const stripOk = !!ss && ss.display === "block" && ss.position === "fixed" && ss.webkitAppRegion === "drag" && Math.abs(parseFloat(ss.height) * windowZoom - 50) <= 0.5;
+      const stripOk = !!ss && ss.display === "block" && ss.position === "fixed" && ss.webkitAppRegion === "drag" && Math.abs(parseFloat(ss.height) * ${win.webContents.getZoomFactor()} - 50) <= 0.5;
       const cls = document.documentElement.className;
       // The drag strip is the window buttons' row; the logo has its own row
       // under it, and the list starts below the logo, never inside the strip,
@@ -1242,17 +1242,22 @@ async function smokeReport(): Promise<void> {
     console.log(matrixFailure ? `DESKTOP_SHOT_MATRIX FAILED: ${matrixFailure}` : `DESKTOP_SHOT_MATRIX written to ${matrixDir} (flips asserted at all zoom levels)`);
   }
 
-  // Sidebar toggle through the REAL input pipeline (round-S1 standing rule:
-  // synthetic DOM clicks bypass the compositor hit-test, so only
-  // sendInputEvent can prove the drag region is not eating the click).
+  // Sidebar toggle through the real input pipeline: a synthetic DOM click
+  // skips the hit test, so only sendInputEvent proves nothing paints over the
+  // button. It reaches the page past the window's drag area, though: where a
+  // bar drags over a button, a person's click moves the window and this one
+  // still lands, so the drag area is read from the page (the drawer's row below).
   // Collapse via the in-header toggle, re-expand via the floating affordance.
   const clickAt = async (selector: string) => {
     const rect = await win.webContents.executeJavaScript(
       `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
     ).catch(() => null) as { x: number; y: number } | null;
     if (!rect) return false;
-    win.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(rect.x), y: Math.round(rect.y), button: "left", clickCount: 1 });
-    win.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(rect.x), y: Math.round(rect.y), button: "left", clickCount: 1 });
+    // Input events are in window points, the page's box in CSS pixels.
+    const zoom = win.webContents.getZoomFactor();
+    const [x, y] = [Math.round(rect.x * zoom), Math.round(rect.y * zoom)];
+    win.webContents.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+    win.webContents.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
     await new Promise((r) => setTimeout(r, 500));
     return true;
   };
@@ -1264,6 +1269,168 @@ async function smokeReport(): Promise<void> {
       sidebarToggleOk = (await isCollapsedNow()) === false;
     }
   }
+
+  // The top row in window points, measured against the shell's own zoom and
+  // fullscreen state, through the window changes that animate: a maximize
+  // used to leave the button off the row until the next zoom. Each change
+  // waits for the row to come right, so a value that stays wrong fails.
+  // Every wait here has a limit: a read sent during a load never answers.
+  const rowFailures: string[] = [];
+  const rowInPoints = (zoom: number) => Promise.race([win.webContents.executeJavaScript(`(() => {
+    const button = document.querySelector(".sidebar-toggle");
+    const glyph = button?.querySelector("svg");
+    if (!button || !glyph) return null;
+    const box = button.getBoundingClientRect();
+    return { left: box.left * ${zoom}, centre: (box.top + box.height / 2) * ${zoom}, size: box.width * ${zoom}, glyph: glyph.getBoundingClientRect().width * ${zoom} };
+  })()`).catch(() => null) as Promise<{ left: number; centre: number; size: number; glyph: number } | null>, new Promise<null>((resolve) => setTimeout(() => resolve(null), 500))]);
+  const checkRow = async (label: string) => {
+    const zoom = win.webContents.getZoomFactor();
+    // In fullscreen the button's glyph, 6 points inside its box, starts on the sidebar's text line, 27 CSS pixels in.
+    const left = win.isFullScreen() ? 27 * zoom - 6 : 87;
+    const right = (row: Awaited<ReturnType<typeof rowInPoints>>) => !!row && Math.abs(row.left - left) <= 1 && Math.abs(row.centre - 25) <= 1 && Math.abs(row.size - 28) <= 0.5 && Math.abs(row.glyph - 16) <= 0.5;
+    let row = await rowInPoints(zoom);
+    for (let tries = 0; tries < 30 && !right(row); tries += 1) {
+      await new Promise((r) => setTimeout(r, 100));
+      row = await rowInPoints(zoom);
+    }
+    if (!right(row)) rowFailures.push(`${label} at ${Math.round(zoom * 100)}%: ${JSON.stringify(row)}`);
+  };
+  // Waits for the window itself, not its events: a change started while the
+  // last one still animates is dropped, and so is its event. The bounds holding
+  // still for a second is the animation over.
+  const reach = async (step: string, change: () => void, reached: () => boolean) => {
+    change();
+    let bounds = "";
+    let stillSince = Date.now();
+    for (const deadline = Date.now() + 8000; Date.now() < deadline; await new Promise((r) => setTimeout(r, 100))) {
+      const now = JSON.stringify(win.getBounds());
+      if (now !== bounds) {
+        bounds = now;
+        stillSince = Date.now();
+      }
+      if (reached() && Date.now() - stillSince >= 1000) return;
+    }
+    rowFailures.push(`${step}: the window did not get there`);
+  };
+  const maximize = () => reach("maximize", () => win.maximize(), () => win.isMaximized());
+  const restore = () => reach("restore", () => win.unmaximize(), () => !win.isMaximized());
+  const enterFullscreen = () => reach("enter fullscreen", () => win.setFullScreen(true), () => win.isFullScreen());
+  const leaveFullscreen = () => reach("leave fullscreen", () => win.setFullScreen(false), () => !win.isFullScreen());
+  if (process.platform === "darwin" && win.isVisible()) {
+    for (const zoom of [0.8, 1, 1.25]) {
+      win.webContents.setZoomFactor(zoom);
+      await checkRow("zoomed");
+      await maximize();
+      await checkRow("maximized");
+      await restore();
+      await checkRow("restored");
+      await enterFullscreen();
+      await checkRow("fullscreen");
+      await leaveFullscreen();
+      await checkRow("left fullscreen");
+    }
+    await reach("reload", () => win.webContents.reload(), () => !win.webContents.isLoading());
+    await checkRow("reloaded");
+    await enterFullscreen();
+    win.webContents.setZoomFactor(1.25);
+    await checkRow("zoomed in fullscreen");
+    await reach("reload", () => win.webContents.reload(), () => !win.webContents.isLoading());
+    await checkRow("reloaded in fullscreen");
+    win.webContents.setZoomFactor(1);
+    await checkRow("zoomed back in fullscreen");
+    await leaveFullscreen();
+    await checkRow("left fullscreen");
+  }
+  const macRow = process.platform !== "darwin" ? "n/a" : !win.isVisible() ? "hidden" : rowFailures.length === 0 ? "ok" : `fail(${rowFailures.join("; ")})`;
+  const macRowOk = rowFailures.length === 0;
+
+  // The back and forward arrows through the real input pipeline, at each zoom:
+  // room to Home to Memory, Back twice, Forward twice, then Back to the first
+  // entry, each arrow grey at its end, which also holds navigation.canGoBack
+  // to this shell. Every step waits for the page to come right. The room needs
+  // a model that could run; none is ever called. A scratch home only: the
+  // setup files would otherwise land in a real one.
+  const arrowFailures: string[] = [];
+  const scratchHome = process.env.EXXPERTS_DESKTOP_SCRATCH_HOME;
+  const arrowsDriven = process.platform === "darwin" && win.isVisible() && !!scratchHome;
+  if (arrowsDriven) {
+    const agentDir = path.join(stateHome(), ".exxperts", "agent");
+    const appDir = path.join(stateHome(), ".exxperts", "app");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: { "fake-gpt": { name: "Fake GPT", baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", models: [{ id: "gpt-fake", name: "GPT Fake", input: ["text"], contextWindow: 128000, maxTokens: 16000 }] } } }), { mode: 0o600 });
+    fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ "fake-gpt": { type: "api_key", key: "synthetic-gpt" } }), { mode: 0o600 });
+    fs.writeFileSync(path.join(appDir, "custom-ai-profiles.json"), JSON.stringify({ version: 1, profiles: [{ id: "custom-fake-gpt", providerId: "fake-gpt", label: "Fake GPT", roomModels: ["gpt-fake"], learnModel: "gpt-fake", reviewMemoryModel: "gpt-fake" }] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "custom-fake-gpt" }), { mode: 0o600 });
+    const pageSays = (expression: string) => Promise.race([win.webContents.executeJavaScript(expression).catch(() => null) as Promise<unknown>, new Promise<null>((resolve) => setTimeout(() => resolve(null), 500))]);
+    const pageComes = async (expression: string) => {
+      for (let tries = 0; tries < 100; tries += 1) {
+        if (await pageSays(expression) === true) return true;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return false;
+    };
+    await pageSays(`fetch("/api/persistent-agents").then((res) => res.json()).then((rooms) => JSON.stringify(rooms).includes("Arrows Room") || fetch("/api/persistent-agents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ displayName: "Arrows Room", userName: "Smoke" }) }).then((res) => res.ok))`);
+    await reach("reload with the room", () => win.webContents.reload(), () => !win.webContents.isLoading());
+    const back = '.history-arrow[aria-label="Back"]';
+    const forward = '.history-arrow[aria-label="Forward"]';
+    const arrows = (canBack: boolean, canForward: boolean) => `document.querySelector(${JSON.stringify(back)})?.disabled === ${!canBack} && document.querySelector(${JSON.stringify(forward)})?.disabled === ${!canForward}`;
+    const home = `!!document.querySelector(".home-page") && !location.hash.startsWith("#/memory")`;
+    const room = `location.hash.startsWith("#/room/") && !!document.querySelector(".sidebar-home-btn")`;
+    const memory = `location.hash === "#/memory"`;
+    const steps: [name: string, selector: string, lands: string][] = [
+      ["into the room", ".persistent-agent-card .landing-action", `${room} && ${arrows(true, false)}`],
+      ["to Home", ".sidebar-home-btn", `${home} && ${arrows(true, false)}`],
+      ["to Memory", '.product-nav .list-btn[title^="What your rooms know"]', `${memory} && ${arrows(true, false)}`],
+      ["first Back", back, `${home} && ${arrows(true, true)}`],
+      ["second Back", back, `${room} && ${arrows(true, true)}`],
+      ["first Forward", forward, `${home} && ${arrows(true, true)}`],
+      ["second Forward", forward, `${memory} && ${arrows(true, false)}`],
+      ["Back again", back, `${home} && ${arrows(true, true)}`],
+      ["Back again", back, `${room} && ${arrows(true, true)}`],
+      ["Back to the first entry", back, `${home} && ${arrows(false, true)}`],
+    ];
+    const walk = async (route: typeof steps) => {
+      for (const [name, selector, lands] of route) {
+        const clicked = await pageComes(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`) && await clickAt(selector);
+        if (clicked && await pageComes(lands)) continue;
+        arrowFailures.push(`${name} at ${Math.round(win.webContents.getZoomFactor() * 100)}%: ${String(await pageSays(`location.hash + " back=" + document.querySelector(${JSON.stringify(back)})?.disabled + " forward=" + document.querySelector(${JSON.stringify(forward)})?.disabled`))}`);
+        return false;
+      }
+      return true;
+    };
+    let walked = true;
+    for (const zoom of [0.8, 1, 1.25]) {
+      win.webContents.setZoomFactor(zoom);
+      walked = walked && await walk(steps);
+    }
+    // Zoomed in to phone width the sidebar is a drawer over the room, and its
+    // button comes before the room's bar in the page. The window takes a
+    // no-drag box out of the drag area in page order, so a bar that drags and
+    // comes later gives the button back to the drag area.
+    if (walked && await walk([["into the room", ".persistent-agent-card .landing-action", room]])) {
+      win.webContents.setZoomFactor(win.getBounds().width / 700);
+      const drawerButton = ".sidebar-toggle:not(.sidebar-toggle-floating)";
+      const drawer = `!!document.querySelector(".sidebar-drawer-backdrop")`;
+      const buttonClear = `(() => {
+        const button = document.querySelector(${JSON.stringify(drawerButton)});
+        const box = button.getBoundingClientRect();
+        return ![...document.querySelectorAll("*")].some((el) => {
+          const bar = el.getBoundingClientRect();
+          return getComputedStyle(el).webkitAppRegion === "drag" && (button.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+            && bar.left < box.right && box.left < bar.right && bar.top < box.bottom && box.top < bar.bottom;
+        });
+      })()`;
+      if (await pageComes("innerWidth <= 760")) await walk([
+        ["the sidebar button opens the drawer, with no bar dragging over its button", ".sidebar-toggle-floating", `${drawer} && ${buttonClear}`],
+        ["the sidebar button closes the drawer", drawerButton, `!${drawer}`],
+      ]);
+      else arrowFailures.push("phone width: the page stayed wide");
+    }
+    win.webContents.setZoomFactor(1);
+  }
+  const macArrows = !arrowsDriven ? "not-driven" : arrowFailures.length === 0 ? "ok" : `fail(${arrowFailures.join("; ")})`;
+  const macArrowsOk = arrowFailures.length === 0;
 
   // End-to-end notification path: hide the window, drive the page's REAL
   // notifyDesktop helper (its gate passes: hidden + granted), and require
@@ -1360,10 +1527,10 @@ async function smokeReport(): Promise<void> {
   } catch (err) {
     console.error(`[smoke] restart before quit failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const ok =landedUrl.startsWith(SERVER_ORIGIN) && !landedUrl.includes("token=") && healthOk && trayIconOk && stateOk && dragOk
+  const ok =landedUrl.startsWith(SERVER_ORIGIN) && !landedUrl.includes("token=") && healthOk && trayIconOk && stateOk && dragOk && macRowOk && macArrowsOk
     && contextOk && spellOk && deepLinkOk && notifOk && payload !== "unknown" && bootVisibleOk && bootFeedbackOk && loginItemPresent
     && updateLogicOk && updateConsistent && updaterFlowOk && updateNoticeUiOk && updatePanelOk && notifyE2EOk && watchdogOk && crashWindows === "ok" && appMenuOk && sidebarToggleOk && matrixFailure === null;
-  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} updateNoticeUi=${updateNoticeUi} updatePanel=${updatePanel} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"} crashWindows=${crashWindows}`);
+  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} macRow=${macRow} macArrows=${macArrows} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} updateNoticeUi=${updateNoticeUi} updatePanel=${updatePanel} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"} crashWindows=${crashWindows}`);
   if (!ok) process.exitCode = 1;
   app.quit();
 }

@@ -14,7 +14,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -144,7 +144,7 @@ try {
 		const say = async (target: typeof page, text: string) => {
 			const before = await target.getByText("Answer from claude-fake.").count();
 			await target.locator("textarea").first().fill(text);
-			await target.locator("textarea").first().press("Enter");
+			await sendFromBox(target);
 			await waitUntil(async () => (await target.getByText("Answer from claude-fake.").count()) > before, "the answer");
 			await target.waitForTimeout(800);
 		};

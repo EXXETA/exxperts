@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
-import { waitEvery } from "./smoke-wait.js";
+import { sendFromBox, waitEvery } from "./smoke-wait.js";
 
 const waitUntil = waitEvery(150);
 
@@ -131,7 +131,7 @@ try {
 		await a.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
 		await lockTakenSince(0, "window A's connection is ready");
 		await composerA.fill("First question.");
-		await composerA.press("Enter");
+		await sendFromBox(a);
 		await a.getByText("Answer from claude-fake.").first().waitFor({ timeout: 20000 });
 		const first = await activeThread();
 		// Window B reads the conversation from disk: wait until the first exchange is saved there.
@@ -154,7 +154,7 @@ try {
 		// Window A still shows the old conversation: a message typed there stays in the box with the plain line.
 		const typed = "Typed in the old window.";
 		await composerA.fill(typed);
-		await composerA.press("Enter");
+		await sendFromBox(a);
 		await a.getByText(MOVED).first().waitFor({ timeout: 10000 }).catch(async (error) => { throw new Error(`the plain line did not show; the room reads: ${(await a.locator("main").innerText()).slice(-300)}`, { cause: error }); });
 		const pageText = await a.locator("body").innerText();
 		assert(!/activeThread|persistent-agent/.test(pageText), `no engine words in the room, got ${pageText.slice(-400)}`);
@@ -172,7 +172,7 @@ try {
 		assert(await activeThread() === moved, "Reload does not retire the conversation the other window shows");
 		assert(await a.locator("textarea").first().inputValue() === typed, `the message is still in the box after Reload, got ${JSON.stringify(await a.locator("textarea").first().inputValue())}`);
 		assert(await a.getByText("First question.").count() === 0, "window A now shows the room's new conversation");
-		await a.locator("textarea").first().press("Enter");
+		await sendFromBox(a);
 		await a.getByText("Answer from claude-fake.").first().waitFor({ timeout: 20000 });
 		assert(await activeThread() === moved, "the message went out in the room's new conversation");
 

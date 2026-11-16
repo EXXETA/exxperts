@@ -17,7 +17,7 @@ import {
 	formatFriendlyWhenForJob,
 	formatNativeTimeSummary,
 	formatScheduleRecurrenceDraftSummary,
-	formatWeeklyDaysAtTime,
+	formatWeeklyTimeLine,
 	inferScheduleRecurrenceDraftFromJob,
 	SCHEDULE_CANNOT_RUN_LINE,
 	SCHEDULE_CREATE_TYPE_AUTO,
@@ -139,6 +139,14 @@ function isScheduledRun(run: PersistentRoomBackgroundRunView): boolean {
 	return run.kind === "scheduled-prompt" || Boolean(run.source.scheduleId);
 }
 
+/**
+ * The runs Recent runs lists, newest first. A waiting run a later run of its task replaced ends cancelled, though it
+ * never ran and nobody cancelled it, so it is left out. A blocked run a later one replaced stays: its line says so.
+ */
+export function recentScheduledRuns(response: PersistentRoomBackgroundRunsResponse | null): PersistentRoomBackgroundRunView[] {
+	return (response?.runs ?? []).filter((run) => isScheduledRun(run) && !(run.status === "cancelled" && run.reason === "superseded_by_later_run"));
+}
+
 function formatRunTiming(run: PersistentRoomBackgroundRunView): string {
 	if (run.source.dueAt) return `Due ${formatTimestamp(run.source.dueAt)}`;
 	if (run.finishedAt) return `Finished ${formatTimestamp(run.finishedAt)}`;
@@ -150,29 +158,20 @@ function getRunEventTimestamp(run: PersistentRoomBackgroundRunView): string {
 	return run.finishedAt || run.startedAt || run.updatedAt || run.createdAt;
 }
 
-function buildRunsByScheduleId(runs: PersistentRoomBackgroundRunView[]): Map<string, PersistentRoomBackgroundRunView[]> {
-	const runsByScheduleId = new Map<string, PersistentRoomBackgroundRunView[]>();
-	for (const run of runs) {
-		const scheduleId = run.source.scheduleId;
-		if (!scheduleId) continue;
-		const existing = runsByScheduleId.get(scheduleId) ?? [];
-		existing.push(run);
-		runsByScheduleId.set(scheduleId, existing);
+/** Each task's newest run, wherever it sits in the room's history. */
+export function latestRunsBySchedule(runsResponse: PersistentRoomBackgroundRunsResponse | null): Map<string, PersistentRoomBackgroundRunView> {
+	const latest = new Map<string, PersistentRoomBackgroundRunView>();
+	for (const run of runsResponse?.latestRuns ?? []) {
+		if (run.source.scheduleId) latest.set(run.source.scheduleId, run);
 	}
-	for (const scheduleRuns of runsByScheduleId.values()) {
-		scheduleRuns.sort((a, b) => getRunEventTimestamp(b).localeCompare(getRunEventTimestamp(a)));
-	}
-	return runsByScheduleId;
+	return latest;
 }
 
-function findRelevantRunForJob(job: PersistentRoomScheduleJob, runsByScheduleId: Map<string, PersistentRoomBackgroundRunView[]>): PersistentRoomBackgroundRunView | null {
-	const runs = runsByScheduleId.get(job.id) ?? [];
-	if (runs.length === 0) return null;
-	if (job.type === "once") {
-		if (!job.nextRunAt) return runs[0] ?? null;
-		return runs.find((run) => run.source.dueAt === job.nextRunAt) ?? null;
-	}
-	return runs[0] ?? null;
+/** The run a task's row shows: its newest, and for a one-off only the run of its own time. */
+export function findRelevantRunForJob(job: PersistentRoomScheduleJob, latestBySchedule: Map<string, PersistentRoomBackgroundRunView>): PersistentRoomBackgroundRunView | null {
+	const run = latestBySchedule.get(job.id) ?? null;
+	if (run && job.type === "once" && job.nextRunAt && run.source.dueAt !== job.nextRunAt) return null;
+	return run;
 }
 
 function deriveOneTimeState(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): { label: string; tone: "default" | "disabled" | "success" | "warning" | "danger" } {
@@ -204,16 +203,15 @@ function isCompletedSuccessfulOneTimeSchedule(job: PersistentRoomScheduleJob, la
 	return job.type === "once" && latestRun?.status === "succeeded";
 }
 
-function deriveNextDueAt(jobs: PersistentRoomScheduleJob[], runsByScheduleId: Map<string, PersistentRoomBackgroundRunView[]>): string | null {
-	const candidates: string[] = [];
-	for (const job of jobs) {
-		if (!job.enabled || !job.nextRunAt) continue;
-		if (job.type === "once") {
-			const latestRun = findRelevantRunForJob(job, runsByScheduleId);
-			if (latestRun && ONE_TIME_TERMINAL_STATUSES.has(latestRun.status)) continue;
-		}
-		candidates.push(job.nextRunAt);
-	}
+/** A task's next time as the pane shows it: none for a task that will not run again, switched off or a one-off that has ended. */
+export function shownNextDueAt(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): string | null {
+	if (!job.enabled || !job.nextRunAt) return null;
+	if (job.type === "once" && latestRun && ONE_TIME_TERMINAL_STATUSES.has(latestRun.status)) return null;
+	return job.nextRunAt;
+}
+
+function deriveNextDueAt(jobs: PersistentRoomScheduleJob[], latestBySchedule: Map<string, PersistentRoomBackgroundRunView>): string | null {
+	const candidates = jobs.map((job) => shownNextDueAt(job, findRelevantRunForJob(job, latestBySchedule))).filter((dueAt): dueAt is string => dueAt !== null);
 	candidates.sort((a, b) => {
 		const aTime = new Date(a).getTime();
 		const bTime = new Date(b).getTime();
@@ -439,8 +437,6 @@ function ScheduleRecurrenceEditor({
 	}
 
 	const dailyTimeSummary = formatNativeTimeSummary(recurrence.daily.time);
-	const weeklySummary = recurrence.mode === "weekly" ? formatScheduleRecurrenceDraftSummary(recurrence) : null;
-	const weeklyDaysAtTime = recurrence.mode === "weekly" ? formatWeeklyDaysAtTime(recurrence.weekly) : null;
 	const oneTimeAtSummary = formatNativeTimeSummary(recurrence.oneTime.at.time);
 
 	return (
@@ -486,7 +482,7 @@ function ScheduleRecurrenceEditor({
 					<label className="settings-row">
 						<span className="settings-row-main">
 							<span className="settings-row-label">At</span>
-							<span className="settings-row-sub">{serverZone ? (weeklyDaysAtTime ? `${weeklyDaysAtTime}, in ${serverZone} time.` : "Choose the days this task should run.") : weeklySummary ? `${weeklySummary}, in this computer's time.` : "Choose the days this task should run."}</span>
+							<span className="settings-row-sub">{formatWeeklyTimeLine(recurrence.weekly, serverZone)}</span>
 						</span>
 						<input className="launcher-path-input room-schedules-time-input" type="time" value={recurrence.weekly.time} onChange={(event) => setWeeklyTime(event.target.value)} required disabled={disabled} />
 					</label>
@@ -578,7 +574,7 @@ function RecentScheduledRunsSection({
 	schedules: PersistentRoomScheduleJob[];
 }) {
 	const jobsById = new Map(schedules.map((job) => [job.id, job]));
-	const allScheduledRuns = (response?.runs ?? []).filter(isScheduledRun);
+	const allScheduledRuns = recentScheduledRuns(response);
 	const scheduledRuns = allScheduledRuns.slice(0, RECENT_RUN_DISPLAY_LIMIT);
 
 	// Nothing has ever run and there are no schedules to run: the schedules
@@ -663,6 +659,7 @@ function ScheduleJobCard({
 	const rowStateClass = rowState.tone === "default" ? "room-schedules-record-state" : `room-schedules-record-state ${rowState.tone}`;
 	const latestAttempt = latestRun ? `${formatRunStatus(runShownStatus(latestRun))} at ${formatTimestamp(getRunEventTimestamp(latestRun))}` : null;
 	const latestReason = latestRun ? formatFriendlyRunReason(latestRun) : null;
+	const nextDueAt = shownNextDueAt(job, latestRun);
 	return (
 		<article className="room-schedules-job">
 			<div className="room-schedules-job-head">
@@ -671,7 +668,7 @@ function ScheduleJobCard({
 			</div>
 			{hasFriendlyWhen && <p className="room-schedules-when-summary"><span>When:</span> {whenSummary}</p>}
 			<div className="room-schedules-job-meta">
-				{job.nextRunAt && <span>Next due {formatTimestamp(job.nextRunAt)}</span>}
+				{nextDueAt && <span>Next due {formatTimestamp(nextDueAt)}</span>}
 				{latestAttempt && <span>Last attempt: {latestAttempt}</span>}
 				{!hasFriendlyWhen && <span className="room-schedules-raw" title="Raw schedule expression">{formatScheduleType(job.type)} · <code>{job.schedule}</code></span>}
 			</div>
@@ -694,16 +691,16 @@ function ScheduleJobCard({
 					<p className="room-schedules-prompt"><span>Prompt preview:</span> {promptPreview || "No prompt text recorded."}</p>
 					{error && <p className="workspaces-error">{error}</p>}
 					<div className="room-schedules-job-actions">
-						<button className="rs-quiet" type="button" onClick={onEdit} disabled={actionDisabled}>Edit</button>
-						<button className="rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this task; it stays in the list" : "Turn this task back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
-						<button className="rs-quiet rs-quiet-danger" type="button" onClick={onRequestDelete} disabled={actionDisabled}>Delete</button>
+						<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" onClick={onEdit} disabled={actionDisabled}>Edit</button>
+						<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this task; it stays in the list" : "Turn this task back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
+						<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" onClick={onRequestDelete} disabled={actionDisabled}>Delete</button>
 					</div>
 					{confirmingDelete && (
 						<div className="room-schedules-delete-confirm">
 							<p>Delete this task? Its past runs stay in Recent runs.</p>
 							<div className="room-schedules-job-actions">
-								<button className="rs-quiet" type="button" onClick={onCancelDelete} disabled={deleting}>Cancel</button>
-								<button className="rs-quiet rs-quiet-danger" type="button" onClick={onConfirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
+								<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" onClick={onCancelDelete} disabled={deleting}>Cancel</button>
+								<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" onClick={onConfirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
 							</div>
 						</div>
 					)}
@@ -733,11 +730,10 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 	const serverZone = sharedServer ? response?.timeZone ?? null : null;
 	const canLoadSchedules = status.exists;
 	const creating = mutation?.kind === "create";
-	const recentScheduledRuns = (runsResponse?.runs ?? []).filter(isScheduledRun);
-	const runsByScheduleId = buildRunsByScheduleId(recentScheduledRuns);
-	const latestScheduledRun = recentScheduledRuns[0] ?? null;
-	const derivedNextDueAt = response && runsResponse ? deriveNextDueAt(response.jobs, runsByScheduleId) : summary.nextRunAt;
-	const scheduleRows = (response?.jobs ?? []).map((job) => ({ job, latestRun: findRelevantRunForJob(job, runsByScheduleId) }));
+	const latestBySchedule = latestRunsBySchedule(runsResponse);
+	const latestScheduledRun = recentScheduledRuns(runsResponse)[0] ?? null;
+	const derivedNextDueAt = response && runsResponse ? deriveNextDueAt(response.jobs, latestBySchedule) : summary.nextRunAt;
+	const scheduleRows = (response?.jobs ?? []).map((job) => ({ job, latestRun: findRelevantRunForJob(job, latestBySchedule) }));
 	const activeScheduleRows = scheduleRows.filter(({ job, latestRun }) => !isCompletedSuccessfulOneTimeSchedule(job, latestRun));
 	const completedOneTimeRows = scheduleRows.filter(({ job, latestRun }) => isCompletedSuccessfulOneTimeSchedule(job, latestRun));
 

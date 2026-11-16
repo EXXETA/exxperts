@@ -14,11 +14,13 @@ export interface MentionSupport {
 	// busyTitle as its tooltip.
 	busy: boolean;
 	busyTitle: string;
-	// Handed the resolved target room id + the question (mention stripped). For
-	// MR-3 this is wired to an inert App-level stub; MR-4 wires it to the consult
-	// WS family + DelegationCard.
-	/** Returns whether the consult was accepted (false → rejected: one already active, or socket down). */
-	onConsultRequest: (targetRoomId: string, question: string) => boolean;
+	/**
+	 * Asks the room on the box's label, by its id, with the box's question; `now`
+	 * (Cmd/Ctrl+Enter) stops this room's answer for it. Returns whether the
+	 * consult was accepted (false: one already active, or the socket down).
+	 */
+	onConsultRequest: (targetRoomId: string, question: string, now: boolean) => boolean;
+
 	// Stacked consult (§8.3): the display name of the room whose card is currently
 	// docked, or null when none is. A composer @-mention always means a FRESH
 	// consult, so while a card is docked the composer must reject it VISIBLY (the

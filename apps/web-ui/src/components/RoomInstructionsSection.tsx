@@ -34,7 +34,7 @@ async function saveGlobalSwitch(agentId: string, enabled: boolean): Promise<Pers
  * Room settings → Instructions: the user's standing text for how this room
  * works. The draft lives here so it survives switching panes (the modal keeps
  * every pane mounted); the modal asks before closing over an unsaved draft
- * through onDirtyChange, the way the Workspace pane does. The counter measures
+ * through onDirtyChange. The counter measures
  * the draft with the server's own normalization (one shared module), so Save
  * is disabled before the server would refuse, and a refusal from the server
  * (room held by a scheduled task) lands here verbatim with

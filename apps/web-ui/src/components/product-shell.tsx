@@ -1,17 +1,28 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { flushSync } from "react-dom";
+import { apiFetch, holdSignInRedirect } from "../api";
 import { settingsChordHint, shortcutsChordHint } from "../platform";
 import { useRemoteAccessStatus } from "../remote-access-api";
 import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 import { SidebarToggleButton } from "../sidebar-collapse";
 import { requestUpdate, useUpdateNotice } from "../update-notice";
 import { Help } from "./Help";
-import { GearIcon } from "./icons";
+import { GearIcon, MoonIcon, ScreenIcon, SunIcon } from "./icons";
 import { openShortcuts, useShortcutsOffered } from "./keys-list";
 import { useEscapeKey } from "./use-escape-key";
 
 export type ThemeMode = "dark" | "light";
-/** What the user picked in the Appearance control; "system" resolves to a ThemeMode via prefers-color-scheme. */
+/** What the user picked for the theme; "system" resolves to a ThemeMode via prefers-color-scheme. */
 export type AppearancePreference = ThemeMode | "system";
+
+/** The theme's three choices and their words, in the gear menu (as icons) and in Settings, Appearance. */
+export const THEME_CHOICES: { id: AppearancePreference; label: string }[] = [
+	{ id: "system", label: "System" },
+	{ id: "light", label: "Light" },
+	{ id: "dark", label: "Dark" },
+];
+const THEME_ICONS = { system: ScreenIcon, light: SunIcon, dark: MoonIcon } satisfies Record<AppearancePreference, unknown>;
+const THEME_TIPS: Partial<Record<AppearancePreference, string>> = { system: "System: follows this device's light or dark setting" };
 
 // Injected at build time from the root package.json "version" field (vite define).
 const APP_VERSION = __APP_VERSION__;
@@ -93,11 +104,12 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 			{open && (
 				<div className="sidebar-config-menu" role="menu">
 					<div className="menu-row">
-						<span className="menu-row-label">Appearance</span>
-						<div className="menu-appearance-seg" role="group" aria-label="Appearance">
-							<button className={appearance === "system" ? "on" : ""} aria-pressed={appearance === "system"} title="Follow this device's light or dark setting" onClick={() => onSetAppearance("system")}>System</button>
-							<button className={appearance === "light" ? "on" : ""} aria-pressed={appearance === "light"} onClick={() => onSetAppearance("light")}>Light</button>
-							<button className={appearance === "dark" ? "on" : ""} aria-pressed={appearance === "dark"} onClick={() => onSetAppearance("dark")}>Dark</button>
+						<span className="menu-row-label">Theme</span>
+						<div className="settings-segments menu-theme-seg" role="group" aria-label="Theme">
+							{THEME_CHOICES.map(({ id, label }) => {
+								const ThemeIcon = THEME_ICONS[id];
+								return <button key={id} type="button" className={`settings-segment${appearance === id ? " active" : ""}`} aria-pressed={appearance === id} aria-label={label} title={THEME_TIPS[id] ?? label} onClick={() => onSetAppearance(id)}><ThemeIcon /></button>;
+							})}
 						</div>
 					</div>
 					<button
@@ -183,7 +195,7 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 								{update.dotVisible && <span className="menu-update-dot" aria-hidden="true" />}
 							</button>
 							{update.dotVisible && (
-								<button className="menu-update-later" role="menuitem" onClick={update.dismiss} title="Hide the dot on the gear; the update stays here">Not now</button>
+								<button className="rs-btn rs-btn-quiet rs-btn-sm menu-update-later" role="menuitem" onClick={update.dismiss} title="Hide the dot on the gear; the update stays here">Not now</button>
 							)}
 						</div>
 					)}
@@ -195,7 +207,7 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 			)}
 			{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
 			<button
-				className="sidebar-config-gear"
+				className="rs-btn rs-btn-icon rs-btn-sm sidebar-config-gear"
 				aria-label={update.dotVisible ? "Settings, update available" : "Settings"}
 				title={`${update.dotVisible ? "Settings, update available" : "Settings"}${chord ? ` (${chord})` : ""}`}
 				aria-haspopup="menu"
@@ -253,17 +265,105 @@ export function SignedInAs() {
 					{person.admin && <span className="signed-in-as-tag">Admin</span>}
 				</span>
 			)}
-			{signOut && <a className="signed-in-as-out" href={signOut}>Sign out</a>}
+			{signOut && <SignOutEverywhere signOut={signOut} />}
 		</div>
 	);
 }
 
-export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, theme, appearance, onSetAppearance, active }: { onHome: () => void; onSettings: (section?: "remote") => void; onDashboard: () => void; onMemory?: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; active: ProductSidebarActive }) {
-	// The Wallet reads the whole usage log, which on a shared server only its
-	// admin may read: it is not offered there.
-	const { sharedServer } = useRemoteClientContext();
+/** How long the sign-out may take before the page says it did not come. */
+export const SIGN_OUT_WAIT_MS = 10_000;
+
+// The server's own sign-out: it ends every session of the person that signed in before it.
+const SIGN_OUT_ROUTE = "/api/session/sign-out";
+
+// "failed" and "retrying" show the failure line and its two choices; "retrying" while Try again's request is out.
+type SignOutState = "ready" | "sending" | "failed" | "retrying";
+
+// The page's one sign-out, read by every footer that shows Sign out (Home's, a room's, Memory's), so moving between
+// screens keeps where it stands, and by the signed-out banner. A reload starts it afresh, as it does the page.
+let signOutState: SignOutState = "ready";
+const signOutListeners = new Set<() => void>();
+
+function setSignOutState(next: SignOutState): void {
+	signOutState = next;
+	for (const listener of signOutListeners) listener();
+}
+
+function useSignOutState(): SignOutState {
+	return useSyncExternalStore(
+		(listener) => { signOutListeners.add(listener); return () => { signOutListeners.delete(listener); }; },
+		() => signOutState,
+	);
+}
+
+/** Whether the page's own Sign out was pressed: from then on the footer's line says where things stand. */
+export function useOwnSignOutPressed(): boolean {
+	return useSignOutState() !== "ready";
+}
+
+function sendSignOut(signOut: string, sending: "sending" | "retrying"): void {
+	// From here on only this sign-out moves the page, whatever else answers 401 meanwhile.
+	holdSignInRedirect();
+	// Drawn before the request goes, so a second press finds the button already disabled.
+	flushSync(() => setSignOutState(sending));
+	void signOutConfirmed().then((confirmed) => {
+		if (confirmed) location.assign(signOut);
+		else setSignOutState("failed");
+	});
+}
+
+// Confirmed by the route's own success, { ok: true }: the record written and the open connections closed; or by the
+// edge's 401 session_signed_out, which a stored record already ending this session answers (an earlier try whose
+// answer was lost), so every session from before it is ended too. Any other status, no answer, or none within
+// SIGN_OUT_WAIT_MS is not.
+async function signOutConfirmed(): Promise<boolean> {
+	try {
+		const res = await apiFetch(SIGN_OUT_ROUTE, { method: "POST", signal: AbortSignal.timeout(SIGN_OUT_WAIT_MS) });
+		const body: unknown = await res.json().catch(() => null);
+		const fields = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
+		return (res.ok && fields.ok === true) || (res.status === 401 && fields.code === "session_signed_out");
+	} catch {
+		return false;
+	}
+}
+
+// Sign out first ends the person's sessions on the server, then follows the server's link, which ends this
+// browser's. Nothing is followed while the answer is out, or when it fails: the person chooses.
+function SignOutEverywhere({ signOut }: { signOut: string }) {
+	const state = useSignOutState();
+	const scopeId = useId();
+	const tryAgainRef = useRef<HTMLButtonElement>(null);
+	// The pressed button is gone or disabled, so focus comes to Try again unless the person has moved it elsewhere.
+	useEffect(() => {
+		if (state === "failed" && (document.activeElement === null || document.activeElement === document.body)) tryAgainRef.current?.focus();
+	}, [state]);
+	if (state === "ready" || state === "sending") {
+		return (
+			<span className="signed-in-as-out-row">
+				<button type="button" className="signed-in-as-out" disabled={state === "sending"} aria-describedby={scopeId} onClick={() => sendSignOut(signOut, "sending")}>Sign out</button>
+				<span id={scopeId} className="signed-in-as-scope">This signs you out on every device.</span>
+			</span>
+		);
+	}
 	return (
-		<aside className="product-sidebar">
+		<span className="signed-in-as-out-failed" role="alert">
+			<span className="signed-in-as-scope">Your other devices may still be signed in.</span>
+			<span className="signed-in-as-out-row">
+				<button type="button" className="signed-in-as-out" ref={tryAgainRef} disabled={state === "retrying"} onClick={() => sendSignOut(signOut, "retrying")}>Try again</button>
+				<button type="button" className="signed-in-as-out" onClick={() => location.assign(signOut)}>Sign out of this browser only</button>
+			</span>
+		</span>
+	);
+}
+
+export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, theme, appearance, onSetAppearance, active }: { onHome: () => void; onSettings: (section?: "remote") => void; onDashboard: () => void; onMemory?: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; active: ProductSidebarActive }) {
+	// The Wallet reads the whole usage log, which a shared server keeps closed,
+	// to its admin too: it is not offered there.
+	const { sharedServer, person, signOut } = useRemoteClientContext();
+	// On a phone the footer then takes a row of its own under the bar (35-sidebar-remote.css), as SignedInAs shows Sign out.
+	const withSignOut = sharedServer && person !== null && signOut !== null;
+	return (
+		<aside className={`product-sidebar${withSignOut ? " with-sign-out" : ""}`}>
 			<div className="product-sidebar-header">
 				<SidebarToggleButton />
 				<div className="brand">

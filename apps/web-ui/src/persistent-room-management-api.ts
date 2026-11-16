@@ -1,5 +1,6 @@
 import { apiFetch } from "./api";
-import type { ArchivedPersistentAgentSummary, PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentLifecycleCounts, PersistentAgentPurgeBusyReason, PersistentAgentPurgeResponse, PersistentAgentRenameResponse, PersistentAgentRestoreResponse } from "./types";
+import { McpRequestError } from "./mcp-api";
+import type { ArchivedPersistentAgentSummary, PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentLifecycleCounts, PersistentAgentPurgeBusyReason, PersistentAgentPurgeResponse, PersistentAgentRenameResponse, PersistentAgentRestoreResponse, PersistentRoomProtection } from "./types";
 
 const PURGE_BUSY_REASONS: readonly PersistentAgentPurgeBusyReason[] = ["room_lock", "turn_in_flight", "detached_cooking", "specialist_running"];
 
@@ -159,13 +160,18 @@ export async function checkPersistentRoomMemoryBudget(agentId: PersistentAgentId
 
 export interface PersistentRoomBashSettings {
 	schemaVersion: 1;
+	/** Commands run without asking: Semi and Auto alike. */
 	autoApprove: boolean;
+	/** Auto in a protected room: public websites are reached without asking too. Only while the room is protected; absent from an older server. */
+	free?: true;
 	updatedAt: string;
 }
 
 export interface PersistentRoomBashSettingsResponse {
 	agentId: PersistentAgentId;
 	settings: PersistentRoomBashSettings;
+	/** Absent on a shared server and on an older server. */
+	protection?: PersistentRoomProtection;
 }
 
 export function fetchPersistentRoomBashSettings(agentId: PersistentAgentId): Promise<PersistentRoomBashSettingsResponse> {
@@ -176,7 +182,8 @@ export function fetchPersistentRoomBashSettings(agentId: PersistentAgentId): Pro
 	);
 }
 
-export function updatePersistentRoomBashSettings(agentId: PersistentAgentId, update: { autoApprove?: boolean }): Promise<PersistentRoomBashSettingsResponse> {
+/** `protection` is the one the page last read: the server refuses a write for another, or with none. `free` goes with `autoApprove` true, in a protected room. */
+export function updatePersistentRoomBashSettings(agentId: PersistentAgentId, update: { autoApprove?: boolean; free?: boolean; protection: PersistentRoomProtection | undefined }): Promise<PersistentRoomBashSettingsResponse> {
 	return fetchJson<PersistentRoomBashSettingsResponse>(
 		`/api/persistent-agents/${encodeURIComponent(agentId)}/bash-settings`,
 		{
@@ -249,25 +256,26 @@ export interface PersistentRoomMcpConnectorsResponse {
 	agentId: PersistentAgentId;
 	settings: { schemaVersion: 1; grantedConnectors: string[]; updatedAt: string };
 	configuredConnectors: string[];
+	/** Each connector's name as typed, where one was given (no address or command). */
+	displayNames?: Record<string, string>;
 	granted: PersistentRoomGrantedConnectorStatus[];
+	/** The tools each enabled connector may use without asking, by their own name and as people read them; never on a shared server. */
+	allowedTools?: Record<string, Array<{ tool: string; shown: string }>>;
+}
+
+/** A room's connectors; a refusal carries its status, which the pane words it by. */
+async function roomConnectorsRequest(agentId: PersistentAgentId, init: RequestInit | undefined, fallbackError: string): Promise<PersistentRoomMcpConnectorsResponse> {
+	const response = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/mcp-connectors`, init);
+	const payload = await readJsonOrText(response);
+	if (!response.ok) throw new McpRequestError(parsePersistentRoomManagementError(payload, fallbackError), response.status);
+	return payload as PersistentRoomMcpConnectorsResponse;
 }
 
 export function fetchPersistentRoomMcpConnectors(agentId: PersistentAgentId): Promise<PersistentRoomMcpConnectorsResponse> {
-	return fetchJson<PersistentRoomMcpConnectorsResponse>(
-		`/api/persistent-agents/${encodeURIComponent(agentId)}/mcp-connectors`,
-		undefined,
-		"Failed to load room connector settings."
-	);
+	return roomConnectorsRequest(agentId, undefined, "Failed to load room connector settings.");
 }
 
-export function updatePersistentRoomMcpConnector(agentId: PersistentAgentId, action: "grant" | "revoke", name: string): Promise<PersistentRoomMcpConnectorsResponse> {
-	return fetchJson<PersistentRoomMcpConnectorsResponse>(
-		`/api/persistent-agents/${encodeURIComponent(agentId)}/mcp-connectors`,
-		{
-			method: "PUT",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ action, name }),
-		},
-		"Failed to update room connector settings."
-	);
+/** Turns a connector on or off for the room, or with `forget-tool` takes back the room's yes to its `tool`. */
+export function updatePersistentRoomMcpConnector(agentId: PersistentAgentId, action: "grant" | "revoke" | "forget-tool", name: string, tool?: string): Promise<PersistentRoomMcpConnectorsResponse> {
+	return roomConnectorsRequest(agentId, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, name, ...(tool === undefined ? {} : { tool }) }) }, "Failed to update room connector settings.");
 }

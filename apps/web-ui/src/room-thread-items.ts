@@ -1,7 +1,8 @@
 import { modelNotOnAccount } from "../../web-server/src/model-not-on-account";
 import { modelNotOffered } from "../../web-server/src/model-not-offered";
 import { isTurnRunningNote, type TurnFailure, savedLineShown, isRetryNote, isStopLine } from "./turn-failure-line";
-import { REMOVED_IDS_CAP } from "../../web-server/src/thread-items-by-id";
+import { keyOfId, REMOVED_IDS_CAP } from "../../web-server/src/thread-items-by-id";
+import { ROOM_ASK_KINDS } from "../../web-server/src/room-box/card-text";
 import type { PersistentAgentId, WebChatModelOption, ChatItem, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord } from "./types";
 
 type PersistentAgentThread = {
@@ -173,11 +174,18 @@ function isStepInFlight(item: ChatItem): boolean {
  * What a room saves of its conversation: never the running-turn note, the
  * model's thinking, or a step the model is still writing (it is saved from
  * running on, with its whole arguments), and no step's end time, which only
- * the window that watched it knows. Nothing new reaches the saved thread.
+ * the window that watched it knows. A room's own card keeps no reason: the
+ * room's words are for the card on this screen only. Nothing new reaches the
+ * saved thread.
  */
 function itemsToSave(items: ChatItem[]): ChatItem[] {
 	return items.flatMap((item): ChatItem[] => {
 		if (isTurnRunningNote(item) || item.kind === "thinking") return [];
+		// Nor what only this screen's wait needs: a folder card's line and the folder it shows, either of which names a folder, a failure line, when it was last sent and its open window. A site or connector card has no reason.
+		if (item.kind === "approval" && (ROOM_ASK_KINDS.has(item.uiKind) || item.uiKind === "site" || item.uiKind === "connector")) {
+			const { reason: _reason, line: _line, failure: _failure, shownAt: _shownAt, choosing: _choosing, suggested: _suggested, ...saved } = item;
+			return [saved];
+		}
 		if (item.kind !== "tool") return [item];
 		if (item.status === "writing") return [];
 		if (item.endedAt === undefined) return [item];
@@ -276,6 +284,18 @@ function reconnectedThread(saved: { items: ChatItem[]; queue: string[] }, local:
 	return { items, queue };
 }
 
+/**
+ * The items with this tab's copy of turn `key`'s items (none without a key) in place of
+ * the saved ones: every one while the turn still runs (`running`), as its
+ * replay rebuilds it; once it ended, those the server did not mark landed,
+ * which only a page saved and can be older and shorter than what it shows.
+ */
+function withShownTurn(items: ChatItem[], shown: readonly ChatItem[], key: string | null, running: boolean): ChatItem[] {
+	if (key === null) return items;
+	const shownById = new Map(shown.map((item) => [item.id, item] as const));
+	return items.map((item) => (keyOfId(item.id) === key && (running || item.landed !== true) ? shownById.get(item.id) ?? item : item));
+}
+
 /** The id a keyed turn's frame names its item by (room-socket.ts, its head comment), or undefined on a frame without one. */
 function frameItemId(frame: unknown): string | undefined {
 	const id = (frame as { itemId?: unknown } | null)?.itemId;
@@ -290,5 +310,5 @@ function hasUserVisibleTurn(items: ChatItem[]): boolean {
 	return items.some((item) => (item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
 }
 
-export { PendingRemovals, ZERO_USAGE, deriveTrailingConsultIds, failureKindOf, frameItemId, reconnectedThread, threadSaveBody, formatDirectResumeError, hasUserInput, hasUserVisibleTurn, endLiveThinking, itemsToSave, leftByFailedAttempt, newConversationId, nid, stopWorkInFlight, threadRecordToLocalThread, withoutStopLineUnderStoppedCard };
+export { PendingRemovals, ZERO_USAGE, deriveTrailingConsultIds, failureKindOf, frameItemId, reconnectedThread, threadSaveBody, formatDirectResumeError, hasUserInput, hasUserVisibleTurn, endLiveThinking, itemsToSave, leftByFailedAttempt, newConversationId, nid, stopWorkInFlight, threadRecordToLocalThread, withShownTurn, withoutStopLineUnderStoppedCard };
 export type { MaintainTarget, PersistentAgentTarget, PersistentAgentThread, PersistentChatConfig, SessionUsage };

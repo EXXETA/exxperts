@@ -7,6 +7,7 @@ import fs from "node:fs";
 import { chromium } from "playwright";
 import { assert, baseUrl, copiesIn, openRoom, rename, requests, startRoomStateServer, stopRoomStateServer, waitUntil } from "./room-state-setup.js";
 import { SMOKE_AUTH_TOKEN } from "./smoke-server-process.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 {
 	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
@@ -39,8 +40,7 @@ try {
 	const send = async (text: string) => {
 		const answers = await page.getByText("Noted.").count();
 		await composer.fill(text);
-		await waitUntil(() => page.getByRole("button", { name: "Send", exact: true }).isEnabled(), "Send is enabled");
-		await composer.press("Enter");
+		await sendFromBox(page);
 		await waitUntil(async () => (await page.getByText("Noted.").count()) > answers, `"${text}" is answered on the page`);
 		await waitUntil(async () => (await (await fetch(`${baseUrl}/api/persistent-agents/${roomId}/status`, { headers: { "X-Exxperts-Auth": SMOKE_AUTH_TOKEN } })).json())?.activeThread?.inFlight === false, "the turn settled");
 	};

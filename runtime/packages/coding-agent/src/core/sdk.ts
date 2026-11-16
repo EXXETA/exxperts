@@ -65,6 +65,12 @@ export interface CreateAgentSessionOptions {
 	 */
 	maxRetries?: number;
 	/**
+	 * Request metadata sent with every model call of this session, its
+	 * summaries included. Providers read the fields they know, such as
+	 * `user_id`; when omitted, requests carry none.
+	 */
+	metadata?: Record<string, unknown>;
+	/**
 	 * Per-session auto-compaction switch. When omitted, the global compaction
 	 * setting decides, exactly as before. When set, it overrides that setting
 	 * for this session ONLY and is never persisted — a throwaway single-shot
@@ -373,6 +379,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		maxTokens: options.maxTokens,
 		cacheRetention: options.cacheRetention,
 		maxRetries: options.maxRetries,
+		metadata: options.metadata,
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);

@@ -26,6 +26,8 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { routePageSocket } from "./page-socket.js";
+import { sendFromBox } from "./smoke-wait.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -149,7 +151,7 @@ try {
 	fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: { [KEY_PROVIDER]: { baseUrl: endpointUrl } } }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ [KEY_PROVIDER]: { type: "api_key", key: "synthetic-anthropic-key" } }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ retry: { baseDelayMs: 1000, provider: { maxRetries: 0 } } }, null, 2), { mode: 0o600 });
-	const workspaceRoot = path.join(tempRoot, "workspace");
+	const workspaceRoot = path.join(tempHome, "workspace");
 	fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
 	const agents = await import("../src/persistent-agents.js");
 	const agentId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Keys Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
@@ -177,26 +179,14 @@ try {
 		const openRoom = async (options: Parameters<typeof browser.newContext>[0]) => {
 			const context = await browser.newContext(options);
 			const page: Page = await context.newPage();
-			let pageSocket: { send(message: string): void } | undefined;
-			const socket = { readies: 0 };
-			await page.routeWebSocket(/\/ws\?/, (ws) => {
-				pageSocket = ws;
-				const upstream = ws.connectToServer();
-				ws.onMessage((message) => upstream.send(message));
-				upstream.onMessage((message) => {
-					if (String(message).includes('"type":"ready"')) socket.readies += 1;
-					ws.send(message);
-				});
-				upstream.onClose((code, reason) => ws.close({ code, reason }));
-				ws.onClose(() => upstream.close());
-			});
+			const socket = await routePageSocket(page);
 			await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 			await page.waitForLoadState("networkidle");
 			const dismiss = page.locator(".whats-new-close");
 			if (await dismiss.count()) await dismiss.click();
 			await page.locator(".persistent-agent-card").filter({ hasText: "Keys Room" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 			await page.locator(".composer-box textarea").waitFor({ timeout: 15000 });
-			await waitUntil(() => socket.readies > 0, "the room's connection is ready");
+			await waitUntil(() => socket.readies() > 0, "the room's connection is ready");
 			const composer = page.locator(".composer-box textarea");
 			const stopButton = page.locator(".composer-box .stop-btn");
 			// Idle: no Stop, and the box no longer reads "Stopping current response…".
@@ -204,7 +194,7 @@ try {
 			const userBubbles = (text: string) => page.locator(".bubble.user").filter({ hasText: text }).count();
 			const ask = async (text: string) => {
 				await composer.fill(text);
-				await composer.press("Enter");
+				await sendFromBox(page);
 				await waitUntil(async () => (await userBubbles(text)) > 0 && !(await idle()), `"${text}" is being answered`);
 			};
 			const answered = async () => {
@@ -215,7 +205,7 @@ try {
 				if (await stopButton.count()) await stopButton.click().catch(() => {});
 				await answered();
 			};
-			const send = (frame: unknown) => pageSocket?.send(JSON.stringify(frame));
+			const send = socket.send;
 			return { context, page, composer, stopButton, userBubbles, ask, answered, stop, send };
 		};
 		const question = (id: string) => ({ type: "ui_request", kind: "confirm", id, title: "Run this command?", message: `echo ${id}` });
@@ -295,7 +285,7 @@ try {
 			// Cancel and Submit sit under its box the same way.
 			await scene("details", async () => {
 				await ask(`A slow answer with questions and their details, please (${platform.name}).`);
-				send({ type: "ui_request", kind: "confirm", id: `ask-details-${platform.name}`, title: "Run this command?", message: `Runs in: /work/keys\nYou can auto-approve bash for this room in Room settings, Folder.\n\n${COMMAND_FENCE}\necho details` });
+				send({ type: "ui_request", kind: "confirm", id: `ask-details-${platform.name}`, title: "Run this command?", message: `Runs in: /work/keys\n\n${COMMAND_FENCE}\necho details` });
 				await allow.waitFor({ timeout: 5000 });
 				const details = page.locator(".wk-ask button", { hasText: /^(Details|Hide details)$/ });
 				const facts = page.locator(".wk-ask .wk-ask-facts");

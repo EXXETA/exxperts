@@ -10,7 +10,7 @@ import {
 	type CreateAgentSessionOptions,
 	type ExtensionUIContext,
 } from "@exxeta/exxperts-runtime";
-import type { BackgroundRunModelLock, BackgroundRunTarget } from "./background-runs.js";
+import { type BackgroundRunModelLock, type BackgroundRunTarget } from "./background-runs.js";
 import {
 	beginPersistentAgentTurn,
 	buildPersistentAgentBootContext,
@@ -52,13 +52,24 @@ import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import { createNativeProviderSearchExtension, resolveNativeProviderSearchDecision, shouldRegisterClientWebSearch } from "../../../pi-package/extensions/web-search/native-provider-search.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
+import { createRoomWebReaderExtension } from "./room-web-reader.js";
+import type { ConnectorCard } from "./web-ui-context.js";
+import { roomReachesFreely, unprotectedRoomOnAuto } from "./persistent-room-bash-settings.js";
+import { protectionJudgesFolder } from "./persistent-room-protection.js";
+import { conversationFolder } from "./room-box/windows/windows-engine.js";
+import { FREE_READER_LINE } from "./room-box/card-text.js";
 import toolResultAgingExt from "../../../pi-package/extensions/tool-result-aging/index.js";
 import { keepAppTurnFailure } from "./failed-prompt-step-back.js";
 import { SERVER_STOPPED_REASON, STOP_SCHEDULED_RUN_SENTENCE, answerAlreadyEnded, trackRunningWork } from "./server-stop.js";
 import { callCacheRetention } from "./memory-call-cache.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
 import { serverHooks } from "./server-hooks.js";
+import { answerlessCallMovedNothing, modelCallMetadata, type UsageCall } from "./usage-log.js";
 import { settleConversationEffortChoice } from "./persistent-room-effort-settings.js";
+import { settleRoom } from "./room-settle.js";
+import { RoomBox } from "./room-box/box-session.js";
+import { roomBoxComputer, roomBoxSettled } from "./room-box/box-available.js";
+import { fileToolsWait } from "./room-box/windows/folder-wait.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -81,7 +92,12 @@ export interface PersistentRoomBackgroundExecutionInput {
 	allowLegacyTranscriptRecap?: boolean;
 	/** Ends the turn as a server stop does; its reason, an Error with a code, is the run's line and code. */
 	signal?: AbortSignal;
+	/** Takes what a cut run spent, when it is cut or when the process exits under it, so possibly twice. */
+	onCut?: (spent: PersistentRoomBackgroundSpend) => void;
 }
+
+/** What a run spent: its model and the tokens of all its messages. */
+export type PersistentRoomBackgroundSpend = Pick<PersistentRoomBackgroundExecutionResult, "model" | "usage">;
 
 export interface PersistentRoomBackgroundExecutionResult {
 	roomId: string;
@@ -96,6 +112,7 @@ export interface PersistentRoomBackgroundExecutionResult {
 		cacheWrite?: number;
 		totalTokens?: number;
 		cost?: number;
+		calls?: UsageCall[];
 	};
 	items: {
 		userItemId: string;
@@ -124,6 +141,7 @@ interface PreparedPersistentRoomBackgroundExecution {
 		availableToolNames: string[];
 		writeEnabled: boolean;
 		bashEnabled: boolean;
+		commandsChangeFiles?: boolean;
 		nativePiFilesystemToolsEnabled?: boolean;
 	};
 }
@@ -186,26 +204,33 @@ function textFromMessageParts(content: unknown): string {
 		.trim();
 }
 
-function usageFromMessageUsage(usage: any): PersistentRoomBackgroundExecutionResult["usage"] | undefined {
+function usageFromMessage(message: any): PersistentRoomBackgroundExecutionResult["usage"] | undefined {
+	const usage = message.usage;
 	if (!usage) return undefined;
+	const input = usage.input ?? 0;
+	const output = usage.output ?? 0;
+	const cacheRead = usage.cacheRead ?? 0;
 	return {
-		input: usage.input ?? 0,
-		output: usage.output ?? 0,
-		cacheRead: usage.cacheRead ?? 0,
+		input,
+		output,
+		cacheRead,
 		cacheWrite: usage.cacheWrite ?? 0,
 		totalTokens: usage.totalTokens ?? 0,
 		cost: usage.cost?.total ?? 0,
+		calls: answerlessCallMovedNothing(message) ? [] : [{ input, output, cacheRead }],
 	};
 }
 
 /** A dialog that was answered for the user because the run had nobody watching it. */
 export interface HeadlessUiAutoDeclinedQuestion {
-	kind: "confirm" | "select" | "input";
+	kind: "confirm" | "select" | "input" | "connector";
 	title: string;
+	/** A connector question: whether Allow for this room would have been offered, so the note can name that way on. */
+	lasting?: boolean;
 }
 
 export function createHeadlessUiContext(
-	rejectMessage = "scheduled background room work cannot answer interactive UI requests",
+	rejectMessage = "scheduled background room work cannot answer interactive UI requests.",
 	onAutoDecline?: (question: HeadlessUiAutoDeclinedQuestion) => void,
 ): ExtensionUIContext {
 	// Every dialog kind takes the question title first. Report it before the
@@ -221,8 +246,17 @@ export function createHeadlessUiContext(
 		select: rejectInteractive("select"),
 		confirm: rejectInteractive("confirm"),
 		input: rejectInteractive("input"),
+		// The connector gate's question (mcp/room-scope.ts): a tool the room allowed never asks, so it runs before this.
+		async askConnector({ title, lasting }: Pick<ConnectorCard, "title" | "lasting">) {
+			if (onAutoDecline) {
+				try { onAutoDecline({ kind: "connector", title, lasting }); } catch {}
+			}
+			throw new Error(rejectMessage);
+		},
 		notify() {},
 		setStatus() {},
+		// The connector adapter colours its status line right after it connects; without this, that connect reads as failed.
+		theme: { fg: (_color: string, text: string) => text },
 		setWorkingMessage() {},
 		setWorkingIndicator() {},
 		setHiddenThinkingLabel() {},
@@ -284,18 +318,19 @@ function promptWithRestoredLegacyContext(prompt: string, thread: PersistentAgent
 }
 
 function backgroundBashUnavailablePromptPrefix(bashEnabled: boolean): string | undefined {
-	return bashEnabled ? "Background scheduled execution does not have Bash/shell access in this release. Do not use shell commands for this run." : undefined;
+	return bashEnabled ? "A scheduled run can't run commands. Do the task with the file tools, or say what it needed." : undefined;
 }
 
 function backgroundWorkspaceCapability(effectiveWorkspacePolicy: ReturnType<typeof resolvePersistentRoomEffectiveWorkspacePolicy>) {
 	const capability = effectiveWorkspacePolicy.capability;
 	if (!capability || capability.availableToolNames.length === 0) return undefined;
-	return { ...capability, bashEnabled: false };
+	return { ...capability, bashEnabled: false, commandsChangeFiles: false };
 }
 
 export function preparePersistentRoomBackgroundExecution(input: PersistentRoomBackgroundExecutionInput, modelLock: PersistentAgentModelLock): PreparedPersistentRoomBackgroundExecution {
 	const roomId = String(input.roomId ?? "").trim();
 	if (!roomId) throw new Error("persistent-room background execution room id is required");
+	settleRoom(roomId);
 	const fallbackCwd = input.cwd ?? REPO_ROOT;
 	if (input.target.kind === "fresh-thread") {
 		const threadId = scheduledPromptBackgroundThreadId(input.executionId);
@@ -391,14 +426,21 @@ export function preparePersistentRoomBackgroundExecution(input: PersistentRoomBa
 	throw new Error(`unsupported persistent-room runtime kind: ${(thread.runtime as any)?.kind ?? "unknown"}`);
 }
 
-function createPersistentRoomPermissionsExtension(roomId: string, workspaceToolNames: string[], workspaceToolsEnabled: boolean, workspaceAccessMode: "bounded" | "localFiles") {
+/** Clears a room's policy from the process once the permissions extension has
+ * read it, which it does before its first await. Never put back what was there:
+ * while two rooms' calls overlap, that would be the other room's values, left
+ * for every terminal started later to inherit. */
+export function clearPersistentRoomSettings(): void {
+	delete process.env.EXXETA_PERSISTENT_ROOM_SESSION;
+	delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
+	delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE;
+	delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS;
+	delete process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
+	delete process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
+}
+
+export function createPersistentRoomPermissionsExtension(roomId: string, workspaceToolNames: string[], workspaceToolsEnabled: boolean, workspaceAccessMode: "bounded" | "localFiles") {
 	return async (pi: any) => {
-		const previousPersistentRoomSession = process.env.EXXETA_PERSISTENT_ROOM_SESSION;
-		const previousPersistentRoomAgent = process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-		const previousPersistentRoomWorkspaceAccessMode = process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE;
-		const previousPersistentRoomWorkspaceTools = process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS;
-		const previousPersistentRoomBashEnabled = process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
-		const previousPersistentRoomExecutionContext = process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
 		if (workspaceToolsEnabled) {
 			process.env.EXXETA_PERSISTENT_ROOM_SESSION = "1";
 			process.env.EXXETA_PERSISTENT_ROOM_AGENT = roomId;
@@ -407,28 +449,12 @@ function createPersistentRoomPermissionsExtension(roomId: string, workspaceToolN
 			delete process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
 			process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT = "background";
 		} else {
-			delete process.env.EXXETA_PERSISTENT_ROOM_SESSION;
-			delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-			delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE;
-			delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS;
-			delete process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
-			delete process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
+			clearPersistentRoomSettings();
 		}
 		try {
 			await (permissionsExt as any)(pi);
 		} finally {
-			if (previousPersistentRoomSession === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_SESSION;
-			else process.env.EXXETA_PERSISTENT_ROOM_SESSION = previousPersistentRoomSession;
-			if (previousPersistentRoomAgent === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
-			else process.env.EXXETA_PERSISTENT_ROOM_AGENT = previousPersistentRoomAgent;
-			if (previousPersistentRoomWorkspaceAccessMode === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE;
-			else process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE = previousPersistentRoomWorkspaceAccessMode;
-			if (previousPersistentRoomWorkspaceTools === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS;
-			else process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = previousPersistentRoomWorkspaceTools;
-			if (previousPersistentRoomBashEnabled === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
-			else process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED = previousPersistentRoomBashEnabled;
-			if (previousPersistentRoomExecutionContext === undefined) delete process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
-			else process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT = previousPersistentRoomExecutionContext;
+			clearPersistentRoomSettings();
 		}
 	};
 }
@@ -450,13 +476,13 @@ export function persistentRoomBackgroundSessionToolNames(allowedToolNames: reado
  * whole. The run's copy is saved to the thread, so a live turn after it reads
  * the latest state from the session as it does after its own turns.
  */
-function createRoomStateExtension(roomId: string, thread: PersistentAgentThreadRecord, workspacePolicy: Parameters<typeof buildPersistentRoomCurrentWorkspaceSection>[0]) {
+function createRoomStateExtension(roomId: string, thread: PersistentAgentThreadRecord, workspacePolicy: Parameters<typeof buildPersistentRoomCurrentWorkspaceSection>[0], free: boolean) {
 	const bootedFingerprint = thread.runtime.kind === "pi-session-jsonl" ? thread.runtime.instructionsFingerprint : undefined;
 	return (pi: any) => {
 		pi.on("before_agent_start", async (event: { systemPrompt: string }, ctx: { sessionManager: SessionManager }) => {
 			let workspace: string | null = null;
 			try {
-				workspace = buildPersistentRoomCurrentWorkspaceSection(workspacePolicy, { scheduled: true });
+				workspace = `${buildPersistentRoomCurrentWorkspaceSection(workspacePolicy, { scheduled: true })}${free ? FREE_READER_LINE : ""}`;
 			} catch (error) {
 				console.warn(`scheduled run: current workspace section build failed: ${(error as Error)?.message ?? error}`);
 			}
@@ -479,6 +505,7 @@ async function createPersistentRoomBackgroundSession(input: {
 	agentDir: string;
 	modelRegistry: ModelRegistry;
 	onAutoDecline?: (question: HeadlessUiAutoDeclinedQuestion) => void;
+	box: RoomBox | null;
 }) {
 	const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(input.roomId, input.threadId);
 	const workspaceToolNames = effectiveWorkspacePolicy.allowedToolNames;
@@ -486,14 +513,20 @@ async function createPersistentRoomBackgroundSession(input: {
 	const toolPolicy = getPersistentRoomToolPolicy(input.roomId, { workspaceToolsEnabled, workspaceToolNames, workspaceAccessMode: effectiveWorkspacePolicy.workspaceAccessMode, bashEnabled: false, bashRuntimeAllowed: false });
 	const backgroundToolNames = persistentRoomBackgroundSessionToolNames(toolPolicy.allowedToolNames);
 	const customTools = workspaceToolsEnabled && effectiveWorkspacePolicy.policy
-		// Same file tools as the live bind, bound to the session cwd this run
-		// binds with. It never has bash or the skills folder, and its refusals say so.
-		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy, { localFilesCwd: input.cwd, background: true })
+		// The same file tools and the same fence as a live turn. Nobody is there
+		// to ask, so a path outside it is refused and the answer says so.
+		// On Windows they run in the server and wait for boxed commands on the same folders.
+		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy, input.box ? { box: input.box } : { folderWait: fileToolsWait() })
 		: [];
 	const customToolNames = new Set(customTools.map((tool) => String(tool.name)));
 	if (customToolNames.size !== workspaceToolNames.length || !workspaceToolNames.every((toolName) => customToolNames.has(toolName))) {
 		throw new Error("persistent-room workspace tool policy mismatch");
 	}
+	const folder = protectionJudgesFolder() ? conversationFolder(input.roomId, input.threadId) : undefined;
+	// Auto in a protected room is read once for the run, as its box would hold it; without protection, at each page too, so Ask applies to the next.
+	const reachesFreely = roomReachesFreely(input.roomId, input.threadId, undefined, folder);
+	const pagesOpenFreely = () => reachesFreely || unprotectedRoomOnAuto(input.roomId, input.threadId, undefined, folder);
+	const free = pagesOpenFreely();
 	// One read for the whole run, which is also the whole binding: a background
 	// run is a single turn and finishes under the rule it started with.
 	const nativeSearchDecision = resolveNativeProviderSearchDecision(input.model.provider);
@@ -510,13 +543,15 @@ async function createPersistentRoomBackgroundSession(input: {
 		// it for the whole run.
 		...(shouldRegisterClientWebSearch(nativeSearchDecision) ? [webSearchExt as any] : []),
 		createNativeProviderSearchExtension(nativeSearchDecision) as any,
+		// Nobody to ask: the person's own addresses, search results and the room's sites open, the rest are refused; in a room on Auto, every address the tool itself allows.
+		createRoomWebReaderExtension({ roomId: input.roomId, questions: null, free: pagesOpenFreely }) as any,
 		fetchUrlExt as any,
 		// A scheduled or detached run replays the same room history a live turn
 		// does, so it ages that history by the same rule. Registering it in only
 		// one of the two factories would make the two kinds of run send
 		// different context for the same room.
 		toolResultAgingExt as any,
-		createRoomStateExtension(input.roomId, input.prepared.thread, { ...effectiveWorkspacePolicy, capability: backgroundWorkspaceCapability(effectiveWorkspacePolicy) }),
+		createRoomStateExtension(input.roomId, input.prepared.thread, { ...effectiveWorkspacePolicy, capability: backgroundWorkspaceCapability(effectiveWorkspacePolicy) }, free),
 	];
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,
@@ -545,6 +580,8 @@ async function createPersistentRoomBackgroundSession(input: {
 		model: input.model,
 		...(thinkingLevel ? { thinkingLevel } : {}),
 		cacheRetention: callCacheRetention("scheduled", input.model),
+		// Whose calls these are: the person the run's scheduled row names.
+		metadata: modelCallMetadata(input.roomId, "scheduled"),
 		...(input.prepared.rawSystemPrompt ? { rawSystemPrompt: input.prepared.rawSystemPrompt } : {}),
 		tools: backgroundToolNames,
 		...(customTools.length > 0 ? { customTools } : {}),
@@ -592,6 +629,15 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 			return items;
 		}
 	};
+	// On a person's Mac the run's file tools read and write in a box of its own, with nobody to ask, ended with the run. Never on Windows, whose box serves commands alone.
+	await roomBoxSettled();
+	const box = roomBoxComputer() === "mac" ? new RoomBox({
+		roomId: prepared.roomId,
+		conversationId: () => prepared.threadId,
+		questions: { watcher: () => "none", askSite: () => Promise.reject(new Error("nobody is there")), closeSiteCards: () => {} },
+		rights: () => ({ canChangeFiles: false, skillFolders: [] }),
+		warn: (detail, message) => console.warn(message, detail),
+	}) : null;
 	const session = await createPersistentRoomBackgroundSession({
 		roomId: prepared.roomId,
 		threadId: prepared.threadId,
@@ -601,6 +647,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		agentDir,
 		modelRegistry,
 		onAutoDecline: (question) => autoDeclinedQuestions.note(question),
+		box,
 	});
 	const turnId = input.turnId ?? `scheduled_${executionId}`.slice(0, 120);
 	const connectionId = input.connectionId ?? `scheduler:${executionId}`.slice(0, 120);
@@ -619,6 +666,9 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		void Promise.resolve((session as any)?.abort?.()).catch(() => {});
 	};
 	const endBySignal = () => endTurn(input.signal!.reason);
+	const reportCut = () => input.onCut?.({ model: cloneModelLock(prepared.modelLock), usage });
+	// A tool the cut cannot reach can hold the turn past the stop's ceiling, and the catch below then never runs.
+	process.once("exit", reportCut);
 	try {
 		thread = writePersistentAgentThread(prepared.roomId, prepared.threadId, {
 			state: thread.state === "active" ? "active" : "standby",
@@ -643,7 +693,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 			if (event.message.stopReason === "error") providerRefusal = String(event.message.errorMessage ?? "");
 			const text = textFromMessageParts(event.message.content);
 			({ text: assistantText, retryFrom } = landedTextAfter({ text: assistantText, retryFrom }, text, event.message.stopReason === "error" && session.retriesAfter(event.message)));
-			const messageUsage = usageFromMessageUsage(event.message.usage);
+			const messageUsage = usageFromMessage(event.message);
 			// Sum across assistant messages so multi-message turns account fully.
 			if (messageUsage) {
 				usage = usage
@@ -654,6 +704,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 						cacheWrite: (usage.cacheWrite ?? 0) + (messageUsage.cacheWrite ?? 0),
 						totalTokens: (usage.totalTokens ?? 0) + (messageUsage.totalTokens ?? 0),
 						cost: (usage.cost ?? 0) + (messageUsage.cost ?? 0),
+						calls: [...(usage.calls ?? []), ...(messageUsage.calls ?? [])],
 					}
 					: messageUsage;
 			}
@@ -681,8 +732,10 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 				// Preserve the original execution error. Worker finalization records status.
 			}
 		}
+		if (endedBy) reportCut();
 		throw endedBy ?? error;
 	} finally {
+		process.off("exit", reportCut);
 		releaseStopWork?.();
 		input.signal?.removeEventListener("abort", endBySignal);
 		// Before the turn ends: a room opened the moment it does must not hand this prompt back.
@@ -691,6 +744,8 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 			try { finishPersistentAgentTurn(prepared.roomId, prepared.threadId, { turnId: activeTurnId, terminalReason }); } catch {}
 		}
 		try { (session as any)?.dispose?.(); } catch {}
+		// Its file programs are stopped at once; its private temp empties after.
+		await box?.endTurn().catch(() => {});
 	}
 
 	const current = getPersistentAgentThread(prepared.roomId, prepared.threadId) ?? thread;

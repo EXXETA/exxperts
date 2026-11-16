@@ -6,6 +6,7 @@ import { type CheckpointTranscriptItem, type CheckpointTranscriptSourceResult, f
 import type { L1bSourceFingerprint } from "./persistent-agent-memory-types.js";
 import { assertPersistentAgentThreadNotInFlight, createPersistentAgentInstance, getPersistentAgentRuntimeState, safeRuntimeThreadId, validatePersistentAgentId } from "./persistent-agent-store.js";
 import { getPersistentAgentThread } from "./persistent-agent-threads.js";
+import { settleRoom } from "./room-settle.js";
 import { openPersistentAgentPiSessionManager, readPersistentAgentBootPromptSnapshot } from "./persistent-agent-conversation-model.js";
 
 // Tool output is the one kind of transcript text that is bounded here: it is
@@ -180,6 +181,7 @@ export function buildPersistentAgentCheckpointTranscriptSource(input: {
 	runtimeCwd?: string;
 }): CheckpointTranscriptSourceResult {
 	const instance = createPersistentAgentInstance(validatePersistentAgentId(input.agentId));
+	settleRoom(instance.agentId);
 	const conversationId = safeRuntimeThreadId(input.conversationId);
 	if (!conversationId) throw new Error("invalid persistent-agent checkpoint conversation id");
 	const runtime = getPersistentAgentRuntimeState(instance.agentId);

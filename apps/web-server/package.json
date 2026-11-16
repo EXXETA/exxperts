@@ -10,8 +10,10 @@
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"
   },
   "dependencies": {
-    "@fastify/websocket": "^11.2.0",
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@exxeta/exxperts-runtime": "*",
+    "@fastify/websocket": "^11.2.0",
+    "@microsoft/mxc-sdk": "1.0.1",
     "dotenv": "^16.4.5",
     "fastify": "^5.12.1",
     "jszip": "^3.10.1",

@@ -36,6 +36,8 @@ function recordWorkerUsage(
 	modelLock: { provider: string; model: string },
 	usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number } | undefined,
 	callKind?: MemoryCallKind,
+	// A call that names no room passes who asked; a room's row is stamped as it is written (usage-log.ts).
+	who?: { person: string; space: string },
 ): void {
 	if (!usage) return;
 	let modelLabel: string | undefined;
@@ -60,6 +62,7 @@ function recordWorkerUsage(
 		cacheWrite: usage.cacheWrite ?? 0,
 		cost: usage.cost ?? 0,
 		...(callKind ? { callKind } : {}),
+		...(who ? { person: who.person, space: who.space } : {}),
 	});
 }
 

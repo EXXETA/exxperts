@@ -239,6 +239,8 @@ function isLikelyEnvironmentVariableName(value: string): boolean {
 
 function getProviderApiKeyConfigStatus(apiKey: string | undefined): AuthStatus | undefined {
 	if (!apiKey) return undefined;
+	// A shared server takes the key as typed, and no status read carries its text.
+	if (process.env.EXXPERTS_SHARED_SERVER === "1") return { configured: true, source: "models_json_key" };
 	if (apiKey.startsWith("!")) {
 		return { configured: true, source: "models_json_command" };
 	}
@@ -256,14 +258,16 @@ function isProviderApiKeyConfigReady(apiKey: string | undefined): boolean {
 }
 
 function resolveProviderApiKeyConfig(apiKey: string): string | undefined {
-	if (!apiKey.startsWith("!") && !process.env[apiKey] && isLikelyEnvironmentVariableName(apiKey)) {
+	// On a shared server a variable's shape means nothing: the key is taken as typed.
+	if (process.env.EXXPERTS_SHARED_SERVER !== "1" && !apiKey.startsWith("!") && !process.env[apiKey] && isLikelyEnvironmentVariableName(apiKey)) {
 		return undefined;
 	}
 	return resolveConfigValueUncached(apiKey);
 }
 
 function resolveProviderApiKeyConfigOrThrow(apiKey: string, description: string): string | undefined {
-	if (!apiKey.startsWith("!") && !process.env[apiKey] && isLikelyEnvironmentVariableName(apiKey)) {
+	// On a shared server a variable's shape means nothing: the key is taken as typed.
+	if (process.env.EXXPERTS_SHARED_SERVER !== "1" && !apiKey.startsWith("!") && !process.env[apiKey] && isLikelyEnvironmentVariableName(apiKey)) {
 		return undefined;
 	}
 	return resolveConfigValueOrThrow(apiKey, description);

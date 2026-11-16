@@ -19,7 +19,7 @@ function TaskStoreGcBanner({ assessment, onReview, onDismiss }: { assessment: Ta
 		<div className="task-store-gc-banner" role="status">
 			<span>Old specialist files are taking up {fmtMb(assessment.totalBytes)} — {fmtMb(assessment.proposal.reclaimBytes)} can be freed safely.</span>
 			<button className="rs-btn" onClick={onReview} title="See which old task folders would be deleted">Review</button>
-			<button className="icon-btn" aria-label="Dismiss" title="Dismiss — nothing is deleted" onClick={onDismiss}>✕</button>
+			<button className="rs-btn rs-btn-icon" aria-label="Dismiss" title="Dismiss: nothing is deleted" onClick={onDismiss}>✕</button>
 		</div>
 	);
 }

@@ -65,7 +65,7 @@ export function Label({ text, className = "", children }: { text: string; classN
 /**
  * Thinking with no steps beside it: one line, a breathing dot, "Thinking"
  * with the sweep and its timer, and nothing under it. Done, it reads
- * "Thought for 7 s". Either way a click opens the whole thought; while it
+ * "Thought for 7.2 s". Either way a click opens the whole thought; while it
  * thinks it grows there, kept at its newest line. A block with no words, or
  * a redacted one, is the label alone. Thoughts with nothing shown between
  * them are one line (`ThoughtGroup`).
@@ -101,7 +101,7 @@ export function ThinkingRow({ group }: { group: ThoughtGroup }) {
 	);
 }
 
-/** Thinking as a row of a work card: "Thinking" while it runs, "Thought for 7 s" after, either opening to the whole thought (ThinkingRow's rules). */
+/** Thinking as a row of a work card: "Thinking" while it runs, "Thought for 7.2 s" after, either opening to the whole thought (ThinkingRow's rules). */
 export function ThinkingCardRow({ group }: { group: ThoughtGroup }) {
 	const words = useThoughtWords(group);
 	const { live, ms } = thoughtTime(group);

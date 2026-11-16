@@ -185,7 +185,7 @@ try {
 	const agentId = created.agent.agentId;
 	const l1bPath = path.join(root, agentId, "L1b", "current.md");
 	fs.writeFileSync(l1bPath, memoryFixture(agentId, { chronosRun: BLANK_RUN, bodyRun: 0, eol: "\n" }), { mode: 0o600 });
-	const overview = timed(() => buildMemoryOverview());
+	const overview = timed(() => buildMemoryOverview("every room"));
 	const room = overview.result.rooms.find((entry) => entry.id === agentId);
 	check(room !== undefined && overview.result.totals.rooms === 1, "the overview lists the room whose Chronos carries the run");
 	check(overview.ms < FAST_MS, `the overview over that room is built in ${ms(overview.ms)}, in-process, no server`);

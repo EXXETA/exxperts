@@ -34,6 +34,12 @@ const repoRoot = path.resolve(webServerDir, "..", "..");
 const shortSpaceFlag = path.join(tempRoot, "short-space");
 const failingWritesFlag = path.join(tempRoot, "failing-writes");
 const unsyncableFlag = path.join(tempRoot, "unsyncable");
+// While held-marks exists, a save's unanswered mark cannot be removed, as when a scanner holds it open on Windows.
+const heldMarksFlag = path.join(tempRoot, "held-marks");
+// While raced-landing exists, another server lands a file under the name it holds a moment before this one does.
+const racedLandingFlag = path.join(tempRoot, "raced-landing");
+// While no-hard-links exists, a link answers ENOTSUP, as on a file system without them.
+const noHardLinksFlag = path.join(tempRoot, "no-hard-links");
 const diskFakesPreload = path.join(tempRoot, "disk-fakes.mjs");
 fs.writeFileSync(diskFakesPreload, `import fs from "node:fs";
 const realStatfs = fs.statfsSync;
@@ -44,6 +50,22 @@ const fails = (file, data) => {
 	return bytes.includes(fs.readFileSync(${JSON.stringify(failingWritesFlag)}));
 };
 const failure = () => Object.assign(new Error("EIO: i/o error, write"), { code: "EIO" });
+for (const name of ["linkSync", "renameSync"]) {
+	const real = fs[name];
+	fs[name] = (from, to, ...rest) => {
+		if (name === "linkSync" && fs.existsSync(${JSON.stringify(noHardLinksFlag)})) throw Object.assign(new Error("ENOTSUP: operation not supported, link"), { code: "ENOTSUP" });
+		if (fs.existsSync(${JSON.stringify(racedLandingFlag)}) && String(to).endsWith(fs.readFileSync(${JSON.stringify(racedLandingFlag)}, "utf-8"))) {
+			fs.unlinkSync(${JSON.stringify(racedLandingFlag)});
+			fs.writeFileSync(to, "another server's upload");
+		}
+		return real(from, to, ...rest);
+	};
+}
+const realRmSync = fs.rmSync;
+fs.rmSync = (file, ...rest) => {
+	if (/\\.upload-|create-unanswered/.test(String(file)) && fs.existsSync(${JSON.stringify(heldMarksFlag)})) throw Object.assign(new Error("EBUSY: resource busy or locked, rm"), { code: "EBUSY" });
+	return realRmSync(file, ...rest);
+};
 const realFsync = fs.fsyncSync;
 fs.fsyncSync = (fd) => { if (fs.existsSync(${JSON.stringify(unsyncableFlag)})) throw Object.assign(new Error("ENOTSUP: operation not supported, fsync"), { code: "ENOTSUP" }); return realFsync(fd); };
 for (const name of ["writeSync", "writeFileSync"]) {
@@ -559,6 +581,47 @@ try {
 	// 9. Unknown rooms 404 without creating anything.
 	const alien = await authedFetch(`${baseUrl}/api/persistent-agents/no-such-room/files`);
 	assert(alien.status === 404, `unknown room: expected 404, got ${alien.status}`);
+
+	// 10. A mark that cannot be removed costs a stale file, never the server: the answer has gone out and everyone else's work goes on.
+	fs.writeFileSync(heldMarksFlag, "");
+	try {
+		const heldUpload = await upload("held-mark.md", Buffer.from("# held mark\n"));
+		assert(heldUpload.ok, `an upload with a held mark is answered, got ${heldUpload.status}`);
+		const heldCreate = await authedFetch(`${baseUrl}/api/persistent-agents`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ displayName: "Held Mark Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }),
+		});
+		assert(heldCreate.status === 201, `a create with a held mark is answered, got ${heldCreate.status}`);
+		// The same bytes under two names, both unanswered: each keeps its own mark, so the first sent again gets its own landing.
+		const twin = Buffer.from("# twin\n");
+		await upload("twin-a.md", twin);
+		const second = (await (await upload("twin-b.md", twin)).json()) as { name: string };
+		assert(second.name === "twin-b.md", `the second twin lands under its own name, got ${JSON.stringify(second)}`);
+		const again = (await (await upload("twin-a.md", twin)).json()) as { name: string };
+		assert(again.name === "twin-a.md", `the first twin sent again gets its landing back, got ${JSON.stringify(again)}`);
+	} finally {
+		fs.rmSync(heldMarksFlag);
+	}
+	const afterHeld = await authedFetch(`${baseUrl}/api/persistent-agents/${ROOM_ID}/files`).catch((error: Error) => error);
+	assert(afterHeld instanceof Response && afterHeld.ok, `the server stays up after a held mark, got ${afterHeld instanceof Response ? afterHeld.status : afterHeld.message}`);
+
+	// 11. Another server on this folder takes the name first: its file stays, and this upload lands beside it.
+	fs.writeFileSync(racedLandingFlag, "raced.md");
+	const raced = (await (await upload("raced.md", Buffer.from("# this server's upload\n"))).json()) as { name: string };
+	const shelf = path.join(tempAgentsRoot, ROOM_ID, "files");
+	assert(fs.readFileSync(path.join(shelf, "raced.md"), "utf-8") === "another server's upload", "the file the other server landed keeps its bytes");
+	assert(raced.name === "raced (2).md" && fs.readFileSync(path.join(shelf, raced.name), "utf-8") === "# this server's upload\n", `this upload lands beside it, got ${JSON.stringify(raced)}`);
+
+	// 12. A data folder with no hard links keeps taking uploads.
+	fs.writeFileSync(noHardLinksFlag, "");
+	try {
+		const landed = await upload("no-links.md", Buffer.from("# no links\n"));
+		assert(landed.ok, `an upload with no hard links lands, got ${landed.status}`);
+		assert(fs.readFileSync(path.join(shelf, "no-links.md"), "utf-8") === "# no links\n", "the upload is whole on the shelf");
+	} finally {
+		fs.rmSync(noHardLinksFlag);
+	}
 
 	console.log("room-files-routes smoke: PASS");
 } catch (error) {

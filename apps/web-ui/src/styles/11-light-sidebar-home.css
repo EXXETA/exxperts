@@ -19,53 +19,18 @@
 	color: var(--fg-soft);
 }
 
-:root[data-theme="light"] .sidebar .icon-btn,
 :root[data-theme="light"] .sidebar .row-action,
 :root[data-theme="light"] .sidebar .section-toggle,
-:root[data-theme="light"] .standalone-header .icon-btn,
 :root[data-theme="light"] .standalone-header .theme-toggle {
 	border-color: #fff;
 	color: #fff;
 	background: transparent;
 }
 
-:root[data-theme="light"] .landing-card .inline-action {
-	background: transparent;
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-}
-
-:root[data-theme="light"] .landing-card .landing-action {
-	background: var(--exx-action-primary-bg);
-	border-color: var(--exx-action-primary-bg);
-	color: var(--exx-action-primary-fg);
-}
-
-:root[data-theme="light"] .standalone-header .landing-action {
-	background: #fff;
-	color: #000;
-	border-color: #fff;
-}
-
-:root[data-theme="light"] .landing-card .landing-action.secondary {
-	background: transparent;
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-}
-
-:root[data-theme="light"] .sidebar .icon-btn:hover,
 :root[data-theme="light"] .sidebar .row-action:hover,
-:root[data-theme="light"] .standalone-header .icon-btn:hover,
 :root[data-theme="light"] .standalone-header .theme-toggle:hover {
 	background: #fff;
 	color: #000;
-}
-
-:root[data-theme="light"] .landing-card .inline-action:hover,
-:root[data-theme="light"] .landing-card .inline-action:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	border-color: var(--border);
-	color: var(--fg);
 }
 
 :root[data-theme="light"] .sidebar .list-btn:hover,
@@ -123,7 +88,6 @@
 	color: var(--fg-soft);
 }
 
-:root[data-theme="light"] .sidebar .icon-btn,
 :root[data-theme="light"] .sidebar .row-action {
 	background: transparent;
 	border-color: var(--border-soft);
@@ -139,8 +103,6 @@
 	color: var(--fg);
 }
 
-:root[data-theme="light"] .sidebar .icon-btn:hover,
-:root[data-theme="light"] .sidebar .icon-btn:focus-visible,
 :root[data-theme="light"] .sidebar .row-action:hover,
 :root[data-theme="light"] .sidebar .row-action:focus-visible {
 	background: var(--fg);
@@ -181,9 +143,7 @@
 :root[data-theme="light"] .create-room-card.create-room-panel p {
 	color: var(--fg);
 }
-:root[data-theme="light"] .create-room-copy,
-:root[data-theme="light"] .create-room-section .create-room-actions .inline-action,
-:root[data-theme="light"] .create-room-card .create-room-actions .inline-action {
+:root[data-theme="light"] .create-room-copy {
 	color: var(--muted);
 }
 :root[data-theme="light"] .create-room-input {

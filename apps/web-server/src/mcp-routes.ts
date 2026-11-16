@@ -1,14 +1,16 @@
+import { startRefusalLookup } from "./connector-start-check.js";
 import { getMcpConnectorsStatus } from "./mcp-status.js";
 import { revokeMcpConnectorFromAllRooms } from "./persistent-room-mcp-settings.js";
-import { McpAdminError, addMcpServer, type AddMcpServerInput, removeMcpServer, startMcpServerLogin, getMcpServerLoginState, cancelMcpServerLogin, logoutMcpServer, testMcpServer } from "./mcp-admin.js";
+import { McpAdminError, addMcpServer, type AddMcpServerInput, changeMcpServerAddress, type ChangeMcpServerAddressInput, removeMcpServer, startMcpServerLogin, getMcpServerLoginState, cancelMcpServerLogin, logoutMcpServer, testMcpServer } from "./mcp-admin.js";
 import { app } from "./server-app.js";
+import { CONNECTOR_REQUEST_LINES } from "./connector-form.js";
 
 app.get("/api/mcp/status", async (_req, reply) => {
 	try {
-		return await getMcpConnectorsStatus();
+		return await getMcpConnectorsStatus(startRefusalLookup);
 	} catch (e) {
 		app.log.warn({ err: (e as Error).message }, "failed to read MCP connector status");
-		return reply.code(500).send({ error: "Failed to read MCP connector status." });
+		return reply.code(500).send({ error: CONNECTOR_REQUEST_LINES.loadFailed });
 	}
 });
 
@@ -47,11 +49,21 @@ app.delete("/api/mcp/servers/:name", async (req, reply) => {
 	}
 });
 
+// A web connector's new address, and its key where the new address needs it.
+// The connector keeps its name, so rooms keep their access.
+app.put("/api/mcp/servers/:name/address", async (req, reply) => {
+	try {
+		return await changeMcpServerAddress(String((req.params as { name: string }).name), (req.body ?? {}) as ChangeMcpServerAddressInput);
+	} catch (e) {
+		return sendMcpAdminError(reply, e, CONNECTOR_REQUEST_LINES.saveFailed);
+	}
+});
+
 app.post("/api/mcp/servers/:name/login", async (req, reply) => {
 	try {
 		return await startMcpServerLogin(String((req.params as { name: string }).name));
 	} catch (e) {
-		return sendMcpAdminError(reply, e, "Failed to start the connector login.");
+		return sendMcpAdminError(reply, e, CONNECTOR_REQUEST_LINES.signInStartFailed);
 	}
 });
 
@@ -72,7 +84,7 @@ app.post("/api/mcp/servers/:name/logout", async (req, reply) => {
 		await logoutMcpServer(String((req.params as { name: string }).name));
 		return { ok: true };
 	} catch (e) {
-		return sendMcpAdminError(reply, e, "Failed to clear the connector login.");
+		return sendMcpAdminError(reply, e, CONNECTOR_REQUEST_LINES.disconnectFailed);
 	}
 });
 
