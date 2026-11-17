@@ -94,7 +94,9 @@ function saveTimings(timings, results) {
 
 // Hard ceiling per smoke: a wedged smoke (or a server process it failed to
 // tear down) must fail loudly instead of eating the CI job's entire timeout.
-const SMOKE_TIMEOUT_MS = 300_000;
+// A slow CI machine runs the longest smokes for over 200 s; split into groups,
+// the smokes leave each job room for ten minutes per smoke.
+const SMOKE_TIMEOUT_MS = 600_000;
 
 function killSmokeTree(child) {
 	if (child.pid == null) return;

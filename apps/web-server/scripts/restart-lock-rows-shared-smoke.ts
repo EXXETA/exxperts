@@ -4,7 +4,7 @@
 // server: a kill at each step of clearing a dead lock, and several processes
 // meeting one dead lock. The desktop's lock rows and a live holder's lock are in
 // restart-lock-rows-smoke.ts, since together they would run past the runner's
-// five minutes on a busy machine.
+// limit per smoke on a busy machine.
 // RESTART_ONLY=<part of a row's name> runs some.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -13,7 +13,7 @@ import path from "node:path";
 import { AT_ONCE_MS, EDITIONS, lanes, lockParts, pool, preload, runRestartParts, tempRoot, webServerDir, type TraceStep } from "./kill-at-write-harness.js";
 
 if (os.platform() === "win32") {
-	console.log("SKIPPED: not yet on a real Windows PC: it needs longer there than the 300 seconds the runner gives each smoke");
+	console.log("SKIPPED: not yet on a real Windows PC: it ran past 300 seconds there");
 	process.exit(0);
 }
 

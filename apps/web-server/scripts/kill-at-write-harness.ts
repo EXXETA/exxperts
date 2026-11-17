@@ -13,7 +13,7 @@
 // its folder's. That is order, not a power cut.
 //
 // The steps are split over several smokes, since the runner stops any smoke at
-// five minutes. KILL_ONLY=forget:38:before runs one step of a smoke's saves.
+// its time limit. KILL_ONLY=forget:38:before runs one step of a smoke's saves.
 // KILL_LANES sets how many kills run side by side.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";

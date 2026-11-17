@@ -11,7 +11,7 @@
 //
 // Beside those: every case in restart-known-cases.ts. The locks a kill can leave
 // are in restart-lock-rows-smoke.ts and restart-lock-rows-shared-smoke.ts, since
-// the runner stops any smoke at five minutes. RESTART_ONLY=<part of a row's name>
+// the runner stops any smoke at its time limit. RESTART_ONLY=<part of a row's name>
 // runs some.
 import fs from "node:fs";
 import os from "node:os";
@@ -23,7 +23,7 @@ import { authedFetch, freePort, SMOKE_AUTH_HEADERS, putRunWithoutAsking } from "
 import { waitEvery, type WaitCondition } from "./smoke-wait.js";
 
 if (os.platform() === "win32") {
-	console.log("SKIPPED: not yet on a real Windows PC: it needs longer there than the 300 seconds the runner gives each smoke");
+	console.log("SKIPPED: not yet on a real Windows PC: it ran past 300 seconds there");
 	process.exit(0);
 }
 

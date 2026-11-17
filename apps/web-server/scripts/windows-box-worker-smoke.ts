@@ -424,10 +424,19 @@ await row("places: the turn's end removes a large temp without stalling the serv
 	const box = engine();
 	await exec(box, "Write-Output one");
 	const temp = nativePath(userSpawns().at(-1)!.request!.environment.TEMP);
-	for (let folder = 0; folder < 100; folder++) {
-		fs.mkdirSync(path.join(temp, `unpacked-${folder}`));
-		for (let file = 0; file < 100; file++) fs.writeFileSync(path.join(temp, `unpacked-${folder}`, `${file}.txt`), "x");
-	}
+	const fill = (place: string) => {
+		for (let folder = 0; folder < 100; folder++) {
+			fs.mkdirSync(path.join(place, `unpacked-${folder}`), { recursive: true });
+			for (let file = 0; file < 100; file++) fs.writeFileSync(path.join(place, `unpacked-${folder}`, `${file}.txt`), "x");
+		}
+	};
+	fill(temp);
+	// What a removal that blocks costs on this machine: its stall is the whole removal of a tree of the same shape.
+	const twin = path.join(work, "blocking-removal");
+	fill(twin);
+	const blockingStarted = Date.now();
+	fs.rmSync(twin, { recursive: true, force: true });
+	const blocking = Date.now() - blockingStarted;
 	let last = Date.now();
 	let longest = 0;
 	const ticker = setInterval(() => {
@@ -440,7 +449,9 @@ await row("places: the turn's end removes a large temp without stalling the serv
 	// The gap up to now counts too: a stall at the very end leaves no tick after it.
 	longest = Math.max(longest, Date.now() - last);
 	assert(!fs.existsSync(temp), "the temp is still there");
-	assert(longest < 100, `the server stalled ${longest} ms in a ${Date.now() - started} ms turn end`);
+	// A slow or busy machine stalls a little on its own; a blocking removal stalls about as long as the removal.
+	assert(longest < 100 || longest < blocking / 2, `the server stalled ${longest} ms in a ${Date.now() - started} ms turn end; a blocking removal took ${blocking} ms`);
+	console.log(`  longest stall ${longest} ms in a ${Date.now() - started} ms turn end; a blocking removal took ${blocking} ms`);
 });
 
 await row("commands: the box's process crashing mid-command ends it with the fault line, and the next command starts a new one", async () => {

@@ -4,7 +4,7 @@
 // Beside those: a kill during a sign-in's refresh, and a live holder's lock.
 // The shared server's lock rows and the rows on a dead lock are in
 // restart-lock-rows-shared-smoke.ts, since together they would run past the
-// runner's five minutes on a busy machine.
+// runner's limit per smoke on a busy machine.
 // RESTART_ONLY=<part of a row's name> runs some.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -16,7 +16,7 @@ import { freePort } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 
 if (os.platform() === "win32") {
-	console.log("SKIPPED: not yet on a real Windows PC: it needs longer there than the 300 seconds the runner gives each smoke");
+	console.log("SKIPPED: not yet on a real Windows PC: it ran past 300 seconds there");
 	process.exit(0);
 }
 

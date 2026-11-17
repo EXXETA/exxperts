@@ -10,7 +10,7 @@ import path from "node:path";
 import { preload, runKillMatrix, tempRoot, webServerDir, type TraceStep } from "./kill-at-write-harness.js";
 
 if (os.platform() === "win32") {
-	console.log("SKIPPED: not yet on a real Windows PC: it needs longer there than the 300 seconds the runner gives each smoke");
+	console.log("SKIPPED: not yet on a real Windows PC: it ran past 300 seconds there");
 	process.exit(0);
 }
 

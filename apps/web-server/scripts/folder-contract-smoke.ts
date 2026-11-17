@@ -2,7 +2,7 @@
 // fault in the records the real saves wrote, restoring each after, and fails
 // unless the row that reads them catches it. The faults under the other rows are in
 // folder-contract-faults-smoke.ts, since together they would run past the
-// runner's five minutes on a busy machine.
+// runner's limit per smoke on a busy machine.
 //
 //   FOLDER_CONTRACT_DIR=<folder>   the folder under test; the system's temporary folder if unset
 //   FOLDER_CONTRACT_ONLY=<part>    runs the rows and faults whose name holds this
