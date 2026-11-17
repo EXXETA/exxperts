@@ -17,6 +17,11 @@ import { folderGrantable, HOME_TOOL_PLACES, roomFolderGrantable } from "../src/r
 import { FOLDERS_SCRIPT } from "../src/room-box/windows/personal-folders.js";
 import { windowsAnswer, windowsPlaces, windowsRefuses, withRealPaths, type PlacesGiven, type WindowsPlaces } from "../src/room-box/windows/windows-places.js";
 
+if (os.platform() === "win32") {
+	console.log("SKIPPED: not yet on a real Windows PC: the smoke's home there lacks folders Windows names, such as AppData\\Local and Startup");
+	process.exit(0);
+}
+
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }

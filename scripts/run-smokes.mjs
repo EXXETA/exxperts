@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 // Runs the web-server smoke suite: every apps/web-server/scripts/*-smoke.ts.
-// Usage: npm run smokes [-- [--jobs N] <filter>...]. Filters are substrings
-// of the smoke file name; any match includes the smoke. N smokes run at once,
-// the slowest of the last run first; N defaults to half the machine's cores,
-// at most 6, and --jobs 1 runs them one after another in name order. Each
-// smoke has its own temp HOME and USERPROFILE and asks the system for free
-// ports, so they do not collide.
+// Usage: npm run smokes [-- [--jobs N] [--group I/N] [--list] <filter>...].
+// Filters are substrings of the smoke file name; any match includes the
+// smoke. N smokes run at once, the slowest of the last run first; N defaults
+// to half the machine's cores, at most 6, and --jobs 1 runs them one after
+// another in name order. --group I/N keeps, of the matching smokes in name
+// order, every N-th one starting at the I-th (I from 1), so N runs with I
+// from 1 to N run each smoke exactly once, and neighbours in name order (often
+// one heavy family) land in different groups: GitHub's CI runs the suite as
+// such groups side by side to stay inside its time limit. --list prints the
+// names it would run and runs none. Each smoke has its own temp HOME and
+// USERPROFILE and asks the system for free ports, so they do not collide.
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -20,8 +25,11 @@ const require = createRequire(import.meta.url);
 // --import needs a URL, not a bare path — a Windows drive-letter path would be misparsed.
 const tsxLoader = pathToFileURL(require.resolve("tsx/esm")).href;
 
+const USAGE = "Usage: npm run smokes [-- [--jobs N] [--group I/N] [--list] <filter>...]";
 const args = process.argv.slice(2);
 let jobs = Math.max(1, Math.min(6, Math.floor(os.availableParallelism() / 2)));
+let group;
+let listOnly = false;
 const filters = [];
 for (let i = 0; i < args.length; i++) {
 	if (args[i] === "--jobs" || args[i].startsWith("--jobs=")) {
@@ -31,19 +39,35 @@ for (let i = 0; i < args.length; i++) {
 			console.error(`--jobs needs a whole number of at least 1, got: ${jobsArg ?? "nothing"}`);
 			process.exit(1);
 		}
+	} else if (args[i] === "--group" || args[i].startsWith("--group=")) {
+		const groupArg = args[i] === "--group" ? args[++i] : args[i].slice("--group=".length);
+		const match = /^(\d+)\/(\d+)$/.exec(groupArg ?? "");
+		group = match && { index: Number(match[1]), count: Number(match[2]) };
+		if (!group || group.index < 1 || group.index > group.count) {
+			console.error(`--group needs I/N, two whole numbers with I from 1 to N, got: ${groupArg ?? "nothing"}\n${USAGE}`);
+			process.exit(1);
+		}
+	} else if (args[i] === "--list") {
+		listOnly = true;
 	} else if (args[i].startsWith("-")) {
-		console.error(`unknown option: ${args[i]}\nUsage: npm run smokes [-- [--jobs N] <filter>...]`);
+		console.error(`unknown option: ${args[i]}\n${USAGE}`);
 		process.exit(1);
 	} else filters.push(args[i]);
 }
-const smokes = fs.readdirSync(smokeDir)
+const matching = fs.readdirSync(smokeDir)
 	.filter((name) => name.endsWith("-smoke.ts"))
 	.filter((name) => filters.length === 0 || filters.some((f) => name.includes(f)))
 	.sort();
+const smokes = group ? matching.filter((_, k) => k % group.count === group.index - 1) : matching;
 
 if (smokes.length === 0) {
-	console.error(filters.length ? `No smokes match: ${filters.join(", ")}` : `No smokes found in ${smokeDir}`);
+	console.error(matching.length > 0 ? `Group ${group.index}/${group.count} holds none of the ${matching.length} matching smokes`
+		: filters.length ? `No smokes match: ${filters.join(", ")}` : `No smokes found in ${smokeDir}`);
 	process.exit(1);
+}
+if (listOnly) {
+	for (const name of smokes) console.log(name);
+	process.exit(0);
 }
 
 // Each smoke's time in the last run, so a parallel run starts the slow ones
@@ -277,6 +301,7 @@ const retried = results.filter((result) => result.retried);
 // clock of a parallel run goes on its own line.
 console.log(`\n${results.length - failed.length}/${results.length} passed in ${Math.round(total)}s`);
 if (jobs > 1) console.log(`${Math.round((Date.now() - startedAt) / 1000)}s on the clock, ${jobs} at a time`);
+if (group) console.log(`Group ${group.index}/${group.count}: ${smokes.length} of ${matching.length} smokes, one in every ${group.count} in name order, starting with number ${group.index}`);
 if (skipped.length > 0) console.log(`${skipped.length} passed with parts SKIPPED: ${skipped.map((result) => result.name).join(", ")}`);
 if (elsewhere.length > 0) console.log(`${elsewhere.length} passed with parts only another system runs: ${elsewhere.map((result) => result.name).join(", ")}`);
 if (retried.length > 0) console.log(`${retried.length} retried once (reasons above): ${retried.map((result) => result.name).join(", ")}`);

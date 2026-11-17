@@ -70,11 +70,12 @@ const mainProgram = () => [realPathOf(process.execPath), realPathOf(FILE_WORKER)
 const listingJob = process.env[LISTING_JOB];
 if (listingJob) {
 	const asked = JSON.parse(listingJob) as ListingJob;
+	let answer: unknown;
 	if ("start" in asked) {
 		const calls = watchListings();
 		await import("../src/index.js");
 		await waitForServer({ exitCode: null }, `http://127.0.0.1:${process.env.PORT}`, 60_000);
-		console.log(JSON.stringify({ box: roomBoxAvailable(), calls: calls.length }));
+		answer = { box: roomBoxAvailable(), calls: calls.length };
 	} else {
 		const calls = watchListings(() => {
 			if ("fails" in asked) throw new Error("the listing failed");
@@ -82,9 +83,12 @@ if (listingJob) {
 		});
 		const first = fileProgram();
 		const again = fileProgram();
-		console.log(JSON.stringify({ files: first.files, again: again.files, command: first.command, rules: rulesFor(first.files), calls: calls.length }));
+		answer = { files: first.files, again: again.files, command: first.command, rules: rulesFor(first.files), calls: calls.length };
 	}
-	process.exit(0);
+	// A pipe's write can still be under way when this returns (Node 20 on a Mac),
+	// and exiting then cuts the line: the job ends only once it is written.
+	process.stdout.write(`${JSON.stringify(answer)}\n`, () => process.exit(0));
+	await new Promise(() => {});
 }
 
 /** Runs one listing job in a child of this smoke, and gives back the last line it printed. */

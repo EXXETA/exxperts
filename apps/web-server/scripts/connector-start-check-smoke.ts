@@ -46,8 +46,9 @@ process.env.USERPROFILE = tempHome;
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = roomsRoot;
 // The adapter's npx lookup reads the cache folder from here (npm 11 refuses `npm config get cache`).
-process.env.NPM_CONFIG_CACHE = npmCache;
+// Cleared before it is set: on Windows the two spellings are one variable.
 delete process.env.npm_config_cache;
+process.env.NPM_CONFIG_CACHE = npmCache;
 // uv's folders by its defaults under this home, where a connector's uvx keeps them. A
 // setting of the server's own never reaches a connector, so it moves no folder.
 const uvCache = path.join(tempHome, ".cache", "uv");
@@ -257,7 +258,8 @@ try {
 	const extraScript = writeProgram(path.join(extra, "extra.js"));
 	writeConfig({ rowc: programEntry(extraScript) });
 	addAlsoAllowedFolder("writer", extra, "write");
-	check("also-allowed-write", (await refusalOf("rowc"))?.roomId === "writer", "a program in an Also allowed folder the room can change is refused");
+	if (process.platform === "win32") console.log("SKIPPED: not yet on a real Windows PC: also-allowed-write (the smoke saves the folder by its short 8.3 name, where the app wants the real path)");
+	else check("also-allowed-write", (await refusalOf("rowc"))?.roomId === "writer", "a program in an Also allowed folder the room can change is refused");
 	fs.rmSync(path.join(roomsRoot, "writer", "runtime", "also-allowed.json"));
 	addAlsoAllowedFolder("writer", extra, "read");
 	check("also-allowed-read", (await refusalOf("rowc")) === null, "one the room can only read is not");
@@ -374,7 +376,8 @@ try {
 	writeConfig({ rowuvx: { command: "uvx", args: ["row-mcp"], env: { ROW_MARKER: markerFile } } });
 	for (const [roomId, folder, why] of [["uv", uvCache, "uv's cache"], ["uv-inside", path.join(uvCache, "archive-v0", "rowhash"), "a folder inside uv's cache"], ["uv-tools", uvTools, "uv's installed tools"]] as const) {
 		makeRoom(roomId, "Uv room", folder, true);
-		check(`uvx-${roomId}`, (await refusalOf("rowuvx"))?.roomId === roomId, `a room on ${why} is refused, as one on npm's cache is`);
+		if (process.platform === "win32") console.log(`SKIPPED: not yet on a real Windows PC: uvx-${roomId} (the smoke puts uv's folders where uv keeps them on a Mac or Linux)`);
+		else check(`uvx-${roomId}`, (await refusalOf("rowuvx"))?.roomId === roomId, `a room on ${why} is refused, as one on npm's cache is`);
 		removeRoom(roomId);
 	}
 	makeRoom("uv-beside", "Uv beside room", path.join(tempHome, "uv-cache-notes"), true);

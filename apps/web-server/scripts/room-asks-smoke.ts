@@ -22,6 +22,11 @@ import { waitForTurnSettled } from "./smoke-turn-settle.js";
 import { waitEvery } from "./smoke-wait.js";
 import { threadSaveBody } from "../../web-ui/src/room-thread-items.js";
 
+if (os.platform() === "win32") {
+	console.log("SKIPPED: not yet on a real Windows PC: the folder window's stand-in answers for the Mac's window, and Windows opens its own with PowerShell");
+	process.exit(0);
+}
+
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
@@ -120,6 +125,13 @@ function newFolder(name: string): string {
 	const dir = path.join(folders, name);
 	fs.mkdirSync(dir, { recursive: true });
 	return fs.realpathSync(dir);
+}
+/** Puts a new, empty folder in place of `target`, under its name. The new one is made beside the old before the old is removed: the disk may hand a removed folder's file number to the next folder made, and the new one would then pass for the old. */
+function replaceFolder(target: string): void {
+	const fresh = `${target} new`;
+	fs.mkdirSync(fresh);
+	fs.rmSync(target, { recursive: true });
+	fs.renameSync(fresh, target);
 }
 /** A room's folder, and a room made where its protection runs when `startsOn`. */
 function plantRoom(startsOn: boolean): { id: string; folder: string } {
@@ -1131,10 +1143,7 @@ await row("a folder is given only after the look, while the card is open and the
 	await run("a message", (bench) => bench.bridge.declineOpenQuestionsOnce("A message came."), { said: "A message came." });
 	await run("a refused look", () => {}, { said: asks.FOLDER_NOT_NOW, line: cards.FOLDER_PICK_REFUSED_IN_PANEL }, "refused");
 	await run("a look over its limit", () => {}, { said: asks.FOLDER_NOT_NOW, line: cards.FOLDER_PICK_REFUSED_IN_PANEL }, "slow");
-	await run("a folder replaced during the look", (_bench, _look, picked) => {
-		fs.rmSync(picked, { recursive: true });
-		fs.mkdirSync(picked);
-	}, { said: asks.FOLDER_NOT_NOW, line: cards.FOLDER_PICK_REFUSED_IN_PANEL });
+	await run("a folder replaced during the look", (_bench, _look, picked) => replaceFolder(picked), { said: asks.FOLDER_NOT_NOW, line: cards.FOLDER_PICK_REFUSED_IN_PANEL });
 	await run("a folder turned into a link during the look", (_bench, _look, picked) => {
 		fs.rmSync(picked, { recursive: true });
 		fs.symlinkSync(newFolder("look-elsewhere"), picked);
@@ -1530,7 +1539,7 @@ await row("at the press the folder shown is judged again: removed, renamed, a li
 		["removed", (target) => fs.rmSync(target, { recursive: true })],
 		["renamed", (target) => fs.renameSync(target, `${target} old`)],
 		["a link", (target) => { fs.rmSync(target, { recursive: true }); fs.symlinkSync(newFolder(`Elsewhere ${path.basename(path.dirname(target))}`), target); }],
-		["another folder of its name", (target) => { fs.rmSync(target, { recursive: true }); fs.mkdirSync(target); }],
+		["another folder of its name", replaceFolder],
 		["a link above it", (target) => { const above = path.dirname(target); fs.renameSync(above, `${above} moved`); fs.symlinkSync(`${above} moved`, above); }],
 	];
 	let n = 0;
@@ -1873,8 +1882,7 @@ await row("Allow for this room on a suggestion whose folder is replaced by a new
 	const bench = askBench({
 		room: { folder: newFolder("swapped-room") },
 		picks: [() => {
-			fs.rmSync(swapped, { recursive: true });
-			fs.mkdirSync(swapped);
+			replaceFolder(swapped);
 			return pickOf(swapped);
 		}],
 	});

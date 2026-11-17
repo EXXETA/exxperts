@@ -606,7 +606,7 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 			} else if (/\.(ts|tsx|mjs|cjs|js)$/.test(entry.name)) {
 				const source = fs.readFileSync(place, "utf8");
 				if (/(room-box\/|\.\/)windows\/(box-request|personal-folders|command-line)|["']\.\.?\/(box-request|personal-folders|command-line)/.test(source)) callers.push(place);
-				for (const [, specifier] of source.matchAll(VALUE_IMPORT)) valueImports.push(`${path.relative(src, place)}: ${specifier}`);
+				for (const [, specifier] of source.matchAll(VALUE_IMPORT)) valueImports.push(`${path.relative(src, place).split(path.sep).join("/")}: ${specifier}`);
 			}
 		}
 	};

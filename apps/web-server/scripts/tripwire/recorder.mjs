@@ -2,8 +2,8 @@
 // or the runtime, it wraps every function `node:fs`, `fs.promises` and
 // `node:fs/promises` export, the `.native` realpaths included, and
 // child_process's starts. Each call whose path, `cwd` or arguments fall under
-// TRIPWIRE_WATCH is kept with its stack; every other call passes through
-// untouched. TRIPWIRE_WATCH and TRIPWIRE_IGNORE are folder lists joined by the
+// TRIPWIRE_WATCH is kept with its stack, but for what an rmSync calls inside
+// (below, at insideRmSync); every other call passes through untouched. TRIPWIRE_WATCH and TRIPWIRE_IGNORE are folder lists joined by the
 // path delimiter, where a `*` segment stands for any one name; the longest
 // entry a path falls under decides, so an ignored tree can hold a watched one. The list is walked, never typed,
 // so a function Node adds is wrapped too. Then module.syncBuiltinESMExports()
@@ -82,12 +82,24 @@ function keep(record) {
 	state.records.push({ ...record, route: serving.getStore(), stack: stack() });
 }
 
+// Node 20 carries out rmSync in JavaScript, through the very functions wrapped
+// here, where a later Node makes one native call: the rmSync is kept, and
+// nothing it calls inside is kept again. It is synchronous and runs no code but
+// Node's own, so a count of the rmSyncs under way is exact.
+let insideRmSync = 0;
+
 function wrapFs(original, key, label) {
 	const wrapper = new Proxy(original, {
 		apply(target, self, args) {
-			const touched = fsPaths(key, args);
+			const touched = insideRmSync > 0 ? [] : fsPaths(key, args);
 			if (touched.length > 0) keep({ kind: "fs", call: label, paths: touched });
-			return Reflect.apply(target, self, args);
+			if (key !== "rmSync") return Reflect.apply(target, self, args);
+			insideRmSync += 1;
+			try {
+				return Reflect.apply(target, self, args);
+			} finally {
+				insideRmSync -= 1;
+			}
 		},
 		construct(target, args, newTarget) {
 			const touched = fsPaths(key, args);

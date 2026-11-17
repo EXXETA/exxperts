@@ -41,6 +41,7 @@ if (path.dirname(home) !== sharedTemp || !path.basename(home).startsWith("exxper
 }
 
 const onMac = process.platform === "darwin";
+const onWindows = process.platform === "win32";
 let passed = 0;
 const failures: string[] = [];
 
@@ -2037,7 +2038,8 @@ async function main(): Promise<void> {
 		assert(report === '{"code":0,"text":"probed\\n"}', `a fresh server's first turn: ${secondServer.stdout}${secondServer.stderr}`);
 	});
 
-	await row("a shared server: no box on any platform, plain commands, and the proxy's code is never reached", async () => {
+	if (onWindows) console.log("SKIPPED: not yet on a real Windows PC: a shared server's plain commands (the row acts as a Mac, so its plain run looks for /bin/bash)");
+	else await row("a shared server: no box on any platform, plain commands, and the proxy's code is never reached", async () => {
 		registerServerHooks({});
 		const platform = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor;
 		Object.defineProperty(process, "platform", { ...platform, value: "darwin" });

@@ -314,7 +314,8 @@ const readSkill = (name: string): ScriptedCall => ({ name: "read_skill", args: {
 // Windows only: the folder's 8.3 short name, or null when the volume has none.
 function shortName(dir: string): string | null {
 	if (process.platform !== "win32") return null;
-	const result = spawnSync("cmd", ["/c", `for %I in ("${dir}") do @echo %~sI`], { encoding: "utf8" });
+	// Handed to cmd as written, as Node's own shell spawn does: Node's quoting would keep the inner quotes in the path.
+	const result = spawnSync("cmd", ["/d", "/s", "/c", `"for %I in ("${dir}") do @echo %~sI"`], { encoding: "utf8", windowsVerbatimArguments: true });
 	const short = String(result.stdout ?? "").trim();
 	return short && short.toLowerCase() !== dir.toLowerCase() ? short : null;
 }

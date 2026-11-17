@@ -46,6 +46,7 @@ const { createEditToolDefinition, createFindToolDefinition, createGrepToolDefini
 const { createPersistentRoomCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, resolvePersistentRoomEffectiveWorkspacePolicy, writePersistentRoomDefaultCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");
 const { createPersistentRoomWorkspaceTools } = await import("../src/persistent-room-workspace-tools.js");
 const { ROOM_FOLDER_MOVED, ROOM_FOLDER_REFUSED } = await import("../src/room-files.js");
+const { placeRefused } = await import("../src/path-shapes.js");
 const { saveAlsoAllowedFolders } = await import("../src/room-box/also-allowed.js");
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -205,6 +206,12 @@ try {
 		assert(!/command/i.test(error) && error.includes("Tell the person"), `${name} ${label}: the refusal must offer no command and say to tell the person, got ${JSON.stringify(error)}`);
 		assert(!outcome.text.includes("needle"), `${name} ${label} must not return content`);
 	};
+	// A colon past the drive names a file's data stream, so its shape is refused before any call on the disk.
+	const refusedAsPlace = async (name: string, params: { path: string } & Record<string, unknown>, label: string) => {
+		const outcome = await run(name, params);
+		assert(outcome.error === placeRefused(params.path), `${name} ${label} must be refused as a place a room can't use, got ${JSON.stringify(outcome).slice(0, 300)}`);
+		assert(!outcome.text.includes("needle"), `${name} ${label} must not return content`);
+	};
 	const open = async (name: string, params: Record<string, unknown>, expected: string, label: string) => {
 		const outcome = await run(name, params);
 		// A link in the room is refused whatever it points at.
@@ -359,7 +366,8 @@ try {
 	await refusedWith("write", { path: "fresh-mcp/.mcp.json", content: "x" }, READ_ONLY, "a new .mcp.json");
 	assert(!fs.existsSync(path.join(project, "fresh-mcp", ".mcp.json")), "a refused write must not create a .mcp.json");
 	if (process.platform === "win32") {
-		for (const spelled of [".mcp.json.", ".mcp.json ", ".mcp.json::$DATA"]) await refusedWith("write", { path: spelled, content: "x" }, READ_ONLY, `${JSON.stringify(spelled)}, which Windows opens as .mcp.json`);
+		for (const spelled of [".mcp.json.", ".mcp.json "]) await refusedWith("write", { path: spelled, content: "x" }, READ_ONLY, `${JSON.stringify(spelled)}, which Windows opens as .mcp.json`);
+		await refusedAsPlace("write", { path: ".mcp.json::$DATA", content: "x" }, "\".mcp.json::$DATA\", which Windows opens as .mcp.json");
 		assert(fs.readFileSync(path.join(project, ".mcp.json"), "utf8") === "kindmark .mcp.json\n", "refused writes must leave .mcp.json alone");
 	} else console.log("SKIPPED: the .mcp.json. cases (only Windows opens .mcp.json. as .mcp.json)");
 	await refusedWith("read", { path: "~/.zshrc" }, REFUSAL, "the home folder's .zshrc");
@@ -792,7 +800,8 @@ try {
 			assert(!fs.existsSync(ranHook), `a hooks path of ${hooksPath}: a commit must run nothing the room wrote`);
 			plantHook(path.join(room.root, "hooks", "pre-commit"), ranHook);
 			gitIn(room.root, "commit", "-q", "--allow-empty", "-m", "b");
-			assert(fs.existsSync(ranHook), `the control: with a hooks path of ${hooksPath}, a commit runs the top's hooks/pre-commit`);
+			if (process.platform === "win32" && hooksPath.startsWith("x/L/")) console.log(`SKIPPED: not yet on a real Windows PC: the control for a hooks path of ${hooksPath} (git there reads the .. by its text, not through the link)`);
+			else assert(fs.existsSync(ranHook), `the control: with a hooks path of ${hooksPath}, a commit runs the top's hooks/pre-commit`);
 		}
 		{
 			const room = topRoom("top-git-include");
@@ -940,7 +949,7 @@ try {
 	if (process.platform === "win32") {
 		await refused("read", { path: "keys/server.key." }, "a key named with a trailing dot");
 		await refused("read", { path: "keys/server.key " }, "a key named with a trailing space");
-		await refused("read", { path: "keys/server.key::$DATA" }, "a key named by its data stream");
+		await refusedAsPlace("read", { path: "keys/server.key::$DATA" }, "a key named by its data stream");
 	} else {
 		console.log("SKIPPED: the trailing dot, space and stream key names (only Windows opens them as the key)");
 	}

@@ -23,7 +23,9 @@ const {
 	writePersistentRoomCapabilityPolicy,
 	writePersistentRoomDefaultCapabilityPolicy,
 } = await import("../src/persistent-room-workspace-policy.js");
-const { roomBoxAvailable } = await import("../src/room-box/box-available.js");
+const { noteWindowsBoxState, roomBoxAvailable, windowsBoxChecks } = await import("../src/room-box/box-available.js");
+// A server notes its Windows check's answer at start (index.ts); here no check runs, so the smoke notes a computer without protection.
+if (windowsBoxChecks()) noteWindowsBoxState("off");
 
 const agentId = "workspace-policy-smoke-room";
 

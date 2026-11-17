@@ -6,7 +6,8 @@
 // The box itself runs only where it is meant to be tested: on a Mac, unless
 // `--no-box` is given. With it, starting a box fails at once, as a box that
 // won't start does, so every row but the box's own walls still runs and says
-// so; those print as skipped. On any other computer every row is skipped.
+// so; those print as skipped, as do the page's rows where no browser is
+// installed. On any other computer every row is skipped.
 // Run: npm run smokes -- room-protection
 import fs from "node:fs";
 import http from "node:http";
@@ -307,6 +308,16 @@ async function row(name: string, body: () => Promise<void>): Promise<void> {
 	}
 }
 
+const { chromium } = await import("playwright");
+const browserPath = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
+/** A row that drives the page: where no browser is installed it is left out, and the summary line says so. */
+async function pageRow(name: string, body: () => Promise<void>): Promise<void> {
+	if (browserPath && fs.existsSync(browserPath)) return row(name, body);
+	assert(ROWS[rowAt++] === name, `rows run in the order ROWS lists them: ${name}`);
+	skipped += 1;
+	console.log(`  skip ${name} (Chromium not installed)`);
+}
+
 console.log(`room protection smoke${realBox ? "" : " (--no-box: a box never starts)"}`);
 try {
 	await row(ROWS[0], async () => {
@@ -424,10 +435,7 @@ try {
 		assert(hers.status === 200 && hers.body?.settings?.autoApprove === true, `turned off by her, the state it read: ${hers.status} ${JSON.stringify(hers.body)}`);
 	});
 
-	await row(ROWS[5], async () => {
-		const { chromium } = await import("playwright");
-		const browserPath = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
-		assert(browserPath && fs.existsSync(browserPath), "Chromium is not installed (PLAYWRIGHT_BROWSERS_PATH)");
+	await pageRow(ROWS[5], async () => {
 		const { id } = await newRoom("Page Chip Room");
 		const browser = await chromium.launch();
 		try {
@@ -482,10 +490,7 @@ try {
 		}
 	});
 
-	await row(ROWS[6], async () => {
-		const { chromium } = await import("playwright");
-		const browserPath = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
-		assert(browserPath && fs.existsSync(browserPath), "Chromium is not installed (PLAYWRIGHT_BROWSERS_PATH)");
+	await pageRow(ROWS[6], async () => {
 		/** A room whose commands are off and may be asked for: made where protection can't run (acting as Linux), so they don't start on, then given its folder on this Mac. */
 		const commandsOffRoom = async (name: string): Promise<string> => {
 			process.env.EXXPERTS_TEST_SHELL_PLATFORM = "linux";
