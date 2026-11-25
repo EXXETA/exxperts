@@ -47,6 +47,17 @@
 	font-size: 13px;
 	color: var(--muted);
 }
+/* A part of the fold: a label's size, a step stronger, with the larger gap above it. */
+.connector-form-sub {
+	margin: 8px 0 -6px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--fg);
+}
+/* The trust line is a warning, so it reads in the text colour; the hints around it stay muted. */
+.cli-note.connector-form-warning {
+	color: var(--fg);
+}
 .connector-form-field input {
 	width: 100%;
 	border: 1px solid var(--border-soft);
@@ -75,35 +86,30 @@
 	outline-offset: 2px;
 	border-color: var(--exx-focus);
 }
-.connector-form-kind {
-	display: flex;
-	gap: 18px;
-	font-size: 13px;
-	color: var(--fg);
-}
-.connector-form-kind label {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	cursor: pointer;
-}
-.connector-form-kind input[type="radio"] {
-	margin: 0;
-}
 .connector-outcome-error {
 	color: var(--exx-danger, #e85858) !important;
 }
 
-/* Connectors, "Your connectors": each connector is one row of the box. The
-   row's open button holds the logo, the name over a one-line status and the
-   rooms link, and ends 8 px before the button slot, so its hover and focus
-   ring never wrap the row's own buttons. Every slot is the same width, so a
-   row that gains or loses its button moves nothing. */
-.connector-list {
-	--connector-slot: 104px;
+/* Connectors, "Your connectors": each connector is one row of the box, and
+   every row is the same height in every state. Its open button holds the
+   logo, the name over a one-line status, the rooms link, and under them the
+   one line every row keeps room for (what to do while signing in, what went
+   wrong); it ends 8 px before the button slot, so its hover and focus ring
+   never wrap the row's own button. Every slot is the same width, and the
+   button sits at its right end, so a row that gains, loses or changes its
+   button moves nothing. */
+/* The dots' colours, shared by the list and a connector's page. */
+.connector-list,
+.connector-page {
 	--connector-dot-ok: var(--exx-success);
 	--connector-dot-warn: var(--exx-warning);
 	--connector-dot-err: var(--exx-danger);
+}
+.connector-list {
+	--connector-slot: 148px;
+	/* The name and status take this much, the line under them the next. */
+	--connector-top: 42px;
+	--connector-note: 18px;
 	display: grid;
 	/* An auto column grows to the widest row's unbreakable line and pushes the
 	   rows past the box; this one stays the box's width and the line is cut. */
@@ -113,9 +119,16 @@
 .settings-dialog .connector-list {
 	padding-block: 8px;
 }
-/* Light: the success and warning tokens are under 3:1 on the box and on an
-   opened row, so the dots take a darker step of each. */
-:root[data-theme="light"] .connector-list {
+/* While the last row has no line under it, the box ends over the room kept for
+   one, so its space below matches above; the box clips that room's tint on hover. */
+.settings-dialog .connector-list {
+	overflow: clip;
+}
+.settings-dialog .connector-list > .connector-item:last-child:has(.connector-item-note:empty) {
+	margin-bottom: calc(-1 * var(--connector-note));
+}
+/* Light: the success and warning tokens are under 3:1 on the box, so the dots take a darker step of each. */
+:root[data-theme="light"] :is(.connector-list, .connector-page) {
 	--connector-dot-ok: #2e8545;
 	--connector-dot-warn: #a86a00;
 }
@@ -123,43 +136,31 @@
 	margin: 0 -8px;
 	border-radius: 10px;
 }
-/* An opened row is one raised container, header and details together. */
-.connector-item.is-open {
-	background: var(--panel);
-	box-shadow: inset 0 0 0 1px var(--exx-divider);
-}
-/* In dark the page colour is darker than the box, so an opened row would look
-   sunken: there it is the box lifted by 5% of the text colour. The lift takes
-   the usual muted text under 4.5:1 (4.0), so muted text inside it is one step
-   lighter (4.7). The remove question's red tint and the hover tint lower it
-   the same way. */
-:root:not([data-theme="light"]) .connector-item:is(.is-open, .is-asking, :has(.connector-item-hit:hover)) {
+/* In dark the hover tint takes the usual muted text under 4.5:1 (4.0), so
+   muted text inside it is one step lighter (4.7). */
+:root:not([data-theme="light"]) .connector-item:has(.connector-item-hit:hover) {
 	--connector-open-muted: color-mix(in srgb, var(--exx-text) 20%, var(--exx-text-muted));
 	--muted: var(--connector-open-muted);
-}
-:root:not([data-theme="light"]) .connector-item.is-open {
-	background: color-mix(in srgb, var(--fg) 5%, var(--settings-box-fill));
-}
-.connector-item.is-asking {
-	background: color-mix(in srgb, var(--error) 4%, transparent);
 }
 .connector-item-row {
 	position: relative;
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	gap: 8px;
-	min-height: 70px;
 	padding: 0 8px 0 0;
 }
 .connector-item-hit {
-	display: flex;
+	display: grid;
+	grid-template-columns: 32px minmax(0, 1fr) auto;
+	grid-template-rows: var(--connector-top) var(--connector-note);
 	align-items: center;
-	gap: 14px;
+	gap: 2px 14px;
 	flex: 1 1 auto;
+	box-sizing: border-box;
 	min-width: 0;
-	align-self: stretch;
+	height: calc(var(--connector-top) + var(--connector-note) + 16px);
 	margin: 0;
-	padding: 0 0 0 8px;
+	padding: 8px 0 6px 8px;
 	border: 0;
 	border-radius: 10px;
 	background: none;
@@ -168,19 +169,24 @@
 	text-align: left;
 	cursor: pointer;
 }
-/* The tint covers the row's own click area, the box the focus ring draws: on a
-   desktop it ends before the button and "⋯", on a phone it is the whole row.
-   An opened row is already one raised container. */
-.connector-item:not(.is-open):not(.is-asking) .connector-item-hit:hover {
-	background: color-mix(in srgb, var(--fg) 3%, transparent);
+/* The tint covers the row's own click area, the box the focus ring draws, and
+   ends before the button. Only where a pointer hovers: a tap would leave it on. */
+@media (hover: hover) {
+	.connector-item-hit:hover {
+		background: color-mix(in srgb, var(--fg) 3%, transparent);
+	}
 }
 .connector-item-hit:focus-visible {
 	outline: 2px solid var(--exx-focus);
 	outline-offset: -2px;
 }
+.connector-item-hit > .connector-avatar {
+	grid-row: 1;
+}
 .connector-item-text {
 	display: flex;
-	flex: 1 1 auto;
+	grid-column: 2;
+	grid-row: 1;
 	flex-direction: column;
 	gap: 2px;
 	min-width: 0;
@@ -194,18 +200,20 @@
 	line-height: 1.5;
 	color: var(--fg);
 	white-space: nowrap;
+	/* One line: a tag with no room left wraps out of sight, whole, rather than cut. */
+	flex-wrap: wrap;
+	height: 1.5em;
+	overflow: hidden;
 }
-/* When the line is short of room the tag is cut first, then the name. */
+/* When the line is short of room the tag goes first, then the name is cut. */
 .connector-item-name-text {
-	flex: 0 0 auto;
+	flex: 0 1 auto;
 	max-width: 100%;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 .connector-item-name .connector-dir-kind {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
+	flex: 0 0 auto;
 }
 .connector-item-state {
 	display: flex;
@@ -231,6 +239,25 @@
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+/* The line every row keeps room for, under the status at the status's edge
+   and as wide as the row's open button; one line, cut with "…" when it is
+   longer, and read in full on the connector's page. */
+.connector-item-note {
+	grid-column: 2 / -1;
+	grid-row: 2;
+	min-width: 0;
+	padding-left: 17px;
+	font-size: 12.5px;
+	line-height: var(--connector-note);
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* A step of the danger colour towards the text keeps 4.5:1 on a hovered row's darker fill too. */
+.connector-item-note.is-error {
+	color: color-mix(in srgb, var(--exx-danger) 85%, var(--fg));
 }
 /* Every dot sits in a 10 px box so the status words line up on every row: a
    solid 8 px dot, or the program's 10 px ring with a 1.5 px stroke. */
@@ -263,7 +290,8 @@
 }
 .connector-rooms-link {
 	display: inline-flex;
-	flex: 0 0 auto;
+	grid-column: 3;
+	grid-row: 1;
 	align-items: center;
 	gap: 5px;
 	margin-right: 8px;
@@ -277,19 +305,17 @@
 .connector-rooms-link .disclosure-chevron {
 	width: 10px;
 	height: 10px;
-	transition: transform 150ms ease;
 }
-.connector-item-hit[aria-expanded="true"] .connector-rooms-link .disclosure-chevron {
-	transform: rotate(90deg);
-}
+/* The button centres on the name and status, above the row's line. */
 .connector-item-side {
 	display: flex;
 	flex: 0 0 auto;
 	align-items: center;
-	gap: 6px;
+	margin-top: calc(8px + var(--connector-top) / 2 - var(--exx-btn-h) / 2);
 }
 .connector-item-slot {
 	display: flex;
+	justify-content: flex-end;
 	width: var(--connector-slot);
 }
 .connector-slot-btn {
@@ -297,7 +323,7 @@
 	width: 100%;
 	min-width: 80px;
 }
-.connector-ask-btns .connector-slot-btn {
+.connector-item-slot .connector-slot-btn {
 	width: auto;
 }
 /* Busy: the words keep the button's width, hidden under a small spinner. */
@@ -309,66 +335,18 @@
 	inset: 0;
 	margin: auto;
 }
-/* A row with no menu keeps the place of its "⋯", so the rows' sides line up. */
-span.connector-item-more {
-	display: inline-block;
-	width: var(--exx-btn-h);
-	height: var(--exx-btn-h);
-}
-/* Remove, asked in place of the row's right side: the question and what it
-   means on two lines level with the name and the status, then Keep and Remove. */
-/* Asking, the name and status keep their width (a long name stops at 45%) and
-   the question wraps in what is left. */
-.connector-item.is-asking .connector-item-hit {
-	flex: 0 1 auto;
-	max-width: 45%;
-}
-.connector-ask {
-	display: flex;
-	flex: 1 1 0;
-	align-items: center;
-	gap: 8px;
-	min-width: 0;
-	/* 12 px from the status and from Keep: a three-room line fits on one line at desktop width. */
-	margin-left: 4px;
-}
-.connector-ask-q {
-	display: flex;
-	flex: 1 1 auto;
-	flex-direction: column;
-	min-width: 0;
-	margin-right: 4px;
-	font-size: 13px;
-	line-height: 1.45;
-	color: var(--fg);
-	text-wrap: balance;
-}
-.connector-ask-q strong {
-	font-size: 14px;
-	font-weight: 600;
-	line-height: 1.5;
-}
-/* The menu's line above Remove, in the card's line colour. */
-.connector-menu-sep {
-	display: block;
-	height: 1px;
-	margin: 4px 8px;
-	background: var(--exx-divider);
-}
-.connector-ask-btns {
-	display: flex;
-	flex: 0 0 auto;
-	gap: 8px;
+/* The Add connector menu's items, which sit in a portal outside the pane. */
+.connector-menu-item {
+	white-space: nowrap;
 }
 .connector-row-error {
 	margin: 0;
-	padding: 0 16px 12px 54px;
 	font-size: 13px;
 	color: var(--exx-danger);
 }
 /* The page's own sentences never end on a word alone: a paragraph fills its
    lines, and a short line under a name splits evenly. */
-:is(.connector-value, .connector-custom-form) p,
+.connector-custom-form p,
 .connector-note,
 .connector-row-error,
 .connector-notice,
@@ -384,56 +362,195 @@ span.connector-item-more {
 	font-size: 13px;
 	text-overflow: ellipsis;
 }
-/* The opened row's details: label and value lines, the labels at the name's edge. */
-.connector-details {
-	display: grid;
-	grid-template-columns: 112px minmax(0, 1fr);
-	gap: 8px 16px;
-	align-items: baseline;
-	padding: 2px 16px 16px 54px;
-}
-.connector-label {
-	font-size: 13px;
-	color: var(--muted);
-}
-.connector-value {
+/* A connector's own page (connector-page.tsx): a back link, its logo, name
+   and tag, its facts as settings rows with each value and its one step on the
+   right, its tools in two groups, and Remove as the last row. */
+.connector-page {
+	display: flex;
+	flex-direction: column;
 	min-width: 0;
-	font-size: 14px;
-	line-height: 1.5;
+}
+.connector-page-head {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+}
+.connector-page-head > .connector-avatar {
+	margin-top: 2px;
+}
+/* With no line under the name, the tile, the name and its tag share one centre line. */
+.connector-page-head:not(:has(.pane-head-text > p)) {
+	align-items: center;
+}
+.connector-page-head:not(:has(.pane-head-text > p)) > :is(.connector-avatar, .connector-dir-kind) {
+	margin-top: 0;
+}
+/* The name's header sits in the head's row, so the head carries the space under it. */
+.connector-page-head {
+	margin-bottom: 4px;
+}
+.settings-dialog .connector-page-head > .pane-head {
+	flex: 0 1 auto;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+}
+.settings-dialog .connector-page-head + .settings-group,
+.settings-dialog .connector-page-head + .connector-notice + .settings-group {
+	margin-top: 20px;
+}
+/* The list row's gap before the tag: the head's 12 px less 4. */
+.connector-page-head > .connector-dir-kind {
+	margin-top: 9px;
+	margin-left: -4px;
+}
+/* A fact's value and its one step, on the right of its row; a long address breaks anywhere. */
+/* Never narrower than its button: a long address wraps anywhere instead. */
+.connector-fact-value {
+	display: flex;
+	flex: 0 1 auto;
+	align-items: center;
+	gap: 12px;
+	max-width: 65%;
+	font-size: 13px;
 	color: var(--fg);
+	text-align: right;
 	overflow-wrap: anywhere;
 }
-.connector-value p {
-	margin: 0;
+.connector-fact-value .connector-slot-btn {
+	flex: 0 0 auto;
+	width: auto;
 }
-.connector-value p + p {
+.connector-fact .settings-row-main {
+	min-width: 0;
+}
+.connector-fact-line {
+	display: block;
+	color: var(--fg);
+}
+.connector-fact-edit .settings-row-main {
+	flex: 1 1 auto;
+	display: grid;
+	gap: 8px;
+}
+/* A group of tools, one step under the section's own title. */
+.settings-dialog .connector-tools-kicker {
+	margin: 20px 0 8px;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--muted);
+}
+/* The section's title and its Check connection share one centre line. */
+.settings-dialog .connector-tools-group > .group-head {
+	align-items: center;
+}
+.settings-dialog .connector-tools-group > .group-head + .connector-tools-kicker {
 	margin-top: 4px;
+}
+/* What the choices reach, under the section's title. */
+.settings-dialog .connector-tools-line {
+	margin: 0 0 4px;
+	text-wrap: pretty;
+}
+/* Above the tools: the unreadable line, and Reset choices beside it, under it where the width runs out. */
+.settings-dialog .connector-tools-unreadable {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	margin: 4px 0 8px;
+}
+.settings-dialog .connector-tools-unreadable > p {
+	flex: 1 1 260px;
+	margin: 0;
+	color: var(--exx-danger);
+	text-wrap: pretty;
+}
+/* A tool's choice at the row's end: "Default" in quiet words, then its menu or, where it can't change here, its words. */
+.connector-tool {
+	align-items: center;
+}
+.connector-choice {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-left: auto;
+}
+.connector-choice-words {
+	font-size: 13px;
+	white-space: nowrap;
+}
+/* The words in force and, unseen, every choice's words share one cell: the widest sets the button's width. */
+.connector-choice-face {
+	display: inline-grid;
+}
+.connector-choice-face > * {
+	grid-area: 1 / 1;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+.connector-choice-sizer {
+	visibility: hidden;
+}
+.connector-choice-btn :is(.connector-slot-label, .connector-choice-sizer)::after {
+	content: "";
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin: 0 1px 3px 8px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(45deg);
+}
+.connector-choice-item[aria-checked="true"] {
+	font-weight: 600;
+}
+.connector-choice-item[aria-checked="true"]::before {
+	content: "✓";
+	margin-right: 6px;
+}
+.connector-choice-item[aria-checked="false"]::before {
+	content: "✓";
+	margin-right: 6px;
+	visibility: hidden;
+}
+.connector-page-error {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 12px;
+	margin-top: 12px;
+}
+.connector-page > .connector-notice {
+	margin: 4px 0 10px;
+}
+.connector-address {
+	overflow-wrap: anywhere;
 }
 /* A room's name never breaks across two lines. */
 .connector-rooms a {
 	white-space: nowrap;
 	color: var(--fg);
 }
-.connector-command code {
+code.connector-command {
 	font-family: var(--exx-font-mono);
-	font-size: 13px;
+	font-size: 12px;
 	color: var(--muted);
-}
-.connector-way {
-	margin-top: 8px;
+	overflow-wrap: anywhere;
 }
 /* In the address edit's grid, its gap already spaces the button; Cancel and
    Save stand further off, so Remove stays with the line above it. */
 .connector-edit > .connector-way {
 	justify-self: start;
-	margin-top: 0;
 }
 .connector-edit > .connector-way + .connector-edit-foot {
 	margin-top: 10px;
 }
 .connector-note {
-	grid-column: 1 / -1;
-	margin: 0;
+	margin: 12px 0 0;
 	font-size: 13px;
 	color: var(--muted);
 }
@@ -446,14 +563,6 @@ span.connector-item-more {
 	text-decoration: underline;
 	text-underline-offset: 2px;
 	cursor: pointer;
-}
-.connector-tool-names {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-	gap: 4px 16px;
-	margin: 8px 0 0;
-	padding: 0;
-	list-style: none;
 }
 .connector-tech {
 	margin-top: 6px;
@@ -471,11 +580,17 @@ span.connector-item-more {
 	gap: 12px;
 	margin-top: 6px;
 }
+/* Copy ends the line on the text edge (--exx-btn-inset-sm), as the rows' box leaves room for its ring. */
+.connector-tech-body > .rs-btn:last-child {
+	margin-right: calc(-1 * var(--exx-btn-inset-sm));
+}
 .connector-tech-body code {
 	flex: 1;
 	font-size: 12px;
 	color: var(--muted);
 	overflow-wrap: anywhere;
+	/* A program's own lines stay lines. */
+	white-space: pre-wrap;
 }
 .connector-edit {
 	display: grid;
@@ -500,9 +615,6 @@ span.connector-item-more {
 	margin: 0;
 	font-size: 13px;
 	color: var(--muted);
-}
-.connector-edit .connector-row-error {
-	padding: 0;
 }
 /* Cancel and Save at their own size, to the right under the field. */
 .connector-edit-foot {
@@ -546,10 +658,9 @@ span.connector-item-more {
 .connector-list-section > .group-head:has(+ .settings-empty) {
 	margin-bottom: 0;
 }
-/* Touch: the row menu's items are 44 px; "⋯", a header's "×" and the row's
-   buttons are 44 px themselves (01-base.css). */
+/* Touch: the Add connector menu's items are 44 px; the row's buttons are 44 px themselves (01-base.css). */
 @media (pointer: coarse) {
-	/* The row menu sits in a portal, outside the row, so its items carry their own class. */
+	/* The menu sits in a portal, outside the pane, so its items carry their own class. */
 	.connector-menu-item {
 		min-height: 44px;
 	}
@@ -563,101 +674,94 @@ span.connector-item-more {
 		animation: none;
 	}
 }
-/* Phone: no rooms link (a tap opens the row), and the button and "⋯" sit
-   level with the name line; the status has the row's full width under them,
-   so a row with a button is 11 px taller than the 74 px of one without. */
+/* Phone: the rooms' words step aside (a tap opens the connector's page) and
+   the button sits level with the name line, which runs up to the button's own
+   width; the status and the line every row keeps room for start at the name's
+   edge. Every row keeps the room a button takes, so a row that gains one is no taller. */
 @media (max-width: 760px) {
+	.connector-list {
+		--connector-top: calc(21px + 11px + 2px + 19px);
+	}
+	/* The rooms' words step aside; their "›" stays at the status line's end, so a row shows it opens. */
 	.connector-rooms-link {
+		align-self: end;
+		margin: 0 0 4px;
+	}
+	.connector-rooms-words {
 		display: none;
 	}
 	.connector-item-row {
-		min-height: 74px;
 		padding: 0;
 	}
 	.connector-item-hit {
-		padding: 16px 8px;
+		height: calc(var(--connector-top) + var(--connector-note) + 2px + 24px);
+		padding: 12px 8px;
 	}
-	/* The button and "⋯" are 44 px on a phone (01-base.css): centred on the
-	   name line (21 px, 16 px down), they end 48.5 px down, so the status
-	   starts under them, on every row. */
+	/* The name line keeps clear of the button, which is 44 px here (01-base.css). */
 	.connector-item-name {
-		padding-right: calc(var(--connector-slot) + 6px + var(--exx-btn-h) + 12px);
 		margin-bottom: 11px;
 	}
-	/* A row with no button keeps the name clear of "⋯" only. */
-	.connector-item-row:not(:has(.connector-slot-btn)) .connector-item-name {
-		padding-right: calc(var(--exx-btn-h) + 12px);
+	.connector-item-row:has(.connector-slot-btn) .connector-item-name {
+		padding-right: calc(var(--connector-slot-now, var(--connector-slot)) + 12px);
 	}
-	/* The button and "⋯" are both 44 px here, so with a button or without,
-	   they centre on the name line (21 px, under the row's 16 px top padding). */
+	.connector-item-note {
+		padding-left: 0;
+	}
+	/* The button centres on the name line (21 px, under the row's 12 px top padding). */
 	.connector-item-side {
 		position: absolute;
-		top: 4.5px;
+		top: calc(12px + 10.5px - var(--exx-btn-h) / 2);
 		right: 8px;
-	}
-	/* Remove on a phone goes under the row at its full width. */
-	.connector-item.is-asking .connector-item-row {
-		flex-wrap: wrap;
-		row-gap: 12px;
-		padding-bottom: 12px;
-	}
-	/* The button and "⋯" give way to the question, so the name line takes the width. */
-	.connector-item.is-asking .connector-item-name {
-		padding-right: 0;
-	}
-	.connector-item.is-asking .connector-item-hit {
-		flex: 1 0 100%;
-		max-width: none;
-	}
-	.connector-ask {
-		flex: 1 0 100%;
-		flex-direction: column;
-		align-items: stretch;
-		gap: 12px;
-		margin: 0;
-		padding: 0 8px;
-	}
-	.connector-ask-q {
 		margin: 0;
 	}
-	.connector-ask-btns {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-	}
-	/* Cancel and Save under a field share the width, as Keep and Remove do. */
+	/* Cancel and Save under a field share the width. */
 	.connector-edit-foot {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 	}
-	.connector-details {
-		column-gap: 12px;
-		padding: 2px 12px 14px;
+	/* A fact's label and line take the row's width; its value goes under them, and its step under the value. */
+	.connector-fact {
+		flex-wrap: wrap;
+		row-gap: 8px;
 	}
-	.connector-row-error {
-		padding: 0 12px 12px;
+	.connector-fact > .settings-row-main {
+		flex: 1 0 100%;
+	}
+	/* Copy then reaches the row's edge: it is pulled only as far as the box's 12 px side leaves its ring, 8 px. */
+	.connector-tech-body > .rs-btn:last-child {
+		margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 8px));
+	}
+	.connector-fact-value {
+		flex-wrap: wrap;
+		max-width: none;
+		text-align: left;
+	}
+	/* The page's way back stands where the shell's "All settings" link stood, drawn as it is, with a 44 px tap height. */
+	.connector-page > .connector-page-back {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+		margin: -12px 0 -2px;
+		font-size: 14px;
+		color: var(--fg-soft);
+	}
+	/* A connector's page has its own way back, so the shell's link to the list steps aside. */
+	.settings-dialog-pane:has(.connector-page) > .settings-dialog-back {
+		display: none;
 	}
 }
-/* Under 480 px each label sits above its value, and values take the full width. */
+/* Under 480 px the remove button sits beside the name, and the value runs the row's full width under both. */
 @media (max-width: 480px) {
-	.connector-details {
-		display: block;
-		padding: 2px 16px 16px;
+	.connector-header-row {
+		grid-template-columns: minmax(0, 1fr) auto;
 	}
-	.connector-label {
-		display: block;
-		font-size: 12px;
-		line-height: 1.4;
+	.connector-header-row > .connector-form-field + .connector-form-field {
+		grid-column: 1 / -1;
+		grid-row: 2;
 	}
-	.connector-label + .connector-value {
-		margin-top: 2px;
-	}
-	/* The note is a paragraph, and the page's own paragraph rule outranks a single class. */
-	.connector-value + .connector-label,
-	.connector-details .connector-note {
-		margin-top: 12px;
-	}
-	.connector-note {
-		display: block;
+	.connector-header-row > .connector-header-remove {
+		grid-column: 2;
+		grid-row: 1;
 	}
 }
 

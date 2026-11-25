@@ -59,9 +59,9 @@ p { line-height: 1.5; }
 </head>
 <body>
 <main>
-<h1>Exxperts is running, but this tab is not signed in</h1>
-<p>Start the app with the <code>exxperts</code> command. It opens a browser tab that signs itself in automatically.</p>
-<p>If no tab opens, run it again and use the link the command prints. If <code>exxperts</code> says it is already running, stop it with Ctrl+C in its terminal first, or reuse the sign-in link that terminal printed. Signing in needs that link once; after that this browser stays signed in.</p>
+<h1>This browser isn't signed in to exxperts</h1>
+<p>In the desktop app, choose Open in Browser. If you started exxperts in a terminal, open the sign-in link it printed there.</p>
+<p>After that, this browser stays signed in.</p>
 </main>
 </body>
 </html>

@@ -7,7 +7,7 @@
  */
 import type { ChatItem } from "./types";
 import { ASK_FOLDER, ASK_FOR_COMMANDS_TOOL_NAME, ASK_FOR_FOLDER_TOOL_NAME, ASK_OUTCOME, ASKED_FOR_COMMANDS, ASKED_FOR_FOLDER, type AskOutcome, commandAsShown, type FolderAskAccess, type FolderLasts, pageCardAddress, RUN_OUTSIDE_BOX_TOOL_NAME } from "../../web-server/src/room-box/card-text";
-import { commandAborted, commandDeclined, connectorNotRunLine, isCommandStep, lastName, nobodyToApprove, pageNotOpened, stoppedBeforeAnswer, stoppedBeforeAsking } from "./step-lines";
+import { commandAborted, commandDeclined, connectorCallRefused, connectorNotRunLine, isCommandStep, lastName, nobodyToApprove, pageNotOpened, stoppedBeforeAnswer, stoppedBeforeAsking } from "./step-lines";
 import { approvalAsking, declinedAnswer, splitFencedBrief } from "./components/Approval";
 import { connectorApprovalSubject } from "../../web-server/src/room-approval-titles";
 
@@ -44,12 +44,14 @@ const commandHead = (text: string) => text.trim().slice(0, COMMAND_HEAD);
  * command step with that command that has not asked yet, since the steps of
  * a message are prepared in order. The run question carries its command
  * whole, as shown; one saved before it carries it under its fence, clipped
- * when long. Any other question belongs to the newest
+ * when long. The run-outside question is its step's until a yes. Any other question belongs to the newest
  * step still at work that has not asked; a step the page does not draw (a
  * hand-off) leaves its question a row of its own, never an earlier step's.
  * A room's folder or commands card belongs to the earliest ask step of its
  * kind that has none, and a page card to the earliest page step for its
- * address.
+ * address. A connector question that names its call belongs to that call's
+ * step and no other, so two calls at once each keep their own; one saved
+ * before questions named their call is placed as any other question.
  */
 function askOwner(pieces: WorkPiece[], ask: ApprovalItem): Extract<WorkPiece, { kind: "step" }> | null {
 	const command = askedCommand(ask);
@@ -60,9 +62,20 @@ function askOwner(pieces: WorkPiece[], ask: ApprovalItem): Extract<WorkPiece, { 
 	// A page card names its address: it is the earliest page step for that address, ended or not.
 	if (ask.uiKind === "site" && ask.address !== undefined) return open.find((piece) => piece.item.name === "fetch_url" && pageCardAddress(String(piece.item.args?.url ?? "")) === ask.address) ?? null;
 	if (ask.uiKind === "run") return open.find((piece) => piece.item.name === "bash" && commandAsShown(String(piece.item.args?.command ?? "")) === ask.command) ?? null;
+	// Asking, or answered no: its step says so. After a yes the step runs, and the question keeps a row of its own, which says it ran outside.
+	if (ask.uiKind === "outside") return askOpen(ask) || declinedAnswer(ask.done) ? open.find((piece) => isOutsideAskStep(piece.item, ask)) ?? null : null;
 	if (command !== null) return open.find((piece) => isCommandStep(piece.item.name) && commandHead(String(piece.item.args?.command ?? "")) === commandHead(command)) ?? null;
+	if (ask.uiKind === "connector" && ask.toolCallId) return open.find((piece) => piece.item.callId === ask.toolCallId) ?? null;
+	// A connector's form asks for details, not whether the step may run: its answer never says the step was not done, so it keeps a row of its own.
+	if (ask.uiKind === "form") return null;
 	const newest = open.at(-1);
 	return newest && !isCommandStep(newest.item.name) && (newest.item.status === "writing" || newest.item.status === "running") ? newest : null;
+}
+
+/** Whether a run-outside question is this step's: its command, at work or ended by that question's no. A call refused before it asked never takes one. */
+function isOutsideAskStep(item: ToolItem, ask: ApprovalItem): boolean {
+	if (item.name !== RUN_OUTSIDE_BOX_TOOL_NAME || commandAsShown(String(item.args?.command ?? "")) !== ask.command) return false;
+	return item.status === "running" || (!askOpen(ask) && commandDeclined(item.result));
 }
 
 /** The pieces of one stretch, each question in the row of the step that asks it, or a row of its own. */
@@ -168,7 +181,7 @@ export function stepState(item: ToolItem, ask: ApprovalItem | undefined): StepSt
 	if (item.status === "running") return "running";
 	if (item.status === "done") return "done";
 	if (item.status === "stopped" || (item.status === "error" && (commandAborted(item.result) || stoppedBeforeAsking(item.result) || stoppedBeforeAnswer(item.result)))) return "stopped";
-	if (item.status === "error" && (commandDeclined(item.result) || nobodyToApprove(item.result) || connectorNotRunLine(item) !== null || pageNotOpened(item) !== null)) return "denied";
+	if (item.status === "error" && (commandDeclined(item.result) || nobodyToApprove(item.result) || connectorNotRunLine(item) !== null || connectorCallRefused(item) || pageNotOpened(item) !== null)) return "denied";
 	return "failed";
 }
 
@@ -222,8 +235,9 @@ export function stepKind(name: string): StepKind {
 const PROGRAMS_WITH_VERBS = new Set(["git", "npm", "pnpm", "yarn", "npx", "node", "python", "python3", "docker", "kubectl", "cargo", "go", "make", "brew", "pip", "pip3", "gh", "dotnet", "mvn", "gradle"]);
 
 /** What a command runs, in a word or two: "git status", "ls", "npm test". The whole command shows when its row is opened. */
-export function commandName(command: string): string {
-	const words = command.trim().split(/\s+/).filter((word) => !/^[A-Z_][A-Z0-9_]*=/.test(word));
+function commandName(tokens: ShellToken[]): string {
+	// A quote that never closes takes in the rest of the line, so its word is read up to its first space.
+	const words = tokens.flatMap((token) => ("op" in token ? [] : [token.unclosed ? token.word.split(/\s/)[0] : token.word])).filter((word) => !/^[A-Z_][A-Z0-9_]*=/.test(word));
 	const first = lastName(words[0] ?? "");
 	if (!first) return "a command";
 	const second = words[1] ?? "";
@@ -246,10 +260,10 @@ export type CommandAction =
 	| { kind: "git-diff"; file: string }
 	| { kind: "git-log" }
 	| { kind: "run"; program: string }
-	/** `line`: the command's first line, with " …" after it when more lines follow. */
+	/** `line`: the command's first line after the settings it begins with, with " …" after it when more lines follow. */
 	| { kind: "line"; line: string };
 
-type ShellToken = { word: string } | { op: string };
+type ShellToken = { word: string; unclosed?: boolean } | { op: string };
 
 /**
  * A command line's words with their quotes taken off, and the operators between them. A backslash escapes only a space, a quote or an operator's character, so a Windows path keeps its own.
@@ -261,7 +275,7 @@ function shellTokens(command: string): ShellToken[] {
 	let inWord = false;
 	let quote: "'" | '"' | null = null;
 	const endWord = () => {
-		if (inWord) tokens.push({ word });
+		if (inWord) tokens.push(quote ? { word, unclosed: true } : { word });
 		word = "";
 		inWord = false;
 	};
@@ -332,13 +346,29 @@ function commandOperands(words: string[], valueOptions: ReadonlySet<string>): { 
 // Far more than a row shows on a desktop, where the row cuts the line with "…"; on a phone the row takes the lines it needs.
 const LINE_HEAD = 300;
 
+// A value's variable ("$A", "${A:-b}"); a form that can hold a space or a quote of another kind ("${A:-$(b)}", "$'a b'") is no plain one.
+const VARIABLE = String.raw`\$(?:\w|\{[^{}$"'\x60\\()]*\})`;
+// A space, or a line that goes on with the next.
+const GAP = String.raw`(?:\s|\\\r?\n)`;
+// A setting before what runs ("NAME=value", its value plain, quoted or a variable) and the ";", "&&", space or line end after it.
+// A value that runs something itself ("$(date)", a backtick) is no plain setting, nor is one an operator or a comment follows.
+const SETTING = new RegExp(String.raw`^[A-Za-z_]\w*=(?:'[^']*'|"(?:[^"\\$\x60]|\\[^]|${VARIABLE})*"|\\.|${VARIABLE}|[^\s'"\\$\x60;&|<>()])*(?:${GAP}*(?:;|&&)${GAP}*|${GAP}+|$)(?!${GAP}|[;&|<>#])`);
+
+/** A command from what it runs on, without the settings at its start; nothing but settings stays as it is. */
+function withoutSettings(command: string): string {
+	let rest = command;
+	for (let setting = SETTING.exec(rest); setting; setting = SETTING.exec(rest)) rest = rest.slice(setting[0].length);
+	return rest || command;
+}
+
 export function commandAction(command: string): CommandAction {
-	const lines = command.trim().split(/\r?\n/);
+	const whole = command.trim();
+	const lines = withoutSettings(whole).split(/\r?\n/);
 	// The token reader takes a line break for a space, so a script of several lines is named by its first line before any of its words are read as one program's.
-	if (lines.length > 1) return { kind: "line", line: `${lines[0].trimEnd().slice(0, LINE_HEAD)} …` };
+	if (/\n/.test(whole)) return { kind: "line", line: `${lines[0].trimEnd().slice(0, LINE_HEAD)}${lines.length > 1 ? " …" : ""}` };
 	let tokens = shellTokens(command);
 	// Decided on the whole line, before "cd src &&" is cut: "cd src && npm test" is named by itself, unless plain words below say what it does ("cd src && ls").
-	const run: CommandAction = tokens.some((token) => "op" in token) ? { kind: "line", line: lines[0].slice(0, LINE_HEAD) } : { kind: "run", program: commandName(command) };
+	const run: CommandAction = tokens.some((token) => "op" in token) ? { kind: "line", line: lines[0].slice(0, LINE_HEAD) } : { kind: "run", program: commandName(tokens) };
 	// "cd src && ls" lists src's folder as much as "ls src" does.
 	let cdFolder = "";
 	if (tokens.length > 3 && "word" in tokens[0] && tokens[0].word === "cd" && "word" in tokens[1] && "op" in tokens[2] && tokens[2].op === "&&") {
@@ -391,6 +421,8 @@ export function commandKind(action: CommandAction): StepKind {
 
 /** A step's kind, a command's from what it does. */
 export function itemKind(item: ToolItem): StepKind {
+	// A connector's own tool, called directly, is a connector's step as the `mcp` tool's is: the room names its connector on it.
+	if (typeof item.details?.connectorId === "string") return "connector";
 	return isCommandStep(item.name) ? commandKind(commandAction(String(item.args?.command ?? ""))) : stepKind(item.name);
 }
 
@@ -516,16 +548,21 @@ export function foldedWords(steps: ReadonlyArray<{ item: ToolItem; ask?: Approva
 	if (query) return `Searched the web for ${query}`;
 	const counts = new Map<StepKind, number>();
 	let failed = 0;
+	let stopped = 0;
 	let notRun = 0;
 	for (const step of steps) {
 		const state = stepState(step.item, step.ask);
 		if (state === "failed") failed++;
-		else if (state === "denied" || state === "stopped") notRun++;
+		else if (state === "stopped") stopped++;
+		else if (state === "denied") notRun++;
 		else counts.set(itemKind(step.item), (counts.get(itemKind(step.item)) ?? 0) + 1);
 	}
 	const phrases = [...counts.entries()].map(([kind, count]) => KIND_PHRASES[kind](count));
 	const words = phrases.length <= 3 ? phrases.join(", ") : `${phrases.slice(0, 3).join(", ")} and ${phrases.length - 3} more`;
-	const tail = [failed ? `${failed} failed` : "", notRun ? `${notRun} not run` : ""].filter(Boolean).join(", ");
-	const all = words && tail ? `${words} · ${tail}` : words || (notRun && !failed ? `${notRun === 1 ? "1 step" : `${notRun} steps`} not run` : tail) || "worked";
+	const ends = ([[failed, "failed"], [stopped, "stopped"], [notRun, "not run"]] as const).filter(([count]) => count > 0);
+	const tail = ends.map(([count, end]) => `${count} ${end}`).join(", ");
+	// With nothing done and nothing failed, the first count says that it counts steps.
+	const alone = failed ? tail : ends.map(([count, end], at) => `${at === 0 ? plural(count, "step", "steps") : count} ${end}`).join(", ");
+	const all = words && tail ? `${words} · ${tail}` : words || alone || "worked";
 	return all.charAt(0).toUpperCase() + all.slice(1);
 }

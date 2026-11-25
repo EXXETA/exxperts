@@ -10,12 +10,13 @@ import { ROOM_FOLDER_REFUSED, roomFence } from "../../room-files.js";
 import { type AlsoAllowedFolder, readAlsoAllowed, saveAlsoAllowedFolders } from "../also-allowed.js";
 import { BoxFault, FolderMoved, type SiteAnswer, type SiteAsk } from "../box-process.js";
 import { boxRefusedLine } from "../card-text.js";
+import { appDataPlaces } from "../box-closed.js";
 import { soundFolders, unsoundForEveryone } from "../folder-offer.js";
 import type { AnswerFolders } from "../folder-question.js";
 import { gitIdentity, makeTurnPlaces, removePlace, sweepOldTemps, type TurnPlaces } from "./box-root.js";
 import { COMMAND_WRAPPER } from "./command-line.js";
 import { folderWait } from "./folder-wait.js";
-import { commandRequest, localPath, type WindowsBoxRequest } from "./box-request.js";
+import { atOrInside, commandRequest, localPath, type RequestResult, type WindowsBoxRequest, type WindowsRoomRules } from "./box-request.js";
 import { type CommandEnd, machineRules, type StartAnswer, type WindowsBox, windowsStartAnswer, WindowsWorker, type WorkerSites } from "./start-check.js";
 
 /**
@@ -37,7 +38,7 @@ export interface RoomFolders {
 export interface WindowsRoomBoxOptions {
 	roomId: string;
 	conversationId: () => string;
-	/** What the room allows right now, its approved skills' folders included (`approvedSkills`); read at each command. */
+	/** What the room allows right now, its skills' folders included (`roomSkillFolders`); read at each command. */
 	rights: () => { canChangeFiles: boolean; skillFolders: readonly string[] };
 	/** The running answer's own folders, read at each command beside the room's list. */
 	answer?: () => AnswerFolders;
@@ -107,7 +108,7 @@ function holdsLink(folder: string): boolean {
 }
 
 /**
- * An approved skill's folder as the protection may be given it, read and run, by
+ * A skill's folder as the protection may be given it, read and run, by
  * its real path: only a plain folder, never a link, that is a full local path as
  * the box names it, and whose tree holds no link or junction, since what a link
  * inside a read-only place lets a command read is unknown on Windows. Undefined
@@ -256,6 +257,23 @@ async function prove(run: Run, proxyRefused: () => readonly SiteAsk[]): Promise<
 	}
 }
 
+/**
+ * The request, with the app's data shut where a grant reaches it. The app's
+ * data is shut by never being granted, but an agent folder a developer setting
+ * moved into a folder the system's lists grant, as ProgramData or a PATH folder,
+ * would be read through it: there it is shut by name, and a skill of its
+ * library goes unopened, since nothing is granted inside a shut place. A PATH
+ * folder that holds it leaves PATH, as for any shut place it holds.
+ */
+export function shutAppData(rules: WindowsRoomRules, request: (rules: WindowsRoomRules) => RequestResult, appData: readonly string[]): RequestResult {
+	const first = request(rules);
+	if (!first.ok) return first;
+	const grants = [...first.request.filesystem.readwritePaths, ...first.request.filesystem.readonlyPaths];
+	const reached = appData.filter((place) => grants.some((grant) => atOrInside(place, grant)));
+	if (reached.length === 0) return first;
+	return request({ ...rules, denied: [...rules.denied, ...reached], skillFolders: rules.skillFolders.filter((folder) => !reached.some((place) => atOrInside(folder, place))) });
+}
+
 /** One room's box for its commands: at most one run at a time, and a room runs one turn at a time. */
 export class WindowsRoomBox {
 	/** Its commands are Windows PowerShell 5.1 (../../room-command-tool.ts reads it). */
@@ -350,7 +368,7 @@ export class WindowsRoomBox {
 					const rights = this.options.rights();
 					const skillFolders = rights.skillFolders.flatMap((folder) => windowsSkillFolder(folder, run.box.requestPath) ?? []);
 					const rules = machineRules(run.box, { folder: folders.folder, canChangeFiles: rights.canChangeFiles }, folders.alsoAllowed, run.places, skillFolders);
-					const built = commandRequest(rules, { wrapper: COMMAND_WRAPPER, text: command, timeoutMs: timeoutSeconds * 1000, proxyPort: run.proxyPort });
+					const built = shutAppData(rules, (each) => commandRequest(each, { wrapper: COMMAND_WRAPPER, text: command, timeoutMs: timeoutSeconds * 1000, proxyPort: run.proxyPort }), appDataPlaces().map(run.box.requestPath));
 					if (built.ok) return built.request;
 					if (built.refused.code === "too-long") throw new Error("This command is longer than Windows lets one command be. Split it into shorter commands.");
 					throw new BoxFault(`the request was refused: ${JSON.stringify(built.refused)}`);
@@ -406,6 +424,11 @@ export class WindowsRoomBox {
 		const run = await untilStopped(this.ensureRun(), signal);
 		if (this.turn !== turn) throw new Error("aborted");
 		return run.places.temp;
+	}
+
+	/** The running answer's temp for its commands, by its real path, while a run is open: the file tools say what it is when they refuse it. */
+	ownTemp(): string | undefined {
+		return this.run?.places.temp;
 	}
 
 	/** The file tools never read in the Windows box, so a long output is read with a command. */

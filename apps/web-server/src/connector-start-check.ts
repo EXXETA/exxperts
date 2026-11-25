@@ -22,6 +22,8 @@ import {
 } from "./persistent-room-workspace-policy.js";
 import { roomFence, under } from "./room-files.js";
 import { realPathOf } from "./room-box/box-closed.js";
+import { judgedAgainst } from "./room-box/folder-offer.js";
+import { connectorSearchPath } from "./connector-search-path.js";
 import { shownRoomName } from "./room-name.js";
 
 /** What a connector start runs, as the adapter is about to start it. */
@@ -46,10 +48,13 @@ const INHERITED = new Set(["PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDA
 /** A variable as the connector program gets it. */
 type Variable = (name: string) => string | undefined;
 
+/** The server's own value of an inherited name; PATH as the start widens it (connector-search-path.ts). */
+const inherited = (name: string): string | undefined => (name === "PATH" ? (connectorSearchPath() ?? process.env.PATH) : INHERITED.has(name) ? process.env[name] : undefined);
+
 const variablesOf =
 	(start: ConnectorStart): Variable =>
 	(name) =>
-		start.environment?.[name] || (INHERITED.has(name) ? process.env[name] : undefined) || undefined;
+		start.environment?.[name] || inherited(name) || undefined;
 
 /** The home the connector's npm and uv read, by its own HOME (USERPROFILE on Windows). */
 const homeOf = (variable: Variable): string => variable(process.platform === "win32" ? "USERPROFILE" : "HOME") || os.homedir();
@@ -104,7 +109,8 @@ async function roomOf(roomsRoot: string, roomId: string): Promise<ConnectorStart
 
 /**
  * The places every room can change files in now, read from the rooms' own
- * files at each call. A rooms folder that can't be read is no proof that no
+ * files at each call. What every room's folder is judged against is read once
+ * for the call and dropped at its end. A rooms folder that can't be read is no proof that no
  * room can change anything, so that read fails the start.
  */
 export async function roomWritePlaces(): Promise<WritePlace[]> {
@@ -117,6 +123,7 @@ export async function roomWritePlaces(): Promise<WritePlace[]> {
 		throw error;
 	}
 	const places: WritePlace[] = [];
+	const against = judgedAgainst();
 	for (const entry of entries) {
 		if (!entry.isDirectory() || !ROOM_ID.test(entry.name)) continue;
 		const room = await roomOf(roomsRoot, entry.name);
@@ -124,7 +131,7 @@ export async function roomWritePlaces(): Promise<WritePlace[]> {
 		const roomRoot = path.join(roomsRoot, entry.name);
 		places.push({ path: realPathOf(path.join(roomRoot, "runtime", "box")), room });
 		const policy = roomPolicy(entry.name);
-		const fence = policy ? roomFence(policy, () => []) : null;
+		const fence = policy ? roomFence(policy, () => [], undefined, false, undefined, against) : null;
 		if (fence?.room?.access === "write") for (const root of fence.roots()) if (root.access === "write") places.push({ path: realPathOf(root.path), room });
 		// One room's files at a time, so a long list of rooms never holds up other requests.
 		await new Promise((resolve) => setImmediate(resolve));
@@ -132,31 +139,45 @@ export async function roomWritePlaces(): Promise<WritePlace[]> {
 	return places;
 }
 
-const EXECUTABLE_SUFFIXES = process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+const executableSuffixes = (platform: NodeJS.Platform) => (platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""]);
+
+/** The files a command can name, in the order they are looked up: by its path when it has one, else along PATH (on Windows the working folder comes first). */
+function programCandidates(command: string, cwd: string, searchPath: string, platform: NodeJS.Platform): string[] {
+	const folders = searchPath.split(path.delimiter).filter(Boolean);
+	const places = /[\\/]/.test(command) ? [path.resolve(cwd, command)] : [...(platform === "win32" ? [cwd] : []), ...folders].map((folder) => path.resolve(cwd, folder, command));
+	const suffixes = executableSuffixes(platform);
+	return places.flatMap((place) => suffixes.map((suffix) => place + suffix));
+}
 
 /** A file the system would start: on Windows any file, elsewhere one that may be run. */
-function runnable(target: string): boolean {
+function runnable(target: string, platform: NodeJS.Platform): boolean {
 	try {
 		if (!fs.statSync(target).isFile()) return false;
-		if (process.platform !== "win32") fs.accessSync(target, fs.constants.X_OK);
+		if (platform !== "win32") fs.accessSync(target, fs.constants.X_OK);
 		return true;
 	} catch {
 		return false;
 	}
 }
 
+/** The file a command names, looked up as the start looks it up: the first candidate that can run. */
+export function programFile(command: string, cwd: string, searchPath: string, platform: NodeJS.Platform = process.platform): string | null {
+	return programCandidates(command, cwd, searchPath, platform).find((candidate) => runnable(candidate, platform)) ?? null;
+}
+
 /**
- * The file a command names, looked up as the start looks it up: by its path
- * when it has one, else along PATH, taking the first file that can run (on
- * Windows the working folder comes first).
+ * Whether Windows has no file for a command anywhere it looks, as a failed
+ * check asks. A file that can't be read counts as there, since Windows may
+ * still start it (the Microsoft Store's python.exe is one).
  */
-function programFile(command: string, cwd: string, searchPath: string): string | null {
-	const folders = searchPath.split(path.delimiter).filter(Boolean);
-	const candidates = /[\\/]/.test(command) ? [path.resolve(cwd, command)] : [...(process.platform === "win32" ? [cwd] : []), ...folders].map((folder) => path.resolve(cwd, folder, command));
-	for (const candidate of candidates) {
-		for (const suffix of EXECUTABLE_SUFFIXES) if (runnable(candidate + suffix)) return candidate + suffix;
-	}
-	return null;
+export function programMissingOnWindows(command: string, cwd: string, searchPath: string): boolean {
+	return programCandidates(command, cwd, searchPath, "win32").every((candidate) => {
+		try {
+			return !fs.statSync(candidate).isFile();
+		} catch (error) {
+			return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "");
+		}
+	});
 }
 
 const commandName = (command: string) => path.basename(command).toLowerCase().replace(/\.(cmd|exe|bat)$/, "");
@@ -205,6 +226,9 @@ const NPX_PACKAGE_FOLDERS = ["_npx", "_cacache"];
 
 const runsThroughNpx = (command: string | undefined) => command !== undefined && ["npx", "npm"].includes(commandName(command));
 
+/** The programs npx's lookup and first-run install start by name, along the connector's PATH: each is judged by its real file, as the program itself is. */
+const NPX_LOOKUP_PROGRAMS = ["npm", "node"];
+
 /**
  * Where uv keeps what uvx runs, by uv's own defaults: the cache it builds a
  * tool's environment in, and the folder of tools installed with `uv tool
@@ -226,15 +250,23 @@ const runsThroughUv = (command: string | undefined) => command !== undefined && 
  * program, what a launcher is handed to run and the working folder count when
  * they sit inside a room's place. For npx and uv, the folders they run packages
  * from count either way round: each runs a package together with everything
- * installed beside it.
+ * installed beside it. For npx, the programs its lookup starts by name count
+ * by their real files (links followed), and every folder on the PATH counts
+ * too: npm runs a package's install scripts through the shell, which finds
+ * whatever they name there.
  */
 export function connectorStartRefusal(start: ConnectorStart, places: readonly WritePlace[]): ConnectorStartRefusal | null {
 	if (places.length === 0) return null;
 	const cwd = realPathOf(start.cwd ?? process.cwd());
 	const variable = variablesOf(start);
-	const program = programFile(start.command, cwd, variable("PATH") ?? "");
-	const inside = [cwd, ...(program ? [program] : []), ...launchedFiles(start.command, start.args, cwd)].map(realPathOf);
+	// Asked once: working it out looks at folders, and an automounted one answers slowly.
+	const searchPath = variable("PATH") ?? "";
+	const program = programFile(start.command, cwd, searchPath);
 	const configured = start.configuredCommand ?? start.command;
+	const npx = runsThroughNpx(configured);
+	const lookupPrograms = npx ? NPX_LOOKUP_PROGRAMS.flatMap((name) => programFile(name, cwd, searchPath) ?? []) : [];
+	const pathFolders = npx ? searchPath.split(path.delimiter).filter(Boolean).map((folder) => path.resolve(cwd, folder)) : [];
+	const inside = [cwd, ...(program ? [program] : []), ...launchedFiles(start.command, start.args, cwd), ...lookupPrograms, ...pathFolders].map(realPathOf);
 	const packageFolders = [
 		...(runsThroughNpx(configured) ? NPX_PACKAGE_FOLDERS.map((name) => path.join(npmCacheFolder(variable, cwd), name)) : []),
 		...(runsThroughUv(configured) ? uvPackageFolders(variable, cwd) : []),
@@ -256,11 +288,14 @@ async function checkConnectorStart(start: ConnectorStart & { name: string }): Pr
 declare global {
 	/** Where the adapter's patched connect finds the start check (scripts/patch-mcp-adapter.mjs, patch 13 reads it by this name). */
 	var exxpertsConnectorStartCheck: typeof checkConnectorStart | undefined;
+	/** Where the adapter's patched start and npx lookup find a connector's PATH (scripts/patch-mcp-adapter.mjs, patch 14 reads it by this name). */
+	var exxpertsConnectorSearchPath: typeof connectorSearchPath | undefined;
 }
 
-/** Puts the check where the adapter's patched connect finds it, for every connector manager in this process. */
+/** Puts the check, and the PATH it judges by, where the adapter's patched connect finds them, for every connector manager in this process. */
 export function installConnectorStartCheck(): void {
 	globalThis.exxpertsConnectorStartCheck = checkConnectorStart;
+	globalThis.exxpertsConnectorSearchPath = connectorSearchPath;
 }
 
 /** The start refusal an adapter error carries, or null for any other failure. */

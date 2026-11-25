@@ -12,8 +12,8 @@ import type { CheckpointModelWindow, L1bSourceFingerprint } from "./persistent-a
 import { type AgentJson, createPersistentAgentInstance, ensureDir, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, PERSISTENT_AGENTS_ROOT, type PersistentAgentInstance, safeRuntimeThreadId } from "./persistent-agent-store.js";
 import { getPersistentAgentThread, normalizeL1bSourceFingerprint, normalizePersistentAgentRuntimeString, normalizeSha256Hex, piSessionHasNoMessages, threadHasUserVisibleTurns } from "./persistent-agent-threads.js";
 import { budgetState } from "./persistent-agent-memory-files.js";
-import type { CommandsAskState } from "./room-box/folder-question.js";
-import { commandsLine, localFilesWorkspaceWriteLine, persistentAgentPlatformKernel, persistentAgentRuntimeEnvelope, safeWorkspaceCapabilityLabel } from "./persistent-agent-constitution.js";
+import { reachWithoutAsking, type CommandsAskState } from "./room-box/folder-question.js";
+import { commandsLine, localFilesWorkspaceWriteLine, persistentAgentPlatformKernel, persistentAgentRuntimeEnvelope, roomFilesWorkspaceLines, safeWorkspaceCapabilityLabel } from "./persistent-agent-constitution.js";
 import { serverHooks } from "./server-hooks.js";
 
 function buildPromptBudget(l0: string, l1a: string, l1b: string, l2: string): PersistentAgentPromptBudget {
@@ -81,7 +81,7 @@ export function assertPersistentAgentBootPromptFitsWindow(input: {
 		: "Review (most of this room's memory is long-term notes)";
 	const wayOut = withMessages
 		? "This conversation keeps the memory it started with, so a smaller memory reaches only the next one. To continue here, choose a model that can read more at once in Room settings, Model, and switch the open conversation to it."
-		: `To fix it, open Maintain from Home and run ${maintainRun} to make the memory smaller, or choose a model that can read more at once in Room settings, Model. Then open the room again.`;
+		: `To fix it, open Maintain on its card in Rooms and run ${maintainRun} to make the memory smaller, or choose a model that can read more at once in Room settings, Model. Then open the room again.`;
 	// The instructions are part of "setup" and the one part the user can
 	// shorten by hand, from the pane, without a model. The refused room holds
 	// a standby thread whose frozen boot still carries the long text, so the
@@ -325,7 +325,14 @@ Your name is now **${displayName}**. If the constitution or memory call you by a
 // Read live, so it wins over the frozen line that allowed absolute paths.
 const ASKS_LIVE_LINE = "File tools reach only this room's folder and the folders the person allows, whatever an earlier line says about absolute paths. A folder the person names that isn't here is somewhere else on their computer: don't make one of that name here, call ask_for_folder with the folder's full path in folder if you know it, and the person allows it or picks another. To change a file in a folder this room can only read, call ask_for_folder with access change and the person picks that folder again.";
 
-export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy, run: { scheduled?: boolean; asks?: { commands: CommandsAskState } } = {}): string {
+/**
+ * In a room that asks nothing (Auto with protection off): the person's choice,
+ * which wins over every earlier line that says to ask, and where its file tools reach.
+ */
+const asksNothingLine = (canChange: boolean): string => `The person chose to let this room work without asking: don't stop to ask their permission for a file, a command, a website or a connector's tool, whatever an earlier line or a tool's description says. Still ask when what they want is unclear. File tools ${reachWithoutAsking(canChange)}; ask_for_folder isn't needed for that. A path through a link that leads out of this room's folders is followed when you give it; find, grep and ls don't follow links they meet.`;
+
+/** `asksNothing`: the room asks nothing now (`unprotectedRoomOnAuto`). */
+export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy, run: { scheduled?: boolean; asks?: { commands: CommandsAskState }; asksNothing?: boolean } = {}): string {
 	const heading = `
 
 ## Current workspace
@@ -342,14 +349,22 @@ This is live runtime state and wins over any "Active workspace capability" secti
 
 ${noFolder} If earlier context claims a folder, the user has removed or changed it since.`;
 	}
-	const toolNames = capability.availableToolNames.join(", ") || "none";
-	const writeLine = localFilesWorkspaceWriteLine(capability);
 	// Bash writes files too, and a scheduled run, which has none, has no one to ask.
 	const noSilentReplace = !capability.writeEnabled && !capability.bashEnabled
 		? ""
-		: run.scheduled
+		: run.scheduled || run.asksNothing
 			? "Never replace an existing file unless the task names that file: look first, and if it exists, write under a new name and say so.\n\n"
 			: "Before you write a file, look: if a file with that name exists, the user did not ask to change it and you did not make it for them, ask, or write under a new name and say so. Changing or recreating a file the user asked to change, or one you made for them, needs no question.\n\n";
+	// Nobody chooses or changes a room's own files as its folder, so the heading says nothing of a change.
+	if (effectivePolicy.source === "room-files") return `
+
+## Current workspace
+
+This is live runtime state and wins over any "Active workspace capability" section above.
+
+${noSilentReplace}${roomFilesWorkspaceLines(capability.availableToolNames)}`;
+	const toolNames = capability.availableToolNames.join(", ") || "none";
+	const writeLine = localFilesWorkspaceWriteLine(capability);
 	return `${heading}
 
 - Folder name: ${safeWorkspaceCapabilityLabel(capability.workspaceLabel)}
@@ -357,7 +372,7 @@ ${noFolder} If earlier context claims a folder, the user has removed or changed 
 ${writeLine}
 ${commandsLine(run.asks ? run.asks.commands : capability.bashEnabled)}
 
-${run.asks ? `${ASKS_LIVE_LINE}\n\n` : ""}${noSilentReplace}Where files land, so you describe it truthfully: a file you create in the room's folder stays in that folder on the user's computer and does NOT appear in this room's Attachments panel (that panel shows only the room's own files). When you tell the user where a file is, name the folder's actual path; never claim a file in the folder is in the Attachments panel.
+${run.asksNothing ? `${asksNothingLine(capability.writeEnabled)}\n\n` : run.asks ? `${ASKS_LIVE_LINE}\n\n` : ""}${noSilentReplace}A file you make in the room's folder stays there on the user's computer and is not in this room's Attachments panel, which shows only the room's own files. When you tell the user where a file is, name the folder's path. Mention the Attachments panel only when the user asks about it.
 
 If these facts differ from a folder described earlier in this conversation, the user changed it mid-conversation; follow these facts and the usage rules from the boot context.`;
 }

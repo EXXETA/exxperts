@@ -20,11 +20,17 @@
 //                or read only: allowed.
 //  environment   the started program has neither the app's token nor a
 //                provider key nor an app setting, and has what it declares.
+//  npx lookup    a room on a folder first on the entry's own PATH: Test runs
+//                no npm, node or npx from it; a room on a folder on that PATH
+//                holding only what an install script names: nothing runs, and
+//                the status says so; an npm in a folder no room can change,
+//                linked to a file one can: nothing runs; read only, all run.
 //  patch         the adapter patch on scratch copies of the installed
 //                adapter: applies to the package's own text, passes when
-//                applied, and fails the install when its anchor is gone,
-//                it is applied in one place of two, or an earlier version
-//                of the script patched it (that line says to run npm ci).
+//                applied, and fails the install when patch 13's or patch
+//                14's anchor is gone, it is applied in one place of two, or
+//                an earlier version of the script patched it (that line
+//                says to run npm ci).
 //
 // Offline, isolated HOME, agent dir and rooms root, set before any import
 // that reads them.
@@ -371,6 +377,78 @@ try {
 	makeRoom("npm", "Npm room", npmCache, false);
 	const npxAllowed = await testMcpServer("rownpx");
 	check("npx-readonly", npxAllowed.ok === true && startsCount() === before + 1 && lastStart().at === fs.realpathSync(path.join(packageDir, "index.js")), `read-only for the room, Test starts the package from the cache (started ${startsCount() - before} times, error ${JSON.stringify(npxAllowed.error ?? null)})`);
+	removeRoom("npm");
+
+	// The npx lookup runs npm, and npm runs node, along the entry's own PATH: a room's folder first there starts neither.
+	if (process.platform === "win32") console.log("SKIPPED: not yet on a real Windows PC: npx-lookup-path, npx-lookup-path-readonly (the row's npm, node and npx are shell scripts)");
+	else {
+		const tools = path.join(tempHome, "Documents", "tools");
+		const lookupMarker = path.join(tempHome, "markers", "lookup.txt");
+		fs.mkdirSync(tools, { recursive: true });
+		for (const name of ["npm", "node", "npx"]) fs.writeFileSync(path.join(tools, name), `#!/bin/sh\necho ${name} >> '${lookupMarker}'\nexit 1\n`, { mode: 0o755 });
+		const lookups = (): string[] => (fs.existsSync(lookupMarker) ? fs.readFileSync(lookupMarker, "utf8").split("\n").filter(Boolean) : []);
+		writeConfig({ rownpxpath: { command: "npx", args: ["-y", "row-absent-mcp"], env: { ROW_MARKER: markerFile, PATH: `${tools}${path.delimiter}${process.env.PATH}` } } });
+		makeRoom("tools", "Tools room", tools, true);
+		const pathTest = await testMcpServer("rownpxpath");
+		check("npx-lookup-path", pathTest.startRefused?.roomId === "tools" && lookups().length === 0, `with a room on a folder first on the entry's PATH, Test runs no npm, node or npx from it (ran ${JSON.stringify(lookups())}, ${JSON.stringify(pathTest.startRefused ?? pathTest.error ?? null)})`);
+		removeRoom("tools");
+		makeRoom("tools", "Tools room", tools, false);
+		const pathAllowed = await testMcpServer("rownpxpath");
+		check("npx-lookup-path-readonly", !pathAllowed.startRefused && lookups().includes("npm"), `read-only for the room, the lookup runs that folder's npm (ran ${JSON.stringify(lookups())}, ${JSON.stringify(pathAllowed.error ?? null)})`);
+		removeRoom("tools");
+
+		// npm runs a package's install scripts through /bin/sh, which finds what they name along that same
+		// PATH: a room's folder there runs nothing, whatever program it holds. This npm does as npm does.
+		const buildTools = path.join(tempHome, "Documents", "build-tools");
+		const ownNpm = path.join(tempHome, "own-npm");
+		for (const folder of [buildTools, ownNpm]) fs.mkdirSync(folder, { recursive: true });
+		fs.writeFileSync(path.join(buildTools, "row-build-tool"), `#!/bin/sh\necho row-build-tool >> '${lookupMarker}'\n`, { mode: 0o755 });
+		fs.writeFileSync(path.join(ownNpm, "npm"), "#!/bin/sh\n/bin/sh -c row-build-tool\nexit 1\n", { mode: 0o755 });
+		fs.writeFileSync(path.join(ownNpm, "npx"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+		writeConfig({ rownpxscript: { command: "npx", args: ["-y", "row-script-mcp"], env: { ROW_MARKER: markerFile, PATH: [buildTools, ownNpm, process.env.PATH].join(path.delimiter) } } });
+		makeRoom("build", "Build tools room", buildTools, true);
+		const scriptTest = await testMcpServer("rownpxscript");
+		check("npx-install-script-path", scriptTest.startRefused?.roomId === "build" && !lookups().includes("row-build-tool"), `with a room on a folder on the entry's PATH, an install script runs nothing from it (ran ${JSON.stringify(lookups())}, ${JSON.stringify(scriptTest.startRefused ?? scriptTest.error ?? null)})`);
+		check("npx-install-script-status", (await refusalOf("rownpxscript"))?.roomId === "build", "the status names that room too, so the row says it after a reload");
+		removeRoom("build");
+		makeRoom("build", "Build tools room", buildTools, false);
+		const scriptAllowed = await testMcpServer("rownpxscript");
+		check("npx-install-script-readonly", !scriptAllowed.startRefused && lookups().includes("row-build-tool"), `read-only for the room, the install script runs that folder's program (ran ${JSON.stringify(lookups())}, ${JSON.stringify(scriptAllowed.error ?? null)})`);
+		removeRoom("build");
+
+		// The lookup's npm, found in a folder no room can change, may be a link to a file a room can: what it runs counts.
+		const linkedTools = path.join(tempHome, "linked-tools");
+		const npmRoom = path.join(tempHome, "Documents", "npm-room");
+		for (const folder of [linkedTools, npmRoom]) fs.mkdirSync(folder, { recursive: true });
+		fs.writeFileSync(path.join(npmRoom, "npm"), `#!/bin/sh\necho linked-npm >> '${lookupMarker}'\nexit 1\n`, { mode: 0o755 });
+		fs.symlinkSync(path.join(npmRoom, "npm"), path.join(linkedTools, "npm"));
+		fs.writeFileSync(path.join(linkedTools, "npx"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+		writeConfig({ rownpxlinked: { command: "npx", args: ["-y", "row-linked-mcp"], env: { ROW_MARKER: markerFile, PATH: [linkedTools, process.env.PATH].join(path.delimiter) } } });
+		makeRoom("npm-link", "Linked npm room", npmRoom, true);
+		const linkedTest = await testMcpServer("rownpxlinked");
+		check("npx-lookup-linked-npm", linkedTest.startRefused?.roomId === "npm-link" && !lookups().includes("linked-npm"), `an npm linked to a file a room can change runs nothing (ran ${JSON.stringify(lookups())}, ${JSON.stringify(linkedTest.startRefused ?? linkedTest.error ?? null)})`);
+		removeRoom("npm-link");
+		makeRoom("npm-link", "Linked npm room", npmRoom, false);
+		const linkedAllowed = await testMcpServer("rownpxlinked");
+		check("npx-lookup-linked-npm-readonly", !linkedAllowed.startRefused && lookups().includes("linked-npm"), `read-only for the room, the lookup runs that npm (ran ${JSON.stringify(lookups())}, ${JSON.stringify(linkedAllowed.error ?? null)})`);
+		removeRoom("npm-link");
+	}
+	makeRoom("npm", "Npm room", npmCache, false);
+
+	// Two entries, each with its own npm cache, start their own copy of one package, whichever starts first.
+	const ownCopies = ["cache-a", "cache-b"].map((name) => {
+		const copyDir = path.join(tempHome, "npm-caches", name, "_npx", "rowhash", "node_modules", "row-two-mcp");
+		writeProgram(path.join(copyDir, "index.js"));
+		fs.writeFileSync(path.join(copyDir, "package.json"), JSON.stringify({ name: "row-two-mcp", version: "1.0.0", bin: { "row-two-mcp": "index.js" } }));
+		return { cache: path.join(tempHome, "npm-caches", name), file: fs.realpathSync(path.join(copyDir, "index.js")) };
+	});
+	writeConfig(Object.fromEntries(ownCopies.map(({ cache }, index) => [`rowtwo${index}`, { command: "npx", args: ["-y", "row-two-mcp"], env: { ROW_MARKER: markerFile, npm_config_cache: cache } }])));
+	const copiesStarted: string[] = [];
+	for (const index of [0, 1, 0]) {
+		const result = await testMcpServer(`rowtwo${index}`);
+		copiesStarted.push(result.ok ? lastStart().at : `error ${result.error}`);
+	}
+	check("npx-own-caches", JSON.stringify(copiesStarted) === JSON.stringify([ownCopies[0].file, ownCopies[1].file, ownCopies[0].file]), `each entry starts the copy in its own npm cache (started ${JSON.stringify(copiesStarted)})`);
 
 	// ── uvx: a package uvx runs from uv's cache, or from its installed tools ──
 	writeConfig({ rowuvx: { command: "uvx", args: ["row-mcp"], env: { ROW_MARKER: markerFile } } });
@@ -427,6 +505,7 @@ try {
 	const installed = path.dirname(createRequire(import.meta.url).resolve("pi-mcp-adapter/package.json"));
 	const patchScript = path.join(repoRoot, "scripts", "patch-mcp-adapter.mjs");
 	const patchedManager = fs.readFileSync(path.join(installed, "server-manager.ts"), "utf8");
+	const patchedResolver = fs.readFileSync(path.join(installed, "npx-resolver.ts"), "utf8");
 	// The package's own text at the patch's two places, written here by hand.
 	const SPAWN_PATCHED = /      const env = resolveEnv\(definition\.env\);\n      const cwd = resolveConfigPath\(definition\.cwd\);\n(?:[^\n]*\n){3}      transport = new StdioClientTransport\(\{\n        command,\n        args,\n        env,\n        cwd,\n/;
 	const SPAWN_PRISTINE = "      transport = new StdioClientTransport({\n        command,\n        args,\n        env: resolveEnv(definition.env),\n        cwd: resolveConfigPath(definition.cwd),\n";
@@ -434,13 +513,14 @@ try {
 	const ENV_PRISTINE = "function resolveEnv(env?: Record<string, string>): Record<string, string> {\n  // Copy process.env, filtering out undefined values\n$1    if (value !== undefined) {\n";
 	if (!SPAWN_PATCHED.test(patchedManager) || !ENV_PATCHED.test(patchedManager)) throw new Error("the installed adapter does not hold patch 13 as this smoke knows it");
 	let scratches = 0;
-	const scratch = (manager: string): string => {
+	const scratch = (manager: string, resolver = patchedResolver): string => {
 		const adapter = path.join(tempHome, `patch-${(scratches += 1)}`, "node_modules", "pi-mcp-adapter");
 		fs.cpSync(installed, adapter, { recursive: true });
 		// Patch 11 looks for the AI library copy beside the adapter.
 		const copy = path.join(installed, "..", "@earendil-works", "pi-ai");
 		if (fs.existsSync(copy)) fs.cpSync(copy, path.join(adapter, "..", "@earendil-works", "pi-ai"), { recursive: true });
 		fs.writeFileSync(path.join(adapter, "server-manager.ts"), manager);
+		fs.writeFileSync(path.join(adapter, "npx-resolver.ts"), resolver);
 		return adapter;
 	};
 	const runPatch = (adapter: string) => {
@@ -448,15 +528,55 @@ try {
 		return { status: result.status, errors: `${result.stdout}${result.stderr}`.split("\n").filter((line) => line.includes("ERROR")), out: result.stdout };
 	};
 	const managerOf = (adapter: string) => fs.readFileSync(path.join(adapter, "server-manager.ts"), "utf8");
-	const pristine = patchedManager.replace(SPAWN_PATCHED, SPAWN_PRISTINE).replace(ENV_PATCHED, ENV_PRISTINE);
+	const resolverOf = (adapter: string) => fs.readFileSync(path.join(adapter, "npx-resolver.ts"), "utf8");
+	// Patch 14's places, patched and as the package has them, written here by hand.
+	const START_PLACES: Array<[string | RegExp, string]> = [
+		["  async connect(name: string, definition: ServerDefinition, start?: ConnectorStartOptions): Promise<ServerConnection> {\n", "  async connect(name: string, definition: ServerDefinition): Promise<ServerConnection> {\n"],
+		["    const promise = this.createConnection(name, definition, start);\n", "    const promise = this.createConnection(name, definition);\n"],
+		["    definition: ServerDefinition,\n    start?: ConnectorStartOptions\n  ): Promise<ServerConnection> {\n", "    definition: ServerDefinition\n  ): Promise<ServerConnection> {\n"],
+		["    let transport: Transport;\n    let program: ConnectorProgramWatch | undefined;\n", "    let transport: Transport;\n"],
+		[/        \/\/ The lookup may run npm[^\n]*\n[^\n]*\n[^\n]*\n        const resolved = await resolveNpxBinary\(command, args, [^\n]*\n/, "        const resolved = await resolveNpxBinary(command, args);\n"],
+		['        stderr: definition.debug ? "inherit" : "pipe",\n      });\n      program = watchConnectorProgram(transport as StdioClientTransport);\n', '        stderr: definition.debug ? "inherit" : "ignore",\n      });\n'],
+		["      await client.connect(transport, start);\n", "      await client.connect(transport);\n"],
+		["      throw program && error instanceof Error ? Object.assign(error, { connectorProgram: program }) : error;\n", "      throw error;\n"],
+		[/  \/\/ Where the program is looked for[^\n]*\n[^\n]*\n[^\n]*\n\n  if \(!env\) return resolved;\n/, "  if (!env) return resolved;\n"],
+		[/\/\*\* A time limit for a program's first answer[\s\S]*?\n(\/\*\*\n \* Resolve headers)/, "$1"],
+	];
+	const LOOKUP_PLACES: Array<[string | RegExp, string]> = [
+		["  args: string[],\n  env?: Record<string, string>,\n  signal?: AbortSignal\n): Promise<NpxResolution | null> {\n", "  args: string[]\n): Promise<NpxResolution | null> {\n"],
+		["  // One package may sit in each connector's own npm cache.\n  const cacheKey = JSON.stringify([getNpmCacheDir(env), command, ...args]);\n", "  const cacheKey = JSON.stringify([command, ...args]);\n"],
+		["  const resolved = resolveFromNpmCache(parsed.packageSpec, parsed.binName, env);\n", "  const resolved = resolveFromNpmCache(parsed.packageSpec, parsed.binName);\n"],
+		[/  await forceNpxCache\(parsed\.packageSpec, env, signal\);\n[^\n]*\n  signal\?\.throwIfAborted\(\);\n  const resolvedAfterInstall = resolveFromNpmCache\(parsed\.packageSpec, parsed\.binName, env\);\n/, "  await forceNpxCache(parsed.packageSpec);\n  const resolvedAfterInstall = resolveFromNpmCache(parsed.packageSpec, parsed.binName);\n"],
+		["function resolveFromNpmCache(packageSpec: string, binName?: string, env?: Record<string, string>): NpxCacheEntry | null {\n  const cacheDir = getNpmCacheDir(env);\n", "function resolveFromNpmCache(packageSpec: string, binName?: string): NpxCacheEntry | null {\n  const cacheDir = getNpmCacheDir();\n"],
+		[/\/\/ A first run downloads[^\n]*\nconst FORCE_CACHE_TIMEOUT_MS = 5 \* 60_000;\n\nasync function forceNpxCache\(packageSpec: string, env\?[^\n]*\n/, "const FORCE_CACHE_TIMEOUT_MS = 30_000;\n\nasync function forceNpxCache(packageSpec: string): Promise<void> {\n"],
+		['        { stdio: "ignore", env, signal }\n', '        { stdio: "ignore" }\n'],
+		[
+			/\/\/ npm's answer for each home[\s\S]*?\n  return npmCacheDirs\.get\(key\) \?\? null;\n\}\n/,
+			'let npmCacheDirCached: string | null | undefined;\n\nfunction getNpmCacheDir(): string | null {\n  if (npmCacheDirCached !== undefined) return npmCacheDirCached;\n  if (process.env.NPM_CONFIG_CACHE) {\n    npmCacheDirCached = process.env.NPM_CONFIG_CACHE;\n    return npmCacheDirCached;\n  }\n  try {\n    const result = spawnSync("npm", ["config", "get", "cache"], { encoding: "utf-8" });\n    if (result.status === 0) {\n      const path = String(result.stdout).trim();\n      npmCacheDirCached = path || null;\n      return npmCacheDirCached;\n    }\n  } catch {\n    npmCacheDirCached = null;\n    return null;\n  }\n  npmCacheDirCached = null;\n  return null;\n}\n',
+		],
+	];
+	const unpatch = (text: string, places: Array<[string | RegExp, string]>, what: string): string =>
+		places.reduce((current, [patched, own]) => {
+			if (typeof patched === "string" ? current.split(patched).length !== 2 : !patched.test(current)) throw new Error(`the installed adapter does not hold patch 14 in ${what} as this smoke knows it (${String(patched).slice(0, 60)})`);
+			return current.replace(patched, own);
+		}, text);
+	// Before patch 13 (patch 14 in place), before patch 14 (patch 13 in place), and before both.
+	const before13 = patchedManager.replace(SPAWN_PATCHED, SPAWN_PRISTINE).replace(ENV_PATCHED, ENV_PRISTINE);
+	const before14 = unpatch(patchedManager, START_PLACES, "server-manager.ts");
+	const pristine = unpatch(before13, START_PLACES, "server-manager.ts");
+	const pristineResolver = unpatch(patchedResolver, LOOKUP_PLACES, "npx-resolver.ts");
 
 	const already = scratch(patchedManager);
 	const alreadyRun = runPatch(already);
 	check("patch-already", alreadyRun.status === 0 && alreadyRun.errors.length === 0 && alreadyRun.out.includes("patch 13 (a connector program's start) already patched") && managerOf(already) === patchedManager, "an adapter already patched passes, its file unchanged");
-	const fresh = scratch(pristine);
+	const fresh = scratch(pristine, pristineResolver);
 	const freshRun = runPatch(fresh);
-	check("patch-apply", freshRun.status === 0 && freshRun.errors.length === 0 && managerOf(fresh) === patchedManager, `the patch applies to the package's own text, giving the installed file (status ${freshRun.status}, ${freshRun.errors.join(" | ")})`);
-	const gone = scratch(pristine.replace("        env: resolveEnv(definition.env),\n", "        env: process.env as Record<string, string>,\n"));
+	check("patch-apply", freshRun.status === 0 && freshRun.errors.length === 0 && managerOf(fresh) === patchedManager && resolverOf(fresh) === patchedResolver, `the patch applies to the package's own text, giving the installed files (status ${freshRun.status}, ${freshRun.errors.join(" | ")})`);
+	const startGone = scratch(before14.replace("    let transport: Transport;\n", "    let transport: Transport | undefined;\n"));
+	const startGoneBefore = managerOf(startGone);
+	const startGoneRun = runPatch(startGone);
+	check("patch-14-anchor-gone", startGoneRun.status === 1 && startGoneRun.errors.length === 1 && startGoneRun.errors[0].includes("patch 14") && managerOf(startGone) === startGoneBefore, `an adapter whose connect changed fails the install on patch 14, one error line, the file unchanged (status ${startGoneRun.status}, ${startGoneRun.errors.join(" | ")})`);
+	const gone = scratch(before13.replace("        env: resolveEnv(definition.env),\n", "        env: process.env as Record<string, string>,\n"));
 	const goneBefore = managerOf(gone);
 	const goneRun = runPatch(gone);
 	check("patch-anchor-gone", goneRun.status === 1 && goneRun.errors.length === 1 && goneRun.errors[0].includes("patch 13") && managerOf(gone) === goneBefore, `an adapter whose start changed fails the install, one error line, the file unchanged (status ${goneRun.status}, ${goneRun.errors.join(" | ")})`);

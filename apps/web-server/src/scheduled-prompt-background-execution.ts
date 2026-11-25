@@ -19,10 +19,11 @@ import {
 } from "./background-runs.js";
 import { executePersistentRoomBackgroundPrompt, type PersistentRoomBackgroundSpend } from "./persistent-room-background-execution.js";
 import { recordPersistentAgentUnseenLandedAnswer } from "./persistent-agents.js";
-import { appendUsageOnce, resolveUsageAuthType, usageMovedNothing } from "./usage-log.js";
-import { INTERRUPTED_SCHEDULED_RUN_SENTENCE, SERVER_STOPPED_REASON, serverStopping } from "./server-stop.js";
-import { serverHooks } from "./server-hooks.js";
-import { activeRoomLock } from "./server-install-root.js";
+import { appendUsageOnce, resolveUsageAuthType, USAGE_ROW_UNCHECKED, usageMovedNothing } from "./usage-log.js";
+import { INTERRUPTED_SCHEDULED_RUN_SENTENCE, SERVER_STOPPED_REASON, SERVER_STOPPING_CODE, serverStopping } from "./server-stop.js";
+import { isSharedServer, serverHooks } from "./server-hooks.js";
+import { ROOM_HOST_ENDED, hostHoldingRoom, roomHosts } from "./room-live-sessions.js";
+import { activePersistentRoomLock } from "./persistent-agent-store.js";
 import {
 	inspectScheduledPromptBackgroundRunIdempotency,
 	mergeScheduledPromptBackgroundRunArtifacts,
@@ -90,6 +91,12 @@ export interface ProcessScheduledPromptBackgroundRunExecutionOnceInput {
 	runLimitMs?: number;
 	/** Whether a run whose lease ran out runs again; without it, the edition's rule, yes on the desktop. */
 	retriesInterrupted?: boolean;
+	/** The server's logger, for the lines an operator's alerts read. */
+	logger?: ScheduledRunLogger;
+}
+
+export interface ScheduledRunLogger {
+	warn?: (value: unknown, message?: string) => void;
 }
 
 export const SCHEDULED_RUN_TIME_LIMIT_REASON = "time_limit";
@@ -222,10 +229,11 @@ function terminalUpdate(input: {
 	});
 }
 
-function startHeartbeat(input: { roomId: string; lockOwner: Record<string, unknown>; runId: string; token: string; leaseMs: number; heartbeatMs: number }): () => void {
+// A run through the room's host holds no lock of its own: only its lease beats.
+function startHeartbeat(input: { roomId: string; lockOwner: Record<string, unknown> | undefined; runId: string; token: string; leaseMs: number; heartbeatMs: number }): () => void {
 	const timer = setInterval(() => {
 		try { extendBackgroundRunLease({ runId: input.runId, token: input.token, leaseMs: input.leaseMs }); } catch {}
-		try { roomLock.heartbeat(input.roomId, input.lockOwner); } catch {}
+		if (input.lockOwner) try { roomLock.heartbeat(input.roomId, input.lockOwner); } catch {}
 	}, input.heartbeatMs);
 	return () => clearInterval(timer);
 }
@@ -242,11 +250,11 @@ function completedArtifactsForEvidence(run: BackgroundRunRecord): BackgroundRunA
  * Scheduled turns spend tokens like chat turns; account them to the room in the
  * shared ledger. Provider auth just succeeded, so the authType lookup can assume
  * configured. Keyed on the run id so a re-executed run can never bill the same
- * occurrence twice.
+ * occurrence twice; a row written without that check is told to the operator.
  */
-function billRun(runId: string, roomId: string, { model, usage }: PersistentRoomBackgroundSpend): void {
+function billRun(runId: string, roomId: string, { model, usage }: PersistentRoomBackgroundSpend, logger: ScheduledRunLogger | undefined): void {
 	if (!usage) return;
-	appendUsageOnce({
+	const unreadable = appendUsageOnce({
 		ts: Date.now(),
 		agent: roomId,
 		persona: "business",
@@ -262,6 +270,7 @@ function billRun(runId: string, roomId: string, { model, usage }: PersistentRoom
 		runId,
 		...(usage.calls ? { calls: usage.calls } : {}),
 	}, (message) => console.warn(message));
+	if (unreadable) logger?.warn?.({ err: unreadable }, USAGE_ROW_UNCHECKED);
 }
 
 async function executeClaimedRun(input: {
@@ -273,6 +282,7 @@ async function executeClaimedRun(input: {
 	heartbeatMs: number;
 	executePrompt: typeof executePersistentRoomBackgroundPrompt;
 	runLimitMs: number | undefined;
+	logger: ScheduledRunLogger | undefined;
 }): Promise<ScheduledPromptBackgroundExecutionTransitionSummary> {
 	let run = updateRunningReason({ run: input.claimed, token: input.token, now: input.now });
 	const previousStatus = input.claimed.status;
@@ -293,9 +303,12 @@ async function executeClaimedRun(input: {
 	}
 
 	const target = preReadiness.target;
+	// On a shared server a room with open pages runs the prompt through their live session, which holds the room's lock.
+	const host = isSharedServer() && target.kind === "resume-thread" ? roomHosts.get(roomId) : undefined;
+	const throughHost = host && host.conversationId === target.threadId ? host : undefined;
 	const lockId = `scheduler_${run.runId}_${crypto.randomBytes(8).toString("hex")}`;
-	const owner = schedulerLockOwner({ runId: run.runId, token: input.token, lockId });
-	const acquired = roomLock.tryAcquire(roomId, owner);
+	const owner = throughHost ? undefined : schedulerLockOwner({ runId: run.runId, token: input.token, lockId });
+	const acquired = owner ? roomLock.tryAcquire(roomId, owner) : { ok: true };
 	if (!acquired.ok) {
 		const updated = terminalUpdate({
 			run,
@@ -312,7 +325,7 @@ async function executeClaimedRun(input: {
 	let stopHeartbeat: (() => void) | null = null;
 	let limitTimer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const postReadiness = checkScheduledPromptBackgroundRunExecutionReadiness({ run, now: new Date(), workerId: input.workerId, expectedSchedulerLockId: lockId });
+		const postReadiness = throughHost ? preReadiness : checkScheduledPromptBackgroundRunExecutionReadiness({ run, now: new Date(), workerId: input.workerId, expectedSchedulerLockId: lockId });
 		if (postReadiness.status !== "queued" || postReadiness.readiness.result !== "ready" || !postReadiness.target || postReadiness.target.kind === "none") {
 			const updated = updateClaimedBackgroundRunStatus({
 				runId: run.runId,
@@ -367,30 +380,34 @@ async function executeClaimedRun(input: {
 		if (runLimitMs !== undefined) {
 			limitTimer = setTimeout(() => limit.abort(Object.assign(new Error(scheduledRunTimeLimitSentence(runLimitMs)), { code: SCHEDULED_RUN_TIME_LIMIT_REASON })), runLimitMs);
 		}
-		const result = await input.executePrompt({
-			roomId,
-			target: finalTarget,
-			prompt: schedule.prompt,
-			executionId: run.runId,
-			turnId,
-			connectionId: `scheduler:${run.runId}`,
-			signal: limit.signal,
-			// A cut run paid for what it did so far. A cut that moved nothing is no turn, as a failed call is none.
-			onCut: (spent) => {
-				if (spent.usage && !usageMovedNothing(spent.usage)) billRun(run.runId, roomId, spent);
-			},
-		});
+		// A cut run paid for what it did so far. A cut that moved nothing is no turn, as a failed call is none.
+		const onCut = (spent: PersistentRoomBackgroundSpend) => {
+			if (spent.usage && !usageMovedNothing(spent.usage)) billRun(run.runId, roomId, spent, input.logger);
+		};
+		const result = throughHost
+			? await throughHost.runScheduled({ runId: run.runId, prompt: schedule.prompt, signal: limit.signal, onCut })
+			: await input.executePrompt({
+				roomId,
+				target: finalTarget,
+				prompt: schedule.prompt,
+				executionId: run.runId,
+				turnId,
+				connectionId: `scheduler:${run.runId}`,
+				signal: limit.signal,
+				onCut,
+			});
 		// The output artifact is the idempotency evidence: it must land before the usage row so a
 		// crash in between makes lease recovery short-circuit to already_completed instead of
 		// generating (and billing) the same run a second time.
 		const outputArtifacts = writeScheduledPromptBackgroundRunOutputArtifact({ run, assistantText: result.assistantText, completedAt: new Date() });
-		billRun(run.runId, roomId, result);
+		billRun(run.runId, roomId, result, input.logger);
 		// Nobody was in the room while this ran, so the answer would otherwise
 		// only be found by opening the room. Record the same unseen-landed-answer
 		// marker the detached-turn landing writes, so the room card badges it and
 		// the badge survives a restart. Best-effort: a completed, paid run must
 		// never fail on this bookkeeping.
-		try {
+		// Through the room's session the host marks it, and tells its pages.
+		if (!throughHost) try {
 			recordPersistentAgentUnseenLandedAnswer(roomId, {
 				threadId: result.threadId,
 				turnId,
@@ -424,6 +441,32 @@ async function executeClaimedRun(input: {
 		});
 		return { runId: updated.runId, previousStatus, finalStatus: updated.status, reason: updated.reason ?? "completed", threadId: result.threadId };
 	} catch (error) {
+		// A page's answer took the room first, or its pages left: the schedule waits for the next tick.
+		if (throughHost && (safeErrorCode(error) === "turn_running" || safeErrorCode(error) === ROOM_HOST_ENDED)) {
+			const updated = terminalUpdate({
+				run,
+				token: input.token,
+				status: "deferred",
+				reason: "room_in_use",
+				message: "Persistent room is open and was in use recently; background work should retry later.",
+				target: run.target ?? target,
+				now: new Date(),
+			});
+			return { runId: updated.runId, previousStatus, finalStatus: updated.status, reason: updated.reason ?? "room_in_use" };
+		}
+		// The server began to stop before the answer through the room began: nothing ran, so it waits for the server's next start.
+		if (throughHost && safeErrorCode(error) === SERVER_STOPPING_CODE) {
+			const updated = terminalUpdate({
+				run,
+				token: input.token,
+				status: "deferred",
+				reason: SERVER_STOPPING_CODE,
+				message: "The server was stopping before the scheduled prompt began; it runs after the server starts again.",
+				target: run.target ?? target,
+				now: new Date(),
+			});
+			return { runId: updated.runId, previousStatus, finalStatus: updated.status, reason: updated.reason ?? SERVER_STOPPING_CODE };
+		}
 		// The time limit's message is the sentence the person reads in the room.
 		const message = safeErrorCode(error) === SCHEDULED_RUN_TIME_LIMIT_REASON ? safeErrorMessage(error) : `Scheduled prompt background execution failed: ${safeErrorMessage(error)}`;
 		let updated: BackgroundRunRecord;
@@ -457,7 +500,7 @@ async function executeClaimedRun(input: {
 	} finally {
 		clearTimeout(limitTimer);
 		if (stopHeartbeat) stopHeartbeat();
-		try { roomLock.release(roomId, owner); } catch {}
+		if (owner) try { roomLock.release(roomId, owner); } catch {}
 	}
 }
 
@@ -467,7 +510,9 @@ async function executeClaimedRun(input: {
 function waitsForHeldRoom(run: BackgroundRunRecord, now: Date): boolean {
 	if (run.status !== "deferred" || run.scope.kind !== "persistent-room") return false;
 	if (now.getTime() - new Date(run.updatedAt).getTime() >= HELD_ROOM_RETRY_MS) return false;
-	if (!activeRoomLock(run.scope.roomId)) return false;
+	// The lock of a room's open pages holds nothing back: their quiet spell decides, at each tick.
+	const lock = activePersistentRoomLock(run.scope.roomId);
+	if (!lock || hostHoldingRoom(run.scope.roomId, lock)) return false;
 	return "job" in readEnabledSchedulePrompt(run);
 }
 
@@ -542,7 +587,7 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 		claimedCount += 1;
 		counts.claimed = claimedCount;
 		try {
-			const transition = await executeClaimedRun({ claimed, token, workerId, now, leaseMs, heartbeatMs, executePrompt, runLimitMs });
+			const transition = await executeClaimedRun({ claimed, token, workerId, now, leaseMs, heartbeatMs, executePrompt, runLimitMs, logger: input.logger });
 			processed.push(transition);
 			const countKey = statusCountKey(transition.finalStatus);
 			if (countKey) counts[countKey] += 1;

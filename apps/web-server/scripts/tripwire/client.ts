@@ -15,7 +15,7 @@ export function assert(condition: unknown, message: string): asserts condition {
 export type Answer = { status: number; body: any };
 
 /** What the person at the computer answers each kind of card with. */
-const CARD_ANSWERS: Readonly<Record<string, unknown>> = { outside: true, site: "decline", commands: true, folder: "choose" };
+const CARD_ANSWERS: Readonly<Record<string, unknown>> = { outside: true, run: true, site: "decline", commands: true, folder: "choose" };
 
 export function client(port: number, gateway: Gateway) {
 	const base = `http://127.0.0.1:${port}`;
@@ -56,7 +56,7 @@ export function client(port: number, gateway: Gateway) {
 				return;
 			}
 			frames.push(frame);
-			// The person at the computer says yes to running a command outside (the way out), to turning on commands and to changes in a folder the room can only read,
+			// The person at the computer says yes to running a command outside (the way out), to a command in a room on Ask, to turning on commands and to changes in a folder the room can only read,
 			// no to a site, and presses Choose a folder… on a folder card. After the floor, as a person reads first: a yes sooner is asked again.
 			const answer = frame.type === "ui_request" ? CARD_ANSWERS[frame.kind] : undefined;
 			if (answer !== undefined) setTimeout(() => ws.send(JSON.stringify({ type: "ui_response", id: frame.id, value: answer })), ANSWER_FLOOR_MS + 50);

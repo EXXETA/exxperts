@@ -51,9 +51,10 @@ const { setShellLookupPlatformForTests } = await import("@exxeta/exxperts-runtim
 const { createRoomCommandTools } = await import("../src/room-command-tool.js");
 const { enablePersistentRoomSkill } = await import("../src/persistent-room-skill-settings.js");
 const { createReadSkillTool } = await import("../src/persistent-room-skill-tool.js");
-const { WINDOWS_CERTIFICATE_CHECK, WINDOWS_SITE_UNANSWERED, WINDOWS_SKILL_READ_ONLY_LINE, WINDOWS_SKILL_RUN_LINE, windowsBoxModelLine, WINDOWS_COMMAND_INPUT, WINDOWS_COMMAND_SNIPPET, WINDOWS_OUTSIDE_COMMAND_INPUT, WINDOWS_OUTSIDE_DESCRIPTION, WINDOWS_READ_SPILL_LINE, windowsCommandDescription } = await import("../src/room-box/windows/model-lines.js");
+const { WINDOWS_CERTIFICATE_CHECK, WINDOWS_SITE_UNANSWERED, WINDOWS_SKILL_READ_ONLY_LINE, WINDOWS_SKILL_RUN_LINE, windowsBoxModelLine, WINDOWS_COMMAND_INPUT, WINDOWS_COMMAND_SNIPPET, WINDOWS_COMMAND_TOO_LONG, WINDOWS_OUTSIDE_COMMAND_INPUT, WINDOWS_OUTSIDE_DESCRIPTION, WINDOWS_READ_SPILL_LINE, windowsCommandDescription } = await import("../src/room-box/windows/model-lines.js");
 const { BOX_ROOT_NAME } = await import("../src/room-box/windows/box-root.js");
 const { COMMAND_VARIABLE } = await import("../src/room-box/windows/box-request.js");
+const { plainPowerShellEnvironment } = await import("../src/room-box/windows/command-line.js");
 const { runStartCheck } = await import("../src/room-box/windows/start-check.js");
 const { WindowsRoomBox } = await import("../src/room-box/windows/windows-engine.js");
 // @ts-expect-error: plain JavaScript, loaded as the kit in the worker and for its path helpers here.
@@ -210,6 +211,16 @@ await row("errors: output that comes while the error stream is inside a record t
 	await box.endTurn();
 });
 
+await row("too long: a command in the box is refused at the length, and with the words, a command without protection is", async () => {
+	const box = windowsBox();
+	const bash = named(toolsOf(createRoomCommandTools(room, { box, outside: { questions: questions().questions, setOffered: () => {} } })), "bash");
+	const limit = 32_767 - COMMAND_VARIABLE.length - 1;
+	const refused = await bash.execute("windows-too-long", { command: "x".repeat(limit + 1) }).then(() => "ran", (error: Error) => error.message);
+	assert(refused === WINDOWS_COMMAND_TOO_LONG && refused === "This command is longer than Windows lets one command be. Split it into shorter commands.", refused);
+	await box.endTurn();
+	assert(plainPowerShellEnvironment("x".repeat(limit), {}) !== undefined && plainPowerShellEnvironment("x".repeat(limit + 1), {}) === undefined, "the plain start's length differs from the box's");
+});
+
 // ---- Long output ----------------------------------------------------------------------------------------
 
 await row("spills: a long Windows output lands in the turn's temp and names a PowerShell way to read it; the Mac's line is unchanged", async () => {
@@ -234,12 +245,12 @@ await row("spills: a long Windows output lands in the turn's temp and names a Po
 
 await row("lines: each line of model-lines.ts, as written here; none names the switch, protection settings or Room settings, and the box line says nothing about git", async () => {
 	const boxLine = windowsBoxModelLine({ folders: [{ path: String.raw`C:\Data`, access: "write" }, { path: String.raw`D:\Reports`, access: "read" }], sites: [{ host: "example.org", port: 443 }] }, true);
-	assert(boxLine === `\n\nCommands run in Windows PowerShell 5.1 inside this room's protection: outside the room's folder they can't change files, they can't read the person's other files or keys, and a site needs the person's yes. Windows' own certificate checks reach only a site already allowed, without asking, and curl.exe goes on without them. "Access is denied" may mean the protection refused a place, and a command that fails oddly may have been refused too. Only what the person asked for goes into the room's folder. Helper scripts and other temporary files go under $env:TEMP, which is emptied after this answer. A library you install with pip is kept for this room. The person can allow a folder or a site when the app asks them. If a command fails or gives nothing useful and may have touched a place outside the room's folder, call ask_for_folder for that place first. Also allowed in this room: C:\\Data (read and change), D:\\Reports (read), example.org:443.`, boxLine);
+	assert(boxLine === `\n\nCommands run in Windows PowerShell 5.1 inside this room's protection: outside the room's folder they can't change files, they can't read the person's other files or keys, and a site needs the person's yes. Windows' own certificate checks reach only a site already allowed, without asking, and curl.exe goes on without them. "Access is denied" may mean the protection refused a place, and a command that fails oddly may have been refused too. Write what the person asked for, and any file you need to open with the file tools, into the room's folder. Helper scripts and other temporary files go under $env:TEMP, which only commands can open and which is emptied after this answer. A library you install with pip is kept for this room. The person can allow a folder or a site when the app asks them. If a command fails or gives nothing useful and may have touched a place outside the room's folder, call ask_for_folder for that place first. Also allowed in this room: C:\\Data (read and change), D:\\Reports (read), example.org:443.`, boxLine);
 	const bare = windowsBoxModelLine({ folders: [], sites: [] }, false);
-	assert(bare === `\n\nCommands run in Windows PowerShell 5.1 inside this room's protection: outside the room's folder they can't change files, they can't read the person's other files or keys, and a site needs the person's yes. Windows' own certificate checks reach only a site already allowed, without asking, and curl.exe goes on without them. "Access is denied" may mean the protection refused a place, and a command that fails oddly may have been refused too. Only what the person asked for goes into the room's folder. Helper scripts and other temporary files go under $env:TEMP, which is emptied after this answer. A library you install with pip is kept for this room. The person can allow a folder or a site when the app asks them. Also allowed in this room: none.`, bare);
+	assert(bare === `\n\nCommands run in Windows PowerShell 5.1 inside this room's protection: outside the room's folder they can't change files, they can't read the person's other files or keys, and a site needs the person's yes. Windows' own certificate checks reach only a site already allowed, without asking, and curl.exe goes on without them. "Access is denied" may mean the protection refused a place, and a command that fails oddly may have been refused too. Write what the person asked for, and any file you need to open with the file tools, into the room's folder. Helper scripts and other temporary files go under $env:TEMP, which only commands can open and which is emptied after this answer. A library you install with pip is kept for this room. The person can allow a folder or a site when the app asks them. Also allowed in this room: none.`, bare);
 	assert(WINDOWS_READ_SPILL_LINE === "Read it with a command, such as Get-Content -Tail 100: the read tool can't open it.", WINDOWS_READ_SPILL_LINE);
 	assert(WINDOWS_SKILL_READ_ONLY_LINE === "Read them with the read tool. This room's commands can't run them on this computer: where the instructions call for running one, do its steps with your own commands, or tell the person it can't run here.", WINDOWS_SKILL_READ_ONLY_LINE);
-	assert(WINDOWS_SKILL_RUN_LINE === "Read them with the read tool. Run one with this room's commands by naming its program and quoting its full path, never by its name alone: & '<full path>.ps1' for PowerShell, python '<full path>.py' or py '<full path>.py' for Python, node '<full path>.js' for Node. If Python or Node isn't on this computer, don't install it and don't rewrite a long script: tell the person which program the skill needs, and that exxperts must be started again once it's installed. A .sh file can't run on this computer: do its steps with PowerShell commands where they are simple, otherwise tell the person that step can't run here. Write outputs into the room's folder and helper files under $env:TEMP. The skill's folder can't be changed, so never call ask_for_folder for it because a write there was refused.", WINDOWS_SKILL_RUN_LINE);
+	assert(WINDOWS_SKILL_RUN_LINE === "Read them with the read tool. Run one with this room's commands by naming its program and quoting its full path, never by its name alone: & '<full path>.ps1' for PowerShell, python '<full path>.py' for Python (py '<full path>.py' where python isn't found), node '<full path>.js' for Node. If Python or Node isn't on this computer, don't install it and don't rewrite a long script: tell the person which program the skill needs, and that exxperts must be quit, not just its window closed, and opened again once it's installed. A .sh file can't run on this computer: do its steps with PowerShell commands where they are simple, otherwise tell the person that step can't run here. Write outputs into the room's folder and helper files under $env:TEMP. If a write in the skill's folder is refused, never call ask_for_folder for it.", WINDOWS_SKILL_RUN_LINE);
 	assert(WINDOWS_OUTSIDE_DESCRIPTION === "Ask the person to run one command outside this room's protection, with all their rights, when the room's commands can't do it: git push over SSH, git clone in their folder, opening an app. This one runs in Git Bash, not PowerShell, so write it in bash. They see the full command and your reason on a card and must say yes each time. Use this only when a PowerShell command in the room has failed for that reason, never just to get at a place the room's protection keeps closed on purpose, such as the person's keys or a local address, unless the person asks.", WINDOWS_OUTSIDE_DESCRIPTION);
 	assert(WINDOWS_OUTSIDE_COMMAND_INPUT === "The one bash command to run outside this room, in Git Bash", WINDOWS_OUTSIDE_COMMAND_INPUT);
 	assert(WINDOWS_SITE_UNANSWERED === "the person hadn't answered before the command stopped waiting, which isn't a no; run the command again if the task needs this site, and don't offer run_outside_box to get round it", WINDOWS_SITE_UNANSWERED);
@@ -249,22 +260,22 @@ await row("lines: each line of model-lines.ts, as written here; none names the s
 	assert(!/git/i.test(boxLine), "the box line names git");
 });
 
-await row("lines: read_skill gives the Windows run line where the protection was given the skill's folder, the read-only line where it wasn't, and the Mac's and an unprotected room's line unchanged", async () => {
+await row("lines: read_skill gives the Windows run line where the protection was given the skill's folder, the read-only line where it wasn't, and the Mac's and an unprotected room's the bash tool's line, which says never to ask for the skill's folder", async () => {
 	const agentId = "windows-model-skills";
 	const manifest = "---\nname: report\ndescription: makes a report\n---\n\nRun scripts/report.ps1.";
 	const lookupSkill = (name: string) => (name === "report" ? { manifest, body: "Run scripts/report.ps1.", description: "makes a report" } : null);
 	assert(enablePersistentRoomSkill(agentId, "report", () => manifest).ok, "the skill was not enabled");
 	const skillDir = String.raw`C:\Users\Ana\.exxperts\agent\skills\report`;
-	const read = async (windowsBoxFlag: boolean, windowsRuns?: boolean) => textOf(await (createReadSkillTool({ agentId, lookupSkill, resolveExecutionExposure: () => ({ skillDir, files: ["scripts/report.ps1"], ...(windowsRuns === undefined ? {} : { windowsRuns }) }), windowsBox: windowsBoxFlag }) as unknown as Tool).execute("skill", { name: "report" }));
-	const after = "Outputs you write stay in the room's folder on the user's computer and do NOT appear in this room's Attachments panel unless explicitly shelved; when you tell the user where an output landed, name the folder's path, never the Attachments panel. If this approval no longer appears in a later read of this skill, it was withdrawn or the files changed: do not run them from memory.";
-	const pinned = "Write any outputs into the room's folder, never into the skill's folder: the approval is pinned to the skill's exact files, so a new file there voids it.";
-	const exposure = (line: string) => `The user approved running this skill's bundled files in this room, for exactly this version. They live at:\n${skillDir}\nFiles: "scripts/report.ps1"\n${line} ${after}`;
+	const read = async (windowsBoxFlag: boolean, windowsRuns?: boolean) => textOf(await (createReadSkillTool({ agentId, lookupSkill, resolveSkillFiles: () => ({ kind: "open", reach: "run", skillDir, files: ["scripts/report.ps1"], ...(windowsRuns === undefined ? {} : { windowsRuns }) }), windowsBox: windowsBoxFlag }) as unknown as Tool).execute("skill", { name: "report" }));
+	const after = "Outputs you write stay in the room's folder on the user's computer; when you tell the user where an output landed, name the folder's path. If a later read of this skill no longer gives this folder, do not run its files from memory.";
+	const outputs = "Write any outputs into the room's folder, never into the skill's folder.";
+	const exposure = (line: string) => `This skill's bundled files live at:\n${skillDir}\nPaths in its instructions are relative to this folder: give them in full, as this folder followed by the path.\nFiles: "scripts/report.ps1"\n${line} ${after}`;
 	const runs = await read(true, true);
-	assert(runs.endsWith(exposure(WINDOWS_SKILL_RUN_LINE)) && !runs.includes("bash tool") && !runs.includes(pinned), runs);
+	assert(runs.endsWith(exposure(WINDOWS_SKILL_RUN_LINE)) && !runs.includes("bash tool") && !runs.includes(outputs), runs);
 	// A skill whose folder the protection wasn't given reads as it did before its folder could be given.
-	for (const readOnly of [await read(true, false), await read(true)]) assert(readOnly.endsWith(exposure(`${WINDOWS_SKILL_READ_ONLY_LINE} ${pinned}`)), readOnly);
-	// A Mac and an unprotected Windows room, whose commands run in Git Bash: the bash tool's line, whatever windowsRuns says.
-	for (const mac of [await read(false), await read(false, true)]) assert(mac.endsWith(exposure(`Read them with the read tool, and run them with the bash tool when the instructions call for it. ${pinned}`)), mac);
+	for (const readOnly of [await read(true, false), await read(true)]) assert(readOnly.endsWith(exposure(`${WINDOWS_SKILL_READ_ONLY_LINE} ${outputs}`)), readOnly);
+	// A Mac and an unprotected room on a Windows PC with Git, whose commands run in Git Bash: the bash tool's line, whatever windowsRuns says.
+	for (const mac of [await read(false), await read(false, true)]) assert(mac.endsWith(exposure(`Read them with the read tool, and run them with the bash tool when the instructions call for it. ${outputs} If a write in the skill's folder is refused, never call ask_for_folder for it.`)), mac);
 });
 
 // ---- The outside tool ----------------------------------------------------------------------------------

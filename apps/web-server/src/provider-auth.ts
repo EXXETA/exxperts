@@ -6,7 +6,7 @@
  * auth store. The UI polls /api/auth/login/status plus the profile status
  * until the provider reports configured.
  */
-import { ANTHROPIC_API_KEY_PROVIDER, AuthStorage, isApiKeyLoginProvider, ModelRegistry } from "@exxeta/exxperts-runtime";
+import { ANTHROPIC_API_KEY_PROVIDER, AuthStorage, AuthStorageNotSavedError, isApiKeyLoginProvider, ModelRegistry } from "@exxeta/exxperts-runtime";
 import { normalizeDomain } from "@exxeta/exxperts-ai/oauth";
 import { anthropicKeyNeedsWorkspace } from "./model-not-offered.js";
 
@@ -18,6 +18,41 @@ export class ProviderAuthError extends Error {
 	constructor(message: string, statusCode = 400) {
 		super(message);
 		this.statusCode = statusCode;
+	}
+}
+
+/** Why auth.json's change was not saved, for the operator's line; never the failure's own message, which may quote the file. */
+export type AuthFileNotSavedKind = "not-json" | "not-readable" | "value-does-not-open" | "not-written";
+
+/** A sign-in change refused because auth.json cannot be read or written: the person's sentence, and why for the operator's line. */
+export class AuthFileNotSavedError extends ProviderAuthError {
+	readonly kind: AuthFileNotSavedKind;
+	constructor(notSaved: AuthStorageNotSavedError) {
+		super(AUTH_FILE_NOT_SAVED, 503);
+		const cause = notSaved.cause;
+		this.kind =
+			notSaved.stage === "write"
+				? "not-written"
+				: cause instanceof SyntaxError
+					? "not-json"
+					: typeof (cause as NodeJS.ErrnoException | undefined)?.code === "string"
+						? "not-readable"
+						: "value-does-not-open";
+	}
+}
+
+/** The operator's line for a change refused with AuthFileNotSavedError, as pino's fields and message: why, never the failure's own message, which may quote the file. */
+export function authFileNotSavedLine(provider: string, error: unknown): [{ code: string; provider: string; kind: AuthFileNotSavedKind }, string] | null {
+	return error instanceof AuthFileNotSavedError ? [{ code: AUTH_FILE_UNREADABLE_CODE, provider, kind: error.kind }, "auth.json cannot be read or written, so the change was refused"] : null;
+}
+
+/** One change of the stored credentials, refused with AuthFileNotSavedError when auth.json cannot be read or written. */
+export function changeCredentials(change: (storage: AuthStorage) => void, storage: AuthStorage = AuthStorage.create()): void {
+	try {
+		change(storage);
+	} catch (error) {
+		if (error instanceof AuthStorageNotSavedError) throw new AuthFileNotSavedError(error);
+		throw error;
 	}
 }
 
@@ -91,7 +126,12 @@ export function providerLoginState(): { pending: boolean; provider?: string; url
 }
 
 /** `onSignedIn` runs once the new credentials are stored. `companyAddress` is Copilot's company GitHub, empty for github.com. */
-export async function startProviderLogin(providerId: string, companyAddress: string | undefined, onSignedIn?: () => void): Promise<{ url: string; instructions?: string | null }> {
+export async function startProviderLogin(
+	providerId: string,
+	companyAddress: string | undefined,
+	onSignedIn?: () => void,
+	onNotSaved?: (error: AuthFileNotSavedError) => void,
+): Promise<{ url: string; instructions?: string | null }> {
 	if (!knownOAuthProviderIds().includes(providerId)) {
 		throw new ProviderAuthError(`Unknown OAuth provider: ${providerId}`, 400);
 	}
@@ -179,7 +219,7 @@ export async function startProviderLogin(providerId: string, companyAddress: str
 		.then(() => {
 			const credentials = signedIn.get(providerId);
 			if (entry.done || pending !== entry || !credentials) return;
-			AuthStorage.create().set(providerId, credentials);
+			changeCredentials((storage) => storage.set(providerId, credentials));
 			entry.done = true;
 			onSignedIn?.();
 		})
@@ -187,9 +227,12 @@ export async function startProviderLogin(providerId: string, companyAddress: str
 			// A sign-in already settled (cancelled, or past a deadline) keeps its line.
 			if (!entry.done) {
 				entry.done = true;
+				if (error instanceof AuthFileNotSavedError) onNotSaved?.(error);
 				entry.error = abort.signal.aborted
 					? "Sign-in was cancelled."
-					: companyDomain
+					: error instanceof AuthFileNotSavedError
+						? error.message
+						: companyDomain
 						? COMPANY_SIGN_IN_FAILED[companySignInFailure(error, entry.url !== null)](companyDomain)
 						: (error as Error).message;
 			}
@@ -254,8 +297,13 @@ export function saveProviderApiKey(providerId: string, key: string): void {
 	}
 	const refusal = apiKeyRefusal(providerId, trimmedKey);
 	if (refusal) throw new ProviderAuthError(refusal, 400);
-	AuthStorage.create().set(providerId, { type: "api_key", key: trimmedKey });
+	changeCredentials((storage) => storage.set(providerId, { type: "api_key", key: trimmedKey }));
 }
+
+/** The sentence when auth.json cannot be read or written, so a sign-in, a key or a sign-out is refused rather than lost. */
+export const AUTH_FILE_NOT_SAVED = "This change wasn't saved, because the saved keys and sign-ins can't be read or written right now.";
+/** The code of the operator's line for that refusal. */
+export const AUTH_FILE_UNREADABLE_CODE = "auth_file_unreadable";
 
 /** Plain words for a Claude key checked at save: Anthropic refused it, it is outside any workspace, or it could not be checked. */
 export const ANTHROPIC_KEY_REFUSED = "Anthropic did not accept this key. Check it at console.anthropic.com.";
@@ -303,5 +351,5 @@ export function logoutProvider(providerId: string): void {
 	if (!knownOAuthProviderIds().includes(providerId) && !authStorage.hasAuth(providerId)) {
 		throw new ProviderAuthError(`Unknown provider: ${providerId}`, 400);
 	}
-	authStorage.logout(providerId);
+	changeCredentials((storage) => storage.logout(providerId), authStorage);
 }

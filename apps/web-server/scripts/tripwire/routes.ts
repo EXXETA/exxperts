@@ -41,6 +41,7 @@ export const NOT_ON_MAIN = [
  * 4xx to an empty body after its checks have run.
  */
 export const SWEPT_ROUTES: readonly string[] = [
+	"DELETE /api/auth/api-key/:provider",
 	"DELETE /api/persistent-agent-ai-profiles/custom/:profileId",
 	"DELETE /api/persistent-agent-ai-profiles/gateways/:gatewayId",
 	"DELETE /api/persistent-agent-ai-profiles/openai-compatible",
@@ -104,6 +105,7 @@ export const SWEPT_ROUTES: readonly string[] = [
 	"GET /api/task-store/gc",
 	"GET /api/usage",
 	"GET /api/usage/export.csv",
+	"GET /api/usage/mine",
 	"GET /api/web-chat/model-status",
 	"GET /api/web-search/searxng/setup",
 	"GET /api/whats-new",

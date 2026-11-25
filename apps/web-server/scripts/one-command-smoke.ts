@@ -1,24 +1,35 @@
-// The one command. `exxperts` with no word starts the app and opens the
-// browser; `--help` prints exactly two lines; every word of the removed
-// terminal app, and any word it does not know, prints the one removal line and
-// exits 1; the hidden pieces (--version, web, --port, --no-open, setup
-// chromium, doctor) still work and appear in no help. A start that fails says why:
-// the launcher's own reason, then the failing start checks of
-// scripts/doctor.mjs, never a stack. Throwaway HOMEs; the browser is a fake
-// `open`/`xdg-open` on PATH that writes down the address it was given.
+// The one command. `exxperts` with no word starts the app, prints the sign-in
+// link on every start and opens the browser once; `--help` prints the options
+// the command takes, word for word; every word of the removed terminal app,
+// and any word it does not know, prints the one removal line and exits 1; the
+// pieces (--version, web, --port, --no-open, setup chromium, doctor) work;
+// --container opens nothing, and off Linux refuses with one line. A
+// start that fails says why: the launcher's own reason, then the failing start
+// checks of scripts/doctor.mjs, never a stack. Throwaway HOMEs; the browser is
+// a fake `open`/`xdg-open` on PATH that writes down the address it was given.
+// No failure message shows a sign-in token.
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { freePort, smokeHomeEnv, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, symlinkOrSkip } from "./smoke-server-process.js";
+import { freePort, smokeHomeEnv, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, symlinkOrSkip, withoutSignInTokens } from "./smoke-server-process.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const tempRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-one-command-")));
 const home = path.join(tempRoot, "home");
 fs.mkdirSync(home, { recursive: true });
 
-const HELP = "Usage: exxperts\nOpens exxperts in your browser. Everything else is in the app.\n";
+const HELP = `Usage: exxperts [options]
+Opens exxperts in your browser. Everything else is in the app.
+
+  --port <number>          Use this port instead of 8787.
+  --no-open                Don't open the browser.
+  --container              Inside a Linux container: also listen on the container's own address.
+  --version                Print the version.
+  exxperts doctor          Check this install and say how to fix what's wrong.
+  exxperts setup chromium  Download the headless browser for pages that need one (about 150 MB, once).
+`;
 const REMOVED = "The terminal app and its commands were removed in exxperts 0.15. Run `exxperts` to open the app; everything else is in the app.\n";
 const VERSION = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version as string;
 
@@ -44,11 +55,10 @@ const hasStack = (text: string) => /^\s+at .+[:(]/m.test(text) || text.includes(
 
 let server: ChildProcessWithoutNullStreams | undefined;
 try {
-	// --- The help: exactly the two lines, exit 0, through every way in.
+	// --- The help: word for word, exit 0, through every way in.
 	for (const [entry, args] of [[exxperts, ["--help"]], [exxperts, ["-h"]], [exxperts, ["web", "--help"]], [path.join(repoRoot, "bin", "exxperts-web.cjs"), ["--help"]]] as const) {
 		const result = run(entry, [...args]);
-		assert(result.status === 0 && result.stdout === HELP && result.stderr === "", `${path.basename(entry)} ${args.join(" ")}: expected the two help lines and exit 0, got ${result.status} ${JSON.stringify(result)}`);
-		assert(!result.stdout.includes("doctor"), `${path.basename(entry)} ${args.join(" ")}: the help must not name the hidden doctor`);
+		assert(result.status === 0 && result.stdout === HELP && result.stderr === "", `${path.basename(entry)} ${args.join(" ")}: expected the help and exit 0, got ${result.status} ${JSON.stringify(result)}`);
 	}
 
 	// --- Every removed word, and any unknown one: the one line, exit 1.
@@ -59,7 +69,7 @@ try {
 	}
 	assert(!fs.existsSync(path.join(home, ".exxperts")), "a removed word must not create the data folder");
 
-	// --- The hidden pieces work.
+	// --- The pieces work.
 	const version = run(exxperts, ["--version"]);
 	assert(version.status === 0 && version.stdout === `exxperts ${VERSION}\n`, `exxperts --version: got ${JSON.stringify(version)}`);
 	const chromiumHelp = run(exxperts, ["setup", "chromium", "--help"]);
@@ -78,32 +88,100 @@ try {
 	const doctorBadProfile = run(exxperts, ["doctor", "--profile", "bogus"]);
 	assert(doctorBadProfile.status === 2 && doctorBadProfile.stderr.startsWith("Usage: node scripts/doctor.mjs") && doctorBadProfile.stdout === "", `exxperts doctor --profile bogus: expected the health check's usage and exit 2, got ${JSON.stringify(doctorBadProfile)}`);
 
-	// --- Bare `exxperts` starts the app and opens the browser at the sign-in link.
+	// --- Bare `exxperts` starts the app, prints the sign-in link and opens the
+	// browser at it once; after a profile switch the new leg prints its own link
+	// and opens nothing; --no-open prints the link and opens nothing; with no
+	// browser to open, the launcher points at the link it printed.
 	if (process.platform === "win32") {
 		console.log("one-command smoke: the browser start is skipped on Windows (the launcher opens it through cmd start, which no fake on PATH replaces)");
 	} else {
 		const fakeBin = path.join(tempRoot, "fake-bin");
+		const emptyBin = path.join(tempRoot, "empty-bin");
 		const opened = path.join(tempRoot, "opened.log");
 		fs.mkdirSync(fakeBin);
+		fs.mkdirSync(emptyBin);
 		for (const name of ["open", "xdg-open"]) fs.writeFileSync(path.join(fakeBin, name), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opened}'\n`, { mode: 0o755 });
+		const withFakeBrowser = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
+		const startLines = (port: number, link: string) => `\nexxperts running at http://localhost:${port}\nPress Ctrl+C to stop.\n\nOpen this link once to sign a browser in:\n${link}\n\n`;
+		const linksIn = (text: string, port: number) => [...text.matchAll(new RegExp(`^Open this link once to sign a browser in:\\n(http://localhost:${port}/auth/session\\?token=\\S+)$`, "gm"))].map((match) => match[1]!);
+		const openedLinks = () => (fs.existsSync(opened) ? fs.readFileSync(opened, "utf8").split("\n").filter(Boolean) : []);
+		const startLauncher = (args: string[], pathVar: string) => {
+			const child = spawn(process.execPath, [exxperts, ...args], {
+				...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
+				cwd: tempRoot,
+				env: homeEnv(home, { PATH: pathVar, EXXPERTS_AUTH_TOKEN: undefined }) as NodeJS.ProcessEnv,
+			});
+			server = child;
+			let output = "";
+			child.stdout.on("data", (chunk) => { output += String(chunk); });
+			child.stderr.on("data", (chunk) => { output += String(chunk); });
+			return { child, output: () => output };
+		};
+		const waitUntil = async (launcher: ReturnType<typeof startLauncher>, done: () => boolean, what: string) => {
+			const deadline = Date.now() + 180_000;
+			while (!done() && launcher.child.exitCode === null && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
+			assert(done(), `${what}, got exit ${launcher.child.exitCode}:\n${withoutSignInTokens(launcher.output())}`);
+		};
+
 		const port = await freePort();
-		server = spawn(process.execPath, [exxperts, "--port", String(port)], {
-			...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
-			cwd: tempRoot,
-			env: homeEnv(home, { PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`, EXXPERTS_AUTH_TOKEN: undefined }) as NodeJS.ProcessEnv,
-		});
-		let output = "";
-		server.stdout.on("data", (chunk) => { output += String(chunk); });
-		server.stderr.on("data", (chunk) => { output += String(chunk); });
-		const deadline = Date.now() + 180_000;
-		while (!fs.existsSync(opened) && server.exitCode === null && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200));
-		assert(fs.existsSync(opened), `bare exxperts must open the browser once the app answers, got exit ${server.exitCode}:\n${output}`);
+		const bare = startLauncher(["--port", String(port)], withFakeBrowser);
+		await waitUntil(bare, () => openedLinks().length > 0 && linksIn(bare.output(), port).length > 0, "bare exxperts must print the sign-in link and open the browser once the app answers");
 		const health = await fetch(`http://localhost:${port}/healthz`);
 		assert(health.ok, `the app must answer on its port, got ${health.status}`);
-		const link = fs.readFileSync(opened, "utf8").trim();
-		assert(new RegExp(`^http://localhost:${port}/auth/session\\?token=.+`).test(link), `the browser must open at the sign-in link, got ${JSON.stringify(link)}`);
-		await stopSmokeServer(server);
+		const [firstLink] = linksIn(bare.output(), port);
+		assert(bare.output().includes(startLines(port, firstLink!)), `the start lines must be printed word for word, got:\n${withoutSignInTokens(bare.output())}`);
+		assert(openedLinks().length === 1 && openedLinks()[0] === firstLink, `the browser must open once, at the printed sign-in link, got ${withoutSignInTokens(JSON.stringify(openedLinks()))}`);
+
+		// A profile switch restarts the server on a new leg with the new
+		// profile's token; the switch reply names the link that leg honors.
+		const token = new URL(firstLink!).searchParams.get("token")!;
+		const post = (route: string, body: unknown) => fetch(`http://localhost:${port}${route}`, { method: "POST", headers: { "X-Exxperts-Auth": token, "content-type": "application/json" }, body: JSON.stringify(body) });
+		const created = await post("/api/settings/state-profile/create", { name: "Demo" });
+		assert(created.status === 200, `creating a profile must succeed, got ${created.status}`);
+		const switched = await post("/api/settings/state-profile/switch", { name: "Demo" });
+		const reply = (await switched.json()) as { signInPath?: string };
+		assert(switched.status === 200 && typeof reply.signInPath === "string", `switching profiles must succeed with a sign-in link, got ${switched.status}`);
+		const secondLink = `http://localhost:${port}${reply.signInPath}`;
+		await waitUntil(bare, () => linksIn(bare.output(), port).length === 2, "after a profile switch the new leg must print its sign-in link");
+		assert(secondLink !== firstLink && linksIn(bare.output(), port)[1] === secondLink && bare.output().includes(startLines(port, secondLink)), `the new leg must print the new profile's link in the same start lines, got:\n${withoutSignInTokens(bare.output())}`);
+		assert(openedLinks().length === 1, `the browser opens on the first leg only, got ${openedLinks().length} opens`);
+		await stopSmokeServer(bare.child);
 		server = undefined;
+
+		const quietPort = await freePort();
+		const quiet = startLauncher(["--no-open", "--port", String(quietPort)], withFakeBrowser);
+		await waitUntil(quiet, () => linksIn(quiet.output(), quietPort).length === 1, "exxperts --no-open must print the sign-in link");
+		assert(quiet.output().includes(startLines(quietPort, linksIn(quiet.output(), quietPort)[0]!)), `--no-open must print the start lines word for word, got:\n${withoutSignInTokens(quiet.output())}`);
+		await stopSmokeServer(quiet.child);
+		server = undefined;
+
+		// No `open` or `xdg-open` on PATH: the opener fails after the link is out.
+		const blindPort = await freePort();
+		const blind = startLauncher(["--port", String(blindPort)], emptyBin);
+		await waitUntil(blind, () => blind.output().includes("Could not open the browser."), "with no browser to open, the launcher must say so");
+		const blindLink = linksIn(blind.output(), blindPort)[0];
+		assert(blindLink !== undefined && blind.output().includes(`${startLines(blindPort, blindLink)}Could not open the browser. Open the link above.\n`), `the failed open must follow the printed link and point at it, got:\n${withoutSignInTokens(blind.output())}`);
+		await stopSmokeServer(blind.child);
+		server = undefined;
+		// --- `exxperts --container` opens nothing. On Linux it prints its own
+		// start lines with the sign-in link; anywhere else, its one refusal.
+		// The line between the publish line and Ctrl+C, printed where no
+		// container is found, is container-forward-smoke.ts's to pin.
+		const containerPort = await freePort();
+		const container = startLauncher(["--container", "--port", String(containerPort)], withFakeBrowser);
+		if (process.platform === "linux") {
+			const containerLink = new RegExp(`\\nOpen this link once in your computer's browser to sign it in:\\nhttp://localhost:${containerPort}/auth/session\\?token=\\S+\\n`);
+			await waitUntil(container, () => containerLink.test(container.output()), "exxperts --container must print its start lines with the sign-in link");
+			assert(container.output().includes(`\nexxperts running at http://localhost:${containerPort} for a container, also on `) && container.output().includes(`\nPublish this port to your own computer only, with the same number on both sides: -p 127.0.0.1:${containerPort}:${containerPort}\n`) && container.output().includes("\nPress Ctrl+C to stop.\n"), `exxperts --container must print its start lines word for word, got:\n${withoutSignInTokens(container.output())}`);
+			assert(!container.output().includes("Open this link once to sign a browser in:"), `exxperts --container prints its own link line only, got:\n${withoutSignInTokens(container.output())}`);
+		} else {
+			await waitUntil(container, () => container.child.exitCode !== null, "exxperts --container must stop off Linux");
+			assert(container.child.exitCode === 1 && container.output() === "--container is for running exxperts inside a Linux container. On this computer, start it with: exxperts\n", `exxperts --container must refuse off Linux with its one line, got exit ${container.child.exitCode}:\n${withoutSignInTokens(container.output())}`);
+		}
+		await stopSmokeServer(container.child);
+		server = undefined;
+		// The later starts took seconds: a stray open would be written down by now.
+		assert(openedLinks().length === 1, `--no-open, a failed open and --container must open nothing, got ${openedLinks().length} opens`);
 	}
 
 	// --- A failed start says why: an unwritable data folder.

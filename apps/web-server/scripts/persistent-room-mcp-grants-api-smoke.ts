@@ -149,6 +149,138 @@ try {
 	const grantedNamed = await putGrant(roomId, "grant", "team-wiki");
 	assert(grantedNamed.status === 200 && grantedNamed.body.displayNames?.["team-wiki"] === "Team wiki", `a grant's answer names it too, got ${JSON.stringify(grantedNamed.body)}`);
 
+	// 5b. The room's list of old yeses shows only the tools with no choice on
+	// the connector's page, a yes the clearing missed included, and goes when
+	// none is left.
+	const roomBefore = fs.readFileSync(newSettingsPath, "utf-8");
+	const seedYeses = (tools: string[]) => fs.writeFileSync(newSettingsPath, `${JSON.stringify({ schemaVersion: 1, grantedConnectors: ["team-wiki"], allowedTools: { "team-wiki": tools.map((tool) => ({ tool, addressPin: "b".repeat(64) })) }, updatedAt: "2026-11-19T00:00:00.000Z" }, null, 2)}\n`, { mode: 0o600 });
+	const listedYeses = async () => JSON.stringify(((await requestJson(`/api/persistent-agents/${roomId}/mcp-connectors`)).body.allowedTools ?? {})["team-wiki"]?.map((entry: { tool: string }) => entry.tool).sort() ?? null);
+	const choose = async (tools: Record<string, string | null>) => {
+		const answer = await requestJson("/api/mcp/servers/team-wiki/tools", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ tools }) });
+		assert(answer.status === 200, `the connector's page saves ${JSON.stringify(tools)}, got ${answer.status}: ${JSON.stringify(answer.body)}`);
+	};
+	seedYeses(["read_page", "edit_page"]);
+	assert((await listedYeses()) === JSON.stringify(["edit_page", "read_page"]), `both old yeses are listed, got ${await listedYeses()}`);
+	await choose({ read_page: "ask" });
+	assert((await listedYeses()) === JSON.stringify(["edit_page"]), `a tool with a choice leaves the list, got ${await listedYeses()}`);
+	seedYeses(["read_page", "edit_page"]);
+	assert((await listedYeses()) === JSON.stringify(["edit_page"]), `a yes the clearing missed stays off the list, got ${await listedYeses()}`);
+	await choose({ edit_page: "blocked" });
+	assert((await listedYeses()) === "null", `with none left, the connector has no list, got ${await listedYeses()}`);
+	await choose({ read_page: null, edit_page: null });
+	fs.writeFileSync(newSettingsPath, roomBefore, { mode: 0o600 });
+
+	// 6. Removing a connector is all or nothing: a delete that does not answer
+	// 200 leaves the connector configured and every room's file as it was.
+	// Both rooms hold team-wiki; the legacy room also holds a yes to one of its tools.
+	const yes = { "team-wiki": [{ tool: "read_page", addressPin: "a".repeat(64) }] };
+	fs.writeFileSync(legacySettingsPath, `${JSON.stringify({ schemaVersion: 1, grantedConnectors: ["team-wiki"], allowedTools: yes, updatedAt: "2026-11-19T00:00:00.000Z" }, null, 2)}\n`, { mode: 0o600 });
+	const roomSettingsPaths = [newSettingsPath, legacySettingsPath];
+	// Every file the delete could write: the app's own files and each room's settings.
+	const filesNow = (): Record<string, string> => {
+		const files: Record<string, string> = {};
+		const walk = (dir: string) => {
+			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+				const full = path.join(dir, entry.name);
+				if (entry.isDirectory()) walk(full);
+				else files[full] = fs.readFileSync(full, "utf-8");
+			}
+		};
+		walk(agentDir);
+		for (const settings of roomSettingsPaths) files[settings] = fs.readFileSync(settings, "utf-8");
+		return files;
+	};
+	const unchangedSince = (before: Record<string, string>, what: string) => {
+		const after = filesNow();
+		const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((file) => before[file] !== after[file]);
+		assert(changed.length === 0, `${what} changes no file, changed ${changed.map((file) => path.relative(tempHome, file)).join(", ")}`);
+	};
+	const deleteConnector = (name: string) => requestJson(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" });
+	// Each row says whether it held, so one run shows every row that fails.
+	const failedRows: string[] = [];
+	const row = async (what: string, check: () => Promise<void>) => {
+		try {
+			await check();
+		} catch (error) {
+			failedRows.push(`${what}: ${(error as Error).message}`);
+		}
+	};
+
+	// A name that is only a built-in property of every object is no connector:
+	// each route that looks one up by name answers 404 and writes nothing.
+	for (const ghost of ["constructor", "__proto__", "toString"]) await row(`"${ghost}" is no connector`, async () => {
+		const before = filesNow();
+		const answers = {
+			delete: await deleteConnector(ghost),
+			address: await requestJson(`/api/mcp/servers/${encodeURIComponent(ghost)}/address`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "http://127.0.0.1:9/elsewhere-mcp" }) }),
+			login: await requestJson(`/api/mcp/servers/${encodeURIComponent(ghost)}/login`, { method: "POST" }),
+			test: await requestJson(`/api/mcp/servers/${encodeURIComponent(ghost)}/test`, { method: "POST" }),
+			tools: await requestJson(`/api/mcp/servers/${encodeURIComponent(ghost)}/tools`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ tools: { read_page: "blocked" } }) }),
+		};
+		for (const [route, answer] of Object.entries(answers)) assert(answer.status === 404, `${route} of "${ghost}" answers 404, got ${answer.status}: ${JSON.stringify(answer.body)}`);
+		// Sign-out names no connector it looks up: it answers as for any name, and writes nothing either.
+		const logout = await requestJson(`/api/mcp/servers/${encodeURIComponent(ghost)}/logout`, { method: "POST" });
+		assert(logout.status === 200, `logout of "${ghost}" answers as for any name, got ${logout.status}: ${JSON.stringify(logout.body)}`);
+		unchangedSince(before, `a request about "${ghost}"`);
+	});
+
+	// A refusal (409): a connector only another app's file defines leaves every room's grant.
+	fs.mkdirSync(path.join(tempHome, ".cursor"), { recursive: true });
+	fs.writeFileSync(path.join(tempHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { "from-cursor": { url: "http://127.0.0.1:9/cursor-mcp" } } }, null, 2));
+	const ownConfigPath = path.join(agentDir, "mcp.json");
+	fs.writeFileSync(ownConfigPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(ownConfigPath, "utf-8")), imports: ["cursor"] }, null, 2));
+	for (const settings of roomSettingsPaths) {
+		const current = JSON.parse(fs.readFileSync(settings, "utf-8"));
+		fs.writeFileSync(settings, `${JSON.stringify({ ...current, grantedConnectors: [...current.grantedConnectors, "from-cursor"] }, null, 2)}\n`, { mode: 0o600 });
+	}
+	await row("a refused removal", async () => {
+		const beforeRefusal = filesNow();
+		const refusedImported = await deleteConnector("from-cursor");
+		assert(refusedImported.status === 409, `removing a connector of another app is refused, got ${refusedImported.status}: ${JSON.stringify(refusedImported.body)}`);
+		unchangedSince(beforeRefusal, "a refused removal");
+	});
+
+	// A folder's refusal can be forced only off Windows and not as root.
+	const canForceFsRefusal = process.platform !== "win32" && process.getuid?.() !== 0;
+	if (canForceFsRefusal) {
+		await row("a removal whose own write fails", async () => {
+			// The connector's own file can't be written: the rooms keep what they had.
+			const beforeWriteFails = filesNow();
+			fs.chmodSync(agentDir, 0o500);
+			let ownWriteFails;
+			try {
+				ownWriteFails = await deleteConnector("team-wiki");
+			} finally {
+				fs.chmodSync(agentDir, 0o700);
+			}
+			assert(ownWriteFails.status === 500, `a removal whose own write fails answers 500, got ${ownWriteFails.status}: ${JSON.stringify(ownWriteFails.body)}`);
+			unchangedSince(beforeWriteFails, "a removal whose own write fails");
+		});
+
+		await row("a room that can't be read", async () => {
+			// A room whose settings can't be read stops the removal: its grant can't be known.
+			const beforeUnreadable = filesNow();
+			fs.chmodSync(legacySettingsPath, 0o000);
+			let unreadable;
+			try {
+				unreadable = await deleteConnector("team-wiki");
+			} finally {
+				fs.chmodSync(legacySettingsPath, 0o600);
+			}
+			assert(unreadable.status === 500 && JSON.stringify((unreadable.body?.revokeFailures ?? []).map((failure: { agentId: string }) => failure.agentId)) === JSON.stringify([legacyRoomId]), `a room that can't be read stops the removal and is named, got ${unreadable.status}: ${JSON.stringify(unreadable.body)}`);
+			unchangedSince(beforeUnreadable, "a removal a room's unreadable settings stopped");
+		});
+
+		await row("the same delete once it can be read", async () => {
+			// Once it can be read, the same delete takes it from the app and every room.
+			const removed = await deleteConnector("team-wiki");
+			assert(removed.status === 200 && [...(removed.body?.revokedFromRooms ?? [])].sort().join(",") === [legacyRoomId, roomId].sort().join(","), `the same delete then succeeds in every room, got ${removed.status}: ${JSON.stringify(removed.body)}`);
+			for (const settings of roomSettingsPaths) assert(!fs.readFileSync(settings, "utf-8").includes("team-wiki"), `no room names the removed connector, ${path.relative(tempHome, settings)} does`);
+			assert(!fs.readFileSync(ownConfigPath, "utf-8").includes("team-wiki"), "the removed connector is gone from the app's file");
+		});
+	}
+	assert(failedRows.length === 0, `removal rows failed:\n${failedRows.join("\n")}`);
+
 	console.log("persistent-room-mcp-grants-api-smoke: OK");
 } catch (error) {
 	console.error(error instanceof Error ? error.stack || error.message : error);

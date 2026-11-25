@@ -15,11 +15,14 @@ import type { PersistentAgentThreadRecord } from "./persistent-agent-types.js";
 import { persistentAgentModelLocksEqual } from "./persistent-agent-ai-profiles.js";
 import { withRoomSaveLock } from "./memory-commit.js";
 import { activeRoomLock, REPO_ROOT, roomLockBusyStatus } from "./server-install-root.js";
-import { type PersistentRoomLiveSession, persistentRoomLiveSessions, SWITCH_WHILE_ANSWERING_MESSAGE } from "./room-live-sessions.js";
+import { itemsShownTo, type PersistentRoomLiveSession, persistentRoomLiveSessions, SWITCH_WHILE_ANSWERING_MESSAGE } from "./room-live-sessions.js";
 import { app } from "./server-app.js";
 import { browserSafeMementoBoundaryResponse, getUsablePersistentAgentStatusForNormalUse, persistentAgentNormalUseErrorReply } from "./room-status.js";
 import { effortOnModel, parseRoomModelPatch, type RegistryModel, roomModelLockPayload, roomModelsPayload, webChatProviderLabel } from "./ai-models.js";
 import { resolveBoundaryFreshThreadModel, roomConversationModelForNewThread } from "./ai-profile-models.js";
+import { readConsultHandoffQueue } from "./consult-handoff.js";
+import { untakenTransfers } from "./persistent-agent-threads.js";
+import { isSharedServer } from "./server-hooks.js";
 
 // Post-stream landing: thread answers are client-
 // authored, and the client's debounced persist fires ~500ms after the LAST
@@ -175,10 +178,12 @@ function mergeThreadSave(agentId: string, threadId: string, incoming: unknown, r
 	rememberRemovedIds(agentId, threadId, removedNow);
 	// The memory keeps only the newest removals; this save's own all count.
 	const removed = new Set([...removedIdsOf(agentId, threadId), ...removedNow]);
-	const byId = removed.size > 0 || existingItems.some(isShared) || incoming.some((item: any) => item && typeof item === "object" && "landed" in item);
+	// On a shared server several pages save one conversation: a save keeps every item it lacks, unless it was removed.
+	const shared = isSharedServer();
+	const byId = shared || removed.size > 0 || existingItems.some(isShared) || incoming.some((item: any) => item && typeof item === "object" && "landed" in item);
 	// Read once: the marker lives in a file, and a save carries many items.
 	const latest = byId ? latestTurnKey(agentId, threadId) : undefined;
-	const merged = byId ? mergeSaveById(existingItems, incoming, removed, (key) => latest === key) : incoming;
+	const merged = byId ? mergeSaveById(existingItems, incoming, removed, (key) => latest === key, shared) : incoming;
 	// The old merge brings back old landings, never one the page removed.
 	const kept = removed.size > 0 ? existingItems.filter((item: any) => !removed.has(String(item?.id ?? ""))) : existingItems;
 	// Last, so a line goes after every landing a merge brought back.
@@ -207,7 +212,13 @@ app.put("/api/persistent-agents/:id/threads/:threadId", { bodyLimit: 64 * 1024 *
 		// is not a choice (choices are made in Room settings, Model).
 		const existing = getPersistentAgentThread(status.id, threadId);
 		const model = existing?.model ?? roomConversationModelForNewThread(status.id);
-		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model, items, pendingHandoffs: body.pendingHandoffs }, {
+		// On a shared server a page's save names only the transfers it added: they join the stored queue, which another page's
+		// message may have taken meanwhile. One a message already carried stays out, whatever the page remembers; named twice, one stays.
+		const stored = readConsultHandoffQueue(existing?.pendingHandoffs);
+		const pendingHandoffs = isSharedServer() && Array.isArray(body.pendingHandoffs)
+			? [...stored, ...untakenTransfers(status.id, threadId, body.pendingHandoffs.filter((block: unknown) => !stored.includes(block as string)))]
+			: body.pendingHandoffs;
+		const written = writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model, items, pendingHandoffs }, {
 			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({
 				agentId: status.id,
 				threadId,
@@ -220,6 +231,8 @@ app.put("/api/persistent-agents/:id/threads/:threadId", { bodyLimit: 64 * 1024 *
 			// newer one.
 			...(body.state === "standby" ? { keepRuntimeIfMoved: true } : {}),
 		});
+		// The page takes this answer as its conversation: shown to its person, as the conversation's read is.
+		return { ...written, thread: { ...written.thread, items: itemsShownTo(req, written.thread.items) } };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -544,8 +557,10 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		}
 		// Tell a still-connected live client its thread is gone, then close the
 		// socket so it stops writing to the closed thread and the room lock is
-		// released. The client lands in its normal disconnected state.
-		if (live && persistentRoomLiveSessions.get(status.id) === live) {
+		// released. The client lands in its normal disconnected state. On a
+		// shared server the room's host has sent every page on to the new
+		// conversation instead (room-socket.ts, room_moved).
+		if (live && persistentRoomLiveSessions.get(status.id) === live && !isSharedServer()) {
 			live.notify("This conversation was forgotten. It is closed and the room starts fresh on next open.");
 			live.closeSocket();
 		}

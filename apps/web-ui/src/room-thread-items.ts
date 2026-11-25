@@ -1,6 +1,7 @@
 import { modelNotOnAccount } from "../../web-server/src/model-not-on-account";
 import { modelNotOffered } from "../../web-server/src/model-not-offered";
-import { isTurnRunningNote, type TurnFailure, savedLineShown, isRetryNote, isStopLine } from "./turn-failure-line";
+import { type TurnFailure, savedLineShown, isRetryNote, isStopLine } from "./turn-failure-line";
+import { isTurnRunningNote } from "./turn-running-words";
 import { keyOfId, REMOVED_IDS_CAP } from "../../web-server/src/thread-items-by-id";
 import { ROOM_ASK_KINDS } from "../../web-server/src/room-box/card-text";
 import type { PersistentAgentId, WebChatModelOption, ChatItem, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord } from "./types";
@@ -31,6 +32,11 @@ interface SessionUsage {
 	contextTokens: number | null;
 }
 
+/** A conversation's items as the server holds them, as the page shows them: lines only the live page shows are left out. */
+function loadedThreadItems(raw: unknown): ChatItem[] {
+	return settleLoadedItems(Array.isArray(raw) ? raw as ChatItem[] : []).filter((item) => !isSavedModelWaitLine(item) && !isSavedRetryNote(item) && !isTurnRunningNote(item)).map(withSavedFailureLineShown);
+}
+
 function threadRecordToLocalThread(record: PersistentAgentThreadRecord, fallbackDisplayName = "Persistent room"): PersistentAgentThread {
 	if (record.state === "closed") throw new Error("This room thread is closed and cannot be resumed.");
 	const model: WebChatModelOption = { provider: record.model.provider, model: record.model.model, label: record.model.label || `${record.model.provider}/${record.model.model}` };
@@ -40,7 +46,7 @@ function threadRecordToLocalThread(record: PersistentAgentThreadRecord, fallback
 		displayName: fallbackDisplayName,
 		conversationId: record.threadId,
 		model,
-		items: settleLoadedItems(Array.isArray(record.items) ? record.items as ChatItem[] : []).filter((item) => !isSavedModelWaitLine(item) && !isSavedRetryNote(item) && !isTurnRunningNote(item)).map(withSavedFailureLineShown),
+		items: loadedThreadItems(record.items),
 	};
 }
 
@@ -181,9 +187,15 @@ function isStepInFlight(item: ChatItem): boolean {
 function itemsToSave(items: ChatItem[]): ChatItem[] {
 	return items.flatMap((item): ChatItem[] => {
 		if (isTurnRunningNote(item) || item.kind === "thinking") return [];
+		// Whom a page waits for, and whether its person asked, are that page's alone: the conversation is everyone's.
+		if (item.kind === "approval" && (item.waitingFor || item.askedBy?.here)) {
+			const { waitingFor: _waitingFor, askedBy, ...rest } = item;
+			item = askedBy ? { ...rest, askedBy: { name: askedBy.name } } : rest;
+		}
 		// Nor what only this screen's wait needs: a folder card's line and the folder it shows, either of which names a folder, a failure line, when it was last sent and its open window. A site or connector card has no reason.
-		if (item.kind === "approval" && (ROOM_ASK_KINDS.has(item.uiKind) || item.uiKind === "site" || item.uiKind === "connector")) {
-			const { reason: _reason, line: _line, failure: _failure, shownAt: _shownAt, choosing: _choosing, suggested: _suggested, ...saved } = item;
+		// A connector's form keeps neither its fields nor their lines: a card still open is sent again whole.
+		if (item.kind === "approval" && (ROOM_ASK_KINDS.has(item.uiKind) || item.uiKind === "site" || item.uiKind === "connector" || item.uiKind === "form")) {
+			const { reason: _reason, line: _line, failure: _failure, shownAt: _shownAt, choosing: _choosing, suggested: _suggested, fields: _fields, fieldLines: _fieldLines, ...saved } = item;
 			return [saved];
 		}
 		if (item.kind !== "tool") return [item];
@@ -310,5 +322,5 @@ function hasUserVisibleTurn(items: ChatItem[]): boolean {
 	return items.some((item) => (item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
 }
 
-export { PendingRemovals, ZERO_USAGE, deriveTrailingConsultIds, failureKindOf, frameItemId, reconnectedThread, threadSaveBody, formatDirectResumeError, hasUserInput, hasUserVisibleTurn, endLiveThinking, itemsToSave, leftByFailedAttempt, newConversationId, nid, stopWorkInFlight, threadRecordToLocalThread, withShownTurn, withoutStopLineUnderStoppedCard };
+export { PendingRemovals, ZERO_USAGE, deriveTrailingConsultIds, failureKindOf, frameItemId, reconnectedThread, threadSaveBody, formatDirectResumeError, hasUserInput, hasUserVisibleTurn, endLiveThinking, itemsToSave, leftByFailedAttempt, newConversationId, nid, stopWorkInFlight, threadRecordToLocalThread, withShownTurn, withoutStopLineUnderStoppedCard, loadedThreadItems };
 export type { MaintainTarget, PersistentAgentTarget, PersistentAgentThread, PersistentChatConfig, SessionUsage };

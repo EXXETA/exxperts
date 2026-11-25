@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { MarkdownRenderer } from "./Markdown";
+import { useSettingsLookNext } from "../settings-look";
 
 /** Folded height of a skill's instructions on its page, in px. */
 const FOLDED_HEIGHT = 340;
@@ -11,6 +12,7 @@ const FOLDED_HEIGHT = 340;
  * review screen leaves it unfolded, since that screen asks you to read it.
  */
 export function SkillInstructions({ body, foldable = false }: { body: string; foldable?: boolean }) {
+	const lookNext = useSettingsLookNext();
 	const docRef = useRef<HTMLDivElement | null>(null);
 	const [tall, setTall] = useState(false);
 	const [open, setOpen] = useState(false);
@@ -34,7 +36,7 @@ export function SkillInstructions({ body, foldable = false }: { body: string; fo
 			{foldable && tall && (
 				<button
 					type="button"
-					className="rs-btn skill-doc-toggle"
+					className={lookNext ? "rs-btn rs-btn-quiet skill-doc-toggle" : "rs-btn skill-doc-toggle"}
 					aria-expanded={open}
 					onClick={() => {
 						// Folding back from far below brings the start of the text into view.

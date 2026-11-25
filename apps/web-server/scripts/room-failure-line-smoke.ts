@@ -19,7 +19,9 @@
 //   error at the provider (500), or a dropped connection; an attempt the
 //   runtime asks again draws no failure line, not even for a moment: only the
 //   attempt that ends the turn does;
-// - a model still busy after the runtime's retries says so;
+// - a model still busy after the runtime's retries says so, also one whose
+//   provider asked for a wait of an hour (stop-during-provider-wait-smoke.ts
+//   has the wait itself): the line promises no time;
 // - a raw red line an older build saved into the conversation shows as the
 //   plain line when the conversation opens;
 // - the conversation and memory more than the model reads at once: the line
@@ -110,13 +112,14 @@ const attempts = new Map<string, number>();
 const sentTexts: string[] = [];
 // A message that fails on the provider's server until the scene says it no longer does.
 let healed = false;
-function scripted(lastUserText: string): { status: number; body: unknown } | "drop" | "text" | "empty" {
+function scripted(lastUserText: string): { status: number; body: unknown; retryAfter?: string } | "drop" | "text" | "empty" {
 	const seen = (attempts.get(lastUserText) ?? 0) + 1;
 	attempts.set(lastUserText, seen);
 	if (/credit/i.test(lastUserText)) return { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: CREDIT_WORDS }, request_id: "req_smoke_credit" } };
 	if (/odd request/i.test(lastUserText)) return { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: "messages.0.content: text content blocks must be non-empty" }, request_id: "req_smoke_odd" } };
 	if (/busy for a while/i.test(lastUserText) && seen <= 3) return { status: 529, body: { type: "error", error: { type: "overloaded_error", message: "Overloaded" }, request_id: "req_smoke_busy_while" } };
 	if (/always busy/i.test(lastUserText)) return { status: 529, body: { type: "error", error: { type: "overloaded_error", message: "Overloaded" }, request_id: "req_smoke_busy" } };
+	if (/busy for an hour/i.test(lastUserText)) return { status: 429, retryAfter: "3600", body: { type: "error", error: { type: "rate_limit_error", message: "Too many requests." }, request_id: "req_smoke_hour" } };
 	if (/server error once/i.test(lastUserText) && seen === 1) return { status: 500, body: { type: "error", error: { type: "api_error", message: "Internal server error" }, request_id: "req_smoke_server" } };
 	if (/until healed/i.test(lastUserText) && !healed) return { status: 500, body: { type: "error", error: { type: "api_error", message: "Internal server error" }, request_id: "req_smoke_until_healed" } };
 	if (/dropped once/i.test(lastUserText) && seen === 1) return "drop";
@@ -167,7 +170,7 @@ const endpoint = http.createServer((req, res) => {
 		const answer = scripted(asked);
 		if (answer === "drop") { req.socket.destroy(); return; }
 		if (answer !== "text" && answer !== "empty") {
-			res.writeHead(answer.status, { "content-type": "application/json" });
+			res.writeHead(answer.status, { "content-type": "application/json", ...(answer.retryAfter ? { "retry-after": answer.retryAfter } : {}) });
 			res.end(JSON.stringify(answer.body));
 			return;
 		}
@@ -496,11 +499,21 @@ try {
 		await page.getByText(`${MODEL_NAME} is busy. Trying again…`).waitFor({ timeout: 15000 });
 		await waitUntil(async () => (await errorTexts()).length > linesBeforeBusy, "the busy failure shows a line", 30000);
 		await settled();
-		assert((await errorTexts()).at(-1) === `${MODEL_NAME} is still busy after several tries. Try again in a minute.`, `a model busy after the retries says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
+		assert((await errorTexts()).at(-1) === `${MODEL_NAME} is still busy after several tries. Try again later.`, `a model busy after the retries says so, got ${JSON.stringify((await errorTexts()).at(-1))}`);
 		assert((await page.getByText(/Trying again…|Retrying…/).count()) === 0, "the retry note is gone once the retries end");
 		await noRawWords("busy after the retries");
 		linesOnlyAtTheEnd(await turnLog(), "busy through every retry", `${MODEL_NAME} is still busy after several tries.`);
 		console.log("  ok  while retrying, the note says the model is busy; after the retries, the line says it is still busy");
+
+		// A provider that asks for an hour: the line promises no minute.
+		const linesBeforeHour = (await errorTexts()).length;
+		await send("Busy for an hour, sorry.");
+		await page.getByText(`${MODEL_NAME} is busy. Trying again…`).waitFor({ timeout: 15000 });
+		await waitUntil(async () => (await errorTexts()).length > linesBeforeHour, "a wait of an hour shows a line", 30000);
+		await settled();
+		assert((await errorTexts()).at(-1) === `${MODEL_NAME} is still busy after several tries. Try again later.`, `a model busy for an hour says to try later, got ${JSON.stringify((await errorTexts()).at(-1))}`);
+		await noRawWords("busy for an hour");
+		console.log("  ok  a provider that asks for a wait of an hour: the same line, promising no time");
 
 		// A page that comes back while the runtime retries names the model from the retry itself.
 		await send("Busy for a while, then an answer.");

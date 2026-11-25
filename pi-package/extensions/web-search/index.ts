@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
+import { isSharedServer, serverHooks } from "../../../apps/web-server/src/server-hooks.js";
 import { productAppStatePath } from "../../product-state-paths.js";
 
 // Search backends: DuckDuckGo's HTML endpoint is the zero-setup default
@@ -36,6 +37,7 @@ interface SharedSearchConfig {
 	provider?: string;
 	baseUrl?: string;
 	providerSearch?: boolean;
+	webPages?: boolean;
 }
 
 // A file nobody wrote and a file nobody can read are different answers, and
@@ -102,8 +104,18 @@ export type WebSearchSettings = {
 	 * subscription profiles it is the better search and it is already paid for.
 	 */
 	providerSearch: boolean;
-	/** What the saved file says, whether or not it is what wins. Empty when the file cannot be read. */
-	saved: { provider?: SearchProvider; baseUrl?: string; providerSearch?: boolean };
+	/**
+	 * Whether rooms open web pages (fetch_url). On a shared server it is the
+	 * organisation admin's switch, off until they turn it on: a missing field
+	 * is off there, so a server whose file predates the field stays off, and a
+	 * server whose setup says it can't reach public pages (the publicPages
+	 * hook) is off whatever is stored. The desktop has no such switch and
+	 * always opens pages, whatever the file says. EXXETA_FETCH_URL_DISABLED
+	 * still refuses every page on its own.
+	 */
+	webPages: boolean;
+	/** What the saved file says, whether or not it is what wins. Empty when the file cannot be read; never webPages on the desktop. */
+	saved: { provider?: SearchProvider; baseUrl?: string; providerSearch?: boolean; webPages?: boolean };
 	/** Set when the config file exists but cannot be understood, so callers can say so instead of acting on a guess. */
 	unreadable?: string;
 };
@@ -117,7 +129,9 @@ export function resolveWebSearchSettings(): WebSearchSettings {
 		// that provider search was not wanted. The local backend falls back to
 		// the zero-setup default, which is a taste question, not a governance
 		// one, and the caller is told the file is broken either way.
-		return { provider: "duckduckgo", source: "default", providerSearch: false, saved: {}, unreadable: read.message };
+		// Web pages fail closed the same way on a shared server; the desktop
+		// opened pages whatever this file said, and still does.
+		return { provider: "duckduckgo", source: "default", providerSearch: false, webPages: !isSharedServer(), saved: {}, unreadable: read.message };
 	}
 	const config = read.state === "ok" ? read.config : {};
 	const savedProvider = config.provider ? normalizeProvider(String(config.provider)) : undefined;
@@ -126,21 +140,26 @@ export function resolveWebSearchSettings(): WebSearchSettings {
 	// about it, and the honest reading of silence is the default, not "off".
 	const savedProviderSearch = typeof config.providerSearch === "boolean" ? config.providerSearch : undefined;
 	const providerSearch = savedProviderSearch ?? true;
+	// Read only on a shared server, so a desktop write never carries it over.
+	const savedWebPages = isSharedServer() && typeof config.webPages === "boolean" ? config.webPages : undefined;
+	// A server marked as unable to reach public pages keeps them off whatever is stored; marked reachable again, the stored value counts again.
+	const webPages = isSharedServer() ? savedWebPages === true && serverHooks().publicPages?.() !== "unreachable" : true;
 	const saved = {
 		...(savedProvider ? { provider: savedProvider } : {}),
 		...(savedBaseUrl ? { baseUrl: savedBaseUrl } : {}),
 		...(savedProviderSearch !== undefined ? { providerSearch: savedProviderSearch } : {}),
+		...(savedWebPages !== undefined ? { webPages: savedWebPages } : {}),
 	};
 
 	const envProvider = String(process.env.EXXETA_SEARCH_PROVIDER || "").trim();
 	const envBaseUrl = String(process.env.EXXETA_SEARCH_BASE_URL || "").trim();
 	if (envProvider) {
-		return { provider: normalizeProvider(envProvider), baseUrl: envBaseUrl || savedBaseUrl, source: "environment", providerSearch, saved };
+		return { provider: normalizeProvider(envProvider), baseUrl: envBaseUrl || savedBaseUrl, source: "environment", providerSearch, webPages, saved };
 	}
 	if (savedProvider) {
-		return { provider: savedProvider, baseUrl: envBaseUrl || savedBaseUrl, source: "settings", providerSearch, saved };
+		return { provider: savedProvider, baseUrl: envBaseUrl || savedBaseUrl, source: "settings", providerSearch, webPages, saved };
 	}
-	return { provider: "duckduckgo", baseUrl: envBaseUrl || savedBaseUrl, source: "default", providerSearch, saved };
+	return { provider: "duckduckgo", baseUrl: envBaseUrl || savedBaseUrl, source: "default", providerSearch, webPages, saved };
 }
 
 function clampLimit(limit: unknown): number {
@@ -345,12 +364,20 @@ async function searchDuckDuckGo(query: string, limit: number, signal?: AbortSign
 	return results;
 }
 
+/** What the model reads where the admin has web search off on a shared server, the same form as the web reader's (WEB_PAGES_OFF, fetch_url). */
+export const WEB_SEARCH_OFF_SHARED = "Web search is off on this server. Your admin can turn it on under Web search.";
+
+/** The tool's description, read as a room's session starts: on a shared server with search off, nothing works out of the box. */
+export function webSearchDescription(): string {
+	if (isSharedServer() && resolveWebSearchSettings().provider === "disabled") return "Search the public web.";
+	return "Search the public web. Works out of the box (DuckDuckGo); a local SearXNG instance is used instead when one is configured (optional, for heavier use).";
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "web_search",
 		label: "Web search",
-		description:
-			"Search the public web. Works out of the box (DuckDuckGo); a local SearXNG instance is used instead when one is configured (optional, for heavier use).",
+		description: webSearchDescription(),
 		promptSnippet:
 			"Use `web_search` when the user asks for latest/current web information, market/client research, trends, or sourced briefings. Cite URLs in the final answer.",
 		parameters: Type.Object({
@@ -372,7 +399,7 @@ export default function (pi: ExtensionAPI) {
 							// the one in force sends them looking in the wrong place.
 							text: settings.source === "environment"
 								? "Web search is disabled by EXXETA_SEARCH_PROVIDER=disabled. Remove that setting to re-enable it."
-								: "Web search is switched off in AI setup under Web search. Turn it back on there to use it.",
+								: isSharedServer() ? WEB_SEARCH_OFF_SHARED : "Web search is switched off in AI setup under Web search. Turn it back on there to use it.",
 						},
 					],
 					details: { configured: false, provider },

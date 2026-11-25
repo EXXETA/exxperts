@@ -28,6 +28,7 @@ import { failureLineText, turnFailureLine as turnFailureParts, unreachedWayOn } 
 // A chat line's text as it is first said, nothing of the message lost.
 const turnFailureLine = (...args: Parameters<typeof turnFailureParts>): string => failureLineText(turnFailureParts(...args), "lost");
 import * as lines from "../../web-ui/src/turn-failure-line.js";
+import { isTurnRunningNote, TURN_RUNNING_LINE } from "../../web-ui/src/turn-running-words.js";
 import { isSignInFailure } from "../../web-ui/src/sign-in-failure.js";
 import { threadRecordToLocalThread } from "../../web-ui/src/room-thread-items.js";
 import path from "node:path";
@@ -365,6 +366,8 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 			["region-or-plan", undefined, false, "Choose another model"],
 			["refused", undefined, false, "Choose another model"],
 			["too-large", undefined, false, "Choose another model"],
+			["request-size", undefined, false, ""],
+			["request-size", undefined, true, ""],
 			["not-on-account", undefined, false, "Choose another model"],
 			["not-offered", undefined, false, "Choose another model"],
 			["overflow", undefined, false, "Review memory|Choose another model"],
@@ -395,9 +398,10 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 				["Acme Model can read only 8,192 tokens at once, less than the context window set for it (32,768). Tell your admin, or choose another model in Room settings, Model.", "window-set-larger", undefined, true, "Acme Model can read only 8,192 tokens at once, less than the context window set for it (32,768). Tell your admin, or choose another model."],
 				["GPT 6 can't read this conversation at once. Continue on a model that can read more at once in Room settings, Model.", "conversation-over-window", undefined, false, "GPT 6 can't read this conversation at once. Continue on a model that can read more at once."],
 				["GPT 6 could not be reached. Check your internet connection, then try again.", "connection", undefined, false, "GPT 6 could not be reached. Check your internet connection, then try again."],
+				["GPT 6 can't take this much at once. Your message is still above. Ask for fewer pictures or files at a time.", "request-size", undefined, false, "GPT 6 can't take this much at once. Your message is still above. Ask for fewer pictures or files at a time."],
 				// A sentence that only says what the Try again button does goes; one that says when, or what to do first, stays.
 				["GPT 6 stopped in the middle of its answer. Try again.", "cut-off", undefined, false, "GPT 6 stopped in the middle of its answer."],
-				["GPT 6 is still busy after several tries. Try again in a minute.", "still-busy", undefined, false, "GPT 6 is still busy after several tries. Try again in a minute."],
+				["GPT 6 is still busy after several tries. Try again later.", "still-busy", undefined, false, "GPT 6 is still busy after several tries. Try again later."],
 			];
 			for (const [text, cause, way, shared, shown] of pairs) check(newest(text, cause, way, shared) === shown, `the newest ${cause} line${shared ? " on a shared server" : ""} reads ${JSON.stringify(shown)}, got ${JSON.stringify(newest(text, cause, way, shared))}`);
 			// The overflow line names memory only where the conversation and memory overflow; the message alone has its own line.
@@ -491,8 +495,8 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 		const older = lines.savedFailureLineShown({ text: "GPT 6 isn't available on your account. Choose another model in Room settings, Model. Your message is back in the box." });
 		check(older.parts?.cause === "GPT 6 isn't available on your account." && older.parts?.wayOn === "Choose another model in Room settings, Model." && older.messageBack === true && older.text === "GPT 6 isn't available on your account. Choose another model in Room settings, Model.", `a line saved with the way on first reads it out of the cause, got ${JSON.stringify(older)}`);
 		// The still-finishing note is never kept: one an older build saved, in its words then, goes on the way in too.
-		check(lines.TURN_RUNNING_LINE === "The last answer is still finishing; send your message in a moment.", `the still-finishing note, got ${JSON.stringify(lines.TURN_RUNNING_LINE)}`);
-		check(lines.isTurnRunningNote({ kind: "system", text: "The last answer is still finishing. Your message is back in the box; send it in a moment." }) && lines.isTurnRunningNote({ kind: "system", text: lines.TURN_RUNNING_LINE }), "the still-finishing note is known in an older build's words and in this one's");
+		check(TURN_RUNNING_LINE === "The last answer is still finishing; send your message in a moment.", `the still-finishing note, got ${JSON.stringify(TURN_RUNNING_LINE)}`);
+		check(isTurnRunningNote({ kind: "system", text: "The last answer is still finishing. Your message is back in the box; send it in a moment." }) && isTurnRunningNote({ kind: "system", text: TURN_RUNNING_LINE }), "the still-finishing note is known in an older build's words and in this one's");
 		// Opened again: every saved line older builds wrote with the message back in the box loses that sentence, whatever its level.
 		const reopened = threadRecordToLocalThread({ state: "standby", agentId: "room", threadId: "thread", model: { provider: "p", model: "m" }, items: [
 			{ kind: "user", id: "u1", text: "Earlier." },
@@ -569,6 +573,11 @@ check(modelUnreachableSentence("gateway-refused" as never, model) === "Claude So
 	check(overflowOf("prompt is too long: 210000 tokens > 200000 maximum") === "overflow", `a provider's overflow words are the overflow cause, got ${overflowOf("prompt is too long: 210000 tokens > 200000 maximum")}`);
 	check(overflowOf("the request exceeds the available context size (4096 tokens), try increasing it") === "overflow", "words that name the model's limit are the overflow cause");
 	check(causes.turnFailureOf("This model's maximum context length is 8192 tokens.", false, "openai", true) === "overflow", "an overflow is read before an answer cut off part way");
+	const bySize = lines.turnFailureLine("GPT 6", "request-size", "openai");
+	check(lines.failureLineText(bySize, "above") === "GPT 6 can't take this much at once. Your message is still above. Ask for fewer pictures or files at a time.", `the line for a request refused for its size, got ${JSON.stringify(lines.failureLineText(bySize, "above"))}`);
+	check(lines.failureLineText(bySize, "back") === "GPT 6 can't take this much at once. Ask for fewer pictures or files at a time.", `its line once the message is back in the box, got ${JSON.stringify(lines.failureLineText(bySize, "back"))}`);
+	check(lines.failureLineText(lines.turnFailureLine("GPT 6", "request-size", "openai", undefined, true), "above") === lines.failureLineText(bySize, "above"), "a shared server says the same");
+	check(causes.turnFailureOf("413 Request Entity Too Large", false, "openai", false, { errorStatus: 413 }) === "request-size", "a 413 is a request refused for its size");
 	check(overflowOf("Request too large for gpt-6 in organization org-x on tokens per min (TPM): Limit 30000, Requested 50000.") === "too-large", "a per-minute ceiling stays too large, not an overflow");
 }
 

@@ -118,12 +118,12 @@ async function readGuide(page: Page): Promise<Read> {
 const FIRST_STEP = "Connect your AI. Open the gear, then Settings, AI setup. Sign in with a subscription, add an API key, or connect your company gateway. Set the default models for your rooms there.";
 const DESKTOP_TILES = [
 	"Each room can have its own model: Room settings, Model.",
-	"Sort your rooms on Home by last used, by name, or drag them into your own order.",
+	"Sort your rooms by last used, by name, or drag them into your own order.",
 	"A room is open in one place at a time. If it's open in another window, close it there first.",
 	"The Memory page shows what your rooms remember. The Wallet shows what you spend.",
 ];
-// No Wallet and no choice of order there.
-const SHARED_TILES = [DESKTOP_TILES[0], DESKTOP_TILES[2], "The Memory page shows what your rooms remember."];
+// No Wallet and no choice of order there, and a room is open on every page at once.
+const SHARED_TILES = [DESKTOP_TILES[0], "The Memory page shows what your rooms remember."];
 
 function checkWords(read: Read, what: string, firstStep: string, tiles: string[]): void {
 	const same = (got: unknown, want: unknown, name: string) => check(JSON.stringify(got) === JSON.stringify(want), `${what}: ${name}, got ${JSON.stringify(got)}`);
@@ -133,7 +133,7 @@ function checkWords(read: Read, what: string, firstStep: string, tiles: string[]
 	same(read.numbers, ["1", "2", "3", "4", "5"], "the steps are numbered straight through the groups");
 	same(read.steps, [
 		firstStep,
-		"Create a room. One room per project or topic. Press New room on Home, give it a name and start talking: ask questions, share files, work things through.",
+		"Create a room. One room per project or topic. Press New room on the Rooms page, give it a name and start talking: ask questions, share files, work things through.",
 		"Remember what matters. When a conversation is worth keeping, press Remember. You see what the room will keep before anything is saved, unless you switched that preview off in Room settings, Memory. Forget closes a conversation without keeping it.",
 		"Come back any time. A room rests fully saved. Press Resume to continue where you left off.",
 		"Keep the memory tidy. When conversations pile up, press Maintain on the room's card. Memorize turns them into notes, and Review tidies the notes. Nothing changes without your approval, unless you let Memorize apply by itself in Room settings, Memory.",
@@ -296,11 +296,11 @@ try {
 		}
 
 		// 6. What's new goes first and the guide never opens over it: it opens as that window closes, by every way out.
-		for (const role of [null, "member"] as const) {
-			const what = role ? "a shared server's member" : "this computer";
+		// A shared server shows no What's new, so there the guide opens at once: whats-new-smoke covers that.
+		{
+			const what = "this computer";
 			whatsNewDueNext();
 			const context = await browser.newContext(DESKTOP);
-			if (role) await asSharedServer(context, role);
 			const page = await openApp(context);
 			const close = page.locator(".whats-new-close");
 			await close.waitFor({ timeout: 15000 });

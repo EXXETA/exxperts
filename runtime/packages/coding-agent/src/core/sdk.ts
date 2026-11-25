@@ -1,6 +1,14 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, type LoopStrategy, type ThinkingLevel } from "@exxeta/exxperts-core";
-import { type CacheRetention, clampThinkingLevel, type Message, type Model, streamSimple } from "@exxeta/exxperts-ai";
+import {
+	type AssistantMessage,
+	type AssistantMessageEventStream,
+	type CacheRetention,
+	clampThinkingLevel,
+	createAssistantMessageEventStream,
+	type Message,
+	type Model,
+} from "@exxeta/exxperts-ai";
 import { getAgentDir } from "../config.js";
 import type { ContextPolicy } from "./context-policy.js";
 import { AgentSession } from "./agent-session.js";
@@ -11,6 +19,7 @@ import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefi
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
+import { EarlierPictures } from "./request-image-budget.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
@@ -178,6 +187,31 @@ function getDefaultAgentDir(): string {
 	return getAgentDir();
 }
 
+/** The answer of a request that was stopped before it went out. */
+function stoppedAnswer(model: Model<any>): AssistantMessageEventStream {
+	const stream = createAssistantMessageEventStream();
+	const error: AssistantMessage = {
+		role: "assistant",
+		content: [],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "aborted",
+		errorMessage: "Request was aborted",
+		timestamp: Date.now(),
+	};
+	stream.push({ type: "error", reason: "aborted", error });
+	return stream;
+}
+
 function getAttributionHeaders(
 	model: Model<any>,
 	settingsManager: SettingsManager,
@@ -330,11 +364,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	let agent: Agent;
 
+	const earlierPictures = new EarlierPictures();
+
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
 		const converted = convertToLlm(messages);
 		// Check setting dynamically so mid-session changes take effect
-		if (!settingsManager.getBlockImages()) {
+		const blockImages = settingsManager.getBlockImages();
+		earlierPictures.readRequest(blockImages ? [] : messages, sessionManager.getBranch());
+		if (!blockImages) {
 			return converted;
 		}
 		// Filter out ImageContent from all messages, replacing with text placeholder
@@ -388,7 +426,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const attributionHeaders = getAttributionHeaders(model, settingsManager);
-			return streamSimple(model, context, {
+			// Stopped before its request: nothing goes out, whatever the provider's client does with an aborted signal.
+			if (options?.signal?.aborted) return stoppedAnswer(model);
+			const requestOptions = {
 				...options,
 				apiKey: auth.apiKey,
 				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
@@ -398,7 +438,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					attributionHeaders || auth.headers || options?.headers
 						? { ...attributionHeaders, ...auth.headers, ...options?.headers }
 						: undefined,
-			});
+			};
+			return earlierPictures.send(model, context, requestOptions);
 		},
 		onPayload: async (payload, _model) => {
 			const runner = extensionRunnerRef.current;
@@ -420,6 +461,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		sessionId: sessionManager.getSessionId(),
 		transformContext: async (messages) => {
+			earlierPictures.readConversation(
+				messages,
+				sessionManager.getBranch(),
+				(provider, model) => modelRegistry.find(provider, model)?.input.includes("image") ?? false,
+			);
 			const runner = extensionRunnerRef.current;
 			if (!runner) return messages;
 			return runner.emitContext(messages);

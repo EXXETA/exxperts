@@ -44,6 +44,8 @@
 .ask-fact dd .ask-name { margin-right: 8px; }
 /* The path moves whole to its own line when it doesn't fit beside the name, and a long one wraps there after its separators. An inline table, not an inline block: its baseline is its first line, so a label beside a path that wraps stands at the path's first line, not its last. */
 .ask-fact dd .ask-path { display: inline-table; max-width: 100%; color: var(--muted); font-size: 13px; }
+/* The room's own words for a place, with no name before them: the row's one fact, so read as the name is. */
+.ask-fact dd .ask-path.ask-named { color: var(--fg); font-size: 14px; }
 /* A fact whose label is a sentence (the model's reason) puts its label on a line of its own. */
 .ask-fact.ask-fact-stacked > dt, .ask-fact.ask-fact-stacked > dd { grid-column: 1 / -1; }
 /* The model's reason can run long: it scrolls in its own few lines. */
@@ -59,6 +61,41 @@
 .ask-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .ask-actions-end { display: flex; flex-grow: 1; justify-content: flex-end; align-items: center; gap: 8px; }
 .ask-more { margin: 0; color: var(--muted); font-size: 12.5px; }
+/* A connector's form (connector-form-card.tsx): its fields, one under another, in the part of the panel that scrolls, each with its own label, Required beside it, the connector's words for it and the line under one whose value didn't fit. The controls are the settings forms' own (.settings-field, .launcher-path-input). */
+.ask-form { display: grid; gap: 14px; min-width: 0; }
+/* The scrolling part reaches 6px into the panel's sides and gives them back as padding, so a focused field's ring (2px, 2px out) is never cut at its edge or drawn under the scroll bar. */
+.ask-panel-in:has(> .ask-words .ask-form) { margin-inline: -6px; padding-inline: 6px; }
+.ask-form-field { min-width: 0; }
+.ask-form-field .launcher-path-input { box-sizing: border-box; min-width: 0; padding: 8px 10px; font-size: 14px; }
+/* Scoped to the form so it outranks the settings forms' own `.settings-field > span`, which a several-of-a-list field's name (a span, not a label) would otherwise take. */
+.ask-form .ask-form-name { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--fg); font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.ask-form-required { color: var(--muted); font-size: 12px; font-weight: 400; }
+.ask-form-field > .ask-form-about { color: var(--muted); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.ask-form-choices { display: grid; gap: 6px; }
+.ask-form-check { display: flex; align-items: baseline; gap: 8px; color: var(--fg); font-size: 14px; overflow-wrap: anywhere; }
+.ask-form-check > input { flex: none; margin: 0; }
+/* The line under a value that doesn't fit reads in the text colour, by weight, as the panel's warning does; the field's edge says which. */
+.ask-form-field > .ask-form-line { color: var(--fg); font-size: 13px; font-weight: 600; }
+.ask-form-field[data-wrong="1"] .launcher-path-input { border-color: var(--error); }
+/* A group of choices that doesn't fit is marked at its edge, as a field is by its border. */
+.ask-form-field[data-wrong="1"] > .ask-form-choices, .ask-form-field[data-wrong="1"] > .ask-form-check { box-shadow: inset 2px 0 var(--error); padding-left: 10px; }
+/* The browser draws a date's picker icon and a choice's box: they take the theme from color-scheme, as the schedule form's time field does (23-room-settings.css), and a ticked box the text colour. */
+.ask-form { color-scheme: dark; }
+:root[data-theme="light"] .ask-form { color-scheme: light; }
+.ask-form input[type="checkbox"] { accent-color: var(--fg); }
+/* A drop-down's prompt reads quieter than a choice, as a field's placeholder does; the list keeps every choice in the text colour. */
+.ask-form select.launcher-path-input:has(> option[value=""]:checked) { color: var(--muted); }
+.ask-form select.launcher-path-input > option { color: var(--fg); }
+/* The browser sets a drop-down's words 4px in from its padding: 4px less keeps them on the other fields' line. */
+.ask-form-field select.launcher-path-input { padding-left: 6px; }
+/* Text, date and drop-down fields stand one height. */
+.ask-form-field .launcher-path-input { height: 38px; }
+/* By touch, every field and every choice's whole row is at least a fingertip tall. */
+@media (hover: none), (max-width: 760px) {
+	.ask-form-field .launcher-path-input { height: 44px; }
+	.ask-form-check { align-items: center; min-height: 44px; }
+	.ask-form-check > input { width: 20px; height: 20px; }
+}
 /* A key's hint on its button, a space after its words (the family's button lays them out inline), never on touch. */
 .ask-panel kbd { margin-left: 8px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font-family: inherit; font-size: 11px; font-weight: 400; line-height: 1.2; opacity: 0.7; }
 /* An answer's words with its key's hint, and its words alone, in one cell: the first always sets the width, so the answer keeps its size and place whether the hint shows or not, and only one shows, the words alone centred. */
@@ -108,3 +145,18 @@
 @media (prefers-reduced-motion: reduce) {
 	.ask-panel { animation-duration: 120ms; }
 }
+/* A question in another person's answer, in the steps of every other page (ask-panel.tsx, WaitingAskCard): the panel's own card, flat and greyed, with whom it waits for where its answers would be. Its own ground under the fades, so they fade into it. */
+.ask-waiting {
+	--panel: var(--exx-surface-inset);
+	container-type: inline-size;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 14px 16px 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: 12px;
+	background: var(--panel);
+	color: var(--muted);
+}
+.ask-waiting .ask-title { color: var(--muted); }
+.ask-waiting-line { margin: 0; align-self: flex-end; color: var(--muted); font-size: 12.5px; }

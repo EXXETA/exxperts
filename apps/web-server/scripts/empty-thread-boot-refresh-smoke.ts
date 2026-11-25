@@ -181,7 +181,7 @@ try {
 		while (fits(leanPrompt, contextWindow) !== null && contextWindow < 1_000_000) contextWindow += 500;
 		check("too large: a window holds the lean memory and refuses the larger one", fits(leanPrompt, contextWindow) === null && fits(heavyPrompt, contextWindow) !== null, contextWindow);
 		const refusal = fits(heavyPrompt, contextWindow, nextThreadId) ?? "";
-		check("too large, empty: the refusal sends people to Maintain and to a larger model", /open Maintain from Home and run (Memorize|Review)/.test(refusal) && refusal.includes("choose a model that can read more at once in Room settings, Model"), refusal);
+		check("too large, empty: the refusal sends people to Maintain and to a larger model", /open Maintain on its card in Rooms and run (Memorize|Review)/.test(refusal) && refusal.includes("choose a model that can read more at once in Room settings, Model"), refusal);
 		check("too large, empty: the refusal no longer sends people to Forget", !/Forget \(it closes|unlocks the room/.test(refusal), refusal);
 		check("too large, empty: the refusal names the model as the app shows it", refusal.includes("the usable window of GPT-5.5 "), refusal);
 		fs.writeFileSync(l1bPath, lean, "utf-8");
@@ -192,7 +192,7 @@ try {
 		// smaller memory does not reach it: its refusal names the switch.
 		const turnsRefusal = fits(heavyPrompt, contextWindow, busyThreadId) ?? "";
 		check("too large, with messages: the refusal names switching this conversation to a larger model", turnsRefusal.includes("Room settings, Model") && /switch the open conversation/i.test(turnsRefusal), turnsRefusal);
-		check("too large, with messages: the refusal does not promise that Maintain fixes it", !/open Maintain from Home and run (Memorize|Review) to make the memory smaller, or/.test(turnsRefusal) && !/Forget \(it closes|unlocks the room/.test(turnsRefusal), turnsRefusal);
+		check("too large, with messages: the refusal does not promise that Maintain fixes it", !/open Maintain on its card in Rooms and run (Memorize|Review) to make the memory smaller, or/.test(turnsRefusal) && !/Forget \(it closes|unlocks the room/.test(turnsRefusal), turnsRefusal);
 		check("too large, with messages: the refusal says the conversation cannot continue, and how to continue here", turnsRefusal.includes("so this conversation cannot continue on this model.") && turnsRefusal.includes("To continue here, choose a model that can read more at once in Room settings, Model, and switch the open conversation to it."), turnsRefusal);
 
 		// With instructions, the way to a fresh boot is Forget; with messages,

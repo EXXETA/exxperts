@@ -508,7 +508,7 @@ try {
 		const toRooms = async (page: Page) => {
 			const back = page.getByRole("button", { name: "Back to rooms" });
 			if (await back.count()) await back.first().click();
-			else await page.getByText("Home", { exact: true }).first().click();
+			else await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 			await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15_000 });
 		};
 		const userItems = (items: Item[], text: string) => items.filter((item) => item.kind === "user" && String(item.text ?? "").includes(text));

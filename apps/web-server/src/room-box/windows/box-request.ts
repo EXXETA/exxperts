@@ -25,7 +25,7 @@ export type BoxNetwork =
 export interface WindowsRoomRules {
 	room: { folder: string; canChangeFiles: boolean };
 	alsoAllowed: readonly { path: string; access: "read" | "write" }[];
-	/** Approved skills' folders: read and run, never written. */
+	/** The folders of the skills on in the room that `windowsSkillFolder` passed: read and run, never written. */
 	skillFolders: readonly string[];
 	/** The turn's own temp and the room's caches, both written, and curl's settings folder, read, when the turn has it. */
 	places: {
@@ -225,7 +225,8 @@ function fileRule(rules: WindowsRoomRules, extra: { readwrite: readonly string[]
 	// Inside a written place, a read grant from the system's lists would only narrow it.
 	const notWritten = (place: string) => !readwrite.some((root) => atOrInside(place, root));
 	const readonly = [
-		...roomReadOnly, ...readAlso, ...rules.skillFolders.map(local), ...extra.readonly.map(local),
+		// A skill's folder in a written place keeps that place's writes; one holding it stays read-only around it.
+		...roomReadOnly, ...readAlso, ...rules.skillFolders.map(local).filter(notWritten), ...extra.readonly.map(local),
 		...[...windowsFolders(rules.environment), ...rules.tools.map(local)].filter((place) => fromSystem(place) && notWritten(place)),
 		...programs.filter((place) => notWritten(place) && !shut.some((closed) => atOrInside(place, closed))),
 		...writable.flatMap((root) => rules.closedNames.readOnly.map((name) => closedName(root, name))),

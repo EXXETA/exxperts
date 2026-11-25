@@ -57,10 +57,30 @@ export const QUIET_MARKER = "QUIET_STREAM_MARKER";
 export const FAILING_MARKER = "FAILING_CALL_MARKER";
 export const DRIP_MARKER = "DRIP_STREAM_MARKER";
 export const SILENT_TOOL_MARKER = "SILENT_TOOL_MARKER";
+// The stop smokes' cases, on a server with smoke-ignores-stop-preload.mjs: a deaf stream says DEAF_TEXT and goes on
+// past the stop until the smoke releases it, then ends with LATE_TEXT; a deaf tool runs a shell command until the file
+// its tag names exists in the command's folder; a deaf job is a deaf stream after a command that leaves a job running,
+// its number in the command's folder; a deaf read has the room read its attachment DEAF_READ_FILE; a Remember's call
+// answers with a page; a refused call is refused for good once, and the Try again plays the marker after it.
+export const DEAF_MARKER = "DEAF_STREAM_MARKER";
+export const DEAF_TOOL_MARKER = "DEAF_TOOL_MARKER";
+export const DEAF_JOB_MARKER = "DEAF_JOB_MARKER";
+export const DEAF_READ_MARKER = "DEAF_READ_MARKER";
+export const REFUSED_MARKER = "REFUSED_CALL_MARKER";
+export const DEAF_READ_FILE = "terms.pdf";
+export const DEAF_TEXT = "Words before the stop. ";
+export const LATE_TEXT = "Late words.";
+export const LATE_USAGE = { prompt_tokens: 777, completion_tokens: 33, total_tokens: 810 };
+export const deafToolCommand = (tag: string): string => `while [ ! -f release-${tag} ]; do sleep 0.2; done; echo late > late-${tag}`;
+const deafJobCommand = (tag: string): string => `( while :; do sleep 0.2; done ) > /dev/null 2>&1 & echo $! > job-${tag}`;
+const REMEMBER_PAGE = "TITLE:\nA stopped answer\n\nSESSION_ARC:\nAsked and stopped.\n\nBODY:\n- Asked.\n\nPARKED:\nNone\n";
+export const REMEMBER_MARKER = "Checkpoint Compression Constitution";
+// While set, a Remember's call waits for it.
+export const rememberHold: { until?: Promise<void> } = {};
 export const DRIP_EVERY_MS = 400;
 export const SILENT_TOOL_SECONDS = 6;
 export const AFTER_TOOL_TEXT = "Checking the result. ";
-const PLAYED_ONCE = /\b(QUIET_STREAM_MARKER|DRIP_STREAM_MARKER|SILENT_TOOL_MARKER|FAILING_CALL_MARKER):(\w+)/;
+const PLAYED_ONCE = /\b(REFUSED_CALL_MARKER|QUIET_STREAM_MARKER|DRIP_STREAM_MARKER|SILENT_TOOL_MARKER|FAILING_CALL_MARKER|DEAF_STREAM_MARKER|DEAF_TOOL_MARKER|DEAF_JOB_MARKER|DEAF_READ_MARKER):(\w+)/;
 const playedTags = new Set<string>();
 // A failing case's tag while its turn still asks again; the smoke ends it with `endFailingCase`.
 const failingTags = new Set<string>();
@@ -123,6 +143,10 @@ export const gateway = http.createServer((req, res) => {
 		const model = String(parsed?.model ?? "");
 		const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
 		const roles = messages.map((message) => String(message?.role ?? ""));
+		if (body.includes(REMEMBER_MARKER)) {
+			void answerRemember(model, res);
+			return;
+		}
 		if (playAwayLimitCase(model, messages, roles, res)) return;
 		const slow = body.includes(SLOW_MARKER);
 		const hang = body.includes(HANG_MARKER);
@@ -170,16 +194,34 @@ function textOf(content: unknown): string {
 	return typeof content === "string" ? content : Array.isArray(content) ? content.map((part: any) => String(part?.text ?? "")).join("") : "";
 }
 
+async function answerRemember(model: string, res: http.ServerResponse): Promise<void> {
+	await rememberHold.until;
+	res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+	const base = { id: "cmpl_remember", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model };
+	res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: REMEMBER_PAGE }, finish_reason: null }] }));
+	res.write(sseChunk({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }));
+	res.end("data: [DONE]\n\n");
+}
+
 // Plays an away-limits case for a message that carries one of its markers; false for any other call.
 function playAwayLimitCase(model: string, messages: any[], roles: string[], res: http.ServerResponse): boolean {
 	// The person's newest message that carries a marker: the room's own state rides after it as a user message too.
 	let lastUser = roles.length - 1;
 	while (lastUser >= 0 && !(roles[lastUser] === "user" && PLAYED_ONCE.test(textOf(messages[lastUser]?.content)))) lastUser--;
-	const found = lastUser >= 0 ? PLAYED_ONCE.exec(textOf(messages[lastUser].content)) : null;
+	const asked = lastUser >= 0 ? textOf(messages[lastUser].content) : "";
+	let found = PLAYED_ONCE.exec(asked);
+	if (found?.[1] === REFUSED_MARKER) {
+		if (!playedTags.has(found[0])) {
+			playedTags.add(found[0]);
+			res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "synthetic refusal", type: "invalid_request_error" } }));
+			return true;
+		}
+		found = PLAYED_ONCE.exec(asked.slice(found.index + found[0].length));
+	}
 	if (!found) return false;
 	const afterTool = roles.slice(lastUser + 1).includes("tool");
 	// The first call for a tag plays it; a call after its tool's result goes on with it; the message sent again answers at once.
-	const fresh = !playedTags.has(found[0]) || afterTool || (found[1] === FAILING_MARKER && failingTags.has(found[0]));
+	const fresh = !playedTags.has(found[0]) || (afterTool && found[1] !== DEAF_TOOL_MARKER && found[1] !== DEAF_READ_MARKER) || (found[1] === FAILING_MARKER && failingTags.has(found[0]));
 	playedTags.add(found[0]);
 	const record: GatewayRequest = {
 		model, roles, startedAt: Date.now(), played: fresh ? found[0] : undefined, afterTool, slow: false, hang: fresh, aborted: false, finished: false, sent: 0,
@@ -214,6 +256,23 @@ function playAwayLimitCase(model: string, messages: any[], roles: string[], res:
 		write({ role: "assistant", content: FAST_ANSWER_CHUNKS.join("") });
 		write({}, "stop");
 		end();
+	} else if ((found[1] === DEAF_TOOL_MARKER || found[1] === DEAF_JOB_MARKER) && !afterTool) {
+		const command = (found[1] === DEAF_TOOL_MARKER ? deafToolCommand : deafJobCommand)(found[2]!);
+		write({ role: "assistant", tool_calls: [{ index: 0, id: `call_${found[2]}`, type: "function", function: { name: "bash", arguments: JSON.stringify({ command }) } }] });
+		write({}, "tool_calls");
+		end();
+	} else if (found[1] === DEAF_READ_MARKER && !afterTool) {
+		write({ role: "assistant", tool_calls: [{ index: 0, id: `call_${found[2]}`, type: "function", function: { name: "read_file", arguments: JSON.stringify({ name: DEAF_READ_FILE }) } }] });
+		write({}, "tool_calls");
+		end();
+	} else if (found[1] === DEAF_MARKER || found[1] === DEAF_JOB_MARKER) {
+		write({ role: "assistant", content: DEAF_TEXT });
+		record.release = () => {
+			if (record.finished || res.destroyed) return;
+			write({ content: LATE_TEXT });
+			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: LATE_USAGE }));
+			end();
+		};
 	} else if (found[1] === SILENT_TOOL_MARKER && !afterTool) {
 		write({ role: "assistant", tool_calls: [{ index: 0, id: `call_${found[2]}`, type: "function", function: { name: "bash", arguments: JSON.stringify({ command: `sleep ${SILENT_TOOL_SECONDS}` }) } }] });
 		write({}, "tool_calls");
@@ -313,6 +372,8 @@ const openedSockets: WsHarness[] = [];
 
 export class WsHarness {
 	readonly frames: Frame[] = [];
+	/** Set once the server closed it, or the smoke did. */
+	closed = false;
 	private socket: any;
 
 	private constructor(socket: any) {
@@ -320,6 +381,7 @@ export class WsHarness {
 		socket.addEventListener("message", (event: { data: unknown }) => {
 			try { this.frames.push(JSON.parse(String(event.data))); } catch {}
 		});
+		socket.addEventListener("close", () => { this.closed = true; });
 	}
 
 	static async connect(persistentAgentId: string, conversationId: string, options: { reattach?: boolean; extraParams?: string } = {}): Promise<WsHarness> {
@@ -407,7 +469,8 @@ export const serverOutput: string[] = [];
 export const expectedText = SLOW_ANSWER_CHUNKS.join("").trim();
 
 /** Starts the gateway and the server on the smoke's own home, with the away limits' test overrides. */
-export async function startDetachedServer(limits: AwayLimitOverrides = { silenceMs: DETACHED_SILENCE_OVERRIDE_MS, limitMs: DETACHED_LIMIT_OVERRIDE_MS }): Promise<void> {
+export async function startDetachedServer(limits: AwayLimitOverrides = { silenceMs: DETACHED_SILENCE_OVERRIDE_MS, limitMs: DETACHED_LIMIT_OVERRIDE_MS }, options: { env?: NodeJS.ProcessEnv; moreModels?: string[] } = {}): Promise<void> {
+	const more = (options.moreModels ?? []).map((id) => ({ id, name: id, contextWindow: 128000, maxTokens: 16384 }));
 	await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
 	const gatewayPort = (gateway.address() as AddressInfo).port;
 
@@ -423,6 +486,7 @@ export async function startDetachedServer(limits: AwayLimitOverrides = { silence
 					api: "openai-completions",
 					models: [
 						{ id: "room-model", name: "Room Model", contextWindow: 128000, maxTokens: 16384 },
+						...more,
 					],
 				},
 			},
@@ -440,18 +504,23 @@ export async function startDetachedServer(limits: AwayLimitOverrides = { silence
 			profileId: "openai-compatible",
 			providerId: "openai-compatible",
 			label: "Synthetic SSE Gateway",
-			roomModels: [{ modelId: "room-model", label: "Room Model" }],
+			roomModels: [{ modelId: "room-model", label: "Room Model" }, ...more.map(({ id }) => ({ modelId: id, label: id }))],
 			maintenanceModel: "room-model",
 		}, null, 2),
 		{ mode: 0o600 },
 	);
 	fs.writeFileSync(path.join(productAppRoot, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible" }, null, 2), { mode: 0o600 });
 
-	server = spawn("npx", ["tsx", "src/index.ts"], {
+	await spawnDetachedServer(limits, options.env);
+}
+
+/** The server alone, as `startDetachedServer` starts it: again, after a smoke stopped it. `imports` load in the server's own process only. */
+export async function spawnDetachedServer(limits: AwayLimitOverrides, env: NodeJS.ProcessEnv = {}, imports: string[] = []): Promise<void> {
+	server = spawn("npx", ["tsx", ...imports.flatMap((entry) => ["--import", entry]), "src/index.ts"], {
 		shell: process.platform === "win32",
 		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 		cwd: webServerDir,
-		env: smokeEnv(limits),
+		env: { ...smokeEnv(limits), ...env },
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));

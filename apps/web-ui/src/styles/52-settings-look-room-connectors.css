@@ -1,0 +1,338 @@
+/* The settings windows' new look: a room's Connectors -------------------------
+   Loaded after the look's other page files, and built while the switch is off
+   as they are: every rule starts with .settings-dialog.settings-look-next, so
+   with the switch off nothing here applies. This page's rows share
+   .room-skills-row and its parts with a room's Skills, and the tile and the dot
+   with Settings, Connectors, so every rule names this page's own holder,
+   .room-connectors-section. The group titles, the rows with a switch, the
+   strip, the dot and the tile carry the same numbers as a room's Skills' and
+   Settings, Connectors' own, for a later step to fold into one part. */
+
+.settings-dialog.settings-look-next .room-connectors-section {
+	/* Tiles and strips: 5 % of the text colour on the page; one step above the card in dark. */
+	--look-room-connectors-tile: color-mix(in srgb, var(--fg) 5%, var(--exx-surface-page));
+	/* The status dots: amber needs the person, red broken. */
+	--look-room-connectors-warn: var(--exx-warning);
+	--look-room-connectors-err: var(--error);
+}
+.settings-dialog.settings-look-next:where(:root:not([data-theme="light"]) *) .room-connectors-section {
+	--look-room-connectors-tile: var(--exx-surface-hover);
+}
+
+/* Groups: the list, then the old answers under a section's label (44-settings-look.css), 8 above its card; groups 32 apart. */
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-group + .room-connector-group {
+	margin-top: 32px;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-group-title {
+	margin: 0 0 8px;
+}
+
+/* The card: white, rows divided by lines 16 px in from its sides (the look's
+   shared card rules draw its edge and the lines). */
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-rows {
+	gap: 0;
+	margin: 0;
+	background: var(--exx-surface-card);
+}
+
+/* A row: tile 32 | 12 | name over its second line | 12 | the switch, or the
+   button in its place, at the card's right padding and centred on the row.
+   64 tall with a second line, 48 with none. */
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-row {
+	display: grid;
+	grid-template-columns: 32px minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: 12px;
+	box-sizing: border-box;
+	min-height: 48px;
+	padding: 0;
+	border-right: 0;
+	border-bottom: 0;
+	border-left: 0;
+	border-radius: 0;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-row:has(.room-connector-line) {
+	min-height: 64px;
+	padding: 12px 0;
+}
+/* The line between two rows counts toward the lower one's height. */
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-row:has(.room-connector-line) + .room-skills-row:has(.room-connector-line) {
+	padding-top: 11px;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-row-main {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-name {
+	overflow: hidden;
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-row-actions {
+	gap: 0;
+	justify-self: end;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-switch {
+	display: flex;
+	align-items: center;
+	height: 32px;
+}
+/* Without the browser's own margin on a checkbox, so the switch ends on the padding. */
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-switch > .workspaces-tool-switch {
+	margin: 0;
+}
+
+/* The tile: 32, radius 8; a service's mark at 20, else two initials 12/16 at 700 in soft text. */
+.settings-dialog.settings-look-next .room-connectors-section .connector-avatar {
+	width: 32px;
+	height: 32px;
+	border-radius: 8px;
+	background: var(--look-room-connectors-tile);
+	color: var(--fg-soft);
+	font-size: 12px;
+	line-height: 16px;
+	font-weight: 700;
+}
+.settings-dialog.settings-look-next .room-connectors-section .connector-avatar > svg {
+	width: 20px;
+	height: 20px;
+	color: var(--fg);
+}
+
+/* The second line: 13/18 muted, one line cut with "…" (whole in its tip); a
+   dot only where the row has a state to tell, an 8 px dot in a 12 px slot,
+   6 px before the words; a reason in soft text; on a row that can't work,
+   "Open connectors" 8 after it, 13 at 500 in the text colour, underlined under
+   the pointer and the focus. */
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-line {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-line.is-broken {
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-fact {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-open {
+	position: relative;
+	flex: none;
+	margin-left: 8px;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 500;
+	text-decoration: none;
+	border-radius: 4px;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .room-connectors-section .room-connector-open:hover {
+		text-decoration: underline;
+	}
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-open:active {
+	opacity: 0.7;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-open:focus-visible {
+	text-decoration: underline;
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+/* A name rooms can't take and a connector removed: its reason wraps, the dot on its first line, and the row grows. */
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-row.is-wrapping .room-connector-line {
+	align-items: flex-start;
+	white-space: normal;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-skills-row.is-wrapping .connector-dot {
+	height: 18px;
+}
+
+/* The status mark: an 8 px dot in a 12 px slot; a hollow ring for not connected. */
+.settings-dialog.settings-look-next .room-connectors-section .connector-dot {
+	width: 12px;
+	height: 12px;
+	margin-right: 6px;
+}
+.settings-dialog.settings-look-next .room-connectors-section .connector-dot::before {
+	box-sizing: border-box;
+	width: 8px;
+	height: 8px;
+	border: 0;
+	background: var(--muted);
+}
+.settings-dialog.settings-look-next .room-connectors-section .connector-dot-warn::before {
+	background: var(--look-room-connectors-warn);
+}
+.settings-dialog.settings-look-next .room-connectors-section .connector-dot-err::before {
+	background: var(--look-room-connectors-err);
+}
+.settings-dialog.settings-look-next .room-connectors-section .connector-dot-wait::before {
+	background: none;
+	border: 1.5px solid var(--muted);
+}
+
+/* The old answers: their own card of 48 px rows, the tool's name with its
+   connector muted after it, or under it where a long name leaves it too
+   little, Remove at the right padding. */
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-answers {
+	grid-template-columns: minmax(0, 1fr);
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-answer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	box-sizing: border-box;
+	min-height: 48px;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-answer-text {
+	display: flex;
+	flex: 1;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 8px;
+	min-width: 0;
+	padding: 8px 0;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-answer-text > span {
+	min-width: 0;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-tool {
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next .room-connectors-section .room-connector-of {
+	flex: 1 1 120px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* A strip: the tile's fill, radius 12, padding 6 8 6 12, at least 40 tall, an
+   8 px dot in a 12 px slot, 6 px, 13/18 in the text colour, its one button at
+   the end. Red for a list that couldn't load and a change refused, 12 above
+   the list (the section's own gap); ink for an archived room. */
+.settings-dialog.settings-look-next .room-connectors-section > .checkpoint-proposal-error {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	box-sizing: border-box;
+	min-height: 40px;
+	margin: 0;
+	padding: 6px 8px 6px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: var(--look-room-connectors-tile);
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	/* Brought into view below the page's sticky 56 px header, 12 under it. */
+	scroll-margin-top: 68px;
+}
+.settings-dialog.settings-look-next .room-connectors-section > .checkpoint-proposal-error::before {
+	content: "";
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin: 0 2px;
+	border-radius: 50%;
+	background: var(--look-room-connectors-err);
+}
+.settings-dialog.settings-look-next .room-connectors-section > .checkpoint-proposal-error.is-archived::before {
+	background: var(--fg);
+}
+.settings-dialog.settings-look-next .room-connectors-section > .checkpoint-proposal-error > span {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* Nothing added yet is 44's empty line. Loading: a muted line. */
+.settings-dialog.settings-look-next .room-connectors-section > .ai-setup-copy {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* Phone: the name with its control at its right, the second line under it,
+   the tile centred on the row. "Open connectors" takes a line of its own
+   under the words, on their edge, 44 to the finger. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .room-connectors-section .room-skills-row {
+		grid-template-rows: auto auto;
+		row-gap: 2px;
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-skills-row > .connector-avatar {
+		grid-row: 1 / span 2;
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-skills-row-main {
+		display: contents;
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-skills-name {
+		grid-column: 2;
+		grid-row: 1;
+	}
+	/* Line 2 runs under the control, to the card's right padding: a phone has no tip for what a cut would hide. */
+	.settings-dialog.settings-look-next .room-connectors-section .room-connector-line {
+		grid-column: 2 / -1;
+		grid-row: 2;
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-skills-row:not(:has(.room-connector-line)) .room-skills-row-actions {
+		grid-row: 1;
+	}
+	/* Centred on the name's line: the switch's 32 and a button's 44 overhang it. */
+	.settings-dialog.settings-look-next .room-connectors-section .room-skills-row:has(.room-connector-line) .room-skills-row-actions {
+		grid-column: 3;
+		grid-row: 1;
+		margin: -12px 0;
+	}
+	/* A phone shows no tip: a broken connector's words wrap, the dot on their first line. */
+	.settings-dialog.settings-look-next .room-connectors-section .room-connector-line.is-broken {
+		align-items: start;
+		white-space: normal;
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-connector-line.is-broken .connector-dot {
+		height: 18px;
+	}
+	/* A row's Remove keeps the button family's 44 on a phone: it sits in the row's padding, clear of the row's line, and line 2 starts under it. */
+	.settings-dialog.settings-look-next .room-connectors-section .room-skills-row:has(.room-skills-row-actions > .rs-btn) .room-skills-row-actions {
+		margin: 0;
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-connector-line:has(.room-connector-open) {
+		display: grid;
+		grid-template-columns: 18px minmax(0, 1fr);
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-connector-open {
+		grid-column: 2;
+		justify-self: start;
+		margin: 4px 0 0;
+	}
+	.settings-dialog.settings-look-next .room-connectors-section .room-connector-open::after {
+		content: "";
+		position: absolute;
+		inset: -13px -8px;
+	}
+}

@@ -369,7 +369,7 @@ try {
 				cutOpenAnswer();
 				await startServer();
 				await waitUntil(() => room.savesHeld() > 0, "the reconnect's save is out", 60_000);
-				await page.getByText("Home", { exact: true }).first().click();
+				await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 				const before = room.readies();
 				await page.locator(".persistent-agent-card").filter({ hasText: "Next Room" }).getByRole("button", { name: /^Enter$/ }).click();
 				await waitUntil(() => room.readies() > before, "the next room's connection is ready");

@@ -8,7 +8,7 @@ import { effortDisplayName, EffortSlider, SpeedometerIcon } from "./EffortContro
 import { ChevronDownIcon } from "./icons";
 import { containTab } from "./contain-tab";
 import { useEscapeKey } from "./use-escape-key";
-import { contextWindowShort, lockKey, ModelCheckIcon, noModelsLine, offeredModelGroups } from "./room-model-picker";
+import { contextWindowShort, lockKey, ModelCheckIcon, ModelsRunInLabel, modelsRunInListLine, noModelsLine, offeredModelGroups } from "./room-model-picker";
 
 /**
  * The mark a model's row carries, from the server's read for the open
@@ -269,13 +269,14 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 			setReadAsk((ask) => ask + 1);
 		}}>Try again</button>
 	);
+	const runsInLine = modelsRunInListLine(aiSetupRole, groups);
 	const listBody: ReactNode = read.state === "loading"
 		? <p className="model-pick-list-note" role="status">Loading models…</p>
 		: read.state === "failed"
 		? <div className="room-model-error model-pick-list-note" role="alert">{read.message}{" "}{tryAgain}</div>
 		: [read.refreshFailed && (
 			<div key="refresh-failed" className="room-model-error model-pick-list-note" role="alert">{read.refreshFailed}{" "}{tryAgain}</div>
-		), ...(groups.length === 0 ? [<p key="no-models" className="model-pick-list-note">{noModelsLine(aiSetupRole)}</p>] : groups.map(({ provider, rows }) => (
+		), runsInLine && <p key="runs-in" className="room-model-menu-kicker models-run-in-note">{runsInLine}</p>, ...(groups.length === 0 ? [<p key="no-models" className="model-pick-list-note">{noModelsLine(aiSetupRole)}</p>] : groups.map(({ provider, rows }) => (
 			<div key={provider.id} className="model-pick-group" role="group" aria-label={provider.label}>
 				<p className="room-model-menu-kicker">{provider.label}</p>
 				{rows.map(({ option, name }, index) => {
@@ -299,7 +300,10 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 							tabIndex={tabStop ? 0 : -1}
 							className={`model-pick-row${selected ? " is-current" : ""}${mark === "none" ? "" : " is-greyed"}`}
 							title={mark === "too-small" ? TOO_SMALL_REASON : undefined}
-							onClick={() => {
+							onClick={(e) => {
+								// On a shared server the list can open over the button that opened it, such as a notice's "Choose another model":
+								// the second click of a double click lands on a row the person never chose, so only a first click picks.
+								if (aiSetupRole !== null && e.detail > 1) return;
 								if (mark === "too-small") return;
 								if (mark === "new-conversation") { close(true); onTooLong({ provider: option.provider, model: option.model }, name); return; }
 								// The model in use is picked again too: an empty conversation keeps it then. A held pick picked again needs nothing.
@@ -310,8 +314,11 @@ export function ModelPickControl({ placement, agentId, conversationId, open, onO
 							}}
 						>
 							<span className="model-pick-check">{selected && <ModelCheckIcon />}</span>
-							<span className="model-pick-row-name">{name}</span>
-							{option.recommended && <span className="room-model-option-tag">Recommended</span>}
+							<span className="models-run-in-title">
+								<span className="model-pick-row-name">{name}</span>
+								{option.recommended && <span className="room-model-option-tag">Recommended</span>}
+								<ModelsRunInLabel runsIn={provider.runsIn} />
+							</span>
 							<span className="model-pick-row-end">
 								{mark === "new-conversation" && <span className="model-pick-row-hint">New conversation</span>}
 								{mark === "too-small" && <span className="model-pick-row-hint">Too small</span>}

@@ -41,6 +41,7 @@ import {
 	type MemorySaveEvent,
 } from "../memory-surface-copy";
 import { plainMemoryText } from "../memory-v2-copy";
+import { useRemoteClientContext } from "../remote-client-context";
 import { MarkdownRenderer } from "./Markdown";
 import { MemoryChangeFold } from "./memory-change-fold";
 import { MemoryGrowthChart, type GrowthPoint } from "./memory-growth-chart";
@@ -56,13 +57,6 @@ import { shownRoomName } from "../../../web-server/src/room-name";
 /** Rooms named only with invisible characters read "Unnamed room" here too. */
 function withShownName<T extends { id: string; displayName: string }>(room: T): T {
 	return { ...room, displayName: shownRoomName(room.displayName) || room.id };
-}
-
-interface Payoff {
-	turns: number;
-	totalCost: number;
-	costPerTurn: number;
-	cacheHitRate: number;
 }
 
 interface RoomSummary {
@@ -89,7 +83,6 @@ interface RoomSummary {
 	topics: string[];
 	knows: string[];
 	composition: { deep: number; active: number; recent: number; chronos: number };
-	payoff: Payoff | null;
 }
 
 interface RecentSession {
@@ -291,7 +284,13 @@ function MemoryFullBar({ room }: { room: RoomSummary }) {
 	);
 }
 
+/** The conversation panel's caption: where the conversation is stored. */
+export function conversationPanelCaption(title: string, sharedServer: boolean): string {
+	return `The conversation "${title}" was saved from, as stored on ${sharedServer ? "this server" : "your machine"}. Read-only.`;
+}
+
 export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { onMaintain?: (target: { agentId: string; displayName: string }) => void; maintainBlocked?: (agentId: string) => string | null; onOpenMemorySettings?: (target: { agentId: string; displayName: string }) => void } = {}) {
+	const { sharedServer } = useRemoteClientContext();
 	const [data, setData] = useState<Overview | null>(null);
 	const [selected, setSelected] = useState<string | null>(null);
 	const [detail, setDetail] = useState<RoomDetail | null>(null);
@@ -906,7 +905,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 													);
 													const body = panel?.kind === "transcript" ? (
 														<>
-															{panelHead("Conversation", `The conversation "${panel.title}" was saved from, as stored on your machine. Read-only.`)}
+															{panelHead("Conversation", conversationPanelCaption(panel.title, sharedServer))}
 															{panel.state === "loading" && <div className="sub">Opening the conversation…</div>}
 															{panel.state === "error" && <div className="sub">Couldn't read this conversation right now.</div>}
 															{panel.state === "ready" && !panel.data.stored && <div className="sub">This conversation is no longer stored.</div>}

@@ -150,7 +150,10 @@ app.post("/api/remote/enroll-deny", async (req, reply) => {
 // Enrollment, phone side (tunnel only; on the loopback listener these routes
 // answer with Fastify's own not-found so the loopback surface is unchanged).
 // The guard's tunnel branch lets exactly these paths through pre-auth; they
-// rate-limit and validate here.
+// rate-limit and validate here. After a refusal each handler gives the reply
+// back: an async handler that returns nothing after callNotFound makes Fastify
+// answer a second time, and its warning prints the raw address, a pairing
+// code or request id included.
 function refuseEnrollOutsideTunnel(req: any, reply: any): boolean {
 	if (!remoteMode.isRemoteSocket(req.raw?.socket)) {
 		reply.callNotFound();
@@ -219,7 +222,7 @@ run();
 `;
 
 app.get("/remote/enroll", async (req, reply) => {
-	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	if (refuseEnrollOutsideTunnel(req, reply)) return reply;
 	if (!enrollBeginLimiter()) {
 		remoteAudit("rate_limited", { path: "/remote/enroll" });
 		return reply.code(429).send({ error: "Too many pairing attempts. Wait a minute and scan again.", code: "remote_rate_limited" });
@@ -228,12 +231,12 @@ app.get("/remote/enroll", async (req, reply) => {
 });
 
 app.get("/remote/enroll.js", async (req, reply) => {
-	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	if (refuseEnrollOutsideTunnel(req, reply)) return reply;
 	return reply.headers(staticSecurityHeadersFor(req)).type("application/javascript; charset=utf-8").send(REMOTE_ENROLL_SCRIPT);
 });
 
 app.post("/remote/enroll/exchange", async (req, reply) => {
-	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	if (refuseEnrollOutsideTunnel(req, reply)) return reply;
 	if (!enrollBeginLimiter()) {
 		app.log.warn({ listener: "tunnel" }, "enroll exchange rate limited");
 		remoteAudit("rate_limited", { path: "/remote/enroll/exchange" });
@@ -255,7 +258,7 @@ app.post("/remote/enroll/exchange", async (req, reply) => {
 });
 
 app.get("/remote/enroll/status", async (req, reply) => {
-	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	if (refuseEnrollOutsideTunnel(req, reply)) return reply;
 	if (!enrollStatusLimiter()) {
 		remoteAudit("rate_limited", { path: "/remote/enroll/status" });
 		return reply.code(429).send({ error: "Too many attempts. Wait a minute.", code: "remote_rate_limited" });

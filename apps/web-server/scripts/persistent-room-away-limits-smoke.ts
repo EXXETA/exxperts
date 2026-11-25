@@ -387,7 +387,7 @@ try {
 			};
 			const earlyText = "Send this once the room has opened.";
 			const awayThread = [{ kind: "user", id: "awayearly9", text: earlyText }, { kind: "system", id: "awayearly9-failure", text: NO_PROGRESS_NOTHING_LINE, level: "error", failure: "away-no-progress" }];
-			const busyLine = { kind: "system", id: "awaybusy9-failure", text: "Room Model is still busy after several tries. Try again in a minute.", level: "error", failure: "still-busy" };
+			const busyLine = { kind: "system", id: "awaybusy9-failure", text: "Room Model is still busy after several tries. Try again later.", level: "error", failure: "still-busy" };
 
 			// A press before the room's connection has opened, which the line allows: the saved thread draws it first.
 			{
@@ -414,7 +414,7 @@ try {
 				const requestsBefore = gatewayRequests.length;
 				const promptsBefore = promptsSent.length;
 				await pressTryAgain();
-				await page.getByRole("button", { name: "Home", exact: true }).click();
+				await page.getByRole("button", { name: "Rooms", exact: true }).click();
 				const card = page.locator(".persistent-agent-card").filter({ hasText: "Away Left Room" });
 				await card.waitFor({ timeout: 15_000 });
 				left.open();

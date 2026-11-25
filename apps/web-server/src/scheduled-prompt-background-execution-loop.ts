@@ -224,6 +224,7 @@ export function startScheduledPromptBackgroundExecutionLoop(
 				limit: resolved.limitPerTick,
 				leaseMs: resolved.leaseMs,
 				heartbeatMs: resolved.heartbeatMs,
+				logger: resolved.logger,
 			});
 			logSummary(resolved.logger, summary);
 			return summary;

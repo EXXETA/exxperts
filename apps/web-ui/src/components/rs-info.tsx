@@ -1,4 +1,6 @@
 import { useEffect, useId, useState } from "react";
+import { useSettingsLookNext } from "../settings-look";
+import { InfoIcon } from "./icons";
 
 // Room settings info mark: hover, click or keyboard focus opens a real tooltip
 // bubble with the text; Escape or leaving closes it. The trigger is a button so
@@ -21,6 +23,8 @@ export function RsInfoLabel({ label, info }: { label: string; info: string }) {
 export function RsInfo({ text }: { text: string }) {
 	const [open, setOpen] = useState(false);
 	const tipId = useId();
+	// The settings windows' new look draws the mark as a line icon in a quiet button.
+	const lookNext = useSettingsLookNext();
 	useEffect(() => {
 		// A hover-opened tooltip has no focused button to catch Escape, so an
 		// open tooltip listens at the document (capture, so it wins the race
@@ -53,7 +57,7 @@ export function RsInfo({ text }: { text: string }) {
 				onFocus={() => setOpen(true)}
 				onBlur={() => setOpen(false)}
 			>
-				i
+				{lookNext ? <InfoIcon /> : "i"}
 			</button>
 			{open && (
 				<span

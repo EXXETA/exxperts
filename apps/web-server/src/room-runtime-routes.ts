@@ -6,6 +6,7 @@ import { app } from "./server-app.js";
 import { isLocalPromptDiagnosticsRequest, isPromptDiagnosticsEnabled } from "./request-checks.js";
 import { parsePromptDiagnosticsSurface } from "./room-prompt-diagnostics.js";
 import { getUsablePersistentAgentStatusForNormalUse, persistentAgentNormalUseErrorReply } from "./room-status.js";
+import { itemsShownTo } from "./room-live-sessions.js";
 
 app.get("/api/persistent-agents/:id/prompt-diagnostics", async (req, reply) => {
 	if (!isPromptDiagnosticsEnabled() || !isLocalPromptDiagnosticsRequest(req)) return reply.code(404).send({ error: "not found" });
@@ -171,7 +172,7 @@ app.get("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const thread = getPersistentAgentThread(status.id, threadId);
 		if (!thread) return reply.code(404).send({ error: "persistent-agent thread not found" });
-		return { thread };
+		return { thread: { ...thread, items: itemsShownTo(req, thread.items ?? []) } };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}

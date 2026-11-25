@@ -408,11 +408,55 @@
 }
 .settings-overlay .skill-table-head,
 .settings-overlay .skill-table .skill-row {
-	grid-template-columns: minmax(0, 1fr) 88px 64px 108px 16px;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 88px 16px;
 	gap: 6px 14px;
+}
+/* A company's library has no room count: the admin's own rooms are not
+   every room that uses a skill. */
+.settings-overlay .skill-table-no-rooms :is(.skill-table-head, .skill-row) {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 16px;
 }
 .settings-overlay .skill-table .skill-row {
 	border-bottom: none;
+}
+/* While a skill has an update, every row keeps an empty column before its
+   chevron, and Update sits over that column: the facts stay under the head and
+   the chevrons at the row's end. Update is its own button, so it lies over the
+   row's button instead of inside it. */
+.settings-overlay .skill-table-updates :is(.skill-table-head, .skill-row) {
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 88px 84px 16px;
+}
+/* A row is at least Update's height and a little more, so two Updates never
+   touch, whatever height a touch screen gives buttons. */
+.settings-overlay .skill-table-updates .skill-row {
+	min-height: calc(var(--exx-btn-h) + 6px);
+}
+.settings-overlay .skill-row-line {
+	position: relative;
+}
+.settings-overlay .skill-row-update {
+	position: absolute;
+	top: 50%;
+	right: calc(16px + 14px);
+	width: 84px;
+	transform: translateY(-50%);
+	display: flex;
+	justify-content: flex-end;
+}
+.settings-overlay .skill-update-state {
+	margin: 0;
+}
+/* The update group's own parts keep the page's gap between them: the warning
+   above the rows, the new text's labels over it, and Update under it all. */
+.settings-overlay .skill-update-group > .skill-review-banner {
+	margin: 10px 0;
+}
+.settings-overlay .skill-update-group > .skill-review-body-label {
+	font-size: 12px;
+	font-weight: 600;
+}
+.settings-overlay .skill-update-group > .settings-form-foot {
+	margin-top: 12px;
 }
 /* The fact cells share a wrapper so the phone layout can fold them into one
    hint line; on desktop the wrapper dissolves into the grid. */
@@ -477,12 +521,6 @@
 		grid-column: 1;
 		grid-row: 1;
 	}
-	.settings-overlay .skill-table-wide {
-		display: none;
-	}
-	.settings-overlay .skill-table-narrow {
-		display: inline;
-	}
 	.settings-overlay .skill-table-facts {
 		display: flex;
 		align-items: baseline;
@@ -491,8 +529,15 @@
 		grid-row: 2;
 		min-width: 0;
 	}
+	.settings-overlay .skill-table-problem {
+		grid-row: 3;
+	}
 	.settings-overlay .skill-table-facts .skill-table-cell:empty {
 		display: none;
+	}
+	/* Where the line is short (a row with Update), only the address gives way. */
+	.settings-overlay .skill-table-facts .skill-table-cell:not(.skill-table-from) {
+		flex-shrink: 0;
 	}
 	.settings-overlay .skill-table-facts .skill-table-cell + .skill-table-cell::before {
 		content: "· ";
@@ -501,6 +546,37 @@
 		grid-column: 2;
 		grid-row: 1 / span 2;
 		align-self: center;
+	}
+	/* No head to line up with: only a row with Update gives it room, and every
+	   chevron keeps the row's end. */
+	.settings-overlay .skill-table-updates .skill-row {
+		grid-template-columns: minmax(0, 1fr) auto 16px;
+	}
+	.settings-overlay .skill-table-updates .skill-table-chevron {
+		grid-column: 3;
+	}
+	.settings-overlay .skill-table-update-slot {
+		display: none;
+	}
+	.settings-overlay .skill-table-update-slot.has-update {
+		display: block;
+		grid-column: 2;
+		grid-row: 1 / span 2;
+		width: 84px;
+	}
+	/* Three actions don't fit one narrow line: they wrap. */
+	.settings-overlay .pane-head > .pane-head-actions {
+		flex-wrap: wrap;
+		max-width: 100%;
+	}
+	/* Add skill wraps to the start of its line. Its menu hangs from the actions'
+	   right edge, wherever the button lands, so it stays inside the pane. */
+	.settings-overlay .pane-head > .pane-head-actions {
+		position: relative;
+	}
+	.settings-overlay .pane-head > .pane-head-actions > .skill-add-menu-wrap {
+		position: static;
+		margin-left: 0;
 	}
 }
 
@@ -515,5 +591,48 @@
 		position: relative;
 		margin-block: var(--touch-pull);
 		margin-right: var(--touch-pull);
+	}
+}
+
+/* The lines after a check wrap evenly, so a last word isn't left alone. */
+.settings-overlay .skill-updates-line {
+	text-wrap: balance;
+}
+/* What a check found, and Update all at its end; the row keeps a button's
+   height, so the list doesn't move when Update all comes and goes. */
+.settings-overlay .skill-updates-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 16px;
+	min-height: var(--exx-btn-h);
+}
+/* The line gives way to the button, so Update all stays at its end at any width. */
+.settings-overlay .skill-updates-lines {
+	flex: 1 1 0;
+	min-width: 0;
+}
+.settings-overlay .skill-updates-lines > .skill-updates-line {
+	margin: 0;
+}
+/* What Update automatically did: its words, and Close at their end, or
+   under them when the row has no room. */
+.settings-overlay .skill-auto-notice {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 16px;
+}
+.settings-overlay .skill-auto-notice > p {
+	flex: 1 1 280px;
+	margin: 0;
+	text-wrap: pretty;
+}
+/* On a narrow page Close, which has no fill, sits tight to the words, and lines up with them if it goes under. */
+@media (max-width: 760px) {
+	.settings-overlay .skill-auto-notice > .rs-btn-quiet {
+		margin-inline-start: calc(-1 * var(--btn-pad));
 	}
 }

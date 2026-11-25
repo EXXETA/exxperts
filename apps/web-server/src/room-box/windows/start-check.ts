@@ -9,6 +9,7 @@ import type { CheckAnswer, ServerMessage, WorkerMessage } from "./box-worker-win
 import { type BoxRoot, openBoxRoot, defaultBoxRoot, sweepGoneRooms } from "./box-root.js";
 import { COMMAND_WRAPPER, encodedCommand, windowsPowerShell } from "./command-line.js";
 import { commandRequest, localPath, type WindowsBoxRequest, type WindowsRoomRules } from "./box-request.js";
+import { withInstalledPython } from "./installed-python.js";
 import { FOLDERS_SCRIPT, readPersonalFolders } from "./personal-folders.js";
 import { productAppStatePath } from "../../../../../pi-package/product-state-paths.js";
 import { actedWindowsBoxState, START_WAIT_MS } from "../box-available.js";
@@ -327,7 +328,7 @@ export async function readMachine(environment: NodeJS.ProcessEnv = process.env):
 		profile: folders.folders.profile,
 		personal: folders.folders.found.map((found) => found.path),
 		environment: { ...environment },
-		pathFolders: (environment.PATH ?? environment.Path ?? "").split(";").filter(Boolean),
+		pathFolders: withInstalledPython((environment.PATH ?? environment.Path ?? "").split(";").filter(Boolean), environment),
 		programs: { folder: programsFolder, names: programs },
 	};
 }
@@ -349,7 +350,7 @@ export interface StartCheckOptions {
 	passed?: { before: () => boolean; note: () => void };
 }
 
-/** The rules a request starts from: this PC's side, and the room's folders, its places and its approved skills' folders (`windowsSkillFolder`). */
+/** The rules a request starts from: this PC's side, and the room's folders, its places and its skills' folders (`windowsSkillFolder`). */
 export function machineRules(box: Pick<WindowsBox, "machine" | "requestPath">, room: WindowsRoomRules["room"], alsoAllowed: WindowsRoomRules["alsoAllowed"], places: WindowsRoomRules["places"], skillFolders: readonly string[] = []): WindowsRoomRules {
 	const { machine, requestPath } = box;
 	return {

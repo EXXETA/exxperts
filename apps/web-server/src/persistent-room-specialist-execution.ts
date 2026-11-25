@@ -44,6 +44,7 @@ import { failedMessageError, failureCodesOf, notOfferedLine, notOnAccountLine, t
 import { createHeadlessUiContext } from "./persistent-room-background-execution.js";
 import { callCacheRetention } from "./memory-call-cache.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
+import { endRoomSession } from "./room-session-end.js";
 import { serverHooks } from "./server-hooks.js";
 import { modelCallMetadata } from "./usage-log.js";
 
@@ -532,11 +533,7 @@ export async function runSpecialistWorker<TModelLock extends { provider: string;
 			input.signal?.removeEventListener("abort", onAbort);
 		}
 	} finally {
-		try {
-			created.session.dispose();
-		} catch {
-			// Best-effort cleanup only.
-		}
+		await endRoomSession(created.session);
 	}
 
 	if (!text.trim()) {

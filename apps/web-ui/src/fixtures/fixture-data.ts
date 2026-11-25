@@ -1026,7 +1026,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 	chatFixture({
 		id: "in-room-sidebar-context",
 		label: "In-room / persistent-room sidebar context",
-		description: "Current persistent-room sidebar baseline with Home anchor.",
+		description: "Current persistent-room sidebar baseline with Rooms anchor.",
 		activeDisplay: "Strategy Room",
 		ownerSecondary: "Persistent room · sidebar hierarchy visible",
 		busy: false,

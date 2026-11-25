@@ -1,0 +1,453 @@
+/* The settings windows' new look: a room's Model and Memory pages and both
+   Instructions pages ----------------------------------------------------
+   Loaded after 44-settings-look.css, and built while the switch is off as it
+   is: every rule starts with .settings-dialog.settings-look-next, or reaches
+   the model list drawn on <body> as body:has(.settings-dialog.settings-look-next)
+   > .room-model-menu, so with the switch off nothing here applies. */
+
+/* A switch on these pages ends on the card's text edge, where the slider's
+   value and the model picker's words end: the browser's own margin after a
+   checkbox would leave it 3 px short. */
+.settings-dialog.settings-look-next :is(.room-maintenance-section, .room-instructions-section) .settings-row > .workspaces-tool-switch {
+	margin-inline-end: 0;
+}
+
+/* The model list: drawn on <body> by the picker (room-model-picker.tsx), which
+   puts it 6 px under its button with the right edges aligned. It opens from
+   a room's Model page and from AI setup's default models. White (radius 12
+   as today), at least 200 wide and as wide as its longest name, so no name
+   is cut; items 32 tall, 48 with a second line; the chosen one's check at
+   the right and its name at 500. A reason under a name widens the list up to 280 and wraps
+   past it; the note under the list wraps to the width the rest gives. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu {
+	box-sizing: border-box;
+	width: max-content;
+	min-width: 200px;
+	max-width: calc(100vw - 32px);
+	padding: 4px;
+	border: 1px solid var(--exx-border-card);
+	background: var(--exx-surface-card);
+	box-shadow: var(--exx-shadow-popover);
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-menu-group + .room-model-menu-group {
+	margin-top: 4px;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-menu-kicker {
+	padding: 8px 10px 4px;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 16px;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option {
+	box-sizing: border-box;
+	min-height: 32px;
+	gap: 12px;
+	padding: 0 10px;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 20px;
+	transition: background-color 100ms ease;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option:has(.room-model-option-reason) {
+	min-height: 48px;
+}
+@media (hover: hover) {
+	body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option:hover:not(.unpickable) {
+		background: var(--exx-quiet-fill);
+	}
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option:hover.unpickable {
+	background: none;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+	background: var(--exx-quiet-fill);
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option:active:not(.unpickable) {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+/* Only the item with the check reads at 500: while a room follows its default,
+   the model the default stands for is selected too, without the check. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option .room-model-option-name {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	font-weight: 400;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option:has(.room-model-option-check svg) .room-model-option-name {
+	font-weight: 500;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option-check {
+	order: 1;
+	width: 14px;
+	color: var(--fg);
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option-check > svg {
+	width: 14px;
+	height: 14px;
+}
+/* The context window in soft words: the muted grey falls under 4.5:1 on the
+   dark card. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option-context {
+	color: var(--fg-soft);
+	font-size: 12px;
+	line-height: 16px;
+}
+/* The tag look of 44-settings-look.css (quiet words, no fill, no edge), on a
+   line 16 tall, so that on the name's baseline it stays inside the name's 20. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option-tag {
+	box-sizing: border-box;
+	height: 16px;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 16px;
+	font-weight: 400;
+}
+/* A row's words stand on one baseline, whatever their size. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option-head {
+	align-items: baseline;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu :is(.room-model-option-reason, .room-model-menu-note) {
+	font-size: 12px;
+	line-height: 16px;
+}
+/* 280 less the list's edge and padding, the item's padding, the check and its gap. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option-reason {
+	max-width: 224px;
+}
+/* With no model to offer, its one sentence wraps at the list's 200 too. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu :is(.room-model-menu-note, .room-model-menu-empty) {
+	contain: inline-size;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option-main {
+	gap: 0;
+}
+/* A provider whose saved key was refused: its reason in soft words after an
+   amber dot, the one place colour goes. */
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option.marked .room-model-option-reason {
+	color: var(--fg-soft);
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option.marked .room-model-option-reason::before {
+	content: "";
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin: 0 6px 1px 2px;
+	border-radius: 50%;
+	background: var(--warning);
+	vertical-align: middle;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-menu-note {
+	padding: 8px 10px;
+}
+body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-menu-empty {
+	padding: 6px 10px;
+	font-size: 13px;
+	line-height: 20px;
+}
+/* On a phone it stays today's sheet from the bottom, in the card's colour,
+   its items a finger's 48. */
+@media (max-width: 720px) {
+	body:has(.settings-dialog.settings-look-next) > .room-model-menu {
+		width: auto;
+		max-width: none;
+		padding: 4px 8px max(12px, env(safe-area-inset-bottom));
+		border-radius: 12px 12px 0 0;
+	}
+	body:has(.settings-dialog.settings-look-next) > .room-model-menu .room-model-option {
+		min-height: 48px;
+		font-size: 14px;
+	}
+}
+
+/* A long model's name is cut inside its row, and leaves the words beside it a
+   width they read at; the words take only what a shorter one leaves. */
+.settings-dialog.settings-look-next .room-model-row > .settings-row-main {
+	min-width: 150px;
+}
+@media (min-width: 721px) {
+	.settings-dialog.settings-look-next .room-model-row > .settings-row-main {
+		flex-basis: 0;
+	}
+}
+.settings-dialog.settings-look-next .room-model-row > .settings-row-value {
+	flex-shrink: 1;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .room-model-row .room-model-picker {
+	display: flex;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .room-model-row .room-model-pick {
+	min-width: 0;
+}
+
+/* Memory: 32 px between sections; a section's action on its title's line,
+   its middle on that line. */
+.settings-dialog.settings-look-next .room-memory-entries,
+.settings-dialog.settings-look-next .room-memory-entries .memory-archive-head,
+.settings-dialog.settings-look-next .room-memory-history {
+	margin-top: 20px;
+}
+.settings-dialog.settings-look-next .room-maintenance-section .group-head > .pane-head-actions {
+	align-self: flex-start;
+	margin-top: -4px;
+}
+@media (hover: none), (max-width: 760px) {
+	.settings-dialog.settings-look-next .room-maintenance-section .group-head > .pane-head-actions {
+		margin-top: -12px;
+	}
+}
+/* "Show" and "Hide" are quiet: their words end on the text edge, the fill
+   hanging past it, never so far that the pane cuts the focus ring. */
+.settings-dialog.settings-look-next .memory-archive-head .pane-head-actions:has(> .rs-btn-quiet) {
+	margin-right: calc(-1 * min(var(--exx-btn-inset-sm), 12px));
+}
+/* Where a button is a finger's size, its words sit 12 inside it, the most
+   the pane leaves its focus ring, so every quiet button's words on Memory
+   keep the text edge. */
+@media (hover: none), (max-width: 760px) {
+	.settings-dialog.settings-look-next .room-maintenance-section {
+		--exx-btn-inset-sm: 12px;
+	}
+}
+/* A closed archive ends the notes' column on its help, with no card under
+   it, so its head keeps no room below: History sits 32 under it, as Archive
+   sits under the topics. */
+.settings-dialog.settings-look-next .room-memory-entries > .memory-archive-head:last-child .group-head {
+	margin-bottom: 0;
+}
+/* An empty archive's holder, left without "Show". */
+.settings-dialog.settings-look-next .memory-archive-head .pane-head-actions:empty {
+	display: none;
+}
+/* The search: full width, 8 under the section's help and 8 above the topics;
+   under the note form, a line or an error, the column's own 12. */
+.settings-dialog.settings-look-next .memory-notes-search {
+	margin: 0 0 -4px;
+}
+.settings-dialog.settings-look-next .room-memory-entries > .group-head + .memory-notes-search,
+.settings-dialog.settings-look-next .memory-archive-head + .memory-archive-entries {
+	margin-top: -12px;
+}
+/* Topics, the archive and the history: each a card of rows. A topic is a
+   one-line row, 48 tall: the chevron at the left turning as it opens, the
+   name, the count in the value's 128 px column. */
+.settings-dialog.settings-look-next :is(.memory-topics, .memory-archive-entries, .memory-history-rows:not(:empty)) {
+	padding: 0 16px;
+	overflow: hidden;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--exx-surface-card);
+}
+.settings-dialog.settings-look-next .memory-topic + .memory-topic {
+	border-top-color: var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .memory-topic-head {
+	box-sizing: border-box;
+	align-items: center;
+	gap: 12px;
+	width: calc(100% + 32px);
+	min-height: 48px;
+	margin: 0 -16px;
+	padding: 0 16px;
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	transition: background-color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .memory-topic-head:hover {
+		background: var(--exx-row-hover);
+	}
+}
+.settings-dialog.settings-look-next .memory-topic-head:active {
+	background: var(--exx-row-press);
+}
+.settings-dialog.settings-look-next .memory-topic-head:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+	border-radius: 8px;
+}
+/* The chevron in the muted grey: the quiet icon's grey falls under a
+   graphic's 3:1 on the dark card. */
+.settings-dialog.settings-look-next .memory-topic-head > .disclosure-chevron {
+	width: 16px;
+	height: 16px;
+	background-color: var(--muted);
+	transition: transform 150ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next .memory-topic-head > .disclosure-chevron {
+		transition: none;
+	}
+}
+.settings-dialog.settings-look-next .memory-topic-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* The count in soft words: the muted grey falls under 4.5:1 on the dark
+   card under the row's tint. It ends on the row's text edge, as a switch or
+   a value does. */
+.settings-dialog.settings-look-next .memory-topic-head .memory-topic-count {
+	flex: 0 0 128px;
+	margin-left: 0;
+	color: var(--fg-soft);
+	text-align: right;
+	font-size: 13px;
+	line-height: 18px;
+}
+/* On a phone the count's column narrows to its longest words, so a topic's
+   name keeps the room. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .memory-topic-head .memory-topic-count {
+		flex-basis: 72px;
+	}
+}
+.settings-dialog.settings-look-next .memory-topic .memory-entries {
+	padding-left: 28px;
+}
+.settings-dialog.settings-look-next .memory-topic .memory-entry {
+	border-top-color: var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .memory-archive-entries > .memory-entry:first-child {
+	border-top: 0;
+}
+.settings-dialog.settings-look-next .memory-archive-entries > .memory-entry + .memory-entry {
+	border-top-color: var(--exx-hairline);
+}
+/* History: one-line rows, at least 48 tall, the moment in a fixed column. */
+.settings-dialog.settings-look-next .memory-history-rows {
+	gap: 0;
+}
+.settings-dialog.settings-look-next .memory-history-row {
+	align-items: center;
+	min-height: 48px;
+	box-sizing: border-box;
+	padding: 6px 0;
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .memory-history-row + .memory-history-row {
+	border-top-color: var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .memory-history-what {
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .memory-history-undone {
+	font-size: 12px;
+	line-height: 16px;
+}
+/* What changed: a long label after a note wraps in its own part of the line, and a long topic name under itself. */
+.settings-dialog.settings-look-next .mem-diff-label {
+	max-width: 40%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .mem-diff-sec {
+	flex-wrap: wrap;
+}
+.settings-dialog.settings-look-next .mem-diff-sec > span:first-child {
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+/* On a phone the moment takes its own line above the words, so the words
+   keep one line beside the row's buttons; that line is a button's height
+   whether the row has one or not, so every row is as tall. The row's room
+   sits above the moment, as much as the button's line leaves under the
+   words, and under an open "What changed". */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .memory-history-row {
+		row-gap: 0;
+		padding: 14px 0 0;
+	}
+	.settings-dialog.settings-look-next .memory-history-change {
+		margin-bottom: 14px;
+	}
+	.settings-dialog.settings-look-next .memory-history-when {
+		flex-basis: 100%;
+	}
+	.settings-dialog.settings-look-next .memory-history-what {
+		display: flex;
+		align-items: center;
+		min-height: var(--exx-btn-h);
+	}
+}
+
+/* Both Instructions pages: the long box, 320 tall at rest, 24 under the card
+   above it; 12 under it one line: Save, Discard, Clear and the save state from
+   the box's left edge, and the counter on its right edge, or under them where
+   they leave it no room. */
+.settings-dialog.settings-look-next .room-instructions-textarea {
+	min-height: 320px;
+	padding-right: 14px;
+}
+.settings-dialog.settings-look-next .room-instructions-global:not(:has(button, pre)) {
+	display: none;
+}
+.settings-dialog.settings-look-next .room-instructions-global {
+	margin-top: 0;
+}
+.settings-dialog.settings-look-next .room-instructions-section > :is(.settings-rows, .room-instructions-global) ~ .room-instructions-textarea {
+	margin-top: 12px;
+}
+.settings-dialog.settings-look-next .room-instructions-foot {
+	gap: 12px;
+}
+.settings-dialog.settings-look-next .room-instructions-count {
+	order: 1;
+	margin-left: auto;
+	font-size: 12px;
+	line-height: 16px;
+}
+/* A member's line on a shared server, with no buttons to keep a row for,
+   leaves the counter its place beside it. */
+.settings-dialog.settings-look-next .room-instructions-foot:has(> .cli-note) {
+	min-height: 0;
+}
+.settings-dialog.settings-look-next .room-instructions-foot > .cli-note {
+	flex: 1 1 240px;
+	margin: 0;
+}
+.settings-dialog.settings-look-next .room-instructions-foot .rs-pane-actions {
+	align-items: center;
+	justify-content: flex-start;
+	gap: 8px;
+	margin-left: 0;
+}
+.settings-dialog.settings-look-next .room-instructions-foot .rs-pane-actions:empty {
+	display: none;
+}
+/* Discard and Clear are quiet. Once saved, Clear starts the line: its word
+   on the box's left edge, the fill hanging past it. The state line stands
+   as far from the last word as those words from each other. On a phone a
+   quiet button's words sit 12 inside it, the most the pane leaves its focus
+   ring; Save keeps the family's padding. */
+.settings-dialog.settings-look-next .room-instructions-foot .rs-pane-actions > .rs-btn-quiet:first-child {
+	margin-left: calc(-1 * var(--exx-btn-inset));
+}
+.settings-dialog.settings-look-next .room-instructions-foot .room-instructions-state {
+	margin-left: var(--exx-btn-inset);
+}
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .room-instructions-foot .rs-btn-quiet {
+		--exx-btn-inset: 12px;
+	}
+	.settings-dialog.settings-look-next .room-instructions-foot .room-instructions-state {
+		margin-left: 12px;
+	}
+}
+.settings-dialog.settings-look-next .room-instructions-state {
+	font-size: 13px;
+	line-height: 18px;
+}

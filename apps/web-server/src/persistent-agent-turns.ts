@@ -9,7 +9,7 @@ import type { PersistentAgentActiveTurnState, PersistentAgentActiveTurnTerminalR
 import { createPersistentAgentInstance, ensureDir, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, idlePersistentAgentTurnState, normalizePersistentAgentActiveTurnToken, persistentAgentActiveTurnKey, persistentAgentActiveTurns, type PersistentAgentInstance, persistentAgentTurnConflictError, readJson, safeRuntimeThreadId, shortRandomId, writeFileAtomic } from "./persistent-agent-store.js";
 import { getPersistentAgentThread, normalizePersistentAgentThreadRecord, threadHasUserVisibleTurns } from "./persistent-agent-threads.js";
 import { declinedQuestionNoteText, notesOfKeptCards } from "./thread-items-by-id.js";
-import { dropRunningTurn, readTurnItemsMemory, type RunningTurn, type TurnItemsMemory, writeRunningTurn, writeTurnItemsMemory } from "./turn-pieces-store.js";
+import { dropRunningTurn, readTurnItemsMemory, type RunningTurn, type TurnItemsMemory, writeRunningMark, writeRunningTurn, writeTurnItemsMemory } from "./turn-pieces-store.js";
 
 // Remember reading a conversation. While a proposal is being generated the
 // conversation must not move: a message sent meanwhile (from another device,
@@ -191,6 +191,8 @@ export function beginPersistentAgentTurn(agentIdRaw: string, threadIdRaw: string
 		updatedAt: now,
 	};
 	persistentAgentActiveTurns.set(persistentAgentActiveTurnKey(instance.agentId, threadId), state);
+	// On a shared server every answer says it runs in the room's folder, page's or schedule's, until it finishes.
+	if (isSharedServer()) keepTurnPiece("running turn", () => writeRunningMark(instance.agentId, threadId, { turnId, startedAt: now }));
 	const memory = readTurnItemsMemory(instance.agentId, threadId);
 	const keys = metadata.key ? [...memory.keys.filter((key) => key !== metadata.key), metadata.key].slice(-RECENT_KEYS_KEPT) : memory.keys;
 	keepTurnPiece("latest-turn marker", () => writeTurnItemsMemory(instance.agentId, threadId, { ...memory, marker: metadata.key ?? `${UNKEYED_MARKER}${turnId}`, keys }));
@@ -357,7 +359,7 @@ function unseenLandedAnswerStillReachable(agentId: string, marker: PersistentAge
 // up; the id prefix belongs to the turn, so a re-landed write updates its own
 // notes instead of stacking new ones.
 export interface PersistentRoomAutoDeclinedQuestionLog {
-	/** `lasting`: a connector question that offered Allow for this room. */
+	/** `lasting`: a connector question that offered Always allow. */
 	note(question: { title: string; lasting?: boolean }): void;
 	titles(): string[];
 	appendItems(items: unknown[], idPrefix: string): unknown[];

@@ -104,9 +104,6 @@
 	line-height: 1;
 	text-align: right;
 }
-.skill-table-narrow {
-	display: none;
-}
 
 /* Write form specifics (reuses .connector-form + .ai-setup-block). */
 .skill-write-id-hint {
@@ -187,7 +184,7 @@
 	color: var(--danger, #d84a4a);
 }
 
-/* Warning/danger banners: unknown license, hidden characters, bundled scripts. */
+/* The hidden-characters banner. */
 .skill-review-banner {
 	font-size: 13px;
 	line-height: 1.55;
@@ -195,10 +192,6 @@
 	border-radius: var(--exx-radius-card);
 	border: 1px solid var(--border-soft);
 	background: var(--panel-2);
-}
-.skill-review-banner.warn {
-	border-color: color-mix(in srgb, var(--exx-warning, #e8a838) 55%, transparent);
-	background: color-mix(in srgb, var(--exx-warning, #e8a838) 12%, transparent);
 }
 .skill-review-banner.danger {
 	border-color: color-mix(in srgb, var(--exx-danger, #d9534f) 55%, transparent);
@@ -214,7 +207,9 @@
 .skill-review-findings code {
 	font-family: var(--exx-font-mono);
 }
+/* The review's Instructions label opens a section of its own, apart from the kinds above it. */
 .skill-review-body-label {
+	margin-top: 12px;
 	color: var(--muted);
 	font-size: 11px;
 }
@@ -272,8 +267,23 @@
 .skill-detail .skill-review-banner {
 	margin: 10px 0 0;
 }
-.skill-detail .settings-row-value .rs-text-btn {
-	margin-left: 10px;
+/* A fact row's line takes the row's width under its label and value. */
+.settings-row:has(> .skill-fact-line) {
+	flex-wrap: wrap;
+	row-gap: 4px;
+}
+.skill-fact-line {
+	flex-basis: 100%;
+}
+/* A folder's name in a skill's path stays on one line; the path breaks only after a "/". */
+.skill-path-part {
+	white-space: nowrap;
+}
+/* A long path a skill's instructions reach outside its folder by breaks anywhere, never sideways; mono 12, as file names are. */
+.skill-outside-path {
+	overflow-wrap: anywhere;
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
 }
 .skill-fact-value {
 	max-width: 65%;
@@ -286,14 +296,61 @@
 	text-decoration: underline;
 	text-underline-offset: 2px;
 }
-.skill-fact-warn {
-	color: var(--exx-warning, #c47f00);
+/* A skill's files by kind (file-groups.tsx `SkillFilesByKind`): one line per
+   kind with its count, opening its files; the Scripts line carries where they run. */
+.skill-file-kinds {
+	display: grid;
+	gap: 4px;
+	margin-top: 12px;
 }
-.skill-detail-files {
-	padding-bottom: 12px;
+/* In the review the column's own gap stands above the list, as the facts' gap does on the skill's page. */
+.skill-review > .skill-file-kinds {
+	margin-top: 0;
 }
-.skill-review-files {
-	margin-top: 10px;
+.skill-file-kind {
+	min-width: 0;
+}
+.rs-text-btn.skill-file-kind-head {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 44px;
+	text-decoration: none;
+	font-weight: 500;
+	text-align: left;
+}
+.skill-file-kind-mark {
+	width: 10px;
+	color: var(--muted);
+}
+/* Under its head, a kind's line and files start where the head's text does (the mark and its gap: 16 px). */
+.skill-file-kind > .skill-file-kind-line {
+	margin: -8px 0 6px 16px;
+	font-size: 13px;
+	text-wrap: pretty;
+}
+.skill-file-kind > .skill-file-kind-files {
+	margin: 0 0 8px 16px;
+}
+/* The review of an upload whose name is in the library: its question in the lead's place. */
+.skill-review-replace {
+	color: var(--fg);
+	font-weight: 500;
+}
+/* A long name in the library keeps its by-hand tag: the name is cut, never the tag. */
+.settings-overlay .skill-table-name:has(.skill-tag) {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+}
+.skill-table-name-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.skill-table-name .skill-tag {
+	flex-shrink: 0;
 }
 
 /* A skill's instructions at the pane's scale (skill-instructions.tsx):
@@ -561,14 +618,17 @@
 .skill-import-option-name {
 	font-weight: 400;
 }
+/* A skill that can't be added: its name in the muted ink beside its paler checkbox, and no pointer. */
+.skill-import-option:has(input:disabled) {
+	cursor: default;
+}
+.skill-import-option:has(input:disabled) .skill-import-option-name {
+	color: var(--muted);
+}
 .skill-import-option-desc {
 	color: var(--muted);
 	font-size: 13px;
 	line-height: 1.5;
-}
-.skill-import-option-meta {
-	color: var(--muted);
-	font-size: 12px;
 }
 .skill-import-queue {
 	color: var(--muted);
@@ -652,29 +712,130 @@
 	font-size: 13px;
 }
 
-/* Room settings, Skills: an enabled skill is a settings row; a skill that can
-   run files adds a second row for that, with no hairline above it, and its
-   file list opens under it in the pane's own scroll. */
-.room-skill-row {
-	align-items: flex-start;
+/* Room settings, Skills: every library skill is a settings row with its
+   switch; its name and line open its page, and the by-hand tag sits beside the name. */
+.room-skills-search {
+	width: 100%;
+	box-sizing: border-box;
+	margin-top: 12px;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control, 8px);
+	background: var(--bg-2);
+	color: var(--fg);
+	padding: 8px 10px;
+	font: inherit;
 }
-.room-skill-actions {
+/* The search's clear mark, in the muted ink rather than the browser's own blue. */
+.room-skills-search::-webkit-search-cancel-button {
+	-webkit-appearance: none;
+	width: 14px;
+	height: 14px;
+	background-color: var(--muted);
+	-webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 3l8 8M11 3l-8 8' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 3l8 8M11 3l-8 8' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+	cursor: pointer;
+}
+/* A tap area of at least 44 px around each switch; the negative margin keeps the row's layout. */
+.room-skill-switch {
+	display: inline-flex;
 	flex-shrink: 0;
-	display: flex;
 	align-items: center;
-	gap: 8px;
+	padding: 11px 0 11px 11px;
+	margin: -11px 0 -11px -11px;
+	cursor: pointer;
 }
-.room-skill-problem {
+.room-skill-switch:has(input:disabled) {
+	cursor: default;
+}
+/* As on the Folder pane: an off switch's edge in the muted ink, and no busy
+   cursor on one that can't be used. */
+.room-skills-section .workspaces-tool-switch:not(:checked) {
+	border-color: var(--muted);
+}
+.room-skills-section .workspaces-tool-switch:disabled {
+	cursor: default;
+}
+.room-skills-search:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-color: var(--exx-focus);
+}
+.room-skill-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	min-width: 0;
+}
+/* A skill's name and its line are one target, at least 44 px tall, that opens
+   its page: they read as the row's label and line, the name underlined only
+   under the pointer, with a chevron after it. */
+.rs-text-btn.room-skill-open {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: stretch;
+	gap: 2px;
+	width: 100%;
+	min-height: 44px;
+	text-decoration: none;
+	text-align: left;
+	color: inherit;
+}
+.room-skill-label {
+	min-width: 0;
+}
+.room-skill-name {
+	overflow-wrap: anywhere;
+}
+.rs-text-btn.room-skill-open:hover .room-skill-name {
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.room-skill-chevron {
+	color: var(--muted);
+	line-height: 1;
+}
+/* "Only when you pick it": a quiet outlined tag in the muted ink. */
+.skill-tag {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 400;
+	line-height: 18px;
+	color: var(--muted);
+	white-space: nowrap;
+	vertical-align: 1px;
+}
+.room-skill-head .skill-tag {
+	margin-left: 0;
+}
+/* Beside a heading, the tag keeps the text's own type, as it has in the lists. */
+h2 > .skill-tag {
+	margin-left: 8px;
+	font-family: var(--exx-font-sans);
+	letter-spacing: normal;
+	vertical-align: 3px;
+}
+/* How to use a by-hand skill that is on: its own line under the description, in the description's ink, a little apart so it doesn't read as part of the description. */
+.room-skill-how {
+	display: block;
+	margin-top: 4px;
+}
+.room-skill-problem,
+.skill-table-problem,
+.skill-detail-problem {
 	color: var(--exx-warning, #c47f00);
 }
-.room-skill-files-row {
-	padding-top: 0;
-}
-.room-skill-files-label {
-	font-size: 13px;
-}
-.room-skill-files {
-	padding-bottom: 12px;
+/* A library row's line for a skill that can't be opened: under the name, across the row. */
+.skill-table-problem {
+	grid-column: 1 / -1;
+	grid-row: 2;
+	font-size: 12px;
+	text-align: left;
 }
 /* A text action inside a sentence: normal ink, underlined. */
 .rs-text-btn {
@@ -719,29 +880,6 @@
 	vertical-align: top;
 }
 
-/* Room settings — drifted-skill re-review gate (MR-5 hardening). */
-.room-skills-review {
-	border: 1px solid var(--exx-warning, #c47f00);
-	border-radius: 8px;
-	padding: 12px;
-	margin: 8px 0;
-	display: grid;
-	gap: 8px;
-}
-.room-skills-review-head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-}
-.room-skills-review-body {
-	max-height: 260px;
-	overflow: auto;
-	padding: 8px 10px;
-	border: 1px solid var(--exx-border, rgba(128, 128, 128, 0.25));
-	border-radius: 6px;
-	font-size: 13px;
-}
 .room-skills-empty {
 	color: var(--muted);
 }
@@ -823,4 +961,56 @@
 }
 .room-connector-allowed li > span {
 	overflow-wrap: anywhere;
+}
+
+/* The "/" list in a room's message box (skill-pick-list.tsx), on the "@" list's frame (16-composer.css): one line a skill, the description cut where the row ends.
+   As wide as the box, so a description keeps room beside a by-hand tag and the list covers what lies behind it whole. */
+.mention-pop.skill-pick-pop {
+	width: calc(100% - 20px);
+}
+.skill-pick-row {
+	align-items: center;
+}
+.skill-pick-name {
+	/* Never cut: a long name wraps; the description takes what is left. */
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	font-weight: 700;
+	font-size: 14px;
+	color: var(--exx-text);
+}
+.skill-pick-description {
+	flex: 1 1 0;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-size: 13px;
+	color: var(--exx-text-muted);
+}
+.skill-pick-row .skill-tag {
+	flex: none;
+	margin-left: auto;
+}
+/* On the selected row's ground the muted ink falls under 4.5:1: the description and the tag take the soft ink there. */
+.skill-pick-row.sel .skill-pick-description,
+.skill-pick-row.sel .skill-tag {
+	color: var(--exx-text-soft);
+}
+/* At phone width a row has no room for a name, a description and a tag on one line: the description takes a line of its own under them. */
+@media (max-width: 760px) {
+	.skill-pick-row {
+		flex-wrap: wrap;
+		row-gap: 2px;
+		min-height: 44px;
+	}
+	.skill-pick-description {
+		order: 1;
+		flex-basis: 100%;
+	}
+}
+/* The folder line above the box can stand taller than a short list: hidden while the list is open, so nothing shows above the list's heading. */
+.above-composer-dock:has(~ .composer .skill-pick-pop) .room-workspace-nudge {
+	visibility: hidden;
 }

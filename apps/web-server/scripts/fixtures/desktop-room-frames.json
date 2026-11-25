@@ -1,0 +1,1020 @@
+{
+	"open": [
+		{
+			"key": "mcp",
+			"kind": "status",
+			"type": "ui_request"
+		},
+		{
+			"agent": "kill-room",
+			"contextHealth": "<varies>",
+			"conversationId": "pi_kill_room",
+			"effort": {
+				"ladder": [
+					{
+						"label": "off",
+						"level": "off"
+					}
+				],
+				"level": "off",
+				"supported": [
+					"off"
+				]
+			},
+			"held": [],
+			"model": {
+				"contextWindow": 128000,
+				"label": "Fake GPT — GPT Fake",
+				"model": "gpt-fake",
+				"provider": "fake-gpt"
+			},
+			"persistentAgentId": "kill-room",
+			"persona": "business",
+			"reattaching": false,
+			"taken": [],
+			"type": "ready",
+			"waiting": [],
+			"withdrawn": []
+		}
+	],
+	"send": [
+		{
+			"event": {
+				"type": "agent_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"type": "turn_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "A desktop question",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "A desktop question",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"itemId": "k_desk_send-a1",
+				"message": {
+					"api": "openai-completions",
+					"content": [],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		"event:message_update",
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A fresh answer.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"cacheRead": "<varies>",
+			"cacheWrite": "<varies>",
+			"contextHealth": "<varies>",
+			"contextTokens": null,
+			"cost": "<varies>",
+			"input": "<varies>",
+			"model": "gpt-fake",
+			"modelLabel": "Fake GPT — GPT Fake",
+			"modelProvider": "fake-gpt",
+			"output": "<varies>",
+			"seq": "<varies>",
+			"totalTokens": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A fresh answer.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"toolResults": [],
+				"type": "turn_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"messages": [
+					{
+						"content": [
+							{
+								"text": "A desktop question",
+								"type": "text"
+							}
+						],
+						"role": "user",
+						"timestamp": "<varies>"
+					},
+					{
+						"api": "openai-completions",
+						"content": [
+							{
+								"text": "A fresh answer.",
+								"type": "text"
+							}
+						],
+						"model": "gpt-fake",
+						"provider": "fake-gpt",
+						"responseId": "cmpl_kill",
+						"role": "assistant",
+						"stopReason": "stop",
+						"timestamp": "<varies>",
+						"usage": "<varies>"
+					}
+				],
+				"type": "agent_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"contextHealth": "<varies>",
+			"seq": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		}
+	],
+	"edit": [
+		{
+			"replaces": "k_desk_send",
+			"seq": "<varies>",
+			"type": "edit_applied"
+		},
+		{
+			"event": {
+				"type": "agent_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"type": "turn_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "The edited desktop question",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "The edited desktop question",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"itemId": "k_desk_edit-a1",
+				"message": {
+					"api": "openai-completions",
+					"content": [],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		"event:message_update",
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A fresh answer.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"cacheRead": "<varies>",
+			"cacheWrite": "<varies>",
+			"contextHealth": "<varies>",
+			"contextTokens": null,
+			"cost": "<varies>",
+			"input": "<varies>",
+			"model": "gpt-fake",
+			"modelLabel": "Fake GPT — GPT Fake",
+			"modelProvider": "fake-gpt",
+			"output": "<varies>",
+			"seq": "<varies>",
+			"totalTokens": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A fresh answer.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"toolResults": [],
+				"type": "turn_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"messages": [
+					{
+						"content": [
+							{
+								"text": "The edited desktop question",
+								"type": "text"
+							}
+						],
+						"role": "user",
+						"timestamp": "<varies>"
+					},
+					{
+						"api": "openai-completions",
+						"content": [
+							{
+								"text": "A fresh answer.",
+								"type": "text"
+							}
+						],
+						"model": "gpt-fake",
+						"provider": "fake-gpt",
+						"responseId": "cmpl_kill",
+						"role": "assistant",
+						"stopReason": "stop",
+						"timestamp": "<varies>",
+						"usage": "<varies>"
+					}
+				],
+				"type": "agent_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"contextHealth": "<varies>",
+			"seq": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		}
+	],
+	"queue": [
+		{
+			"event": {
+				"type": "agent_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"type": "turn_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "A desktop question hold-answer-desk-queue",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "A desktop question hold-answer-desk-queue",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"itemId": "k_desk_queue-a1",
+				"message": {
+					"api": "openai-completions",
+					"content": [],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		"event:message_update",
+		{
+			"event": {
+				"followUp": [],
+				"steering": [
+					"queued on the desktop"
+				],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"id": "s_desk",
+			"type": "steer_waiting"
+		},
+		"event:message_update",
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A held answer begins.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"cacheRead": "<varies>",
+			"cacheWrite": "<varies>",
+			"contextHealth": "<varies>",
+			"contextTokens": null,
+			"cost": "<varies>",
+			"input": "<varies>",
+			"model": "gpt-fake",
+			"modelLabel": "Fake GPT — GPT Fake",
+			"modelProvider": "fake-gpt",
+			"output": "<varies>",
+			"seq": "<varies>",
+			"totalTokens": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A held answer begins.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"toolResults": [],
+				"type": "turn_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"type": "turn_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"id": "s_desk",
+			"seq": "<varies>",
+			"text": "queued on the desktop",
+			"type": "steer_taken"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "queued on the desktop",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "queued on the desktop",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"itemId": "k_desk_queue-a2",
+				"message": {
+					"api": "openai-completions",
+					"content": [],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		"event:message_update",
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A fresh answer.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"cacheRead": "<varies>",
+			"cacheWrite": "<varies>",
+			"contextHealth": "<varies>",
+			"contextTokens": null,
+			"cost": "<varies>",
+			"input": "<varies>",
+			"model": "gpt-fake",
+			"modelLabel": "Fake GPT — GPT Fake",
+			"modelProvider": "fake-gpt",
+			"output": "<varies>",
+			"seq": "<varies>",
+			"totalTokens": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A fresh answer.",
+							"type": "text"
+						}
+					],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"toolResults": [],
+				"type": "turn_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"messages": [
+					{
+						"content": [
+							{
+								"text": "A desktop question hold-answer-desk-queue",
+								"type": "text"
+							}
+						],
+						"role": "user",
+						"timestamp": "<varies>"
+					},
+					{
+						"api": "openai-completions",
+						"content": [
+							{
+								"text": "A held answer begins.",
+								"type": "text"
+							}
+						],
+						"model": "gpt-fake",
+						"provider": "fake-gpt",
+						"responseId": "cmpl_kill",
+						"role": "assistant",
+						"stopReason": "stop",
+						"timestamp": "<varies>",
+						"usage": "<varies>"
+					},
+					{
+						"content": [
+							{
+								"text": "queued on the desktop",
+								"type": "text"
+							}
+						],
+						"role": "user",
+						"timestamp": "<varies>"
+					},
+					{
+						"api": "openai-completions",
+						"content": [
+							{
+								"text": "A fresh answer.",
+								"type": "text"
+							}
+						],
+						"model": "gpt-fake",
+						"provider": "fake-gpt",
+						"responseId": "cmpl_kill",
+						"role": "assistant",
+						"stopReason": "stop",
+						"timestamp": "<varies>",
+						"usage": "<varies>"
+					}
+				],
+				"type": "agent_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"contextHealth": "<varies>",
+			"seq": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		}
+	],
+	"stop": [
+		{
+			"event": {
+				"type": "agent_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"type": "turn_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "A desktop question hold-answer-desk-stop",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"content": [
+						{
+							"text": "A desktop question hold-answer-desk-stop",
+							"type": "text"
+						}
+					],
+					"role": "user",
+					"timestamp": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"itemId": "k_desk_stop-a1",
+				"message": {
+					"api": "openai-completions",
+					"content": [],
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"role": "assistant",
+					"stopReason": "stop",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_start"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		"event:message_update",
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		"event:message_update",
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A held answer begins.",
+							"type": "text"
+						}
+					],
+					"errorMessage": "Request was aborted",
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "aborted",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"type": "message_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"message": {
+					"api": "openai-completions",
+					"content": [
+						{
+							"text": "A held answer begins.",
+							"type": "text"
+						}
+					],
+					"errorMessage": "Request was aborted",
+					"model": "gpt-fake",
+					"provider": "fake-gpt",
+					"responseId": "cmpl_kill",
+					"role": "assistant",
+					"stopReason": "aborted",
+					"timestamp": "<varies>",
+					"usage": "<varies>"
+				},
+				"toolResults": [],
+				"type": "turn_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"endedBy": "stop",
+				"messages": [
+					{
+						"content": [
+							{
+								"text": "A desktop question hold-answer-desk-stop",
+								"type": "text"
+							}
+						],
+						"role": "user",
+						"timestamp": "<varies>"
+					},
+					{
+						"api": "openai-completions",
+						"content": [
+							{
+								"text": "A held answer begins.",
+								"type": "text"
+							}
+						],
+						"errorMessage": "Request was aborted",
+						"model": "gpt-fake",
+						"provider": "fake-gpt",
+						"responseId": "cmpl_kill",
+						"role": "assistant",
+						"stopReason": "aborted",
+						"timestamp": "<varies>",
+						"usage": "<varies>"
+					}
+				],
+				"type": "agent_end"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		},
+		{
+			"agent": "kill-room",
+			"contextHealth": "<varies>",
+			"seq": "<varies>",
+			"type": "usage_turn"
+		},
+		{
+			"event": {
+				"followUp": [],
+				"steering": [],
+				"type": "queue_update"
+			},
+			"seq": "<varies>",
+			"type": "event"
+		}
+	],
+	"model switch": [
+		{
+			"key": "mcp",
+			"kind": "status",
+			"type": "ui_request"
+		},
+		{
+			"contextHealth": "<varies>",
+			"effort": {
+				"ladder": [
+					{
+						"label": "off",
+						"level": "off"
+					}
+				],
+				"level": "off",
+				"supported": [
+					"off"
+				]
+			},
+			"model": {
+				"contextWindow": 128000,
+				"label": "Fake GPT — GPT Fake Two",
+				"model": "gpt-fake-2",
+				"provider": "fake-gpt"
+			},
+			"notice": {
+				"id": "<id>",
+				"text": "Continued on GPT Fake 2"
+			},
+			"type": "model_switched"
+		}
+	]
+}

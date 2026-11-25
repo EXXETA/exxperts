@@ -155,3 +155,9 @@
 	background: var(--panel);
 	border-color: var(--border);
 }
+
+/* Menus and tooltips drawn on the canvas or a grey: white in light, as the others are there. */
+:root[data-theme="light"] :is(.room-sort-menu, .bash-mode-menu, .composer-context-popover, .mention-pop, .att-menu, .mem-tip),
+:root[data-theme="light"] .figure-icon:is(:hover, :focus-visible)::before {
+	background: var(--exx-surface);
+}

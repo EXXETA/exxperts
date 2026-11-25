@@ -1,0 +1,478 @@
+/* The settings windows' new look: Settings, Skills (its header, the add menu,
+   the table and the lines above it) and a room's Skills page ---------------
+   Loaded after the look's other files, and built while the switch is off as
+   they are: every rule starts with .settings-dialog.settings-look-next, so
+   with it off nothing here applies. A room's Connectors page shares
+   .room-skills-section: rules for a room's Skills name it without
+   .room-connectors-section. */
+
+/* The tag: its look is 44's, wherever the window shows it (the list, a
+   room's rows, a skill's page and the review); 20 tall, 8 px after the name,
+   never cut. */
+.settings-dialog.settings-look-next .skill-tag {
+	display: inline-flex;
+	align-items: center;
+	flex: none;
+	box-sizing: border-box;
+	height: 20px;
+	margin-left: 8px;
+	font-family: var(--exx-font-sans);
+	letter-spacing: normal;
+	vertical-align: middle;
+}
+.settings-dialog.settings-look-next .room-skill-head .skill-tag {
+	margin-left: 0;
+}
+
+/* Settings, Skills' header: Add skill, with a 12 px caret 6 px after its
+   words. */
+.settings-dialog.settings-look-next .skill-add-menu-wrap {
+	margin-left: 0;
+}
+.settings-dialog.settings-look-next .skill-add-caret {
+	display: inline-flex;
+	margin-left: 6px;
+	vertical-align: middle;
+	opacity: 0.7;
+}
+.settings-dialog.settings-look-next .skill-add-caret > svg {
+	display: block;
+}
+
+/* The add menu: 6 px under its button, right edges aligned, the card's fill
+   and edge, radius 12, 200 to 280 wide; items 32 tall. */
+.settings-dialog.settings-look-next .skill-add-menu {
+	top: calc(100% + 6px);
+	right: 0;
+	min-width: 200px;
+	max-width: 280px;
+	gap: 0;
+	padding: 4px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--exx-surface-card);
+	box-shadow: var(--exx-shadow-popover);
+}
+.settings-dialog.settings-look-next .skill-add-menu .menu-item {
+	box-sizing: border-box;
+	align-items: center;
+	height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 8px;
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 400;
+	white-space: nowrap;
+	transition: background-color 100ms ease;
+}
+.settings-dialog.settings-look-next .skill-add-menu .menu-item:hover {
+	background: var(--exx-quiet-fill);
+}
+.settings-dialog.settings-look-next .skill-add-menu .menu-item:active {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+.settings-dialog.settings-look-next .skill-add-menu .menu-item:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+	background: var(--exx-quiet-fill);
+}
+@media (hover: none) {
+	.settings-dialog.settings-look-next .skill-add-menu .menu-item {
+		height: 44px;
+	}
+}
+
+/* The lines above the table: each message a strip in the tile's fill, its
+   8 px dot in a 12 px slot telling its kind (ink news, green done or found
+   fine, red failed), the words in the text colour, its one button at the
+   right; 12 above the table, 8 between two. "Last checked", the read-only
+   line and loading stay muted lines. */
+.settings-dialog.settings-look-next .skills-page .ai-setup-section.skill-library {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 0;
+}
+.settings-dialog.settings-look-next .skills-page .ai-setup-section.skill-library > :is(p, div) {
+	margin: 0;
+}
+.settings-dialog.settings-look-next .skills-page .ai-setup-section.skill-library > .skill-message + .skill-message {
+	margin-top: -4px;
+}
+/* The lines after a check sit in skill updates' bar, beside Update all: 8 between two there too. */
+.settings-dialog.settings-look-next .skills-page .skill-library .skill-updates-lines {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+/* "Last checked" is as high as the bar without messages, so it keeps one gap to the list under them too.
+   Beside Update all on a phone it breaks before Check now, never inside the time. */
+.settings-dialog.settings-look-next .skills-page .skill-updates-lines > .skill-updates-checked {
+	min-height: var(--exx-btn-h);
+	align-content: center;
+	text-wrap: wrap;
+}
+.settings-dialog.settings-look-next .skill-message {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	box-sizing: border-box;
+	min-height: 40px;
+	max-width: none;
+	padding: 6px 8px 6px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: color-mix(in srgb, var(--fg) 5%, var(--exx-surface-page));
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+}
+.settings-dialog.settings-look-next .skill-message::before {
+	content: "";
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin: 0 2px;
+	border-radius: 50%;
+	background: var(--exx-action-primary-bg);
+}
+.settings-dialog.settings-look-next .skill-message-done::before {
+	background: var(--success);
+}
+.settings-dialog.settings-look-next .skill-message-failed::before {
+	background: var(--error-text);
+}
+/* A long "Update <name>" gives way first: the name is cut with "…" down to
+   120 px, then the sentence takes a second line, so nothing goes sideways. */
+.settings-dialog.settings-look-next .skill-message > .rs-btn {
+	flex: 0 1000 auto;
+	min-width: min(120px, 100%);
+	max-width: 100%;
+	margin-left: auto;
+}
+
+/* The library is a list like every other (44's row pattern): no column
+   heads; the name, under it one status line with where the skill came from
+   and how many rooms use it ("Uploaded · 1 room"); at the right edge the
+   chevron, or Update in its place while the skill has one. A skill whose
+   files can't be opened keeps its whole reason under that line. */
+.settings-dialog.settings-look-next .skill-table {
+	margin-top: 0;
+	padding: 0 16px;
+}
+.settings-dialog.settings-look-next .skill-table-head {
+	display: none;
+}
+.settings-dialog.settings-look-next .skill-table > .skill-table-head + * {
+	border-top: 0;
+}
+.settings-dialog.settings-look-next .skill-table .skill-row {
+	position: relative;
+	isolation: isolate;
+	box-sizing: border-box;
+	grid-template-columns: minmax(0, 1fr) 16px;
+	column-gap: 12px;
+	row-gap: 0;
+	min-height: 64px;
+	padding: 12px 0;
+	background: none;
+	border-radius: 0;
+	outline: none;
+}
+/* A row in its line takes the divider into its height, as a row of its own
+   does: the rows stay where they are when an update shows. */
+.settings-dialog.settings-look-next .skill-row-line + .skill-row-line {
+	margin-top: -1px;
+}
+/* With Update in the chevron's place, the row leaves its button's room. */
+.settings-dialog.settings-look-next .skill-table .skill-row:has(> .skill-table-update-slot.has-update) {
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+.settings-dialog.settings-look-next .skill-table .skill-row:last-child {
+	border-bottom: 0;
+}
+/* Hover, pressed and the keyboard's ring: a rounded fill and ring inside the
+   row, 8 past its words on each side, clear of the dividers. */
+.settings-dialog.settings-look-next .skill-table .skill-row::before {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset: 2px -8px;
+	border-radius: 8px;
+	transition: background-color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .skill-table .skill-row:hover:not(:disabled) {
+		background: none;
+	}
+	.settings-dialog.settings-look-next .skill-table .skill-row:hover:not(:disabled)::before {
+		background: var(--exx-row-hover);
+	}
+	.settings-dialog.settings-look-next .skill-table .skill-row:hover .skill-table-name {
+		text-decoration: none;
+	}
+	.settings-dialog.settings-look-next .skill-table .skill-row:hover:not(:disabled) .skill-table-chevron {
+		background-color: var(--muted);
+	}
+}
+.settings-dialog.settings-look-next .skill-table .skill-row:active:not(:disabled)::before {
+	background: var(--exx-row-press);
+}
+.settings-dialog.settings-look-next .skill-table .skill-row:focus-visible::before {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
+.settings-dialog.settings-look-next .skill-table-name {
+	grid-column: 1;
+	grid-row: 1;
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next .skill-table-facts {
+	display: flex;
+	align-items: baseline;
+	gap: 4px;
+	grid-column: 1;
+	grid-row: 2;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .skill-table-cell {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .skill-table-facts > .skill-table-cell:empty {
+	display: none;
+}
+/* Where the line is short, only where it came from gives way. */
+.settings-dialog.settings-look-next .skill-table-facts > .skill-table-cell:not(.skill-table-from) {
+	flex-shrink: 0;
+}
+.settings-dialog.settings-look-next .skill-table-facts > .skill-table-cell + .skill-table-cell::before {
+	content: "· ";
+}
+/* Update's room, as wide as the button while it says Updating…: the button itself is laid over it, after the row in the tab order. */
+.settings-dialog.settings-look-next .skill-table-update-slot {
+	display: none;
+}
+.settings-dialog.settings-look-next .skill-table-update-slot.has-update {
+	display: block;
+	grid-column: 2;
+	grid-row: 1 / span 2;
+	width: 92px;
+}
+@media (hover: none) {
+	.settings-dialog.settings-look-next .skill-table-update-slot.has-update {
+		width: 104px;
+	}
+}
+.settings-dialog.settings-look-next .skill-table-chevron {
+	grid-column: 2;
+	grid-row: 1 / span 2;
+	align-self: center;
+	width: 16px;
+	height: 16px;
+	background-color: var(--exx-icon-quiet);
+	transition: background-color 100ms ease;
+}
+.settings-dialog.settings-look-next .skill-table .skill-row:has(> .skill-table-update-slot.has-update) > .skill-table-chevron {
+	display: none;
+}
+/* Under a reason too, the chevron sits on the whole row's middle. */
+.settings-dialog.settings-look-next .skill-row:has(.skill-table-problem) .skill-table-chevron {
+	grid-row: 1 / span 3;
+}
+/* The reason, whole, under the status line, after a red dot. */
+.settings-dialog.settings-look-next .skill-table-problem {
+	overflow-wrap: anywhere;
+	grid-column: 1 / -2;
+	grid-row: 3;
+	position: relative;
+	padding-left: 18px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 18px;
+	white-space: normal;
+}
+/* A long name in the notice breaks rather than run past the page. */
+.settings-dialog.settings-look-next .skill-auto-notice > p {
+	overflow-wrap: anywhere;
+}
+/* Update: the small secondary button on the row's right edge, where the
+   chevron is on the other rows; its own target, after its row in the tab order. */
+.settings-dialog.settings-look-next .skill-row-update {
+	right: 0;
+	width: auto;
+}
+
+/* Status dots: red where a skill can't be used or a switch did not take. */
+.settings-dialog.settings-look-next :is(.skill-table-problem, .room-skills-section:not(.room-connectors-section) .room-skill-problem)::before {
+	content: "";
+	position: absolute;
+	top: 5px;
+	left: 2px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--error-text);
+}
+
+/* A room's Skills: the search on the page's title line, 240 by 32, ending
+   where a page's actions end (12 before the close), and staying put with the
+   header while the page scrolls; the lead follows the header as on every
+   page. */
+.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) > .room-skills-search {
+	margin-top: 0;
+}
+/* The search sits between the header and the lists in the page's code, so the
+   first list keeps the 24 px under the lead that follows a header elsewhere. */
+.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) > .room-skills-search + .settings-group {
+	margin-top: 0;
+}
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) > .pane-top > .pane-head {
+		order: -2;
+	}
+	.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) > .room-skills-search {
+		order: -1;
+		position: sticky;
+		z-index: 6;
+		top: 17px;
+		align-self: flex-end;
+		width: 240px;
+		/* Up past the 12 px gap onto the header's line, 17 below its top; 7
+		   under it so the lead sits where it does on every page. */
+		margin: -51px 34px 7px 0;
+	}
+}
+
+/* Rows: 64 tall, the name at 14/20 with its chevron and the tag after it, the
+   description on one line ending in "..." (whole in its tip), the switch at
+   the row's end. */
+.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) .settings-row.room-skill {
+	min-height: 64px;
+	/* 10 above and below the name's target, which stays 44 tall for a finger. */
+	padding-block: 10px;
+}
+/* A row under another has the line on its top edge: one less above, so a row
+   with the target stays 64 as the others are. */
+.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) .settings-row.room-skill + .settings-row.room-skill {
+	padding-top: 9px;
+}
+.settings-dialog.settings-look-next .room-skill-head {
+	flex-wrap: nowrap;
+	gap: 8px;
+}
+.settings-dialog.settings-look-next .room-skill-label {
+	min-width: 0;
+	font-size: 14px;
+	line-height: 20px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .room-skill-name {
+	color: var(--fg);
+	overflow-wrap: normal;
+}
+.settings-dialog.settings-look-next .room-skill-chevron {
+	color: var(--exx-icon-quiet);
+	transition: color 100ms ease;
+}
+.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) .settings-row-clamp {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	-webkit-line-clamp: none;
+}
+/* The name and its line: one target that opens the skill's page, as a link:
+   the name underlined under the pointer and on the keyboard's focus, its ring
+   2 px round the whole target, inside the card's padding. */
+.settings-dialog.settings-look-next .rs-text-btn.room-skill-open {
+	border-radius: 8px;
+}
+/* A finger's last tap leaves no underline: only a pointer's hover draws one. */
+.settings-dialog.settings-look-next .rs-text-btn.room-skill-open:hover :is(.room-skill-name, .room-skill-open-link) {
+	text-decoration: none;
+}
+.settings-dialog.settings-look-next .rs-text-btn.room-skill-open:focus-visible :is(.room-skill-name, .room-skill-open-link) {
+	text-decoration: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}
+.settings-dialog.settings-look-next .rs-text-btn.room-skill-open:focus-visible .room-skill-chevron {
+	color: var(--muted);
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .rs-text-btn.room-skill-open:hover :is(.room-skill-name, .room-skill-open-link) {
+		text-decoration: underline;
+		text-decoration-thickness: 1px;
+		text-underline-offset: 3px;
+	}
+	.settings-dialog.settings-look-next .rs-text-btn.room-skill-open:hover .room-skill-chevron {
+		color: var(--muted);
+	}
+}
+.settings-dialog.settings-look-next .rs-text-btn.room-skill-open:active .room-skill-name {
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next .rs-text-btn.room-skill-open:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+/* A folder's name in a skill's path still keeps to one line where it fits; one longer than the line breaks. */
+.settings-dialog.settings-look-next .skill-path-part {
+	display: inline-block;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+/* A reason, or a switch that did not take: soft words after a red dot, the
+   reason's "Open skill" 8 after it in the action link's look. */
+.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) .room-skill-problem {
+	overflow-wrap: anywhere;
+	position: relative;
+	display: block;
+	padding-left: 18px;
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next .room-skill-open-link {
+	/* With the space before it, 8 after the reason. */
+	margin-left: 4px;
+	color: var(--fg);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+/* Phone: Add skill's menu hangs from its left edge. The table's rows are two
+   lines, name and tag, then From and Used in, with Update or the chevron at
+   the right of both, centred; a room's description wraps whole. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .pane-head > .pane-head-actions > .skill-add-menu-wrap {
+		position: relative;
+	}
+	.settings-dialog.settings-look-next .skill-add-menu {
+		right: auto;
+		left: 0;
+	}
+	/* A phone has no tip to read the rest: the description wraps whole. */
+	.settings-dialog.settings-look-next .room-skills-section:not(.room-connectors-section) .settings-row-clamp {
+		display: block;
+		overflow: visible;
+		white-space: normal;
+		-webkit-line-clamp: none;
+		line-clamp: none;
+	}
+	.settings-dialog.settings-look-next .room-skill-open-link {
+		display: block;
+		margin-left: 0;
+	}
+}

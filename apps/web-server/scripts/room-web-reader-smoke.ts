@@ -87,6 +87,8 @@ async function row(name: string, run: () => Promise<void> | void): Promise<void>
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-web-reader-"));
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempRoot;
+// The web search setting every row reads, this run's own and never the developer's.
+process.env.EXXPERTS_STATE_HOME = path.join(tempRoot, "state");
 
 // Every name lookup, by host, through the module fetch_url itself calls.
 const lookups: string[] = [];
@@ -1357,7 +1359,10 @@ try {
 	const sharedUnprotected = unprotectedRoom("person");
 	assert(sharedUnprotected.free(), "the room without protection is on Auto before the shared server");
 
-	// Last, as the registry is filled once per process: from here on this process is a shared server.
+	// Last, as the registry is filled once per process: from here on this process is a shared server, whose admin has
+	// turned web pages on (they are off until then), saved in this run's state folder.
+	const { writeWebSearchSettings } = await import("../src/web-search-settings.js");
+	writeWebSearchSettings({ webPages: true });
 	const { registerServerHooks } = await import("../src/server-hooks.js");
 	registerServerHooks({ ignoresStoredWorkspaceSettings: () => true });
 	const listFile = (roomId: string) => path.join(persistentAgentRootPath(roomId), "runtime", "also-allowed.json");

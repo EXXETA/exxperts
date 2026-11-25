@@ -5,10 +5,10 @@ import { createBashToolDefinition } from "@exxeta/exxperts-runtime";
 import { Type } from "typebox";
 
 import { COMMAND_DECLINED, NOBODY_TO_APPROVE_COMMAND } from "../persistent-room-bash-approval.js";
-import { PERSISTENT_ROOM_SHELL_MISSING_SENTENCE, persistentRoomShellFound } from "../persistent-room-shell-missing.js";
+import { PERSISTENT_ROOM_SHELL_MISSING_SENTENCE, persistentRoomBashFound } from "../persistent-room-shell-missing.js";
 import { OUTSIDE_COMMAND_MAX_CHARS, RUN_OUTSIDE_BOX_TOOL_NAME } from "./card-text.js";
 import type { NotNowCount } from "./folder-question.js";
-import { WINDOWS_OUTSIDE_COMMAND_INPUT, WINDOWS_OUTSIDE_DESCRIPTION } from "./windows/model-lines.js";
+import { WINDOWS_OUTSIDE_COMMAND_INPUT, WINDOWS_OUTSIDE_DESCRIPTION, WINDOWS_OUTSIDE_POWERSHELL_COMMAND_INPUT, WINDOWS_OUTSIDE_POWERSHELL_DESCRIPTION } from "./windows/model-lines.js";
 
 /** The slice of the room's question bridge this tool uses. */
 export interface OutsideQuestions {
@@ -28,9 +28,16 @@ export interface OutsideToolOptions {
 	notNow: NotNowCount;
 	/** Why the room's commands can't run now, or null while they're on: read before the card and again after its yes. */
 	commandsOff: () => string | null;
-	/** Beside the Windows box, whose commands are PowerShell: this tool still runs Git Bash, and with none found it refuses before its card. */
-	besideWindowsBox?: boolean;
+	/** Beside the Windows box, whose commands are PowerShell: the shell this tool's command runs in. With bash, and none found any more, it refuses before its card. */
+	besideWindowsBox?: "bash" | "powershell";
 }
+
+/** What the model reads of this tool: the Mac's texts, or Windows' by the shell the command runs in. */
+const TEXTS = {
+	mac: { description: "Ask the person to run one command outside this room's protection, with all their rights, when the room's commands can't do it: git push over SSH, git clone in their folder, opening an app. They see the full command and your reason on a card and must say yes each time. Use this only when the bash tool has failed for that reason, never just to get at a place the room's protection keeps closed on purpose, such as the person's keys or a local address, unless the person asks.", command: "The one bash command to run outside this room" },
+	bash: { description: WINDOWS_OUTSIDE_DESCRIPTION, command: WINDOWS_OUTSIDE_COMMAND_INPUT },
+	powershell: { description: WINDOWS_OUTSIDE_POWERSHELL_DESCRIPTION, command: WINDOWS_OUTSIDE_POWERSHELL_COMMAND_INPUT },
+};
 
 const outsideSchema = (command: string) => Type.Object({
 	command: Type.String({ description: command }),
@@ -46,6 +53,7 @@ const outsideSchema = (command: string) => Type.Object({
 export function createOutsideTool(cwd: string, plain: BashOperations, options: OutsideToolOptions): { tool: ToolDefinition<any, any>; personSpoke: () => void } {
 	const inner: ToolDefinition<any, any> = createBashToolDefinition(cwd, { operations: plain });
 	const { notNow } = options;
+	const texts = TEXTS[options.besideWindowsBox ?? "mac"];
 	const refuse = (toolCallId: string, sentence: string): never => {
 		options.notStarted(toolCallId);
 		throw new Error(sentence);
@@ -54,17 +62,17 @@ export function createOutsideTool(cwd: string, plain: BashOperations, options: O
 		...inner,
 		name: RUN_OUTSIDE_BOX_TOOL_NAME,
 		label: RUN_OUTSIDE_BOX_TOOL_NAME,
-		description: options.besideWindowsBox ? WINDOWS_OUTSIDE_DESCRIPTION : "Ask the person to run one command outside this room's protection, with all their rights, when the room's commands can't do it: git push over SSH, git clone in their folder, opening an app. They see the full command and your reason on a card and must say yes each time. Use this only when the bash tool has failed for that reason, never just to get at a place the room's protection keeps closed on purpose, such as the person's keys or a local address, unless the person asks.",
+		description: texts.description,
 		promptSnippet: "Ask the person to run one command outside the room's protection",
 		// On its own in a batch: a boxed command beside it would run by rules made before it changed the room.
 		executionMode: "sequential",
-		parameters: outsideSchema(options.besideWindowsBox ? WINDOWS_OUTSIDE_COMMAND_INPUT : "The one bash command to run outside this room"),
+		parameters: outsideSchema(texts.command),
 		async execute(toolCallId, params: { command: string; reason?: string; timeout?: number }, signal, onUpdate, ctx) {
 			const command = String(params.command ?? "");
 			const offBefore = options.commandsOff();
 			if (offBefore) return refuse(toolCallId, offBefore);
 			// On a Mac a shell is always there; on Windows a card would ask for a yes that can run nothing. Only no shell at all counts: a settings path that is wrong reaches the runtime's own words.
-			if (options.besideWindowsBox && !persistentRoomShellFound()) return refuse(toolCallId, PERSISTENT_ROOM_SHELL_MISSING_SENTENCE);
+			if (options.besideWindowsBox === "bash" && !persistentRoomBashFound()) return refuse(toolCallId, PERSISTENT_ROOM_SHELL_MISSING_SENTENCE);
 			if (notNow.reached()) return refuse(toolCallId, `${COMMAND_DECLINED} They have declined several times, so do not ask again until they write.`);
 			if (options.questions.watcher() !== "computer") return refuse(toolCallId, NOBODY_TO_APPROVE_COMMAND);
 			if (command.length > OUTSIDE_COMMAND_MAX_CHARS) return refuse(toolCallId, `This command is longer than ${OUTSIDE_COMMAND_MAX_CHARS} characters, too long to show on the card, so nothing ran.`);

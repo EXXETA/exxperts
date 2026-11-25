@@ -4,6 +4,7 @@ import path from "node:path";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
 import { shownRoomName } from "./room-name.js";
 import { isValidMcpConnectorName } from "./connector-form.js";
+import { serverHooks } from "./server-hooks.js";
 
 /**
  * Per-room MCP connector grants (per-room MCP v1). Clones the
@@ -129,21 +130,37 @@ export function persistentRoomMcpSettingsPath(agentIdRaw: string, options: Persi
 	return path.join(persistentAgentRootPath(agentId, options.persistentAgentsRoot ?? DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT), "runtime", "mcp-settings.json");
 }
 
+/** A settings file's text read leniently, or null when it is not JSON of this schema. */
+function settingsFromText(text: string): PersistentRoomMcpSettings | null {
+	let raw;
+	try {
+		raw = JSON.parse(text);
+	} catch {
+		return null;
+	}
+	if (!raw || typeof raw !== "object" || raw.schemaVersion !== 1) return null;
+	return {
+		schemaVersion: 1,
+		grantedConnectors: sanitizeGrantedConnectors(raw.grantedConnectors),
+		allowedTools: sanitizeAllowedTools(raw.allowedTools),
+		updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
+	};
+}
+
 export function readPersistentRoomMcpSettings(agentIdRaw: string, options: PersistentRoomMcpSettingsStorageOptions = {}): PersistentRoomMcpSettings {
 	const settingsPath = persistentRoomMcpSettingsPath(agentIdRaw, options);
 	try {
 		if (!fs.existsSync(settingsPath)) return emptySettings();
-		const raw = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-		if (!raw || typeof raw !== "object" || raw.schemaVersion !== 1) return emptySettings();
-		return {
-			schemaVersion: 1,
-			grantedConnectors: sanitizeGrantedConnectors(raw.grantedConnectors),
-			allowedTools: sanitizeAllowedTools(raw.allowedTools),
-			updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
-		};
+		return settingsFromText(fs.readFileSync(settingsPath, "utf-8")) ?? emptySettings();
 	} catch {
 		return emptySettings();
 	}
+}
+
+/** Only a path that is not there; any other refusal leaves it unknown. */
+function isMissing(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException | null)?.code;
+	return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /**
@@ -162,19 +179,36 @@ export function writePersistentRoomMcpSettings(agentIdRaw: string, grantedConnec
 		updatedAt: now.toISOString(),
 	};
 	fs.mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
+	writeSettingsText(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+	return settings;
+}
+
+function writeSettingsText(settingsPath: string, text: string): void {
 	// Atomic (tmp + rename): the enforcement wrapper re-reads this file on
 	// every tool call, possibly from another process, and the corrupt-file
 	// fallback is an EMPTY grant list - a torn write must never be observable.
 	const tmp = `${settingsPath}.${process.pid}.tmp`;
-	fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+	fs.writeFileSync(tmp, text, { mode: 0o600 });
 	fs.renameSync(tmp, settingsPath);
-	return settings;
+}
+
+/**
+ * Of these connector names, those the room may use, in their order: on a
+ * shared server the ones its owner may use (server-hooks.ts, roomConnectors),
+ * elsewhere all. Every door that hands a room its connectors asks here.
+ */
+export function roomUsableMcpConnectors(agentId: string, names: readonly string[]): string[] {
+	const usable = serverHooks().roomConnectors;
+	if (!usable) return [...names];
+	const allowed = new Set(usable(agentId, names));
+	return names.filter((name) => allowed.has(name));
 }
 
 /**
  * Grant a connector to a room. Validates the name and requires the connector
- * to be globally configured RIGHT NOW (`configuredNames`), so a grant can
- * never point at a connector that does not exist. Idempotent upsert.
+ * to be globally configured RIGHT NOW (`configuredNames`) and usable by the
+ * room, so a grant can never point at a connector that does not exist or that
+ * the room may not use. Idempotent upsert.
  */
 export function grantPersistentRoomMcpConnector(
 	agentIdRaw: string,
@@ -184,7 +218,7 @@ export function grantPersistentRoomMcpConnector(
 	now = new Date(),
 ): McpGrantMutationResult {
 	if (!isValidMcpConnectorName(name)) return { ok: false, reason: "invalid-name" };
-	if (!configuredNames.includes(name)) return { ok: false, reason: "unknown-connector" };
+	if (!configuredNames.includes(name) || roomUsableMcpConnectors(agentIdRaw, [name]).length === 0) return { ok: false, reason: "unknown-connector" };
 	const current = readPersistentRoomMcpSettings(agentIdRaw, options);
 	if (current.grantedConnectors.includes(name)) return { ok: true, settings: current };
 	return { ok: true, settings: writePersistentRoomMcpSettings(agentIdRaw, [...current.grantedConnectors, name], options, now) };
@@ -247,13 +281,15 @@ export function effectiveGrantedMcpConnectors(grantedConnectors: readonly string
  * matches the live grants from the next turn onward. (Call gating never
  * depends on it - the wrapper re-reads grants per call.) The list-taking form
  * exists so the description builder can fingerprint the very read it used.
+ * Both take the stored grants the room may use, so a change to who may use a
+ * connector rebinds the room too.
  */
 export function mcpGrantsFingerprint(grantedConnectors: readonly string[]): string {
 	return JSON.stringify(grantedConnectors);
 }
 
 export function persistentRoomMcpGrantsFingerprint(agentIdRaw: string, options: PersistentRoomMcpSettingsStorageOptions = {}): string {
-	return mcpGrantsFingerprint(readPersistentRoomMcpSettings(agentIdRaw, options).grantedConnectors);
+	return mcpGrantsFingerprint(roomUsableMcpConnectors(agentIdRaw, readPersistentRoomMcpSettings(agentIdRaw, options).grantedConnectors));
 }
 
 /** Per-grant configured/missing view for the room settings panel. */
@@ -335,16 +371,64 @@ export interface McpConnectorRevokeSweepResult {
 	failures: Array<{ agentId: string; error: string }>;
 }
 
-/** Every room, archived ones included, whose file names `name`: `change` writes it, and a room that can't be written is reported. */
-function sweepRooms(name: string, options: PersistentRoomMcpSettingsStorageOptions, holds: (settings: PersistentRoomMcpSettings) => boolean, change: (agentId: string, settings: PersistentRoomMcpSettings) => void): McpConnectorRevokeSweepResult {
+/**
+ * The rooms a sweep must go through: every folder that may be a room. Unlike
+ * a room's own reading, a folder whose room file can't be checked counts, and
+ * a rooms folder that can't be listed throws, so a sweep never passes over a
+ * room it could not see.
+ */
+function sweptRoomAgentIds(persistentAgentsRoot: string): string[] {
+	let folders: fs.Dirent[];
+	try {
+		folders = fs.readdirSync(persistentAgentsRoot, { withFileTypes: true });
+	} catch (error) {
+		if (isMissing(error)) return [];
+		throw error;
+	}
+	return folders
+		.filter((entry) => entry.isDirectory() && /^[a-zA-Z0-9_-]{1,160}$/.test(entry.name))
+		.filter((entry) => {
+			try {
+				fs.statSync(path.join(persistentAgentsRoot, entry.name, "agent.json"));
+				return true;
+			} catch (error) {
+				return !isMissing(error);
+			}
+		})
+		.map((entry) => entry.name);
+}
+
+/**
+ * A room's settings as a sweep for `name` must know them. A room with no file
+ * has no grants. A file that can't be read throws. A file that is there but
+ * isn't settings this version understands throws only when its text names the
+ * connector, as a quoted name: a hand repair or another version could read that grant again,
+ * and a file that never names it can't give it back.
+ */
+function sweptRoomMcpSettings(agentId: string, name: string, options: PersistentRoomMcpSettingsStorageOptions): { settings: PersistentRoomMcpSettings; text: string } {
+	let text: string;
+	try {
+		text = fs.readFileSync(persistentRoomMcpSettingsPath(agentId, options), "utf-8");
+	} catch (error) {
+		if (isMissing(error)) return { settings: emptySettings(), text: "" };
+		throw error;
+	}
+	const settings = settingsFromText(text);
+	if (settings) return { settings, text };
+	if (text.includes(JSON.stringify(name))) throw new Error(`its connector settings aren't readable as settings and name ${name}`);
+	return { settings: emptySettings(), text };
+}
+
+/** Every room, archived ones included, whose file names `name`: `change` writes it, and a room that can't be read or written is reported. */
+function sweepRooms(name: string, options: PersistentRoomMcpSettingsStorageOptions, holds: (settings: PersistentRoomMcpSettings) => boolean, change: (agentId: string, settings: PersistentRoomMcpSettings, text: string) => void): McpConnectorRevokeSweepResult {
 	if (!isValidMcpConnectorName(name)) return { revokedFrom: [], failures: [] };
 	const revokedFrom: string[] = [];
 	const failures: Array<{ agentId: string; error: string }> = [];
-	for (const agentId of listPersistentRoomAgentIds(options.persistentAgentsRoot ?? DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT)) {
+	for (const agentId of sweptRoomAgentIds(options.persistentAgentsRoot ?? DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT)) {
 		try {
-			const current = readPersistentRoomMcpSettings(agentId, options);
+			const { settings: current, text } = sweptRoomMcpSettings(agentId, name, options);
 			if (!holds(current)) continue;
-			change(agentId, current);
+			change(agentId, current, text);
 			revokedFrom.push(agentId);
 		} catch (error) {
 			failures.push({ agentId, error: (error as Error).message });
@@ -353,18 +437,42 @@ function sweepRooms(name: string, options: PersistentRoomMcpSettingsStorageOptio
 	return { revokedFrom, failures };
 }
 
+export interface McpConnectorRevoke extends McpConnectorRevokeSweepResult {
+	/** Puts back each swept room's file as it was; the rooms that could not be written. */
+	undo: () => McpConnectorRevokeSweepResult["failures"];
+}
+
 /**
  * Connector-delete hook (grant identity rule): remove `name` from every
  * room's grant list and its yeses, archived rooms included, so a re-created
  * connector with the same name starts with no grants and no yeses anywhere.
- * One unwritable room must not stop the sweep, but every failure is reported
- * to the caller so the delete route can surface it instead of a namesake
- * silently inheriting grants.
+ * All or nothing: when a room can't be read or written, the rooms already
+ * swept get their files back, every failure is reported and `revokedFrom` is
+ * empty, so the delete keeps the connector and a retry sweeps again. `undo`
+ * does the same for a delete that fails after the sweep. A process stopped
+ * mid-sweep leaves grants gone and the connector kept: never a grant left for
+ * a namesake to inherit.
  */
-export function revokeMcpConnectorFromAllRooms(name: string, options: PersistentRoomMcpSettingsStorageOptions = {}, now = new Date()): McpConnectorRevokeSweepResult {
-	return sweepRooms(name, options, (settings) => settings.grantedConnectors.includes(name) || Object.hasOwn(settings.allowedTools, name), (agentId, settings) => {
-		writePersistentRoomMcpSettings(agentId, settings.grantedConnectors.filter((granted) => granted !== name), options, now);
+export function revokeMcpConnectorFromAllRooms(name: string, options: PersistentRoomMcpSettingsStorageOptions = {}, now = new Date()): McpConnectorRevoke {
+	const before = new Map<string, string>();
+	const sweep = sweepRooms(name, options, (settings) => settings.grantedConnectors.includes(name) || Object.hasOwn(settings.allowedTools, name), (agentId, settings, text) => {
+		writePersistentRoomMcpSettings(agentId, settings.grantedConnectors.filter((granted) => granted !== name), options, now, settings.allowedTools);
+		before.set(agentId, text);
 	});
+	const undo = () => {
+		const failures: McpConnectorRevokeSweepResult["failures"] = [];
+		for (const [agentId, text] of before) {
+			try {
+				writeSettingsText(persistentRoomMcpSettingsPath(agentId, options), text);
+			} catch (error) {
+				failures.push({ agentId, error: (error as Error).message });
+			}
+		}
+		before.clear();
+		return failures;
+	};
+	if (sweep.failures.length === 0) return { ...sweep, undo };
+	return { revokedFrom: [], failures: [...sweep.failures, ...undo()], undo };
 }
 
 /** A connector moved to another address: its yeses go in every room, and its grants stay. */
@@ -372,6 +480,15 @@ export function forgetMcpConnectorToolsInAllRooms(name: string, options: Persist
 	return sweepRooms(name, options, (settings) => Object.hasOwn(settings.allowedTools, name), (agentId, settings) => {
 		const { [name]: _gone, ...rest } = settings.allowedTools;
 		writePersistentRoomMcpSettings(agentId, settings.grantedConnectors, options, now, rest);
+	});
+}
+
+/** The person picked a choice for these tools of a connector: their old yeses go in every room, and its grants stay. */
+export function forgetMcpConnectorToolYesesInAllRooms(name: string, tools: readonly string[], options: PersistentRoomMcpSettingsStorageOptions = {}, now = new Date()): McpConnectorRevokeSweepResult {
+	const picked = new Set(tools);
+	return sweepRooms(name, options, (settings) => allowedToolsOf(settings.allowedTools, name).some((entry) => picked.has(entry.tool)), (agentId, settings) => {
+		const allowed = { ...settings.allowedTools, [name]: allowedToolsOf(settings.allowedTools, name).filter((entry) => !picked.has(entry.tool)) };
+		writePersistentRoomMcpSettings(agentId, settings.grantedConnectors, options, now, allowed);
 	});
 }
 

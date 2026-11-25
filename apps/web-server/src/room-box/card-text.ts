@@ -97,11 +97,13 @@ export function alsoAllowedSentence(alsoAllowed: AlsoAllowedForModel): string {
 
 /**
  * In the box's line for the model on a Mac, where each kind of file goes: a
- * command's TMPDIR is the turn's private temp, emptied when the turn ends, the
- * shared temp folders are closed, and pip installs into the room's caches
- * (boxEnvironment in box-rules.ts).
+ * command's TMPDIR is the turn's private temp, emptied when the turn ends,
+ * which lies in the app's own data, so the file tools open only a long output
+ * there, by its exact path, and refuse the rest (`ownTempRefusal` in
+ * ../room-files.ts); the shared temp folders are closed,
+ * and pip installs into the room's caches (boxEnvironment in box-rules.ts).
  */
-export const BOX_FILE_HOMES_LINE = "Only what the person asked for goes into the room's folder. Helper scripts and other temporary files go under $TMPDIR, which is emptied after this answer; /tmp is closed. A library you install with pip is kept for this room.";
+export const BOX_FILE_HOMES_LINE = "Write what the person asked for, and any file you need to open with the file tools, into the room's folder. Helper scripts and other temporary files go under $TMPDIR, which only commands can open and which is emptied after this answer; /tmp is closed. A library you install with pip is kept for this room.";
 
 /**
  * What the model is told each answer: what the box refuses, and the room's list as
@@ -124,11 +126,21 @@ export const ASK_AGAIN_FROM_COMPUTER = "the person can ask again from the comput
  * folder ask is offered with someone there to answer it.
  */
 export const boxRefusedLine = (asks: boolean): string =>
-	`The room's protection may have refused a place outside the room's folder. ${asks ? `If this command needed one, call ${ASK_FOR_FOLDER_TOOL_NAME} with access read or change so the person can pick it.` : `If this command needed one, say which place it was: ${ASK_AGAIN_FROM_COMPUTER}.`}`;
+	`The room's protection may have refused a place outside the room's folder. ${asks ? `If this command needed one, call ${ASK_FOR_FOLDER_TOOL_NAME} with access read or change so the person can pick it, but never for a skill's folder, which no room can change.` : `If this command needed one, say which place it was: ${ASK_AGAIN_FROM_COMPUTER}.`}`;
 
-/** What follows a file tool's refused write into a folder the room can only read; `asks` as for boxRefusedLine. */
-export const readOnlyNextLine = (asks: boolean): string =>
-	asks ? `Call ${ASK_FOR_FOLDER_TOOL_NAME} with access change so the person can allow it.` : `Tell the person: ${ASK_AGAIN_FROM_COMPUTER}.`;
+/** What the model reads, in place of `boxRefusedLine` for that refusal, after a Mac's boxed command was refused LibreOffice's start: no folder would open it. */
+export const LIBREOFFICE_REFUSED_LINE = `LibreOffice can't start inside this room's protection. If the task needs it and you have ${RUN_OUTSIDE_BOX_TOOL_NAME}, ask for that program alone, on files in the room's folder; otherwise go on without it and say what you couldn't check.`;
+
+/**
+ * Who can let a room change a folder it can only read, when its file tool's write is refused there:
+ * the folder ask now (`ask`), the person later from the computer, where the ask is (`ask-later`), or
+ * only the person, outside the conversation (`tell`), since a room that asks nothing shows no card.
+ */
+export type ReadOnlyNext = "ask" | "ask-later" | "tell";
+
+/** What follows a file tool's refused write into a folder the room can only read. */
+export const readOnlyNextLine = (next: ReadOnlyNext): string =>
+	next === "ask" ? `Call ${ASK_FOR_FOLDER_TOOL_NAME} with access change so the person can allow it.` : next === "ask-later" ? `Tell the person: ${ASK_AGAIN_FROM_COMPUTER}.` : "Tell the person.";
 
 export const ASK_FOR_FOLDER_TOOL_NAME = "ask_for_folder";
 export const ASK_FOR_COMMANDS_TOOL_NAME = "ask_for_commands";
@@ -166,6 +178,12 @@ export const REMOVE = "Remove";
 export const folderRemovedLine = (name: string): string => `${name} is no longer on this room's list. The folder stays on your computer.`;
 export const DISMISS = "Dismiss";
 export const WAITING_FOR_OK = "Waiting for your OK";
+/** A step head on another person's page while a shared room's question waits for its asker: the card under it names whom. */
+export const WAITING_FOR_OTHERS = "Waiting";
+/** A shared room's question in someone else's answer, on another person's page: only the person whose message started that answer can answer it; null when nobody knows their name. */
+export const waitingForAsker = (name: string | null): string => (name ? `Waiting for ${name} to answer` : "Waiting for the person who asked to answer");
+/** The same page's line once its answer to that question was refused. */
+export const onlyAskerAnswers = (name: string | null): string => (name ? `Only ${name} can answer this` : "Only the person who asked can answer this");
 /** The panel above the message box that shows the room's folder, commands, site, run and run-outside questions, as a screen reader names it. */
 export const ASK_PANEL_NAME = "The room's question";
 /** Under the room's question when more wait behind it. */
@@ -175,10 +193,10 @@ export const roomNeedsAnswer = (room: string): string => `${room} needs your ans
 export const SENDING_COUNTS_AS_NOT_NOW = "Sending a message counts as Not now.";
 export const SENDING_ENDS_QUESTION = "Sending ends this question.";
 export const folderAskTitle = (roomHasFolder: boolean): string => (roomHasFolder ? "This room needs access to another folder." : "This room needs access to a folder.");
-/** What a yes on a folder card gives: `chosen` where the yes opens the folder window, `named` where it gives the folder the card names. */
-export const folderAskLine = (access: FolderAskAccess, folder: "chosen" | "named" = "chosen"): string => {
-	const where = folder === "named" ? "this folder" : "the folder you choose";
-	return access === "write" ? `It will be able to read and change the files in ${where}. It gets no other access.` : `It will be able to read the files in ${where}. It gets no other access.`;
+/** What a yes on a folder card gives: `chosen` where the yes opens the folder window, `named` where it gives the folder the card names, `{ file }` where that folder holds the one file the room named: it gets the whole folder. */
+export const folderAskLine = (access: FolderAskAccess, folder: "chosen" | "named" | { file: string } = "chosen"): string => {
+	const where = folder === "chosen" ? "the files in the folder you choose" : folder === "named" ? "the files in this folder" : `all the files in this folder, not just ${folder.file}`;
+	return access === "write" ? `It will be able to read and change ${where}. It gets no other access.` : `It will be able to read ${where}. It gets no other access.`;
 };
 export const folderPickedLine = (access: FolderAskAccess, name: string): string => (access === "write" ? `This room can now read and change files in ${name}.` : `This room can now read files in ${name}.`);
 /** Under a yes for this answer only: `running` while the answer that gave it goes on, and in the past once it has ended. */
@@ -200,8 +218,16 @@ export const NO_FOLDER_WINDOW = "This computer can't open a folder window.";
 export const FOLDER_WINDOW_CLOSED = "The folder window closed before you chose a folder. Try again.";
 /** The folder card has two Allow buttons and no Choose a folder…. */
 export const FOLDER_CARD_WINDOW_CLOSED = "The folder window closed before you chose a folder. Try again.";
-/** A folder the panel names before it is given: its real name and path as shown, and whether Allow this time is offered. */
-export type SuggestedFolder = { name: string; path: string; once: boolean };
+/**
+ * What the panel's Folder row shows. A folder the server holds: its real name
+ * and path as shown, whether Allow this time is offered, and `file`, the name
+ * of the file the room named in it. Or only the room's own words for a place
+ * the server won't offer (`named`, as `namedPathAsShown` draws it): no press
+ * gives it.
+ */
+export type SuggestedFolder = { name: string; path: string; once: boolean; file?: string } | { named: string; once: false };
+/** The panel's row above the Folder row where the room named a file. */
+export const FILE_LABEL = "File";
 /** At the end of the panel's Folder row where one click is offered: the folder window, whose pick the panel then shows. */
 export const CHOOSE_ANOTHER_FOLDER = "Choose another folder";
 /** A real path as the panel's Folder row shows it: whole on Windows; elsewhere from `~` inside the home. */
@@ -210,6 +236,22 @@ export function pathAsShown(real: string, home: string, windows: boolean): strin
 	if (real === home) return "~";
 	const below = home.endsWith("/") ? home : `${home}/`;
 	return real.startsWith(below) ? `~/${real.slice(below.length)}` : real;
+}
+
+/** Longer than this, the room's own path is cut in the middle, so its start and its last names both show. */
+export const NAMED_PATH_MAX_CHARS = 120;
+/** The room's own path, as the panel's Folder row draws it: from `~` inside the home, on one line with every hidden character written out, cut in the middle. */
+export function namedPathAsShown(text: string, home: string, windows: boolean): string {
+	// By characters, so the cut never splits one in two.
+	const shown = [...writtenOut(pathAsShown(text, home, windows))];
+	if (shown.length <= NAMED_PATH_MAX_CHARS) return shown.join("");
+	const end = Math.floor((NAMED_PATH_MAX_CHARS - 1) / 2);
+	const head = shown.slice(0, NAMED_PATH_MAX_CHARS - 1 - end);
+	const tail = shown.slice(-end);
+	// At the slashes where there are some, so no name shows in part: a stray piece of one reads as a folder of its own.
+	const headEnd = Math.max(head.lastIndexOf("/"), head.lastIndexOf("\\"));
+	const tailStart = tail.findIndex((character) => character === "/" || character === "\\");
+	return `${(headEnd > 0 ? head.slice(0, headEnd + 1) : head).join("")}…${(tailStart >= 0 ? tail.slice(tailStart) : tail).join("")}`;
 }
 
 /** Room settings' button on a folder the room can only read. */
@@ -222,6 +264,15 @@ export const ROOM_FOLDER_REFUSED_LINE = "This room can't use its folder. Choose 
 // The line above the message box in a room with no folder: with none, there is nowhere for commands to work, so they aren't offered.
 export const NO_FOLDER_LINE = "Choose a folder so this room can work with your files and run commands.";
 export const CHOOSE_FOLDER = "Choose folder";
+/**
+ * Room settings, Skills, when a skill that is on has files: what its skills
+ * can't do in a room without a folder it can open ("none") or with Commands off ("read"),
+ * then how to change that, which only the computer can, so a phone shows `what` alone.
+ */
+export const ROOM_SKILL_FILES_LINES: Record<"none" | "read", { what: string; how: string }> = {
+	none: { what: "Skills in this room use only their instructions until the room has a folder it can open.", how: "Choose one on the Folder page to let them read their files; with Commands on there, they can run their scripts too." },
+	read: { what: "Skills in this room can read their files, but can't run their scripts while Commands is off.", how: "To run them, open the Folder page and switch Commands on." },
+};
 /** The no-folder line when the computer's folder window failed: the button tries again. */
 export const FOLDER_CHOOSE_FAILED = "Couldn't choose a folder. Try again.";
 /** The Folder page's Location button where the room's folder is there: choosing one replaces it. */
@@ -233,7 +284,7 @@ export const CHOOSING = "Choosing";
 export const COMMANDS_ASK_TITLE = "Allow this room to run commands?";
 export type CommandsAskLine = "in-box" | "in-box-read-only" | "no-box" | "unprotected";
 /** What commands can reach inside the room's protection, as the card says it: true on a Mac and on Windows alike. */
-export const COMMANDS_ASK_REACH = "It can open only files in this room's folders and reach only the sites you allow, until you turn this off in Room settings.";
+export const COMMANDS_ASK_REACH = "It can open only files in this room's folders and the folders of the skills that are on here, and reach only the sites you allow, until you turn this off in Room settings.";
 export const COMMANDS_ASK_LINES: Record<CommandsAskLine, string> = {
 	"in-box": `${COMMANDS_ASK_REACH} Commands can change or delete the files this room can change.`,
 	"in-box-read-only": `${COMMANDS_ASK_REACH} This room can't change files, so its commands can't either.`,
@@ -259,12 +310,12 @@ export const TURN_OFF_PROTECTION_BODY_COMMANDS_OFF = "If you turn commands on la
 export const FREE_CONFIRM_TITLE = "Let this room reach public websites without asking?";
 export const FREE_CONFIRM_BODY = "Anything this room can read or remembers could be sent to a website, also while a scheduled task runs.";
 export const ALLOW = "Allow";
-/** Asked before a room without protection goes on Auto, which is Auto's own question there too: its pages open without asking as well. */
-export const RUN_WITHOUT_ASKING_TITLE = "Run commands without asking?";
-export const RUN_WITHOUT_ASKING_BODY = "Protection is off. On Auto, commands can change or delete any of your files and send anything this room can read to a website, without asking you.";
-export const RUN_WITHOUT_ASKING = "Run without asking";
+/** Asked before a room without protection goes on Auto, where the room asks nothing: its commands, its pages, its file tools and its connectors. */
+export const RUN_WITHOUT_ASKING_TITLE = "Let this room work without asking?";
+export const RUN_WITHOUT_ASKING_BODY = "Protection is off. On Auto, this room can change or delete any of your files, use its connectors and send anything it can read to a website, without asking you.";
+export const RUN_WITHOUT_ASKING = "Work without asking";
 // The chip's modes for a room's commands: each item a name and one line, and one line under them.
-/** Auto's line, with or without protection. */
+/** Auto's line in a protected room. */
 const AUTO_LINE = "Runs commands and reaches public websites without asking.";
 /** In a protected room, where a new website asks unless the room is on Auto. */
 export const MODE_LINES_PROTECTED: Record<CommandMode, string> = {
@@ -276,11 +327,15 @@ export const MODE_LINES_PROTECTED: Record<CommandMode, string> = {
 export const MODES_PROTECTED_STAY_LINE = "In every mode, commands stay in this room's folders.";
 /** Under the protected room's modes at the computer: in each, the folder question and Run once ask before a command reaches outside the room's folders. */
 export const MODES_PROTECTED_LINE = `${MODES_PROTECTED_STAY_LINE} If they need anything outside, they ask you first.`;
-/** In a room without protection, which has no Semi, since its commands reach any site without asking there; the line under them is the Folder page's Commands line for that room. */
+/** In a room without protection, which has no Semi, since its commands reach any site without asking there; the line under them is the Folder page's Commands line for that room on Ask. On Auto it asks nothing. */
 export const MODE_LINES_UNPROTECTED: Record<"ask" | "auto", string> = {
 	ask: "Asks before each command.",
-	auto: AUTO_LINE,
+	auto: "Runs commands, changes files, opens websites and uses connectors without asking.",
 };
+/** The room's Connectors page at the desktop: each tool goes by its choice on its connector's page. */
+export const CONNECTORS_EACH_TOOL_LINE = "Each tool runs, asks you first or is blocked as set on its connector's page in Settings.";
+/** The room's Connectors page, where the room asks nothing: no tool asks first. */
+export const CONNECTORS_WITHOUT_ASKING_LINE = "This room is on Auto with protection off, so its connectors don't ask first. A blocked tool still doesn't run.";
 /** Where protection can't work, by its cause: this computer, the room's folder, or not known. */
 export const PROTECTION_UNAVAILABLE_COMPUTER = "Protection isn't available on this computer.";
 export const PROTECTION_UNAVAILABLE_FOLDER = "Protection isn't available for this folder.";
@@ -299,9 +354,11 @@ export type AskFolder = { path: string; name: string; access: FolderAskAccess; l
 /** A reason as a card draws it: one line, every hidden character written out, cut at a length a card can hold. */
 export const REASON_MAX_CHARS = 300;
 export function reasonAsShown(reason: string): string {
-	const shown = commandAsShown(reason).replace(/[\t\n]/g, (hidden) => `⟦U+${(hidden.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}⟧`);
+	const shown = writtenOut(reason);
 	return shown.length > REASON_MAX_CHARS ? `${shown.slice(0, REASON_MAX_CHARS - 1)}…` : shown;
 }
+/** Text on one line: every hidden character written out, line ends and tabs too. */
+const writtenOut = (text: string): string => commandAsShown(text).replace(/[\t\n]/g, (hidden) => `⟦U+${(hidden.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}⟧`);
 
 /** Longer than this and the outside card refuses the command: nobody reads it all. */
 export const OUTSIDE_COMMAND_MAX_CHARS = 8_000;
@@ -371,17 +428,23 @@ export const CAN_CHANGE_FILES_OFF_UNPROTECTED_LINE = "The room can only read fil
 export const CAN_CHANGE_FILES_OFF_NO_COMMANDS_LINE = "The room can only read files.";
 export const COMMANDS = "Commands";
 /** The Commands line inside the room's protection, whether or not Can change files is on. */
-export const COMMANDS_PROTECTED_REACH = "Commands can open only files in this room's folders and reach only the sites you allow.";
+export const COMMANDS_PROTECTED_REACH = "Commands can open only files in this room's folders and the folders of the skills that are on here, and reach only the sites you allow.";
 /** The Commands line inside the room's protection in a room on Auto. */
-export const COMMANDS_FREE_REACH = "Commands can open only files in this room's folders and reach public websites without asking.";
+export const COMMANDS_FREE_REACH = "Commands can open only files in this room's folders and the folders of the skills that are on here, and reach public websites without asking.";
 /** The Commands line where the person turned protection off, or the folder is why it can't work. */
 export const COMMANDS_UNPROTECTED_REACH = "In this room, commands can reach and change any of your files, not just this room's.";
+/** The same, in a room on Auto, which asks nothing. */
+export const COMMANDS_UNPROTECTED_AUTO_REACH = "In this room, commands run without asking and can reach and change any of your files.";
 /** The Commands line on a computer that can't protect, with Can change files on. */
 export const COMMANDS_NO_PROTECTION_REACH = "On this computer, commands can reach and change any of your files, not just this room's.";
+/** The same, in a room on Auto, which asks nothing. */
+export const COMMANDS_NO_PROTECTION_AUTO_REACH = "On this computer, commands run without asking and can reach and change any of your files.";
 /** On a computer with no protection, Can change files off: the switch shows off and greyed. */
 export const COMMANDS_NEED_CHANGES_LINE = "On this computer, commands can change files, so they work only while Can change files is on.";
-/** The Protection row's line where protection can work, on or turned off by the person. */
+/** The Protection row's line where protection is on. */
 export const PROTECTION_LINE = "Keeps commands inside this room's folders.";
+/** Where the person turned it off: what turning it on does. */
+export const PROTECTION_OFF_LINE = "Turn on to keep commands inside this room's folders.";
 /** Where it can't, the row says only its cause: the row's label names Protection. A line with no label above it keeps the full sentence (PROTECTION_UNAVAILABLE and its neighbours). */
 export const PROTECTION_ROW_UNAVAILABLE_COMPUTER = "Not available on this computer.";
 export const PROTECTION_ROW_UNAVAILABLE_FOLDER = "Not available for this folder.";

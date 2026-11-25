@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { authedFetch, freePort, killSmokeServer, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, waitForServer } from "./smoke-server-process.js";
+import { authedFetch, keptPort, killSmokeServer, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, waitForServer } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -65,12 +65,24 @@ export const releaseAnswer = (hold: string) => heldAnswers.get(hold)?.();
 /** The last message of every request the fake model got. */
 export const lastMessagesHeard: string[] = [];
 
+/** Every request the fake model got, in order: the model it named, the tools it offered and its messages. */
+export const requestsHeard: { model: string; tools: string[]; messages: string }[] = [];
+
 /** A last message with a word like this gets the first words of its answer and then silence, so a turn stays in flight. */
 const HOLD_WORD = /hold-answer-[a-z0-9-]+/;
+/** What a held answer whose word ends in "-tail" says after its first words, once released. */
+export const HELD_TAIL = " And it ends here.";
+/** A held answer whose word ends in "-site" calls fetch_url once released, for an address on its own made-up site, so the room asks whether to open it. The call and its address leave the word out, so the call's result is not held again. */
+export const askedSiteOf = (hold: string) => `https://${hold.replace("hold-answer-", "asked-")}.example.com/page`;
 /** A last message with a word like this is refused, as a provider refuses a bad request. */
 const REFUSE_WORD = /refuse-answer-[a-z0-9-]+/;
 /** A last message with a word like this is refused the first time and held after, so a Try again stays in flight. */
 const REFUSE_ONCE_WORD = /refuse-once-answer-[a-z0-9-]+/;
+/** A last message with a word like this is answered up to the model's output limit, so the answer ends cut off. */
+const LENGTH_WORD = /length-answer-[a-z0-9-]+/;
+/** A last message with a word like this is answered as if it had read nearly the whole window, so the room shortens its conversation after that turn. */
+const FULL_WORD = /full-answer-[a-z0-9-]+/;
+const FULL_READING = 120_000;
 const refusedOnce = new Set<string>();
 
 function lastMessageOf(body: string): string {
@@ -85,8 +97,13 @@ export const provider = http.createServer((req, res) => {
 	const body: Buffer[] = [];
 	req.on("data", (chunk) => body.push(chunk));
 	req.on("end", () => {
-		const last = lastMessageOf(Buffer.concat(body).toString());
+		const raw = Buffer.concat(body).toString();
+		const last = lastMessageOf(raw);
 		lastMessagesHeard.push(last);
+		try {
+			const request = JSON.parse(raw);
+			requestsHeard.push({ model: String(request.model ?? ""), tools: (request.tools ?? []).map((tool: any) => String(tool?.function?.name ?? tool?.name ?? "")), messages: JSON.stringify(request.messages ?? []) });
+		} catch {}
 		const once = REFUSE_ONCE_WORD.exec(last)?.[0];
 		const refuseNow = once !== undefined && !refusedOnce.has(once);
 		if (once) refusedOnce.add(once);
@@ -103,11 +120,34 @@ export const provider = http.createServer((req, res) => {
 		};
 		const hold = HOLD_WORD.exec(last)?.[0] ?? once;
 		if (hold) {
-			sse(res, { ...base, choices: [{ index: 0, delta: { role: "assistant", content: "A held answer begins." }, finish_reason: null }] });
-			heldAnswers.set(hold, finish);
+			// One whose word ends in "-spent" says what it spent with its first words, so an answer stopped while held has used something.
+			sse(res, { ...base, choices: [{ index: 0, delta: { role: "assistant", content: "A held answer begins." }, finish_reason: null }], ...(hold.endsWith("-spent") ? { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } } : {}) });
+			// One whose word ends in "-tail" says more once released, so an answer cut while held reads differently from a whole one.
+			if (hold.endsWith("-site")) {
+				heldAnswers.set(hold, () => {
+					sse(res, { ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_asked_site", type: "function", function: { name: "fetch_url", arguments: JSON.stringify({ url: askedSiteOf(hold) }) } }] }, finish_reason: null }] });
+					sse(res, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } });
+					res.write("data: [DONE]\n\n");
+					res.end();
+				});
+				return;
+			}
+			heldAnswers.set(hold, hold.endsWith("-tail") ? () => { sse(res, { ...base, choices: [{ index: 0, delta: { content: HELD_TAIL }, finish_reason: null }] }); finish(); } : finish);
 			return;
 		}
 		sse(res, { ...base, choices: [{ index: 0, delta: { role: "assistant", content: "A fresh answer." }, finish_reason: null }] });
+		if (FULL_WORD.test(last)) {
+			sse(res, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: FULL_READING, completion_tokens: 5, total_tokens: FULL_READING + 5 } });
+			res.write("data: [DONE]\n\n");
+			res.end();
+			return;
+		}
+		if (LENGTH_WORD.test(last)) {
+			sse(res, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "length" }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } });
+			res.write("data: [DONE]\n\n");
+			res.end();
+			return;
+		}
 		finish();
 	});
 });
@@ -506,7 +546,7 @@ export async function runStep(save: Save, step: number, how: string, lane: numbe
 	fs.cpSync(templateHome, home, { recursive: true });
 	save.prepare?.(home);
 	const arm = path.join(folder, "armed");
-	const port = await freePort();
+	const port = await keptPort();
 	const run: Run = { home, base: `http://127.0.0.1:${port}` };
 	const killed = startServer(save, home, port, { step, how, arm });
 	let second: Child | undefined;
@@ -543,7 +583,7 @@ export async function traceSave(save: Save): Promise<TraceStep[]> {
 	save.prepare?.(home);
 	const arm = path.join(folder, "armed");
 	const trace = path.join(folder, "trace.jsonl");
-	const port = await freePort();
+	const port = await keptPort();
 	const child = startServer(save, home, port, { step: 0, how: "before", arm, trace });
 	try {
 		await waitForServer(child.process, `http://127.0.0.1:${port}`, 60_000);

@@ -4,6 +4,8 @@ import { readPersistentRoomMaintenanceSettings, overMemoryBudget, MEMORY_BUDGET_
 import { settleMemoryBudget } from "./memory-entries-store.js";
 import { createRoomModelCatalog, resolveRoomModel, resolveAiDefault, roomModelUnavailableError } from "./room-models.js";
 import { registerUsageApi } from "./usage-api.js";
+import { listArchivedPersistentAgents } from "./persistent-agent-archive.js";
+import { shownRoomName } from "./room-name.js";
 import { buildMemoryOverview, buildMemoryDigest, buildMemoryAskContext, withoutMemoryIds, searchMemory, buildRoomMemory, readMemoryArea, readConversationTranscript, listMemoryConversations, MEMORY_EVENT_DIFF_KINDS, readMemoryEventDiff, readMemoryNotesView, readMemorySnapshotAt } from "./memory-api.js";
 import { notOnAccountLine, notOfferedLine, providerFailureLogFields } from "./model-call-causes.js";
 import { app } from "./server-app.js";
@@ -23,6 +25,14 @@ registerUsageApi(app, {
 		}
 	},
 	liveAgents: () => new Map(listPersistentAgents("every room").map((status) => [status.id, status.displayName?.trim() || status.id])),
+	// A shared server's own usage names only the rooms its person may see.
+	roomNames: async (req) => {
+		const viewer = await viewerOf(req);
+		return {
+			live: new Map(listPersistentAgents(viewer).map((status) => [status.id, shownRoomName(status.displayName) || status.id])),
+			archived: new Map(listArchivedPersistentAgents(viewer).map((room) => [room.id, shownRoomName(room.displayName) || room.id])),
+		};
+	},
 	// The same resolution the model rows use, so a gateway's source row reads
 	// as the name the person gave it and a rename shows up on the next poll.
 	// The raw id coming back means nobody answers for the provider any more.

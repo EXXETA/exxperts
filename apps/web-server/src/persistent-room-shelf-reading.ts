@@ -330,7 +330,9 @@ export async function readShelfFileText(roomIdRaw: string, rawName: string, opti
 		}
 	}
 	const parsed = await runShelfParseWorker(resolved.absolutePath, sniff.kind);
-	try {
+	// The document, or its whole room, may be gone by now, and another of its name in its place: nothing is kept of it then.
+	const now = fs.statSync(resolved.absolutePath, { throwIfNoEntry: false });
+	if (now && now.ino === resolved.stat.ino && now.mtimeMs === resolved.stat.mtimeMs) try {
 		const dir = path.dirname(metaPath);
 		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 		const meta: ReadingCacheMeta = {

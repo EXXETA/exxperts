@@ -8,7 +8,7 @@
 // settings asks the bin's question, with its running-answer line, and sends
 // one request. Instructions' text wraps before Clear, which sits in its box. Every danger word reads at 4.5:1 in dark, and light keeps its red.
 // The gear menu's Theme row holds three icons, and each sets its theme.
-// The custom connector form's unchosen radio is an empty ring, and "Add another header" has its help line's size and colour, underlined.
+// Connectors by keyboard and by touch: Add connector's menu, a connector's page and its Remove question; "Add another header" has its help line's size and colour, underlined.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -16,10 +16,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import { sendFromBox, waitEvery } from "./smoke-wait.js";
 import { CHOOSE_FOLDER } from "../src/room-box/card-text.js";
+import { SETTINGS_LOOK_KEY, SETTINGS_LOOK_OLD } from "../../web-ui/src/settings-look.js";
 
 const waitUntil = waitEvery(100);
 
@@ -28,6 +29,12 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 function same(actual: unknown, expected: unknown, what: string): void {
 	assert(JSON.stringify(actual) === JSON.stringify(expected), `${what}: got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
+}
+/** A context whose pages name the old look in the switch's key: this smoke pins the old look while it is kept. */
+async function oldLookContext(browser: Browser, options: BrowserContextOptions): Promise<BrowserContext> {
+	const context = await browser.newContext(options);
+	await context.addInitScript(([key, old]) => localStorage.setItem(key, old), [SETTINGS_LOOK_KEY, SETTINGS_LOOK_OLD]);
+	return context;
 }
 
 {
@@ -246,7 +253,7 @@ async function assertLook(page: Page, where: string, panes: string[], paneWithou
 	}
 }
 
-// Every connector row, its button and "⋯" included, ends inside the list's box,
+// Every connector row, its button included, ends inside the list's box,
 // and the pane never scrolls sideways.
 async function assertRowsInsideBox(page: Page, where: string): Promise<void> {
 	await page.locator(".connector-item", { hasText: "From Claude Desktop" }).waitFor({ timeout: 10000 });
@@ -262,93 +269,101 @@ async function assertRowsInsideBox(page: Page, where: string): Promise<void> {
 	assert(read.sideways <= 0, `${where}: the pane scrolls ${read.sideways} px sideways`);
 }
 
-// A row's "⋯" by keyboard alone: the menu takes the focus, Remove asks with Keep
-// focused, and Escape keeps the connector and closes nothing else.
-async function assertRowMenuByKeyboard(page: Page, where: string): Promise<void> {
-	const row = page.locator(".connector-item", { hasText: "tickets-server" });
-	const focused = () => page.evaluate(() => `${document.activeElement?.getAttribute("role") ?? document.activeElement?.tagName.toLowerCase()}: ${document.activeElement?.textContent?.trim()}`);
-	await row.locator("button.connector-item-more").focus();
-	await page.keyboard.press("Enter");
-	await page.getByRole("menuitem", { name: "Remove" }).waitFor({ timeout: 5000 });
-	// The open "⋯" stands out from the box behind it in both schemes, once its fill's short fade has run.
-	const stepOn = () => row.locator("button.connector-item-more").evaluate((element) => (window as any).__stepOn(element) as number);
-	await waitUntil(async () => (await stepOn()) >= 1.06, `${where}: the open "⋯" stands out from its box`).catch(async () => assert(false, `${where}: the open "⋯" is ${(await stepOn()).toFixed(2)}:1 against its box`));
-	await waitUntil(async () => (await focused()).startsWith("menuitem:"), `${where}: "⋯" opened by Enter puts the focus on its first item`);
-	await page.keyboard.press("End");
-	same(await focused(), "menuitem: Remove", `${where}: End reaches Remove`);
-	await page.keyboard.press("Enter");
-	await waitUntil(async () => (await focused()) === "button: Keep", `${where}: Remove asks with Keep focused`);
-	await page.keyboard.press("Escape");
-	await waitUntil(async () => (await focused()) === "button: ···", `${where}: Escape keeps it and gives the focus back to "⋯"`);
-	assert(await row.isVisible() && await page.locator(".settings-dialog").isVisible(), `${where}: Escape keeps the connector and the Settings window`);
+const focusedControl = (page: Page) => page.evaluate(() => `${document.activeElement?.getAttribute("role") ?? document.activeElement?.tagName.toLowerCase()}: ${document.activeElement?.textContent?.trim()}`);
+
+async function openConnectorPage(page: Page, name: string): Promise<void> {
+	await page.locator(".connector-item", { hasText: name }).locator(".connector-item-hit").click();
+	await page.locator(".connector-page").waitFor({ timeout: 5000 });
+}
+async function backToConnectors(page: Page): Promise<void> {
+	await page.locator(".connector-page-back").click();
+	await page.locator(".connector-list").waitFor({ timeout: 5000 });
 }
 
-// On a phone, the row menu's items are 44 px tall, Remove asks under the row with
-// Keep and Remove side by side, each 44 px tall and half the width, and an opened
-// row keeps its spacing.
-async function assertPhoneRowParts(page: Page, where: string): Promise<void> {
-	const row = page.locator(".connector-item", { hasText: "tickets-server" });
-	await row.locator("button.connector-item-more").click();
+// By keyboard alone: Add connector's menu opens on Enter with the focus on its
+// first item, End reaches its last, and Escape closes the menu only, with the
+// focus back on Add connector. A connector's Remove asks in the app's dialog
+// with Keep focused, and Escape keeps the connector and the Settings window,
+// with the focus back on Remove. The open Add connector stands out.
+async function assertConnectorsByKeyboard(page: Page, where: string): Promise<void> {
+	const add = page.locator(".settings-dialog-pane .pane-head-actions").getByRole("button", { name: "Add connector", exact: true });
+	await add.focus();
+	await page.keyboard.press("Enter");
+	await waitUntil(async () => (await focusedControl(page)) === "menuitem: From the directory", `${where}: Add connector opened by Enter puts the focus on its first item`);
+	// The open button stands out from what is behind it in both schemes, once its fill's short fade has run.
+	const stepOn = () => add.evaluate((element) => (window as any).__stepOn(element) as number);
+	await waitUntil(async () => (await stepOn()) >= 1.06, `${where}: the open Add connector stands out`).catch(async () => assert(false, `${where}: the open Add connector is ${(await stepOn()).toFixed(2)}:1 against what is behind it`));
+	await page.keyboard.press("End");
+	same(await focusedControl(page), "menuitem: Program on this computer", `${where}: End reaches the last way`);
+	await page.keyboard.press("Escape");
+	await waitUntil(async () => (await focusedControl(page)) === "button: Add connector", `${where}: Escape closes the menu and gives the focus back to Add connector`);
+	assert(await page.locator(".settings-dialog").isVisible(), `${where}: Escape keeps the Settings window`);
+	await page.locator(".connector-item", { hasText: "tickets-server" }).locator(".connector-item-hit").focus();
+	await page.keyboard.press("Enter");
+	await page.locator(".connector-page").waitFor({ timeout: 5000 });
+	await page.locator(".connector-remove-group").getByRole("button", { name: "Remove", exact: true }).focus();
+	await page.keyboard.press("Enter");
+	await waitUntil(async () => (await focusedControl(page)) === "button: Keep", `${where}: Remove asks with Keep focused`);
+	await page.keyboard.press("Escape");
+	await waitUntil(async () => (await focusedControl(page)) === "button: Remove", `${where}: Escape keeps it and gives the focus back to Remove`);
+	assert(await page.locator(".connector-page").isVisible() && await page.locator(".settings-dialog").isVisible(), `${where}: Escape keeps the connector and the Settings window`);
+	await backToConnectors(page);
+}
+
+// On a phone: Add connector's menu items are 44 px tall; a row's button sits
+// level with its name line and the longest tag is never cut; on a failed
+// connector's page the fix beside what went wrong takes a touch on its whole
+// height; Remove asks in the app's dialog with Keep and Remove each 44 px
+// tall; and an imported connector's closing line stands apart from the box
+// above it, as the pairs do.
+async function assertPhoneConnectorParts(page: Page, where: string): Promise<void> {
+	await page.locator(".settings-dialog-pane .pane-head-actions").getByRole("button", { name: "Add connector", exact: true }).click();
 	const items = await page.locator(".ai-profile-menu [role=menuitem]").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
-	assert(items.length > 0 && items.every((height) => height >= 44), `${where}: the row menu's items are ${items.join(", ")} px tall on touch`);
-	await page.getByRole("menuitem", { name: "Remove" }).click();
-	const keep = row.getByRole("button", { name: "Keep", exact: true });
-	await keep.waitFor({ timeout: 5000 });
-	const sizes = await row.locator(".connector-ask-btns .rs-btn").evaluateAll((buttons) => buttons.map((button) => {
-		const { width, height, top } = button.getBoundingClientRect();
-		return { width, height, top };
-	}));
-	same(sizes.length, 2, `${where}: Keep and Remove`);
-	for (const size of sizes) assert(size.height >= 44, `${where}: a remove button is ${size.height} px tall`);
-	assert(sizes[0].top === sizes[1].top && Math.abs(sizes[0].width - sizes[1].width) <= 1, `${where}: Keep and Remove sit side by side, half each`);
-	const tag = await row.locator(".connector-item-name .connector-dir-kind").evaluate((element) => ({ text: element.textContent, cut: element.scrollWidth > element.clientWidth }));
-	assert(!tag.cut, `${where}: while Remove asks, the "${tag.text}" tag is cut short`);
-	await keep.click();
-	await row.locator("button.connector-item-more").waitFor({ timeout: 5000 });
-	// "⋯" sits level with the name line when a row has no button, and with the button when it has one.
+	assert(items.length === 3 && items.every((height) => height >= 44), `${where}: Add connector's items are ${items.join(", ")} px tall on touch`);
+	await page.keyboard.press("Escape");
+	await page.locator(".ai-profile-menu").waitFor({ state: "detached", timeout: 5000 });
 	const levels = await page.locator(".connector-item-row").evaluateAll((rows) => rows.map((one) => {
 		const middle = (selector: string) => { const box = one.querySelector(selector)?.getBoundingClientRect(); return box ? box.top + box.height / 2 : null; };
-		const button = middle(".connector-slot-btn");
-		return { name: one.querySelector(".connector-item-name-text")?.textContent ?? "?", off: Math.abs(middle(".connector-item-more")! - (button ?? middle(".connector-item-name")!)), button: button !== null };
+		const button = middle(".connector-item-slot .connector-slot-btn");
+		return { name: one.querySelector(".connector-item-name-text")?.textContent ?? "?", off: button === null ? null : Math.abs(button - middle(".connector-item-name")!) };
 	}));
-	assert(levels.some((one) => one.button) && levels.some((one) => !one.button), `${where}: rows with and without a button`);
-	same(levels.filter((one) => one.off > 1).map((one) => one.name), [], `${where}: rows whose "⋯" is off its name line or button`);
-	// The button under a failed row's line is finger size itself: 44 px tall, its top and bottom edges land on it.
-	const failed = page.locator(".connector-item", { hasText: "notes-server" });
-	await failed.locator(".connector-item-hit").click();
-	const way = failed.locator("button.connector-way").first();
+	assert(levels.some((one) => one.off !== null), `${where}: a row with a button`);
+	same(levels.filter((one) => one.off !== null && one.off > 1).map((one) => one.name), [], `${where}: rows whose button is off their name line`);
+	const tag = await page.locator(".connector-item", { hasText: "From Claude Desktop" }).locator(".connector-item-name .connector-dir-kind").evaluate((element) => ({ text: element.textContent, cut: element.scrollWidth > element.clientWidth }));
+	assert(!tag.cut, `${where}: the "${tag.text}" tag is cut short`);
+	await openConnectorPage(page, "notes-server");
+	const way = page.locator(".connector-fact-wrong .connector-slot-btn").first();
 	await way.waitFor({ timeout: 5000 });
 	const reach = await way.evaluate((button) => {
 		const { left, width, top, bottom } = button.getBoundingClientRect();
 		const lands = (y: number) => button.contains(document.elementFromPoint(left + width / 2, y));
 		return { height: bottom - top, above: lands(top + 1), below: lands(bottom - 1) };
 	});
-	assert(reach.height >= 44 && reach.above && reach.below, `${where}: the ${await way.textContent()} button under the line takes a touch only ${reach.height} px tall`);
-	await failed.locator(".connector-item-hit").click();
-	// The imported connector's closing line stands apart from the value above it, as the pairs do.
-	const imported = page.locator(".connector-item", { hasText: "From Claude Desktop" });
-	await imported.locator(".connector-item-hit").click();
-	const note = imported.locator(".connector-note");
+	assert(reach.height >= 44 && reach.above && reach.below, `${where}: the ${await way.textContent()} button beside what went wrong takes a touch only ${reach.height} px tall`);
+	await page.locator(".connector-remove-group").getByRole("button", { name: "Remove", exact: true }).click();
+	const asked = page.locator(".confirm-dialog-backdrop");
+	await asked.getByRole("button", { name: "Keep", exact: true }).waitFor({ timeout: 5000 });
+	const sizes = await asked.locator(".rs-btn").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+	assert(sizes.length === 2 && sizes.every((height) => height >= 44), `${where}: Keep and Remove are ${sizes.join(", ")} px tall`);
+	await asked.getByRole("button", { name: "Keep", exact: true }).click();
+	await asked.waitFor({ state: "detached", timeout: 5000 });
+	await backToConnectors(page);
+	await openConnectorPage(page, "From Claude Desktop");
+	const note = page.locator(".connector-remove-group .connector-note").first();
 	await note.waitFor({ timeout: 5000 });
-	const gap = await note.evaluate((element) => element.getBoundingClientRect().top - element.previousElementSibling!.getBoundingClientRect().bottom);
-	assert(gap >= 12, `${where}: the imported connector's note sits ${gap} px under the value above it`);
-	await imported.locator(".connector-item-hit").click();
+	const gap = await note.evaluate((element) => element.getBoundingClientRect().top - element.closest(".connector-remove-group")!.previousElementSibling!.getBoundingClientRect().bottom);
+	assert(gap >= 12, `${where}: the imported connector's note sits ${gap} px under the box above it`);
+	await backToConnectors(page);
 }
 
-// The custom connector form: the unchosen way to connect is an empty ring in
-// both schemes, as the chosen one is a ring with a dot, and "Add another header"
-// has the help line's size and colour, underlined; on touch a header's "×" is 44 px.
+// "Add another header", in the web form's fold, has the help line's size and
+// colour, underlined; on touch a header's "×" is 44 px.
 async function assertAddFormQuiet(page: Page, where: string): Promise<void> {
-	await page.locator(".settings-dialog-pane .pane-head-actions .rs-btn").click();
+	await page.locator(".settings-dialog-pane .pane-head-actions").getByRole("button", { name: "Add connector", exact: true }).click();
+	await page.getByRole("menuitem", { name: "By web address" }).click();
 	const form = page.locator(".connector-custom-form");
 	await form.waitFor({ timeout: 5000 });
-	const radios = await form.locator(".connector-form-kind input[type=radio]").evaluateAll((inputs) => inputs.map((input) => {
-		const style = getComputedStyle(input);
-		return { checked: (input as HTMLInputElement).checked, look: style.appearance, fill: style.backgroundColor };
-	}));
-	same(radios.length, 2, `${where}: two ways to connect`);
-	for (const radio of radios.filter((one) => !one.checked)) same([radio.look, radio.fill], ["none", "rgba(0, 0, 0, 0)"], `${where}: the unchosen way to connect is an empty ring`);
-	await form.locator(".connector-oauth-toggle").nth(1).click();
+	await form.locator(".connector-oauth-toggle").click();
 	const add = form.locator(".connector-header-add");
 	await add.waitFor({ timeout: 5000 });
 	const read = await add.evaluate((element) => {
@@ -445,7 +460,7 @@ async function send(page: Page, text: string): Promise<void> {
 
 // So the Conversation pane has a row to show.
 async function startConversation(browser: Browser, room: string): Promise<void> {
-	const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	const context = await oldLookContext(browser, { viewport: { width: 1280, height: 900 } });
 	const page = await context.newPage();
 	await signIn(page);
 	await enterRoom(page, room);
@@ -457,7 +472,7 @@ async function startConversation(browser: Browser, room: string): Promise<void> 
 async function checkLookOnEveryPane(browser: Browser): Promise<void> {
 	for (const [device, viewport] of [["desktop", { width: 1440, height: 900 }], ["phone", { width: 390, height: 844 }]] as const) {
 		for (const colorScheme of ["light", "dark"] as const) {
-			const context = await browser.newContext({ viewport, colorScheme, hasTouch: device === "phone" });
+			const context = await oldLookContext(browser, { viewport, colorScheme, hasTouch: device === "phone" });
 			const page = await context.newPage();
 			await page.route("**/background-runs*", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(RECENT_RUNS) }));
 			await signIn(page);
@@ -474,8 +489,8 @@ async function checkLookOnEveryPane(browser: Browser): Promise<void> {
 			await page.locator(".connector-dot-err").first().waitFor({ timeout: 15000 });
 			await assertLook(page, `${where} Settings`, ["Connectors"], []);
 			await assertRowsInsideBox(page, `${where} Connectors`);
-			if (device === "desktop") await assertRowMenuByKeyboard(page, `${where} Connectors`);
-			else await assertPhoneRowParts(page, `${where} Connectors`);
+			if (device === "desktop") await assertConnectorsByKeyboard(page, `${where} Connectors`);
+			else await assertPhoneConnectorParts(page, `${where} Connectors`);
 			await assertAddFormQuiet(page, `${where} Connectors`);
 			if (device === "phone") await page.locator(".settings-dialog-back").click();
 			await closeDialog(page);
@@ -507,7 +522,7 @@ async function checkPanesLessDevices(browser: Browser): Promise<void> {
 		["a remote device", { remote: true, capability: "read-only" }],
 		["a shared server", { remote: false, capability: "full", sharedServer: true, person: { id: "smoke-person", name: "Smoke Person", admin: false }, signOut: null }],
 	] as const) {
-		const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+		const context = await oldLookContext(browser, { viewport: { width: 1280, height: 900 } });
 		const page = await context.newPage();
 		await page.route("**/api/remote/client-context", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(answer) }));
 		await signIn(page);
@@ -526,7 +541,7 @@ async function checkPanesLessDevices(browser: Browser): Promise<void> {
 }
 
 async function checkAppearance(browser: Browser): Promise<void> {
-	const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "light" });
+	const context = await oldLookContext(browser, { viewport: { width: 1440, height: 900 }, colorScheme: "light" });
 	const page = await context.newPage();
 	await signIn(page);
 	await enterRoom(page, "Width Room");
@@ -577,7 +592,7 @@ async function checkAppearance(browser: Browser): Promise<void> {
 	same(await chatColumnWidth(page), 768, "Standard is the 768 px column again");
 	await context.close();
 
-	const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+	const phone = await oldLookContext(browser, { viewport: { width: 390, height: 844 }, hasTouch: true });
 	const phonePage = await phone.newPage();
 	await signIn(phonePage);
 	await openSettings(phonePage);
@@ -600,7 +615,7 @@ async function checkMenuThemeRow(browser: Browser): Promise<void> {
 		["1280", { viewport: { width: 1280, height: 900 } }],
 		["390", { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true }],
 	] as const) {
-		const context = await browser.newContext({ ...options, colorScheme: "light" });
+		const context = await oldLookContext(browser, { ...options, colorScheme: "light" });
 		const page = await context.newPage();
 		await signIn(page);
 		const menu = page.locator(".sidebar-config-menu");
@@ -670,7 +685,7 @@ async function dialogWords(page: Page) {
 const FORGET_WORDS = (body: string) => ({ text: `${QUESTION} ${body} Cancel Forget`, red: "Forget" });
 
 async function checkForget(browser: Browser): Promise<void> {
-	const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	const context = await oldLookContext(browser, { viewport: { width: 1280, height: 900 } });
 	const page = await context.newPage();
 	const mementos: string[] = [];
 	page.on("request", (request) => { if (request.method() === "POST" && request.url().endsWith("/memento")) mementos.push(request.postData() ?? ""); });
@@ -720,7 +735,7 @@ async function checkForget(browser: Browser): Promise<void> {
 	await enterRoom(page, "Home Forget Room");
 	await send(page, "A conversation to forget from Home.");
 	await page.getByText("Answer from the model.").first().waitFor({ timeout: 45000 });
-	await page.getByRole("button", { name: "Home", exact: true }).first().click();
+	await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 	await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
 	await openRoomCardSettings(page, "Home Forget Room");
 	await goToPane(page, "Conversation");
@@ -732,7 +747,7 @@ async function checkForget(browser: Browser): Promise<void> {
 	await enterRoom(page, "Home Forget Room");
 	await send(page, HOLD);
 	await page.getByText("Still writing").first().waitFor({ timeout: 15000 });
-	await page.getByRole("button", { name: "Home", exact: true }).first().click();
+	await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 	await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
 	await openRoomCardSettings(page, "Home Forget Room");
 	await goToPane(page, "Conversation");
@@ -747,7 +762,7 @@ async function checkForget(browser: Browser): Promise<void> {
 }
 
 async function checkSetWorkspaceLink(browser: Browser): Promise<void> {
-	const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+	const context = await oldLookContext(browser, { viewport: { width: 1280, height: 900 } });
 	const page = await context.newPage();
 	await signIn(page);
 	await enterRoom(page, "Look Room");

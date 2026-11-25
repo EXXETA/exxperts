@@ -52,6 +52,7 @@ try {
 	assert(refused.details?.outcome === "manual-only", `manual-only skill must be refused with the manual-only outcome, got ${refused.details?.outcome}`);
 	assert(!refused.content[0].text.includes("Grill relentlessly."), "the manual-only body must NOT be served");
 	assert(/manual invocation only/i.test(refused.content[0].text), "the refusal must explain it is manual-only");
+	assert(refused.content[0].text.includes('starts a message with "/grill-me"') && !/no way to invoke/i.test(refused.content[0].text), `the refusal says how the person uses it, got ${refused.content[0].text}`);
 
 	// The index section helper itself is content-agnostic: it renders exactly the
 	// entries passed. The room's filter (tested via the server) is what withholds

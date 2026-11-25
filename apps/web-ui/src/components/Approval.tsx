@@ -95,6 +95,18 @@ export function approvalAsking(item: ApprovalItem): boolean {
 	return !item.done && !item.stopped && !item.unanswered;
 }
 
+/** Whether this page answers a card that still asks: one waiting for another person is theirs to answer. */
+export function answersHere(item: ApprovalItem): boolean {
+	return approvalAsking(item) && item.waitingFor === undefined;
+}
+
+/** A frame's `askedBy` or `waitingFor`, read where it enters: the person whose answer asked, by name or null. */
+export function readAsker(value: unknown): { name: string | null } | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const name = (value as { name?: unknown }).name;
+	return { name: typeof name === "string" && name !== "" ? name : null };
+}
+
 /**
  * The items as the room shows them: a card whose question was not asked on
  * this connection has ended (the server declines every open question when the

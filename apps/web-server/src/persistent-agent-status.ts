@@ -236,7 +236,7 @@ export function assertPersistentAgentAcceptsSession(status: PersistentAgentStatu
 	}
 	const entries = status.recentContext?.fullEntries ?? 0;
 	if (entries >= RECENT_CONTEXT_BLOCK_CAP && !status.activeThread?.hasUserVisibleTurns) {
-		throw new Error(`persistent agent is not ready: needs_absorb — this room is holding ${entries} saved sessions and cannot be opened until they are folded into its memory. Memorize it from Home → Maintain, then open it again.`);
+		throw new Error(`persistent agent is not ready: needs_absorb: this room is holding ${entries} saved sessions and cannot be opened until they are folded into its memory. Memorize it from Maintain on its card in Rooms, then open it again.`);
 	}
 }
 

@@ -8,14 +8,17 @@
 // subfolder of AppData\Local\Programs and never a drive, the personal folders
 // read from Windows' answer, the paths no request may carry, a file call's
 // request against a command's, the environment, the command line and the
-// wrapper's proxy line, and its callers.
+// wrapper's proxy line, a skill in the folder shared with other tools, and
+// its callers.
 import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { atOrInside, COMMAND_VARIABLE, commandRequest, fileRequest, TEMP_VARIABLE, type RequestResult, type WindowsBoxRequest, type WindowsRoomRules } from "../src/room-box/windows/box-request.js";
 import { COMMAND_WRAPPER, encodedCommand, joinCommandLine } from "../src/room-box/windows/command-line.js";
 import { FOLDERS_SCRIPT, readPersonalFolders, type ResolveFolder } from "../src/room-box/windows/personal-folders.js";
+import { shutAppData } from "../src/room-box/windows/windows-engine.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -590,7 +593,123 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 	console.log("ok: the environment keeps no secret and no MXC_ name, the wrapper decodes and names the proxy only from a request's own, the C runtime's quoting holds");
 }
 
-// ---- 9. Its callers ----------------------------------------------------------------------
+// ---- 9. A skill in the folder shared with other tools ---------------------------------------
+// A real skill in a throwaway home's ~/.agents/skills, on in a room, taken as the Windows engine takes it:
+// the room's skill folders, each judged by `windowsSkillFolder`, then `machineRules` and the request.
+// The home is mapped to the profile's drive-letter path, as the box names a place.
+{
+	const tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-windows-shared-skill-")));
+	const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, EXXETA_PERSISTENT_AGENTS_ROOT: process.env.EXXETA_PERSISTENT_AGENTS_ROOT };
+	process.env.HOME = tempHome;
+	process.env.USERPROFILE = tempHome;
+	process.env.EXXETA_PERSISTENT_AGENTS_ROOT = path.join(tempHome, "rooms-data");
+	try {
+		const { roomSkillFolders } = await import("../src/skills-executable.js");
+		const { persistentRoomSkillSettingsPath } = await import("../src/persistent-room-skill-settings.js");
+		const { windowsSkillFolder } = await import("../src/room-box/windows/windows-engine.js");
+		const { machineRules } = await import("../src/room-box/windows/start-check.js");
+		const requestPath = (place: string) => (place === tempHome || place.startsWith(`${tempHome}/`) ? PROFILE + place.slice(tempHome.length).replaceAll("/", "\\") : place);
+		const skill = (folder: string, name: string) => {
+			fs.mkdirSync(path.join(folder, "scripts"), { recursive: true });
+			fs.writeFileSync(path.join(folder, "SKILL.md"), `---\nname: ${name}\ndescription: a shared test skill\n---\n\nRun scripts/run.ps1.\n`);
+			fs.writeFileSync(path.join(folder, "scripts", "run.ps1"), "Write-Output shared-ran\n");
+		};
+		// One linked from ~/.agents/skills to its real folder elsewhere in ~/.agents; one whose folder holds a link.
+		const real = path.join(tempHome, ".agents", "kept", "report-shared");
+		skill(real, "report-shared");
+		fs.mkdirSync(path.join(tempHome, ".agents", "skills"), { recursive: true });
+		fs.symlinkSync(real, path.join(tempHome, ".agents", "skills", "report-shared"), "dir");
+		const holding = path.join(tempHome, ".agents", "skills", "report-linked");
+		skill(holding, "report-linked");
+		fs.mkdirSync(path.join(tempHome, "elsewhere"), { recursive: true });
+		fs.symlinkSync(path.join(tempHome, "elsewhere"), path.join(holding, "elsewhere"), "dir");
+		const roomId = "windows-shared-skill-room";
+		const settingsFile = persistentRoomSkillSettingsPath(roomId);
+		fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+		fs.writeFileSync(settingsFile, `${JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "report-shared" }, { name: "report-linked" }], updatedAt: "2026-11-21T10:00:00.000Z" }, null, 2)}\n`);
+
+		const room = path.join(tempHome, "rooms", "shared-skill");
+		const machine = { revision: 26100, profile: PROFILE, personal: V4_PERSONAL, environment: SERVER_ENVIRONMENT, pathFolders: [...v4Rules(ROOM_C).pathFolders], programs: { folder: PROGRAMS, names: [] } };
+		const offered = roomSkillFolders(roomId).map((entry) => entry.skillDir);
+		const skillFolders = offered.flatMap((folder) => windowsSkillFolder(folder, requestPath) ?? []);
+		const rules = machineRules({ machine, requestPath }, { folder: room, canChangeFiles: true }, [], { temp: path.join(room, "temp"), caches: path.join(room, ".npm-cache") }, skillFolders);
+		const request = built(commandRequest(rules, call()), "a room with shared-folder skills on");
+		const grants = [...request.filesystem.readwritePaths, ...request.filesystem.readonlyPaths];
+
+		// Green before and after: a shared skill whose folder holds a link carries nothing, since a link inside a read-only place is unknown on Windows.
+		const holdingAt = requestPath(holding);
+		assert(!grants.some((grant) => inside(grant, holdingAt) || inside(holdingAt, grant)), `a shared skill whose folder holds a link is in the request: ${show(grants)}`);
+		console.log("ok: a shared-folder skill whose folder holds a link puts nothing into the request");
+
+		// The shared skill's real folder, after its link, is read and run, never written.
+		const realAt = requestPath(fs.realpathSync(real));
+		assert(has(request.filesystem.readonlyPaths, realAt), `the shared skill's real folder ${realAt} is not read: ${show(request.filesystem.readonlyPaths)}`);
+		assert(!request.filesystem.readwritePaths.some((grant) => inside(grant, realAt) || inside(realAt, grant)), `the shared skill's folder takes a write: ${show(request.filesystem.readwritePaths)}`);
+		assert(!has(grants, requestPath(path.join(tempHome, ".agents", "skills", "report-shared"))), "the request names the link, not the real folder");
+		// The one holding a link reached the Windows judge, so the row above tests `windowsSkillFolder`, not the room's list.
+		assert(offered.includes(holding), `the room never offered the skill whose folder holds a link: ${show(offered)}`);
+		console.log("ok: a shared-folder skill's real folder inside ~/.agents is read and run by a command, never written");
+
+		// One whose real folder lies in the room's own folder, one whose real folder holds it, and one outside ~/.agents elsewhere.
+		const inRoom = path.join(room, "team-skills", "report-in");
+		const holdsRoom = path.dirname(room);
+		const away = path.join(tempHome, "team-skills", "report-away");
+		for (const [real, name] of [[inRoom, "report-in"], [holdsRoom, "report-hold"], [away, "report-away"]] as const) {
+			skill(real, name);
+			fs.symlinkSync(real, path.join(tempHome, ".agents", "skills", name), "dir");
+		}
+		const placedRoom = "windows-placed-skill-room";
+		const placedSettings = persistentRoomSkillSettingsPath(placedRoom);
+		fs.mkdirSync(path.dirname(placedSettings), { recursive: true });
+		fs.writeFileSync(placedSettings, `${JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "report-in" }, { name: "report-hold" }, { name: "report-away" }], updatedAt: "2026-11-21T10:00:00.000Z" }, null, 2)}\n`);
+		const placed = roomSkillFolders(placedRoom);
+		const [inAt, holdsAt, awayAt] = [inRoom, holdsRoom, away].map((real) => requestPath(fs.realpathSync(real)));
+		assert(placed.length === 3, `the room offers all three skills at their real folders: ${show(placed)}`);
+		// One request per skill: a read-only grant around the room's folder would hold the one inside it.
+		const placedRequest = (canChangeFiles: boolean, name: string) => {
+			const placedFolders = placed.filter((entry) => entry.name === name).flatMap((entry) => windowsSkillFolder(entry.skillDir, requestPath) ?? []);
+			assert(placedFolders.length === 1, `${name} reaches the Windows judge and passes it: ${show(placedFolders)}`);
+			const placedRules = machineRules({ machine, requestPath }, { folder: room, canChangeFiles }, [], { temp: path.join(room, "temp"), caches: path.join(room, ".npm-cache") }, placedFolders);
+			return built(commandRequest(placedRules, call()), `a room with skills in and around its folder, ${canChangeFiles ? "changing" : "not changing"} files`).filesystem;
+		};
+		const roomAt = requestPath(room);
+		const changingIn = placedRequest(true, "report-in");
+		assert(has(changingIn.readwritePaths, roomAt) && !changingIn.readonlyPaths.some((grant) => inside(grant, inAt)), `a skill's folder in the room's own folder narrows its write: ${show(changingIn.readonlyPaths)}`);
+		const changingHolds = placedRequest(true, "report-hold");
+		assert(has(changingHolds.readonlyPaths, holdsAt) && has(changingHolds.readwritePaths, roomAt), `a skill's folder holding the room's folder is read, the room's folder still written: ${show(changingHolds)}`);
+		const changingAway = placedRequest(true, "report-away");
+		assert(has(changingAway.readonlyPaths, awayAt) && !changingAway.readwritePaths.some((grant) => inside(grant, awayAt) || inside(awayAt, grant)), `a skill's folder outside ~/.agents is read and run, never written: ${show(changingAway)}`);
+		const reading = placedRequest(false, "report-in");
+		assert(has(reading.readonlyPaths, roomAt) && !reading.readwritePaths.some((grant) => inside(inAt, grant)), `a room that can't change files writes no skill's folder in its own folder: ${show(reading)}`);
+		console.log("ok: a shared-folder skill's folder in the room's own folder keeps the room's writes, one holding it or outside ~/.agents is read and run, and a room that can't change files writes neither");
+
+		// One reached through a link in the room's own folder, as the room's command could leave it in place of the skill's folder:
+		// with the room's folder stored, the request carries nothing of where that link leads; the real folder in the room still opens.
+		const { createPersistentRoomDefaultCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");
+		const swappedTo = path.join(tempHome, "private-notes");
+		skill(swappedTo, "report-swapped");
+		fs.symlinkSync(swappedTo, path.join(room, "report-swapped"), "dir");
+		fs.symlinkSync(path.join(room, "report-swapped"), path.join(tempHome, ".agents", "skills", "report-swapped"), "dir");
+		writePersistentRoomDefaultCapabilityPolicy(createPersistentRoomDefaultCapabilityPolicy({ agentId: placedRoom, repoRoot: path.resolve(import.meta.dirname, "..", "..", ".."), root: room, workspaceAccessMode: "localFiles", displayLabel: "Shared skill room", source: "manual" }));
+		fs.writeFileSync(placedSettings, `${JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "report-in" }, { name: "report-swapped" }], updatedAt: "2026-11-21T10:00:00.000Z" }, null, 2)}\n`);
+		const throughRoom = roomSkillFolders(placedRoom);
+		const throughFolders = throughRoom.flatMap((entry) => windowsSkillFolder(entry.skillDir, requestPath) ?? []);
+		const throughRules = machineRules({ machine, requestPath }, { folder: room, canChangeFiles: true }, [], { temp: path.join(room, "temp"), caches: path.join(room, ".npm-cache") }, throughFolders);
+		const throughRequest = built(commandRequest(throughRules, call()), "a room with a skill reached through a link in its folder").filesystem;
+		const swappedAt = requestPath(fs.realpathSync(swappedTo));
+		assert(![...throughRequest.readwritePaths, ...throughRequest.readonlyPaths].some((grant) => inside(swappedAt, grant)), `the folder a link in the room's folder leads to is in the request: ${show(throughRequest)}`);
+		assert(throughRoom.length === 0 && throughFolders.length === 0, `with the room's folder stored, a skill whose way enters it is handed nothing, the real folder in the room included: ${show(throughRoom)}`);
+		console.log("ok: a shared-folder skill whose way enters the room's own folder puts nothing into the request, where a link there leads included");
+	} finally {
+		for (const [name, value] of Object.entries(saved)) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+		fs.rmSync(tempHome, { recursive: true, force: true });
+	}
+}
+
+// ---- 10. Its callers ---------------------------------------------------------------------
 // The request is built only inside room-box/windows/, and the app reaches the box through these imports alone.
 {
 	const src = path.join(import.meta.dirname, "../src");
@@ -617,11 +736,18 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 	assert(callers.includes(protection) && /import \{ localPath \} from "\.\/room-box\/windows\/box-request\.js";/.test(fs.readFileSync(protection, "utf8")), "the protection module no longer judges a folder by localPath alone");
 	const suggestion = path.join(src, "room-box", "folder-suggestion.ts");
 	assert(callers.includes(suggestion) && /import \{ localPath \} from "\.\/windows\/box-request\.js";/.test(fs.readFileSync(suggestion, "utf8")), "the folder suggestion's judge no longer reads a folder's shape by localPath alone");
-	const others = callers.filter((caller) => caller !== protection && caller !== suggestion);
+	// A shared-folder skill's real folder is judged local or not by `localPath` alone, as the box judges a skill's folder.
+	const skills = path.join(src, "skills-executable.ts");
+	assert(callers.includes(skills) && /import \{ localPath \} from "\.\/room-box\/windows\/box-request\.js";/.test(fs.readFileSync(skills, "utf8")), "the skills' folder check no longer reads a folder's shape by localPath alone");
+	// A command without protection is started by the plain PowerShell start alone, never by the request or the box's own line.
+	const commands = path.join(src, "room-command-tool.ts");
+	assert(callers.includes(commands) && /import \{ PLAIN_COMMAND_WRAPPER, PLAIN_POWERSHELL_ARGS, plainPowerShellEnvironment \} from "\.\/room-box\/windows\/command-line\.js";/.test(fs.readFileSync(commands, "utf8")), "the command tool no longer takes the plain start alone");
+	const others = callers.filter((caller) => caller !== protection && caller !== suggestion && caller !== skills && caller !== commands);
 	assert(others.length === 0, `the Windows request has a caller: ${others.join(", ")}`);
 	const EXPECTED = [
 		"index.ts: ./room-box/windows/start-check.js",
 		"local-folder-picker.ts: ./room-box/windows/windows-places.js",
+		"mcp-admin.ts: ./room-box/windows/windows-search-path.js",
 		"persistent-room-background-execution.ts: ./room-box/windows/folder-wait.js",
 		"persistent-room-background-execution.ts: ./room-box/windows/windows-engine.js",
 		"persistent-room-protection.ts: ./room-box/windows/box-request.js",
@@ -630,11 +756,15 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 		"room-box/folder-suggestion.ts: ./windows/box-request.js",
 		"room-box/folder-suggestion.ts: ./windows/windows-places.js",
 		"room-box/outside-tool.ts: ./windows/model-lines.js",
+		"room-command-tool.ts: ./room-box/windows/command-line.js",
 		"room-command-tool.ts: ./room-box/windows/model-lines.js",
+		"room-command-tool.ts: ./room-box/windows/windows-places.js",
 		"room-socket.ts: ./room-box/windows/folder-wait.js",
 		"room-socket.ts: ./room-box/windows/model-lines.js",
 		"room-socket.ts: ./room-box/windows/site-decision.js",
 		"room-socket.ts: ./room-box/windows/windows-engine.js",
+		"skills-executable.ts: ./room-box/windows/box-request.js",
+		"skills-library.ts: ./room-box/windows/windows-engine.js",
 	];
 	assert(isDeepStrictEqual([...valueImports].sort(), EXPECTED), `the Windows box's callers changed: ${show([...valueImports].sort())}`);
 
@@ -648,6 +778,67 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 	assert(roomBoxAvailable() === true && roomBoxComputer() === "mac", "roomBoxAvailable() is false on a Mac, so the rows above prove nothing");
 	setRoomBoxForTests(null);
 	console.log("ok: the request is built inside room-box/windows/ alone, the app's imports of the box are the ones named, and roomBoxAvailable() follows the check on Windows");
+}
+
+// ---- An agent folder a developer setting moved out of the app's data -------------------
+// No request names the app's data: it stays shut by never being granted, and a
+// room's folder or a folder on its list is never at, in or above it, since
+// folder-offer.ts judges both by appDataPlaces(), which holds a moved agent
+// folder too. So a room beside the moved folder, with a library skill on, gets
+// what it gets with the agent folder in the app's data: no grant at or above
+// it, and in it only the skill's own folder, for reading. Both for a command
+// and for a file call.
+{
+	const roomBeside = String.raw`D:\code\project`;
+	for (const agent of [String.raw`C:\Users\Ana Lopez\.exxperts\agent`, String.raw`D:\code\agent`]) {
+		const skill = `${agent}\\skills\\report`;
+		const rules = v4Rules(roomBeside, { skillFolders: [skill] });
+		const requests = [
+			built(commandRequest(rules, call()), `a command beside ${agent}`),
+			built(fileRequest(rules, { argv: ["node.exe", "worker.mjs"], program: [], writes: true, timeoutMs: 60000 }), `a file call beside ${agent}`),
+		];
+		for (const request of requests) {
+			const grants = [...request.filesystem.readwritePaths, ...request.filesystem.readonlyPaths];
+			assert(!grants.some((grant) => inside(agent, grant)), `${agent}: granted at or above it: ${show(grants)}`);
+			const within = grants.filter((grant) => inside(grant, agent));
+			assert(isDeepStrictEqual(within, [skill]) && has(request.filesystem.readonlyPaths, skill), `${agent}: granted in it: ${show(within)}`);
+		}
+	}
+	console.log("ok: a room beside an agent folder moved out of the app's data gets no grant at, above or in it but a skill's own folder to read, as beside the app's data");
+}
+
+// ---- The app's data inside a folder every command reads ------------------------------------
+// A developer setting can put the agent folder where the system's lists grant a
+// read, as in ProgramData or a PATH folder: there it is shut by name and a skill
+// of its library goes unopened. Windows' own folder around it is still read; a
+// PATH folder around it leaves PATH and its grant, as the request does for any
+// PATH folder that holds a shut place.
+{
+	const shutAround = (rules: WindowsRoomRules, appData: readonly string[]) => shutAppData(rules, (each) => commandRequest(each, call()), appData);
+	const pathFolders = [String.raw`C:\Tools\bin`, String.raw`C:\Windows\System32`];
+	for (const [agent, around] of [[String.raw`C:\ProgramData\agent`, "read"], [String.raw`C:\Tools\bin\agent`, "dropped"]] as const) {
+		const skill = `${agent}\\skills\\report`;
+		const request = built(shutAround(v4Rules(ROOM_C, { skillFolders: [skill], pathFolders }), [agent]), `an agent folder at ${agent}`);
+		const grants = [...request.filesystem.readwritePaths, ...request.filesystem.readonlyPaths];
+		assert(has(request.filesystem.deniedPaths, agent), `${agent}: not shut: ${show(request.filesystem)}`);
+		assert(!grants.some((grant) => inside(grant, agent)), `${agent}: granted in it: ${show(grants)}`);
+		const parent = path.win32.dirname(agent);
+		const onPath = has(request.environment.PATH.split(";"), parent);
+		assert(around === "read" ? has(grants, parent) : !has(grants, parent) && !onPath, `${agent}: the folder around it should be ${around}: ${show({ grants, PATH: request.environment.PATH })}`);
+		assert(has(grants, String.raw`C:\Windows\System32`) || has(grants, String.raw`C:\Windows`), `${agent}: Windows' own folders are no longer read`);
+	}
+	// Where no grant reaches it, the request is the one without it: a skill of its library opens, as in the app's data.
+	const beside = v4Rules(String.raw`D:\code\project`, { skillFolders: [String.raw`D:\code\agent\skills\report`] });
+	assert(isDeepStrictEqual(built(shutAround(beside, [String.raw`D:\code\agent`]), "beside").filesystem, built(commandRequest(beside, call()), "beside, as built").filesystem), "an agent folder no grant reaches changed the request");
+	// The ordinary set-up: the app's data in the profile, the box root beside it, the library on. No grant reaches them, so the request is main's, byte for byte.
+	const ordinaryData = [String.raw`C:\Users\Ana Lopez\.exxperts`, String.raw`C:\Users\Ana Lopez\.exxperts.box`];
+	for (const room of [ROOM_C, DOC_ROOM]) {
+		const ordinary = v4Rules(room, { skillFolders: [String.raw`C:\Users\Ana Lopez\.exxperts\agent\skills\report`] });
+		const shut = shutAround(ordinary, ordinaryData);
+		const plain = commandRequest(ordinary, call());
+		assert(JSON.stringify(shut) === JSON.stringify(plain), `the ordinary set-up's request changed in ${room}: ${show(shut)}`);
+	}
+	console.log("ok: an agent folder inside a folder every command reads is shut by name and its library's skills unopened; ProgramData stays read, a PATH folder around it leaves PATH, and the ordinary set-up's request is main's");
 }
 
 console.log("windows-box-request-smoke: ok");

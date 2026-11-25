@@ -28,9 +28,11 @@ export {
 	type AuthStatus,
 	AuthStorage,
 	type AuthStorageBackend,
+	AuthStorageNotSavedError,
 	FileAuthStorageBackend,
 	InMemoryAuthStorageBackend,
 	type OAuthCredential,
+	type StoredTextCodec,
 } from "./core/auth-storage.js";
 // Compaction
 export {
@@ -424,6 +426,8 @@ export {
 	resolveLoopStrategy,
 	createStrategyStopHook,
 } from "@exxeta/exxperts-core";
+// The mark of the app's own prompts
+export { APP_PROMPT_MARK, EARLIER_PICTURES_HIGH_MARK, EARLIER_PICTURES_LOW_MARK } from "./core/request-image-budget.js";
 // Context policy
 export {
 	type ContextPolicy,

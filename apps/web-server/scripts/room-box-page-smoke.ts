@@ -816,6 +816,9 @@ try {
 				return { buttons, roomLines, onceLines };
 			};
 			const desktop = await readerCard("desktop");
+			// A shared server opens web pages only once its admin turns them on: saved in this run's home.
+			const { writeWebSearchSettings } = await import("../src/web-search-settings.js");
+			writeWebSearchSettings({ webPages: true });
 			// Rooms on a shared server run no commands, so the shared page never says the room yes reaches them.
 			expect(desktop.buttons.includes(SITE_ALLOW_ROOM) && desktop.roomLines === 0 && desktop.onceLines === 0, `page: before the registry is filled, the reader's card offers Allow for this room and, on the shared page, keeps its words: nothing of commands or of the site's other pages (${JSON.stringify(desktop)})`);
 			registerServerHooks({ ignoresStoredWorkspaceSettings: () => true });

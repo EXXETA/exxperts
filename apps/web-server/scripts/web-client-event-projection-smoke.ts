@@ -248,6 +248,17 @@ try {
 	const realClock = projectAgentEventForWebClient({ type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: {} });
 	assert(Math.abs(realClock.startedAt - Date.now()) < 5_000, `without a clock of its own the projector reads the server's, got ${realClock.startedAt}`);
 
+	// A connector call's first update goes out as the call's id and the names it is shown by, and nothing else of it;
+	// an update without them is cleaned as any other frame.
+	row("a connector call's update carries only its names", () => {
+		const update = { type: "tool_execution_update", toolCallId: "t3", toolName: "mcp", args: { tool: "toy_web_search", args: "{\"query\":\"Q3\"}" }, partialResult: { content: [{ type: "text", text: "partial" }], details: { connector: "Toy web", connectorId: "toy-web", use: "Search in Toy web", extra: "x" } } };
+		const placed = projectAgentEventForWebClient(update);
+		assert(JSON.stringify(placed) === JSON.stringify({ type: "tool_execution_update", toolCallId: "t3", details: { connector: "Toy web", connectorId: "toy-web", use: "Search in Toy web" } }), `only the call's id and its names, got ${JSON.stringify(placed)}`);
+		const plain = { type: "tool_execution_update", toolCallId: "t4", toolName: "bash", partialResult: { content: [{ type: "text", text: "a.txt" }], details: {} } };
+		const kept = projectAgentEventForWebClient(plain);
+		assert(kept.toolCallId === "t4" && kept.toolName === "bash" && kept.partialResult?.content?.[0]?.text === "a.txt", `an update without names stays as it was, got ${JSON.stringify(kept)}`);
+	});
+
 	// Unknown message_update variants pass through untouched (forward-compat).
 	const unknown = wrap({ type: "future_delta", contentIndex: 0, delta: "?" });
 	assert(projectAgentEventForWebClient(unknown) === unknown, "unknown update variants pass through untouched");

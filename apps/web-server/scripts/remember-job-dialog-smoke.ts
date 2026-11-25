@@ -590,7 +590,7 @@ try {
 		await dialog.getByRole("button", { name: "Save to memory" }).click();
 		await dialog.getByText("Memory updated", { exact: true }).waitFor({ timeout: 20000 });
 		assert(await dialog.getByText(nineteenHeadsUp, { exact: true }).count() === 0, "the saved page does not repeat the heads-up the review showed");
-		await dialog.getByRole("button", { name: "Return Home" }).click();
+		await dialog.getByRole("button", { name: "Back to rooms" }).click();
 		await dialog.waitFor({ state: "detached", timeout: 10000 });
 		(await import("../src/persistent-room-maintenance-settings.js")).writePersistentRoomMaintenanceSettings(agentId, { quickCheckpointAutoApply: true });
 		holdNineteen();
@@ -613,7 +613,7 @@ try {
 		holdRemember = false;
 		for (const release of held.splice(0)) release();
 		await staysOnFilledPage("the quick Remember");
-		// Escape on the full room's page is Return Home: nothing reaches the closed conversation, no engine words.
+		// Escape on the full room's page is Back to rooms: nothing reaches the closed conversation, no engine words.
 		const toClosed: string[] = [];
 		page.on("request", (request) => { if (request.method() !== "GET" && request.url().includes(encodeURIComponent(closedId))) toClosed.push(`${request.method()} ${request.url()}`); });
 		page.on("websocket", (socket) => socket.on("framesent", (frame) => { if (String(frame.payload).includes('"prompt"')) toClosed.push(`ws ${String(frame.payload).slice(0, 80)}`); }));

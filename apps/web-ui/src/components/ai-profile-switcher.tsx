@@ -1,10 +1,12 @@
-import { type ReactNode, useRef, useState, useLayoutEffect, useEffect } from "react";
+import { Fragment, type ReactNode, useRef, useState, useLayoutEffect, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useEscapeKey } from "./use-escape-key";
 import { PaneHeader, GroupHeader } from "./pane-header";
-import { useRemoteClientContext, aiSetupLocked, SHARED_SERVER_ADMIN_LINE, NEW_ADMIN_HINT } from "../remote-client-context";
+import { useRemoteClientContext, aiSetupLocked, SHARED_SERVER_ADMIN_LINE, SHARED_SERVER_NO_PROVIDERS, NEW_ADMIN_HINT, sharedServerRemoveLine, sharedServerRole } from "../remote-client-context";
 import { useProviderLogin, ApiKeyForm, CopilotSignInForm, COPILOT_PROVIDER_ID, AddProviderPanel, ConfigureProfileModal, GatewayConfigModal, GatewayApproveModelsModal } from "./add-provider-panel";
 import { AiDefaultsGroup } from "./ai-defaults-group";
+import { useSettingsLookNext } from "../settings-look";
+import { ModelsRunInLabel } from "./room-model-picker";
 import { fetchJson, withoutServiceLine } from "../api";
 import { modelTooltipName, distinctModelNames } from "../model-names";
 import type { AuthStatusResponse, WebChatModelStatus, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, LoginProviderCatalogEntry } from "../types";
@@ -43,6 +45,22 @@ function registryModelTooltip(model: RegistryModel): string {
 	return modelTooltipName(nameInput(model)) || model.model;
 }
 
+// A provider row's state, and the words its second line gives it. The settings
+// windows' new look starts them with a capital, as its other status lines do.
+type ProviderRowStatus = "signing-in" | "signed-out" | "refused" | "refused-no-workspace" | "key-saved" | "signed-in" | "setup-needed";
+const PROVIDER_ROW_WORDS: Record<ProviderRowStatus, string> = {
+	"signing-in": "finish signing in in your browser…",
+	"signed-out": "signed out",
+	refused: "not accepted at the last try",
+	"refused-no-workspace": "not accepted at the last try: key isn't tied to a workspace",
+	"key-saved": "key saved",
+	"signed-in": "signed in",
+	"setup-needed": "setup needed",
+};
+function startWithCapital(words: string): string {
+	return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 // A comma-separated model list where each name carries its provider on hover.
 type CurrentModel = { name: string; provider: string | null };
 const NO_CURRENT_MODEL: CurrentModel = { name: "", provider: null };
@@ -52,10 +70,10 @@ function ModelNameList({ models }: { models: RegistryModel[] }) {
 	return (
 		<>
 			{models.map((model, index) => (
-				<span key={`${model.provider ?? ""}/${model.model}/${index}`}>
-					{index > 0 ? ", " : ""}
-					<span title={registryModelTooltip(model)}>{names[index] || model.model}</span>
-				</span>
+				<Fragment key={`${model.provider ?? ""}/${model.model}/${index}`}>
+					{index > 0 && " "}
+					<span title={registryModelTooltip(model)}>{names[index] || model.model}{index < models.length - 1 && ","}</span>
+				</Fragment>
 			))}
 		</>
 	);
@@ -65,8 +83,21 @@ function ModelNameList({ models }: { models: RegistryModel[] }) {
 // the connection. Which model runs memory work is the rooms' choice (the
 // defaults above, or Room settings, Model), not the provider's.
 // keySaved: the stored credential is a key, so it reads "key saved", as the row's subline does.
+// In the settings look the row above already says the connection: just the models, and where a sign-in the app doesn't hold comes from.
 function AiProfileModelsDetail({ profile, keySaved }: { profile: PersistentAgentAiProfileStatus; keySaved: boolean }) {
+	const lookNext = useSettingsLookNext();
 	const roomModels = profile.processes?.persistentRoom.models ?? [];
+	if (lookNext) {
+		const { configured, source, label } = profile.provider;
+		const from = configured && source && source !== "stored" ? authSourceLabel(source, label) : null;
+		return (
+			<div className="ai-profile-models">
+				<p className="ai-profile-models-names"><ModelNameList models={roomModels} /></p>
+				{/* A file's name keeps its small letter. */}
+				{from && <p className="ai-profile-models-source">{from === "models.json" ? from : startWithCapital(from)}</p>}
+			</div>
+		);
+	}
 	return (
 		<div className="ai-profile-models" role="presentation">
 			<div className="ai-profile-models-row"><span>Rooms</span><span>{roomModels.length > 0 ? <ModelNameList models={roomModels} /> : "no room models listed"}</span></div>
@@ -96,7 +127,9 @@ export function AiProfileRowMenu({ anchorRef, onDismiss, children }: { anchorRef
 			const spaceBelow = window.innerHeight - rect.bottom - 12;
 			const spaceAbove = rect.top - 12;
 			const up = height > spaceBelow && spaceAbove > spaceBelow;
-			const left = Math.max(8, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8));
+			// Under the anchor's right edge; where that would pass the window's left, under its left edge instead.
+			const endAligned = rect.right - menu.offsetWidth;
+			const left = Math.max(8, Math.min(endAligned < 8 ? rect.left : endAligned, window.innerWidth - menu.offsetWidth - 8));
 			const next = up
 				? { top: undefined, bottom: window.innerHeight - rect.top + 6, left }
 				: { top: rect.bottom + 6, bottom: undefined, left };
@@ -140,6 +173,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 	// Provider sign-in and sign-out stay off there for the admin too: it holds
 	// keys and gateways, never a person's own subscription.
 	const remoteClient = useRemoteClientContext();
+	const lookNext = useSettingsLookNext();
 	const remoteSetupLocked = aiSetupLocked(remoteClient);
 	const subscriptionsHidden = remoteClient.sharedServer;
 	const [addProviderOpen, setAddProviderOpen] = useState(false);
@@ -182,6 +216,16 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 		setConfirmRemoveId(null);
 	}, [remoteSetupLocked]);
 	const [loginCatalog, setLoginCatalog] = useState<LoginProviderCatalogEntry[] | null>(null);
+	// A key or sign-in form in the panel below shows its own ink button.
+	// The new look's loading card: grey bars once the read has taken 300 ms, so a quick answer never flashes them.
+	const statusKnown = status !== null;
+	const [loadingBarsDue, setLoadingBarsDue] = useState(false);
+	useEffect(() => {
+		setLoadingBarsDue(false);
+		if (!lookNext || statusKnown) return;
+		const timer = window.setTimeout(() => setLoadingBarsDue(true), 300);
+		return () => window.clearTimeout(timer);
+	}, [lookNext, statusKnown]);
 
 	// Refetched when the profile SET changes (not on every status refresh):
 	// setting up a gateway or custom provider adds catalog entries the
@@ -315,9 +359,16 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 			setRemoving(false);
 		}
 	}
-	const emptyCard = (
+	// A shared server starts with no provider at all: once the status is read, its list says so, by who reads it.
+	const sharedRole = sharedServerRole(remoteClient);
+	const emptyCard = lookNext && !status ? (
+		<div className="ai-profile-card ai-profile-card-loading" aria-busy="true">
+			<p className="cli-note ai-profile-card-empty sr-only">Profile status is still loading.</p>
+			{loadingBarsDue && [0, 1, 2].map((row) => <div key={row} className="ai-profile-loading-row" aria-hidden="true"><span /><span /></div>)}
+		</div>
+	) : (
 		<div className="ai-profile-card">
-			<p className="cli-note ai-profile-card-empty">Profile status is still loading.</p>
+			<p className="cli-note ai-profile-card-empty">{status && sharedRole ? SHARED_SERVER_NO_PROVIDERS[sharedRole] : "Profile status is still loading."}</p>
 		</div>
 	);
 	return (
@@ -326,7 +377,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 				title="AI setup"
 				line="Your providers, and the models rooms use until they set their own."
 				actions={!remoteSetupLocked && (
-					<button className="rs-btn add-provider-toggle" type="button" aria-expanded={addProviderOpen} onClick={() => setAddProviderOpen((value) => !value)}>Add provider</button>
+					<button className={lookNext ? "rs-btn rs-btn-sm add-provider-toggle" : "rs-btn add-provider-toggle"} type="button" aria-expanded={addProviderOpen} onClick={() => setAddProviderOpen((value) => !value)}>Add provider</button>
 				)}
 			/>
 			<AiDefaultsGroup serviceBack={serviceBack} onSaved={onRefreshAuth} refreshKey={(status?.profiles ?? []).map((profile) => `${profile.id}:${profile.ready ? 1 : 0}:${[...profile.requiredModels, ...(profile.processes?.persistentRoom.models ?? [])].map((model) => `${model.provider}/${model.model}`).join("+")}`).join(",")} />
@@ -342,44 +393,49 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 								const signingIn = login.signingInProvider === profile.provider.id;
 								// One quiet subline per row, describing the row's own state.
 								// "Setup needed" is reserved for signed-in-but-still-broken.
-								const signedInWithOAuth = authStatus?.providers.find((provider) => provider.id === profile.provider.id)?.signedInWithOAuth;
+								// A shared server holds no subscription sign-in, and its sign-in status lists no provider: every credential there is a key.
+								const signedInWithOAuth = subscriptionsHidden ? false : authStatus?.providers.find((provider) => provider.id === profile.provider.id)?.signedInWithOAuth;
 								const keyRefused = profile.provider.keyRefused !== undefined;
 								// A sign-in the last call found gone reads as signed out, and its way on is Sign in, not Replace key.
 								const signInGone = profile.provider.keyRefused === "signed-out";
-								const subline = signingIn
-									? "finish signing in in your browser…"
+								// The models toggle already carries the count; repeating it in
+								// these words read as a glitch, loudest on phones where the
+								// toggle wraps directly under them.
+								const rowStatus: ProviderRowStatus = signingIn
+									? "signing-in"
 									: keyRefused
-										? signInGone ? "signed out" : profile.provider.keyRefused === "no-workspace" ? "not accepted at the last try: key isn't tied to a workspace" : "not accepted at the last try"
+										? signInGone ? "signed-out" : profile.provider.keyRefused === "no-workspace" ? "refused-no-workspace" : "refused"
 										: profile.ready
-										? signedInWithOAuth === false ? "key saved" : "signed in"
+										? signedInWithOAuth === false ? "key-saved" : "signed-in"
 										: profile.provider.configured
-											? "setup needed"
-											// The models toggle beside the row already carries the count;
-											// repeating it here read as a glitch, loudest on phones where
-											// the toggle wraps directly under this line.
-											: "signed out";
+											? "setup-needed"
+											: "signed-out";
+								const subline = lookNext ? startWithCapital(PROVIDER_ROW_WORDS[rowStatus]) : PROVIDER_ROW_WORDS[rowStatus];
 								const sublineWarn = !signingIn && profile.provider.configured && (!profile.ready || keyRefused);
 								const modelsOpen = modelsOpenId === profile.id;
+								const modelsToggle = roomModelCount > 0 && (
+									<button
+										className="ai-profile-models-toggle"
+										aria-expanded={modelsOpen}
+										title="Show or hide this profile's models"
+										onClick={() => setModelsOpenId(modelsOpen ? null : profile.id)}
+									>
+										{roomModelsLabel} <span className="disclosure-chevron" aria-hidden="true" />
+									</button>
+								);
+								const sub = <span className={`ai-profile-sub sub-default${sublineWarn ? " warn" : ""}`} data-status={lookNext ? rowStatus : undefined}>{subline}</span>;
 								return (
 									<div key={profile.id} data-provider-id={profile.provider.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}${keyProfileId === profile.id && !signingIn ? " key-open" : ""}`}>
 										<div className={`ai-profile-row${profile.ready && !keyRefused ? "" : " notready"}`}>
 											<span className="ai-profile-main">
 												<span className="ai-profile-text">
-													<span className="ai-profile-name">{profile.label}</span>
-													<span className={`ai-profile-sub sub-default${sublineWarn ? " warn" : ""}`}>{subline}</span>
+													<span className="ai-profile-name"><span className="ai-profile-name-text">{profile.label}</span><ModelsRunInLabel runsIn={profile.runsIn} /></span>
+													{/* The settings look's one status line: the state, then how many room models, which opens them. */}
+													{lookNext ? <span className="ai-profile-line">{sub}{modelsToggle}</span> : sub}
 												</span>
 											</span>
 											<span className="ai-profile-side">
-												{roomModelCount > 0 && (
-													<button
-														className="ai-profile-models-toggle"
-														aria-expanded={modelsOpen}
-														title="Show or hide this profile's models"
-														onClick={() => setModelsOpenId(modelsOpen ? null : profile.id)}
-													>
-														{roomModelsLabel} <span className="disclosure-chevron" aria-hidden="true" />
-													</button>
-												)}
+												{!lookNext && modelsToggle}
 												{signingIn ? (
 													<button className="rs-btn rs-btn-quiet rs-btn-sm" onClick={() => void login.cancel()} title="Stop this sign-in attempt">Cancel</button>
 												) : (
@@ -388,10 +444,10 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 														    than only the not-ready ones, so this offers the way IN and the
 														    form offers the way out. */}
 														{keyRefused && !signInGone && keyProfileId !== profile.id && !remoteSetupLocked && (
-															<button className="rs-btn ai-profile-signin" onClick={() => profile.kind === "gateway" ? setGatewayEdit({ id: profile.id, label: profile.label }) : setKeyProfileId(profile.id)}>Replace key</button>
+															<button className={lookNext ? "rs-btn rs-btn-sm ai-profile-signin" : "rs-btn ai-profile-signin"} onClick={() => profile.kind === "gateway" ? setGatewayEdit({ id: profile.id, label: profile.label }) : setKeyProfileId(profile.id)}>Replace key</button>
 														)}
 														{((!profile.ready && !keyRefused) || signInGone) && keyProfileId !== profile.id && !remoteSetupLocked && !(subscriptionsHidden && !providerAcceptsApiKey(profile.provider.id)) && (
-															<button className="rs-btn ai-profile-signin" disabled={login.signingInProvider !== null} onClick={() => void signIn(profile)}>
+															<button className={lookNext ? "rs-btn rs-btn-sm ai-profile-signin" : "rs-btn ai-profile-signin"} disabled={login.signingInProvider !== null} onClick={() => void signIn(profile)}>
 																{providerUsesOAuth(profile.provider.id) && !subscriptionsHidden ? "Sign in" : "Add API key"}
 															</button>
 														)}
@@ -401,7 +457,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 														    items that need a credential gate themselves below. */}
 													{!remoteSetupLocked && <span className="ai-profile-menu-anchor">
 														<button
-															className="rs-btn rs-btn-icon ai-profile-menu-btn"
+															className={lookNext ? "rs-btn rs-btn-icon rs-btn-sm ai-profile-menu-btn" : "rs-btn rs-btn-icon ai-profile-menu-btn"}
 															aria-haspopup="menu"
 															aria-expanded={menuOpenId === profile.id}
 															aria-label={`Manage ${profile.label}`}
@@ -412,9 +468,10 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 															<AiProfileRowMenu anchorRef={menuAnchorRef} onDismiss={closeMenu}>
 																{confirmRemoveId === profile.id ? (
 																	<>
-																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its models.</span>
-																		<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={() => void removeProfile(profile)}>{removing ? "Removing…" : "Remove"}</button>
-																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)} title="Cancel — keep this profile">Keep it</button>
+																		<span className="ai-profile-menu-confirm">{remoteClient.sharedServer ? sharedServerRemoveLine(profile.label) : `Remove ${profile.label}? This ${profile.provider.configured ? "signs out and deletes" : "deletes"} its models.`}</span>
+																		{/* On a shared server Remove takes everyone's models away, and the question opens where "Remove…" was just clicked, above or below the row: a click that is the second of a double click never answers it. */}
+																		<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={(e) => { if (remoteClient.sharedServer && e.detail > 1) return; void removeProfile(profile); }}>{removing ? "Removing…" : "Remove"}</button>
+																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)} title="Cancel: keep this profile">Keep it</button>
 																	</>
 																) : (
 																	<>
@@ -445,7 +502,8 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 																		{profile.provider.configured && !subscriptionsHidden && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signOut(profile); }}>Sign out</button>
 																		)}
-																		{profile.kind !== "builtin" && (
+																		{/* The install's gateway goes only with the install's settings. */}
+																		{profile.kind !== "builtin" && !profile.setByInstall && (
 																			<button className="ai-profile-menu-item danger" role="menuitem" onClick={() => setConfirmRemoveId(profile.id)}>
 																				{profile.kind === "gateway" ? "Remove gateway…" : "Remove provider…"}
 																			</button>

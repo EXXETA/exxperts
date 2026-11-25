@@ -1,9 +1,14 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
-import { approvalAsking, keyboardAnswers } from "./Approval";
+import { answersHere, keyboardAnswers } from "./Approval";
 import { BubbleEditor, ConsultThreadItem, Message, QueuedBubbles, TaskThreadItem, type FailureLineActions, type MessageAttachmentAccess, type QueuedBubbleActions } from "./Message";
 import type { QueuedBubble } from "../outgoing-messages";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
+import { SkillPickList } from "./skill-pick-list";
+import { BACK_TO_ROOMS_LABEL } from "../back-to-rooms-label";
+import { draftAfterSkillPick, filterSkillPicks, skillPickEntries, skillPickQuery, type SkillPickEntry } from "../skill-pick-list";
+import { fetchSkills } from "../skills-api";
+import { fetchPersistentRoomSkillSettings } from "../persistent-room-management-api";
 import { escapeLayerOpen, useEscapeKey } from "./use-escape-key";
 import { foldChoiceOf, TurnCard, WorkStretch } from "./work-card";
 import { RunningAnswerSteps } from "./box-ask-rows";
@@ -18,7 +23,7 @@ import { ANOTHER_ROOM, askHint, askingWords, detectMentionQuery, draftAfterPick,
 import { replyCopyTargets } from "../reply-copy";
 import { chordHeld } from "../platform";
 import { formatModelWithProvider } from "../model-names";
-import { useRemoteClientContext } from "../remote-client-context";
+import { knownRemoteClientContext, mayBeOnSharedServer, useRemoteClientContext } from "../remote-client-context";
 
 export interface InRoomChatUsage {
 	turns: number;
@@ -459,7 +464,7 @@ function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: {
 				<div className="room-workspace-nudge-actions">
 					{stopped.onChooseModel && <button type="button" className="rs-btn rs-btn-sm" onClick={stopped.onChooseModel}>Choose another model</button>}
 					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onSignIn}>{stopped.signInLabel ?? "Sign in"}</button>}
-					{stopped.onReturnHome && <button type="button" className="rs-btn rs-btn-sm" onClick={stopped.onReturnHome}>Return Home</button>}
+					{stopped.onReturnHome && <button type="button" className="rs-btn rs-btn-sm" onClick={stopped.onReturnHome}>{BACK_TO_ROOMS_LABEL}</button>}
 					{stopped.onMemorize && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onMemorize}>Memorize</button>}
 					{stopped.onReload && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onReload}>Reload</button>}
 					{stopped.onOpenHere && <button type="button" className="rs-btn rs-btn-primary rs-btn-sm" onClick={stopped.onOpenHere}>Open here</button>}
@@ -563,7 +568,7 @@ function renderTranscript(
 			) : it.kind === "user" && edit?.editing?.id === it.id ? (
 				<BubbleEditor key={`edit-${it.id}`} text={edit.editing.text} onCancel={edit.onCancel} onSend={edit.onSend} />
 			) : (
-				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} newestFailure={it.id === newestFailureId} failureActions={it.id === newestFailureId ? failureLineActions : undefined} drawnAtOnce={it.id === answerDrawnAtOnceId} elsewhere={stepsElsewhere} followed={index < followedBefore} onEdit={it.id === edit?.editableId && !edit.editing ? edit.onEdit : undefined} />
+				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} newestFailure={it.id === newestFailureId} failureActions={it.id === newestFailureId ? failureLineActions : undefined} drawnAtOnce={it.id === answerDrawnAtOnceId} elsewhere={stepsElsewhere} followed={index < followedBefore} onEdit={it.id === edit?.editableId && !edit.editing ? edit.onEdit : undefined} sender={it.kind === "user" ? it.sender : undefined} />
 			),
 		});
 	}
@@ -655,7 +660,7 @@ function soleKeyboardApproval(items: ChatItem[]): Extract<ChatItem, { kind: "app
 	for (let index = items.length - 1; index >= 0; index--) {
 		const item = items[index];
 		if (item.kind === "user") break;
-		if (item.kind !== "approval" || !approvalAsking(item)) continue;
+		if (item.kind !== "approval" || !answersHere(item)) continue;
 		if (found || item.uiKind !== "confirm") return null;
 		found = item;
 	}
@@ -853,6 +858,12 @@ export function ComposerInput({
 	onBoxHoldsChange,
 	notice = null,
 }: ComposerInputProps) {
+	// The box draws again once the page hears which server it is on.
+	useRemoteClientContext();
+	// A word names a room by its id's start only once the server has said it is
+	// this computer: a shared server's ids are random, and the page may be on one
+	// until that answer comes, or after a first read failed.
+	const idsByStart = knownRemoteClientContext() !== null && !mayBeOnSharedServer();
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
 	const boxHasText = draft.trim() !== "";
 	const [caret, setCaret] = useState(0);
@@ -891,7 +902,7 @@ export function ComposerInput({
 	const sendDisabled = sendUnavailable || askingGone || awaitingQuestion || !!queueRefused || (!draft.trim() && !allowEmptySend);
 	const sendButtonTitle = sendUnavailable ? sendTitle : askingGone ? ROOM_GONE : awaitingQuestion ? TYPE_QUESTION : queueRefused ?? sendTitle;
 	// A later '@' word that names one room: the line above the box says how to ask it; the message still goes to this room.
-	const laterRoom = mention && !asking ? laterMentionRoom(draft, mention.candidates, mention.currentRoomId) : null;
+	const laterRoom = mention && !asking ? laterMentionRoom(draft, mention.candidates, mention.currentRoomId, idsByStart) : null;
 
 	// Mention popover state. The interactive picker opens only when a trigger is
 	// active, no room is on the box, the room is not busy, it has not been
@@ -901,11 +912,45 @@ export function ComposerInput({
 	const rawTrigger = mention && !asking ? detectMentionQuery(draft, caret) : null;
 	const mentionQuery = mention && !mention.busy && !mentionDismissed ? rawTrigger : null;
 	const mentionMatches: MentionCandidateRoom[] = mention && mentionQuery
-		? filterMentionCandidates(mention.candidates, mentionQuery.query, mention.currentRoomId)
+		? filterMentionCandidates(mention.candidates, mentionQuery.query, mention.currentRoomId, idsByStart)
 		: [];
 	const mentionOpen = Boolean(mentionQuery) && mentionMatches.length > 0;
 	const mentionBusyActive = Boolean(mention?.busy) && rawTrigger !== null;
 	const activeMentionIndex = mentionMatches.length > 0 ? Math.min(mentionIndex, mentionMatches.length - 1) : 0;
+
+	// The "/" list: the skills on in this room, asked for at each opening, so a
+	// skill switched on a moment ago is there. Never under a room's label (that
+	// question goes to the other room as typed), and none while its skills load,
+	// after a failed lookup, or when nothing fits: Enter then sends the text as
+	// typed, and the server reads a leading "/name" all the same.
+	const skillRoomId = mention && !asking ? mention.currentRoomId : null;
+	const skillQuery = skillRoomId ? skillPickQuery(draft, caret) : null;
+	const [skillDismissed, setSkillDismissed] = useState(false);
+	// Esc closes it as leaving the "/" does: typing after it is a new opening, which asks again.
+	const skillListWanted = skillQuery !== null && !mentionOpen && !skillDismissed;
+	const [skillIndex, setSkillIndex] = useState(0);
+	const [skillLibrary, setSkillLibrary] = useState<{ roomId: string; entries: SkillPickEntry[] } | null>(null);
+	// Closed: its entries go in the same render, so an opening right after shows only its own answer, never the last one's.
+	if (!skillListWanted && skillLibrary !== null) setSkillLibrary(null);
+	useEffect(() => {
+		if (!skillListWanted || !skillRoomId) return;
+		let current = true;
+		Promise.all([fetchSkills(), fetchPersistentRoomSkillSettings(skillRoomId)])
+			.then(([library, room]) => {
+				// An answer for a room the person has left, or a list closed since, is dropped.
+				if (current) setSkillLibrary({ roomId: skillRoomId, entries: skillPickEntries(library, room.skills) });
+			})
+			.catch(() => {});
+		return () => {
+			current = false;
+		};
+	}, [skillListWanted, skillRoomId]);
+	const skillMatches = skillListWanted && skillLibrary?.roomId === skillRoomId ? filterSkillPicks(skillLibrary.entries, skillQuery!) : [];
+	const skillOpen = skillMatches.length > 0;
+	const activeSkillIndex = skillOpen ? Math.min(skillIndex, skillMatches.length - 1) : 0;
+	useEffect(() => {
+		setSkillIndex(0);
+	}, [skillQuery]);
 
 	const setTextareaNode = useCallback((node: HTMLTextAreaElement | null) => {
 		textareaNodeRef.current = node;
@@ -916,6 +961,7 @@ export function ComposerInput({
 		setDraft(initialDraftValue ?? "");
 		setAsking(initialAsking ?? null);
 		setMentionDismissed(false);
+		setSkillDismissed(false);
 	}, [draftResetKey]);
 
 	// A room that just opened is there to be typed into: focus the composer
@@ -1019,6 +1065,14 @@ export function ComposerInput({
 		setDraft(rest);
 	}, [draft, caret]);
 
+	// A skill picked from the "/" list: the draft's first word becomes "/name ", the caret after it.
+	const selectSkill = useCallback((entry: SkillPickEntry) => {
+		const picked = draftAfterSkillPick(draft, entry.name);
+		pendingCaretRef.current = picked.caret;
+		setSkillDismissed(false);
+		setDraft(picked.draft);
+	}, [draft]);
+
 	// Typing in the box. The space after a word at the start that names one
 	// room puts that room on the box, unless Esc dismissed the list for it.
 	// While an input method composes, the words stay as they are: the label
@@ -1026,9 +1080,12 @@ export function ComposerInput({
 	function changeDraft(box: HTMLTextAreaElement, from = draft) {
 		const next = box.value;
 		const composing = composeFromRef.current !== null;
-		const labelled = !composing && mention && !mention.busy && !asking && !mentionDismissed ? labelAtFirstSpace(from, next, mention.candidates, mention.currentRoomId) : null;
+		const labelled = !composing && mention && !mention.busy && !asking && !mentionDismissed ? labelAtFirstSpace(from, next, mention.candidates, mention.currentRoomId, idsByStart) : null;
 		// Esc holds while an input method composes, so the word it ends with is judged with Esc's choice.
-		if (!composing) setMentionDismissed(false);
+		if (!composing) {
+			setMentionDismissed(false);
+			setSkillDismissed(false);
+		}
 		setConsultGateNotice(null);
 		if (labelled) {
 			pendingCaretRef.current = Math.max(0, (box.selectionStart ?? next.length) - (next.length - labelled.rest.length));
@@ -1100,6 +1157,13 @@ export function ComposerInput({
 			e.preventDefault();
 			stopAsking();
 			return;
+		}
+		if (skillOpen) {
+			// As in the "@" list: moving and picking never send the message.
+			if (e.key === "ArrowDown") { e.preventDefault(); setSkillIndex((i) => (Math.min(i, skillMatches.length - 1) + 1) % skillMatches.length); return; }
+			if (e.key === "ArrowUp") { e.preventDefault(); setSkillIndex((i) => (Math.min(i, skillMatches.length - 1) - 1 + skillMatches.length) % skillMatches.length); return; }
+			if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); selectSkill(skillMatches[activeSkillIndex]!); return; }
+			if (e.key === "Escape") { e.preventDefault(); setSkillDismissed(true); return; }
 		}
 		if (mentionOpen) {
 			// Navigation and selection never submit the message (spec invariant).
@@ -1181,6 +1245,7 @@ export function ComposerInput({
 				/>
 			)}
 			{mentionBusyActive && mention && <MentionConsultPopoverBusy title={mention.busyTitle} />}
+			{skillOpen && <SkillPickList entries={skillMatches} activeIndex={activeSkillIndex} onHover={setSkillIndex} onSelect={selectSkill} />}
 			{consultGateNotice && <div className="composer-consult-gate" role="status">{consultGateNotice}</div>}
 			{stagingSlot}
 			<div className="composer-input">
@@ -1631,7 +1696,7 @@ export function InRoomChatShellView({
 					<div className="topbar">
 						<div className="left">
 							{onHome && (
-								<button className="topbar-home-btn" aria-label="Back to rooms" title="Back to rooms" onClick={onHome}>
+								<button className="topbar-home-btn" aria-label={BACK_TO_ROOMS_LABEL} title={BACK_TO_ROOMS_LABEL} onClick={onHome}>
 									<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
 										<path d="M2.5 7.5 8 2.5l5.5 5" />
 										<path d="M4 7v6h8V7" />

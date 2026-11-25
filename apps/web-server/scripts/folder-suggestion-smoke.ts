@@ -4,7 +4,8 @@
 // gate refuses only after an overrun, one click is offered only strictly
 // inside Desktop, Documents or Downloads, and before the click only `lstat`
 // and `realpath` touch the path, no saved entry is touched and no program
-// starts. Every disk call and program start is recorded by the names it was
+// starts. A file it names counts as the folder that holds it, judged by the
+// same rules. Every disk call and program start is recorded by the names it was
 // given. Windows' rules run on stand-in file calls; the Mac rows on this disk.
 //
 // It makes folders in the home it runs under, so it refuses to start anywhere
@@ -112,7 +113,7 @@ const macView = (extra: Partial<SuggestionView> = {}): SuggestionView => {
 type Entry = { kind: "folder" | "link" | "file"; dev?: bigint; ino?: bigint };
 function windowsDisk(entries: Record<string, Entry>, record: Call[] = []): SuggestionFiles & { hold?: () => void } {
 	const find = (place: string) => Object.entries(entries).find(([name]) => name.toLowerCase() === place.toLowerCase());
-	const stats = (entry: Entry, at: number): BigIntStats => ({ isDirectory: () => entry.kind === "folder", isSymbolicLink: () => entry.kind === "link", dev: entry.dev ?? 7n, ino: entry.ino ?? BigInt(at + 100) }) as unknown as BigIntStats;
+	const stats = (entry: Entry, at: number): BigIntStats => ({ isDirectory: () => entry.kind === "folder", isFile: () => entry.kind === "file", isSymbolicLink: () => entry.kind === "link", dev: entry.dev ?? 7n, ino: entry.ino ?? BigInt(at + 100) }) as unknown as BigIntStats;
 	return {
 		async lstat(place) {
 			record.push({ fn: "lstat", name: place });
@@ -256,6 +257,72 @@ async function main(): Promise<void> {
 		assert((await judgeSuggestion(`${ANA}\\Documents\\Reports`, winView(zero, answerOf({})), "before-click")) === null, "a dev of 0 gives a suggestion");
 		const healthy = await judgeSuggestion(`${ANA}\\Documents\\Reports`, winView(files, answerOf({})), "before-click");
 		assert(healthy?.once === true, `the folder beside it: ${JSON.stringify(healthy)}`);
+	});
+
+	await row("a file the room names counts as the folder that holds it, judged by the same rules: under each rule a file whose folder it refuses gives nothing, and one whose folder it passes gives that folder and names the file", async () => {
+		const file = (...names: string[]) => {
+			const place = path.join(made(...names.slice(0, -1)), names.at(-1)!);
+			fs.writeFileSync(place, "x");
+			return place;
+		};
+		const reports = made("Documents", "Reports");
+		file("Documents", "Reports", "q3.txt");
+		file("Documents", "Reports", ".env");
+		file(".hidden", "tools", "run.py");
+		file("Library", "Scripts", "run.py");
+		file("loose.py");
+		// Documents and these six: the file's folder is seven parts below the home, and the file eight.
+		const deep8 = Array.from({ length: 6 }, (_, at) => `f${at}`);
+		file("Documents", ...deep8, "run.py");
+		file("Documents", ...deep8, "g", "run.py");
+		const linkedFolder = made("Real", "Linked Tools");
+		fs.writeFileSync(path.join(linkedFolder, "run.py"), "x");
+		fs.symlinkSync(linkedFolder, path.join(home, "Documents", "Tools Link"));
+		fs.symlinkSync(path.join(reports, "q3.txt"), path.join(reports, "q3 link.txt"));
+		const writableEntry = made("Shared", "Writable Tools");
+		fs.writeFileSync(path.join(writableEntry, "run.py"), "x");
+		fs.writeFileSync(path.join(roomFolder, "inside.py"), "x");
+		fs.writeFileSync(path.join(outside, "run.py"), "x");
+		const view = macView({ writable: [writableEntry] });
+		const refused: [string, string][] = [
+			["no file of that name", "~/Documents/Reports/missing.txt"],
+			["outside the home", path.join(outside, "run.py")],
+			["a file right in the home, whose folder is the home", "~/loose.py"],
+			["nine parts below the home, though its folder has eight", `~/Documents/${deep8.join("/")}/g/run.py`],
+			["a dot folder", "~/.hidden/tools/run.py"],
+			["a dot file", "~/Documents/Reports/.env"],
+			["Library", "~/Library/Scripts/run.py"],
+			["a folder link on the way", "~/Documents/Tools Link/run.py"],
+			["a link to a file", "~/Documents/Reports/q3 link.txt"],
+			["in a writable entry", path.join(writableEntry, "run.py")],
+			["in the room's folder", path.join(roomFolder, "inside.py")],
+		];
+		for (const [label, text] of refused) assert((await judgeSuggestion(text, view, "before-click")) === null, `${label}: suggested`);
+		// The room's own rules refuse the folder: its file gives nothing either.
+		assert((await judgeSuggestion("~/Documents/Reports/q3.txt", macView({ roomRules: () => false }), "before-click")) === null, "the room's rules: suggested");
+		// The neighbours: the folder of eight parts by its own path, and files whose folders pass.
+		const eight = await judgeSuggestion(`~/Documents/${deep8.join("/")}/g`, view, "before-click");
+		assert(eight !== null && eight.file === undefined, `the eight-part folder by its own path: ${JSON.stringify(eight)}`);
+		const q3 = await judgeSuggestion("~/Documents/Reports/q3.txt", view, "before-click");
+		assert(q3?.real === reports && q3.file === "q3.txt" && q3.once && q3.shown === "~/Documents/Reports" && q3.name === "Reports", `a file in Reports: ${JSON.stringify(q3)}`);
+		const seven = await judgeSuggestion(`~/Documents/${deep8.join("/")}/run.py`, view, "before-click");
+		assert(seven?.real === path.join(home, "Documents", ...deep8) && seven.file === "run.py", `a file eight parts down: ${JSON.stringify(seven)}`);
+		// At the press the held folder is judged by its own path: the file plays no part.
+		const again = await judgeSuggestion(reports, view, "click");
+		assert(again?.real === reports && again.file === undefined, `the recheck: ${JSON.stringify(again)}`);
+	}, "posix");
+
+	await row("a file the room names on Windows rules: on another disk, or behind a link, its folder gives nothing; on the home's disk it gives the folder", async () => {
+		const entries = folders(`${ANA}\\Documents`, `${ANA}\\Documents\\Reports`, `${ANA}\\Documents\\Mount`);
+		entries[`${ANA}\\Documents\\Reports\\q3.txt`] = { kind: "file" };
+		entries[`${ANA}\\Documents\\Reports\\away.txt`] = { kind: "file", dev: 9n };
+		entries[`${ANA}\\Documents\\Reports\\link.txt`] = { kind: "link" };
+		entries[`${ANA}\\Documents\\Mount`] = { kind: "folder", dev: 9n };
+		entries[`${ANA}\\Documents\\Mount\\q3.txt`] = { kind: "file", dev: 9n };
+		const files = windowsDisk(entries);
+		for (const text of [`${ANA}\\Documents\\Reports\\away.txt`, `${ANA}\\Documents\\Reports\\link.txt`, `${ANA}\\Documents\\Mount\\q3.txt`]) assert((await judgeSuggestion(text, winView(files, answerOf({})), "before-click")) === null, `${text}: suggested`);
+		const ok = await judgeSuggestion(`${ANA}\\Documents\\Reports\\q3.txt`, winView(files, answerOf({})), "before-click");
+		assert(ok?.real === `${ANA}\\Documents\\Reports` && ok.file === "q3.txt" && ok.once, `the file on the home's disk: ${JSON.stringify(ok)}`);
 	});
 
 	await row("guard 3: a home on a network disk gives no suggestions (Mac and Linux)", async () => {
@@ -459,6 +526,20 @@ async function main(): Promise<void> {
 		assert(value === null && seen.length === 0, `before the card: ${JSON.stringify({ value, seen: seen.slice(0, 3) })}`);
 		const shown: HeldFolder | null = await suggestionBeforeCard("~/Documents/Reports", macView());
 		assert(shown?.once === true, "the default shows it");
+	}, "posix");
+
+	await row("an agent folder a setting moved out of the app's data is still its data: no suggestion of it, a folder in it or one that holds it, and the folder beside it gets one", async () => {
+		const agent = made("Code", "agent");
+		made("Code", "agent", "skills", "report");
+		made("Code", "project");
+		process.env.EXXPERTS_CODING_AGENT_DIR = agent;
+		try {
+			const judge = (text: string) => judgeSuggestion(text, macView(), "before-click");
+			for (const text of ["~/Code/agent", "~/Code/agent/skills/report", "~/Code"]) assert((await judge(text)) === null, `${text}: suggested`);
+			assert((await judge("~/Code/project")) !== null, "the folder beside it: no suggestion");
+		} finally {
+			delete process.env.EXXPERTS_CODING_AGENT_DIR;
+		}
 	}, "posix");
 
 	console.log(`${passed} passed, ${failures.length} failed`);

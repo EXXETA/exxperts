@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { ROOM_STATE_HEADING } from "../src/room-state-message.js";
 import { ANSWER_FLOOR_MS } from "../src/room-box/card-text.js";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
-import { computeSkillFilesDigest, sha256, writeSkillProvenance } from "../src/skills-store.js";
+import { listSkillFiles, sha256, writeSkillProvenance } from "../src/skills-store.js";
 import { waitEvery } from "./smoke-wait.js";
 
 // Stop must kill the tool-turn recovery (fix/stop-cancels-recovery). The
@@ -77,7 +77,7 @@ fs.mkdirSync(skillDir, { recursive: true, mode: 0o700 });
 const skillManifest = `---\nname: ${skillName}\ndescription: Converts documents\n---\n\nRun the conversion steps.\n`;
 fs.writeFileSync(path.join(skillDir, "SKILL.md"), skillManifest, { mode: 0o600 });
 writeSkillProvenance(skillDir, { source: "upload", importedAt: new Date().toISOString(), license: null, sha256: sha256(skillManifest) });
-assert(computeSkillFilesDigest(skillDir), "the planted skill must digest");
+assert(listSkillFiles(skillDir), "the planted skill must list its files");
 
 // Turn tokens ride the user prompt, so every completion request of a turn
 // (the whole message history travels each leg) is attributable to its turn.

@@ -1,57 +1,116 @@
-import type { SkillScanFinding } from "../skills-api";
+import type { ReactNode } from "react";
+import type { SkillFile, SkillRepositoryView, SkillScanFinding } from "../skills-api";
+import { SKILL_BY_HAND_TAG, skillFilesAtLine, skillFilesLine, skillOutsideFolderLine, skillRefText, skillTierLabel } from "../skill-source-copy";
+import { useRemoteClientContext } from "../remote-client-context";
 
-/** Where a skill came from, in the words the skill page and the review share:
- *  an address without its scheme (a link), or what the origin means. `tier`
- *  is the library's store tier, for a skill with no recorded origin. */
-export function SkillSourceValue({ source, tier }: { source: string | null | undefined; tier?: string }) {
-	if (source && /^https?:\/\//.test(source)) {
-		return <a className="skill-fact-link" href={source} target="_blank" rel="noreferrer">{source.replace(/^https?:\/\//, "").replace(/\/$/, "")}</a>;
-	}
-	if (source === "local") return <>Written here</>;
-	if (source === "upload") return <>Uploaded</>;
-	if (source) return <>{source}</>;
-	if (tier === "builtin") return <>Built in</>;
-	if (tier === "shared") return <>~/.agents/skills, shared with other agent tools</>;
-	if (tier === "project") return <>This project</>;
-	return <>{tier || "Unknown"}</>;
+const ADDRESS = /^https?:\/\//;
+
+/** Where a skill came from, as words: an address without its scheme, or what
+ *  the origin means. `tier` is the library's store tier, for a skill with no
+ *  recorded origin; `short` gives the library table's few words for a tier. */
+export function skillFromText(source: string | null | undefined, tier?: string, short = false): string {
+	if (source && ADDRESS.test(source)) return source.replace(ADDRESS, "").replace(/\/$/, "");
+	if (source === "local") return "Written here";
+	if (source === "upload") return "Uploaded";
+	if (source) return source;
+	if (tier === "shared" && !short) return "~/.agents/skills, shared with other agent tools";
+	return (tier && skillTierLabel(tier)) || tier || "Unknown";
 }
 
-/** The Source and License rows of a skill's page and of the review. */
-export function SkillSourceRows({ source, tier, license }: { source: string | null | undefined; tier?: string; license: string | null | undefined }) {
+/** Where a skill came from, in the words the skill page and the review share:
+ *  an address is a link. */
+export function SkillSourceValue({ source, tier }: { source: string | null | undefined; tier?: string }) {
+	const text = skillFromText(source, tier);
+	if (source && ADDRESS.test(source)) return <a className="skill-fact-link" href={source} target="_blank" rel="noreferrer">{text}</a>;
+	return <>{text}</>;
+}
+
+/** The From row of a skill's page and of the review, naming the branch, tag or commit a skill from a repository follows, and License and Version when the skill states them. */
+export function SkillSourceRows({ source, tier, license, version, repository }: { source: string | null | undefined; tier?: string; license: string | null | undefined; version: string | null | undefined; repository?: SkillRepositoryView }) {
 	const licenseText = license?.trim() ?? "";
+	const versionText = version?.trim() ?? "";
+	const refText = repository ? skillRefText(repository.refKind, repository.ref) : null;
 	return (
 		<>
 			<div className="settings-row">
-				<span className="settings-row-label">Source</span>
-				<span className="settings-row-value skill-fact-value"><SkillSourceValue source={source} tier={tier} /></span>
+				<span className="settings-row-label">From</span>
+				<span className="settings-row-value skill-fact-value"><SkillSourceValue source={source} tier={tier} />{refText && <>, {refText}</>}</span>
 			</div>
-			<div className="settings-row">
-				<span className="settings-row-label">License</span>
-				<span className="settings-row-value skill-fact-value">{licenseText || <span className="skill-fact-warn">None declared</span>}</span>
-			</div>
+			{licenseText && (
+				<div className="settings-row">
+					<span className="settings-row-label">License</span>
+					<span className="settings-row-value skill-fact-value">{licenseText}</span>
+				</div>
+			)}
+			{versionText && (
+				<div className="settings-row">
+					<span className="settings-row-label">Version</span>
+					<span className="settings-row-value skill-fact-value">{versionText}</span>
+				</div>
+			)}
 		</>
 	);
 }
 
-/** The hidden-character warning, shared by the review screen and a library
- *  skill's page, and the unknown-license warning, which only the review
- *  passes `licenseKnown` for: there the person decides to add the skill,
- *  while the page says it in its License row. */
-export function SkillWarnings({ licenseKnown, findings }: { licenseKnown?: boolean; findings: SkillScanFinding[] }) {
+/**
+ * The Files row: how many files a skill brings, its instructions included, when
+ * rooms open them, and a line in its value column when given: where they are, or
+ * why rooms use only its instructions.
+ */
+export function SkillFilesRow({ count, line }: { count?: number; line?: ReactNode }) {
+	return (
+		<div className="settings-row">
+			<span className="settings-row-label">Files</span>
+			{count !== undefined && <span className="settings-row-value skill-fact-value">{count === 1 ? "1 file" : `${count} files`}</span>}
+			{line && <span className="settings-row-sub skill-fact-line">{line}</span>}
+		</div>
+	);
+}
+
+/**
+ * Where a shared-folder skill's files are (`skillFilesAtLine`), its path breaking
+ * only after a separator, "/" or a Windows "\": a folder's name stays whole, so a
+ * hyphen in it never reads as a line's end. On its page and on a room's Skills page.
+ */
+export function SkillFilesAt({ place }: { place: string }) {
+	const line = skillFilesAtLine(place);
+	const at = line.indexOf(place);
+	// Names and separators alternate: ["~", "/", "team-guides", "/", "travel-report"].
+	const pieces = place.split(/([\\/])/);
 	return (
 		<>
-			{licenseKnown === false && (
-				<div className="skill-review-banner warn" role="note">
-					<strong>Unknown license.</strong> This skill declares no license, so you have no stated
-					permission to use or redistribute it. Adopt it only if you trust the source.
-				</div>
-			)}
+			{line.slice(0, at)}
+			{pieces.map((piece, i) => (i % 2 === 0 ? <span key={i} className="skill-path-part">{piece}</span> : <span key={i}>{piece}<wbr /></span>))}
+			{line.slice(at + place.length)}
+		</>
+	);
+}
 
+/** The review's line on a skill whose instructions reach above its folder (`skillOutsideFolderLine`), its path as written set as code. */
+export function SkillOutsideLine({ path, className }: { path: string; className: string }) {
+	const line = skillOutsideFolderLine(path);
+	const at = line.indexOf(path);
+	return (
+		<p className={className}>
+			<span>{line.slice(0, at)}<code className="skill-outside-path">{path}</code>{line.slice(at + path.length)}</span>
+		</p>
+	);
+}
+
+/** Beside the name of a skill its author marked to start only by hand, wherever it is listed. */
+export function SkillByHandTag() {
+	return <span className="skill-tag">{SKILL_BY_HAND_TAG}</span>;
+}
+
+/** The hidden-character warning, shared by the review screen and a library skill's page. `before` names the step it comes before: accepting an add, or updating. */
+export function SkillWarnings({ findings, before = "accepting" }: { findings: SkillScanFinding[]; before?: "accepting" | "updating" }) {
+	return (
+		<>
 			{findings.length > 0 && (
 				<div className="skill-review-banner danger" role="alert">
 					<strong>{findings.length} hidden {findings.length === 1 ? "character" : "characters"} found.</strong>{" "}
 					The instructions contain invisible or bidirectional characters, a common way to smuggle
-					hidden instructions past a reader. Review carefully before accepting.
+					hidden instructions past a reader. Review carefully before {before}.
 					<ul className="skill-review-findings">
 						{findings.slice(0, 12).map((finding, index) => (
 							<li key={`${finding.index}-${index}`}>
@@ -64,4 +123,17 @@ export function SkillWarnings({ licenseKnown, findings }: { licenseKnown?: boole
 			)}
 		</>
 	);
+}
+
+/** The Scripts line's one explanation for a skill's scripts: on a shared server
+ *  that they never run; on the computer that the assistant can run them, a skill
+ *  marked for picking by hand included, whose folder opens while it is on, or,
+ *  when the library item says so (`readOnly`), that a protected room there runs
+ *  them only from a folder it can already open. */
+export function useScriptsLine(files: SkillFile[], readOnly = false): string | null {
+	const { sharedServer } = useRemoteClientContext();
+	const scripts = files.filter((file) => file.kind === "scripts").length;
+	if (scripts === 0) return null;
+	if (sharedServer) return skillFilesLine("sharedServer", scripts);
+	return skillFilesLine(readOnly ? "readOnly" : "run", scripts);
 }

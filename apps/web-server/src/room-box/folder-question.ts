@@ -8,12 +8,12 @@ import { Type } from "typebox";
 import type { LocalFolderPickerResult } from "../local-folder-picker.js";
 import { grantAutomaticRunWithoutAsking } from "../persistent-room-bash-settings.js";
 import { persistentAgentRootPath, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, type PersistentRoomCapabilityPolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, withCommandsFromCard, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "../persistent-room-workspace-policy.js";
-import { coveringRoot } from "../room-files.js";
+import { coveringRoot, RoomFilesError } from "../room-files.js";
 import { realPlace } from "../path-shapes.js";
 import type { ChooseOutcome, CommandsApply, FolderAnswer, FolderPress, QuestionWatcher } from "../web-ui-context.js";
 import { addAlsoAllowedFolder, type AlsoAllowedFolder, readAlsoAllowed, saveAlsoAllowedFolders } from "./also-allowed.js";
 import { isInside, realPathOf } from "./box-closed.js";
-import { ASK_FOLDER, ASK_FOR_COMMANDS_TOOL_NAME, CHANGE_SAVE_FAILED, ASK_FOR_FOLDER_TOOL_NAME, ASK_OUTCOME, type AskFolder, type AskOutcome, type CommandsAskLine, FOLDER_PICK_REFUSED, FOLDER_PICK_REFUSED_IN_PANEL, FOLDER_CARD_WINDOW_CLOSED, FOLDER_WINDOW_CLOSED, type FolderAskAccess, folderHoldsRoomLine, type FolderLasts, folderUsableThisTimeLine, NO_FOLDER_WINDOW, pathAsShown } from "./card-text.js";
+import { ASK_FOLDER, ASK_FOR_COMMANDS_TOOL_NAME, CHANGE_SAVE_FAILED, ASK_FOR_FOLDER_TOOL_NAME, ASK_OUTCOME, type AskFolder, type AskOutcome, type CommandsAskLine, FOLDER_PICK_REFUSED, FOLDER_PICK_REFUSED_IN_PANEL, FOLDER_CARD_WINDOW_CLOSED, FOLDER_WINDOW_CLOSED, type FolderAskAccess, folderHoldsRoomLine, type FolderLasts, folderUsableThisTimeLine, namedPathAsShown, NO_FOLDER_WINDOW, pathAsShown } from "./card-text.js";
 import { folderGrantable, pickedThroughWritableLink, soundFolders, writeEntries } from "./folder-offer.js";
 import { type HeldFolder, judgeSuggestion, SHOW_SUGGESTION_BEFORE_CLICK, SUGGESTION_JUDGE_MS, suggestionBeforeCard, type SuggestionView } from "./folder-suggestion.js";
 import { isSharedServer } from "../server-hooks.js";
@@ -127,7 +127,7 @@ export interface RoomAskView {
 /** The slice of the question bridge the asks use. */
 export interface AskQuestions {
 	watcher(): QuestionWatcher;
-	askFolder(card: { access: FolderAskAccess; reason: string; roomHasFolder: boolean; held: HeldFolder | null; act: (press: FolderPress, held: HeldFolder | null, signal: AbortSignal) => Promise<ChooseOutcome> }): Promise<FolderAnswer>;
+	askFolder(card: { access: FolderAskAccess; reason: string; roomHasFolder: boolean; held: HeldFolder | null; named?: string | null; act: (press: FolderPress, held: HeldFolder | null, signal: AbortSignal) => Promise<ChooseOutcome> }): Promise<FolderAnswer>;
 	askCommands(card: { reason: string; line: CommandsAskLine; anyway: boolean }, apply: CommandsApply): Promise<boolean>;
 }
 
@@ -135,7 +135,7 @@ export interface RoomAsksOptions {
 	roomId: string;
 	/** The room's reason for a call, which only the card may see. */
 	reasonOf: (toolCallId: string, fallback: unknown) => string;
-	/** The folder the room suggests on a folder ask, by the model's own text: only the judge reads it, and nothing shows or saves it. */
+	/** The folder the room suggests on a folder ask, by the model's own text: the judge reads it, the card shows it written out where no folder is held, and nothing saves it. */
 	folderOf?: (toolCallId: string, fallback: unknown) => string;
 	questions: AskQuestions;
 	room: () => RoomAskView;
@@ -150,10 +150,16 @@ export interface RoomAsksOptions {
 	look?: (folder: string) => Promise<FirstLook>;
 	/** Every folder ask waits this long before its card, with a suggestion or without; a timer unless a smoke records it. */
 	wait?: (ms: number) => Promise<void>;
-	/** Whether the panel names a suggested folder before a press; `SHOW_SUGGESTION_BEFORE_CLICK` unless a smoke sets it. */
+	/** Whether the panel names a suggested folder it holds before a press; `SHOW_SUGGESTION_BEFORE_CLICK` unless a smoke sets it. */
 	showSuggestionBeforeClick?: boolean;
 	/** The person's home for the judge and the paths the panel shows; the login home unless a smoke sets it. */
 	suggestionHome?: string;
+	/**
+	 * In a room that asks nothing (Auto with protection off): the real path its
+	 * file tools would open a folder at now, or the fence's refusal thrown; null
+	 * elsewhere. A read that throws reads as null.
+	 */
+	opensWithoutAsking?: () => ((folder: string, access: FolderAskAccess) => string) | null;
 }
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -163,7 +169,8 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * moment the model's message ends, before anything sends or saves them: the
  * tool events, the finished message, the replay, the runtime's own session file
  * and the saved steps all carry them empty. The card gets the reason, and the
- * judge the folder, from here by the call's id, and nothing else does.
+ * judge the folder and the card its words, from here by the call's id, and
+ * nothing else does.
  */
 const isAsk = (name: unknown): boolean => name === ASK_FOR_FOLDER_TOOL_NAME || name === ASK_FOR_COMMANDS_TOOL_NAME;
 const KEPT_FIELDS = ["reason", "folder"] as const;
@@ -291,19 +298,56 @@ export const COMMANDS_ALREADY_ON = "Commands are already on in this room: run th
 export const COMMANDS_TURNED_ON = "The person turned on commands for this room. Run the command now.";
 export const COMMANDS_WITHDRAWN = `Not asked: the person said Not now to the folder this job needed, so there's no folder for commands to work in. If the job still needs commands, you can ask again with a new reason. ${NO_STEPS}`;
 export const ASK_WITHDRAWN_FOR_MESSAGE = "Not asked: the person wrote a message instead. Read it and go on from there.";
+export const FOLDER_REASON_MISSING = `Not asked: the reason is empty. Call ${ASK_FOR_FOLDER_TOOL_NAME} again with a reason that names the file or folder you're looking for, such as "the folder that holds fetch_transcript.py".`;
 
 const folderPicked = (folder: string, access: FolderAskAccess, lasts: FolderLasts): string =>
 	lasts === "answer"
 		? `The person chose ${folder} for this answer only. This room can ${access === "write" ? "read and change" : "read"} files there until it finishes answering this message: use that full path, and go on with the job. Don't count on it in a later answer.`
 		: `The person chose ${folder}. This room can now ${access === "write" ? "read and change" : "read"} files there: use that full path, and go on with the job.`;
 const folderAlready = (folder: string, access: FolderAskAccess): string => `This room can already ${access === "write" ? "read and change" : "read"} files in ${folder}: use that full path, and go on with the job.`;
+/**
+ * Where a room that asks nothing reaches with its file tools: its ask_for_folder
+ * answer and its line in the room's state message both say it. The exceptions
+ * are the fence's in that room (room-files.ts: the app's data, the shared
+ * connector settings, CLOSED_TO_WRITES_ASKING_NOTHING, a Can read folder) and
+ * the person's own content rules, which still apply to its file tools. Left
+ * out on purpose: running programs' details under /proc, which no desktop has,
+ * and a stored policy's extra closed names, which no screen sets.
+ */
+export const reachWithoutAsking = (canChangeFiles: boolean): string =>
+	canChangeFiles
+		? "read and change files anywhere on this computer by their full path, except the app's own data, the connector settings file .config/mcp/mcp.json, changes to .mcp.json files and in a folder the person set to Can read, and anything a rule the person added to the content policy blocks"
+		: "read files anywhere on this computer by their full path, except the app's own data, the connector settings file .config/mcp/mcp.json and anything a rule the person added to the content policy blocks";
+/** A room that asks nothing, asked for no folder in particular: it names none. */
+const nothingToAsk = (canChangeFiles: boolean): string => `Nothing needs the person's approval here: this room's file tools ${reachWithoutAsking(canChangeFiles)}. Use the full path, and go on with the job.`;
+
+/** What ask_for_folder answers in a room that asks nothing: the file tools' own fence decides, and no card shows. */
+function answeredWithoutAsking(opens: (folder: string, access: FolderAskAccess) => string, folder: string, access: FolderAskAccess, canChangeFiles: boolean) {
+	if (access === "write" && !canChangeFiles) return answered(READ_ONLY_ROOM_ASK, "not-asked");
+	if (!folder) return answered(nothingToAsk(canChangeFiles), "already");
+	try {
+		return answered(folderAlready(opens(folder, access), access), "already");
+	} catch (error) {
+		if (error instanceof RoomFilesError) return answered(error.message, "not-asked");
+		throw error;
+	}
+}
+
+function opensNow(options: RoomAsksOptions): ((folder: string, access: FolderAskAccess) => string) | null {
+	try {
+		return options.opensWithoutAsking?.() ?? null;
+	} catch {
+		return null;
+	}
+}
 
 const REASON_FIELD = 'Why this room needs it, in one plain line for the person. Say "folder", never "workspace". No paths.';
-const FOLDER_FIELD = "The folder's full path when you know which one, as /Users/ana/Documents/Reports, C:\\Users\\Ana\\Documents\\Reports or ~/Documents/Reports. Leave it out when you don't know it.";
+const FOLDER_REASON_FIELD = 'What you are looking for and why, in one plain line for the person. Name the file or folder by its name, as "the folder that holds fetch_transcript.py" or "your Reports folder". Say "folder", never "workspace". No paths.';
+const FOLDER_FIELD = "The full path of the folder, or of the one file the job needs, when you know it, as /Users/ana/Documents/Reports, C:\\Users\\Ana\\Documents\\Reports or ~/Documents/Reports. Leave it out when you don't know it.";
 
 const folderSchema = Type.Object({
 	access: Type.Union([Type.Literal("read"), Type.Literal("change")], { description: "read to read files there; change to also change or add files there" }),
-	reason: Type.String({ description: REASON_FIELD }),
+	reason: Type.String({ description: FOLDER_REASON_FIELD }),
 	folder: Type.Optional(Type.String({ description: FOLDER_FIELD })),
 });
 
@@ -537,7 +581,7 @@ export function createRoomAsks(options: RoomAsksOptions): { tools: ToolDefinitio
 			const result = await options.pickFolder(signal, startAt);
 			if (!result.ok) {
 				if (result.code === "folder_chooser_stopped") return { unchanged: true };
-				return { show: { line: result.supported ? FOLDER_CARD_WINDOW_CLOSED : NO_FOLDER_WINDOW, canChoose: result.supported, held } };
+				return { line: result.supported ? FOLDER_CARD_WINDOW_CLOSED : NO_FOLDER_WINDOW, canChoose: result.supported };
 			}
 			if (result.cancelled || signal.aborted) return { unchanged: true };
 			return picked(result.path);
@@ -585,7 +629,7 @@ export function createRoomAsks(options: RoomAsksOptions): { tools: ToolDefinitio
 	const askFolder: ToolDefinition<typeof folderSchema, Record<string, unknown>> = {
 		name: ASK_FOR_FOLDER_TOOL_NAME,
 		label: ASK_FOR_FOLDER_TOOL_NAME,
-		description: "Ask the person to choose a folder this room can use. Call this as soon as a job names a folder or files this room can't see: it's somewhere else on their computer. Do this instead of guessing paths, making a folder of that name here, saving somewhere else, or telling them to change a setting. The app shows them your reason. Give the folder's full path in folder when you know it: they see it, and allow it or choose another in their computer's folder window. If they allow one, the result gives you its path and you go on with the job. Don't call it for work this room's folder, its attachments or the chat already cover. To change a file in a folder this room can only read, call this with access change: the person picks that folder again.",
+		description: "Ask the person to choose a folder this room can use. Call this as soon as a job names a folder or files this room can't see: it's somewhere else on their computer. Do this instead of guessing paths, making a folder of that name here, saving somewhere else, or telling them to change a setting. The app shows them your reason. Say in it what you're looking for, by name. Give the full path in folder when you know it, of the folder or of the one file the job needs: they see it, and allow its folder or choose another in their computer's folder window. When you know the folder, also name it in your own message. If they allow one, the result gives you its path and you go on with the job. Don't call it for work this room's folder, its attachments or the chat already cover. To change a file in a folder this room can only read, call this with access change: the person picks that folder again.",
 		promptSnippet: "Ask the person to choose a folder this room can't reach yet",
 		parameters: folderSchema,
 		async execute(toolCallId, params) {
@@ -596,9 +640,13 @@ export function createRoomAsks(options: RoomAsksOptions): { tools: ToolDefinitio
 			const room = options.room();
 			// A folder on the list is opened through the room's own: with none, a pick would give nothing.
 			if (!room.folder) return answered(NO_FOLDER_OF_ITS_OWN, "not-asked");
+			const opens = opensNow(options);
+			if (opens) return answeredWithoutAsking(opens, suggestion, access, room.canChangeFiles);
 			if (questions.watcher() === "none") return answered(NOBODY_FOR_FOLDER, "nobody");
 			if (notNow.reached()) return answered(ASKED_TOO_OFTEN, "not-asked");
 			if (access === "write" && !room.canChangeFiles) return answered(READ_ONLY_ROOM_ASK, "not-asked");
+			// The card's reason is all a person may have to go on: a card that names nothing can't be answered.
+			if (reason.trim() === "") return answered(FOLDER_REASON_MISSING, "not-asked");
 			try {
 				const answer = await inLine("folder", async (): Promise<FolderAnswer | string> => {
 					// Every ask waits the judge's time, so how long the card took says nothing of the room's guess.
@@ -606,7 +654,9 @@ export function createRoomAsks(options: RoomAsksOptions): { tools: ToolDefinitio
 					const [held] = await Promise.all([judging, (options.wait ?? pause)(SUGGESTION_JUDGE_MS)]);
 					// The person wrote while the card waited: it isn't asked.
 					if (spoken !== spokenBefore) return ASK_WITHDRAWN_FOR_MESSAGE;
-					const result = await questions.askFolder({ access, reason, roomHasFolder: room.folder !== null, held, act: act(access, suggestion) });
+					// Where no folder is held, the room's own words for the place, so the person still learns which it means.
+					const named = held === null && suggestion.trim() !== "" ? namedPathAsShown(suggestion, home(), process.platform === "win32") : null;
+					const result = await questions.askFolder({ access, reason, roomHasFolder: room.folder !== null, held, named, act: act(access, suggestion) });
 					// After a Not now on the folder, a commands ask waiting behind it has nothing to work in.
 					if (result.state === "declined") withdraw("commands", COMMANDS_WITHDRAWN);
 					return result;

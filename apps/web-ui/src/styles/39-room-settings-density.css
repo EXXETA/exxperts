@@ -33,11 +33,6 @@
 .rs-shell .room-skills-picker-list {
 	gap: 0;
 }
-/* The drifted-skill review gate keeps its warning identity, softened from a
-   full-strength outline to a tinted one. */
-.rs-shell .room-skills-review {
-	border-color: color-mix(in srgb, var(--exx-warning, #c47f00) 45%, transparent);
-}
 /* Choice chips rest transparent at chip weight; the selected one keeps the
    app's filled-selection treatment from the base rules. */
 .rs-shell .room-schedules-day-chip {

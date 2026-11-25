@@ -3,7 +3,12 @@
 // refused outside, whatever the path's spelling. A Can read folder reads and
 // refuses a write, a list change reaches the next call, the names the box never
 // lets a command change are refused from the box's own arrays, a link is
-// refused, and a saved folder card the room already opens isn't shown.
+// refused, and a saved folder card the room already opens isn't shown. A path
+// refused in the app's skills folder is named as a skill's folder; a key in a
+// skill that is on, as a key. A path in the running answer's own temp for
+// commands is named as that temp, with no step for the person and no folder
+// ask; another room's temp and the rest of the app's data keep the secret-file
+// line.
 // Offline, in a throwaway HOME.
 import fs from "node:fs";
 import os from "node:os";
@@ -18,11 +23,14 @@ const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE,
 Object.assign(process.env, { HOME: home, USERPROFILE: home, EXXETA_PERSISTENT_AGENTS_ROOT: persistentAgentsRoot });
 
 const { createPersistentRoomCapabilityPolicy, hashPersistentRoomPath } = await import("../src/persistent-room-workspace-policy.js");
-const { ROOM_FOLDER_REFUSED } = await import("../src/room-files.js");
+const { ownTempRefusal, ROOM_FOLDER_REFUSED } = await import("../src/room-files.js");
 const { createPersistentRoomWorkspaceTools } = await import("../src/persistent-room-workspace-tools.js");
 const { addAlsoAllowedFolder, saveAlsoAllowedFolders } = await import("../src/room-box/also-allowed.js");
 const { NEVER_WRITABLE_FILES, NEVER_WRITABLE_FOLDERS, NEVER_WRITABLE_GLOBS } = await import("../src/room-box/box-rules.js");
 const { stepOutcome } = await import("../../web-ui/src/step-lines.js");
+const { agentSkillsDir } = await import("../src/skills-store.js");
+const { readLibrarySkill } = await import("../src/skills-executable.js");
+const { enablePersistentRoomSkill } = await import("../src/persistent-room-skill-settings.js");
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -33,6 +41,7 @@ const READ_ONLY_FOLDER = "is in a folder this room can only read";
 const NEVER_CHANGED = "can be read but not changed by rooms";
 const LINK = "this room doesn't follow links";
 const CLOSED = "looks like a secret file or the app's own data";
+const SKILLS = "is in the app's skills folder. A room can't change a skill's folder, and reads only the folders of the skills that are on in it, which read_skill gives; write into the room's folder instead.";
 
 const write = (file: string, text: string) => {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -65,7 +74,7 @@ try {
 }
 
 type Outcome = { text: string; error?: string };
-function toolsFor(agentId: string, mode: "localFiles" | "bounded", root = sales, toolSelection?: unknown): (name: string, params: Record<string, unknown>, signal?: AbortSignal) => Promise<Outcome> {
+function toolsFor(agentId: string, mode: "localFiles" | "bounded", root = sales, toolSelection?: unknown, options?: Parameters<typeof createPersistentRoomWorkspaceTools>[1]): (name: string, params: Record<string, unknown>, signal?: AbortSignal) => Promise<Outcome> {
 	const policy = createPersistentRoomCapabilityPolicy({
 		agentId,
 		conversationId: "c_fence",
@@ -78,7 +87,7 @@ function toolsFor(agentId: string, mode: "localFiles" | "bounded", root = sales,
 		...(toolSelection ? { toolSelection } : {}),
 		now: new Date("2026-11-01T00:00:00.000Z"),
 	} as any);
-	const tools = new Map(createPersistentRoomWorkspaceTools(policy).map((tool) => [String(tool.name), tool as any]));
+	const tools = new Map(createPersistentRoomWorkspaceTools(policy, options).map((tool) => [String(tool.name), tool as any]));
 	return async (name, params, signal) => {
 		const tool = tools.get(name);
 		assert(tool, `the ${name} tool must be there`);
@@ -290,6 +299,67 @@ try {
 		process.env.PATH = savedPath;
 	}
 	opens(await onTools("read", { path: "readme.md" }), "tools readme", "the same room once its folder holds no program folder");
+
+	// ---- the app's skills folder: what is refused there is named as a skill's folder, a key in a skill that is on still as a key ----
+	const skillsRoot = agentSkillsDir();
+	for (const name of ["on-skill", "off-skill"]) {
+		write(path.join(skillsRoot, name, "SKILL.md"), `---\nname: ${name}\ndescription: a skill\n---\n\nRun scripts/run.sh.\n`);
+		write(path.join(skillsRoot, name, "scripts", "run.sh"), "echo ran\n");
+		write(path.join(skillsRoot, name, ".env"), "TOKEN=synthetic\n");
+	}
+	const skillsRoom = "fence-skills";
+	assert(enablePersistentRoomSkill(skillsRoom, "on-skill", readLibrarySkill).ok, "on-skill switches on");
+	const inSkills = toolsFor(skillsRoom, "localFiles");
+	// Every row runs, so one run names each answer that is wrong.
+	const skillRowsFailed: string[] = [];
+	const refusedAsSkills = (outcome: Outcome, shown: string, what: string) => {
+		if (outcome.error !== `${shown} ${SKILLS}`) skillRowsFailed.push(`${what} must be refused as a skill's folder, got ${JSON.stringify(outcome).slice(0, 400)}`);
+	};
+	opens(await inSkills("read", { path: path.join(skillsRoot, "on-skill", "SKILL.md") }), "Run scripts/run.sh.", "a skill that is on: its SKILL.md");
+	refusedAsSkills(await inSkills("ls", { path: skillsRoot }), skillsRoot, "listing the app's skills folder");
+	refusedAsSkills(await inSkills("read", { path: path.join(skillsRoot, "off-skill", "SKILL.md") }), path.join(skillsRoot, "off-skill", "SKILL.md"), "a skill that is off");
+	const intoSkill = path.join(skillsRoot, "on-skill", "notes.md");
+	refusedAsSkills(await inSkills("write", { path: intoSkill, content: "x\n" }), intoSkill, "a write into a skill that is on");
+	assert(!fs.existsSync(intoSkill), "the refused write left no file in the skill's folder");
+	refusedAs(await inSkills("read", { path: path.join(skillsRoot, "on-skill", ".env") }), CLOSED, "a key inside a skill that is on");
+	write(path.join(sales, ".env"), "TOKEN=synthetic\n");
+	refusedAs(await inSkills("read", { path: path.join(sales, ".env") }), CLOSED, "a key in the room's folder");
+	assert(skillRowsFailed.length === 0, skillRowsFailed.join("\n"));
+
+	// ---- the running answer's own temp for commands: named as that temp; every other closed place as before ----
+	const tempRoom = "fence-own-temp";
+	const boxOf = (room: string) => path.join(persistentAgentsRoot, room, "runtime", "box");
+	const ownTemp = path.join(boxOf(tempRoom), "temp-0a1b2c3d4e5f");
+	const picture = path.join(ownTemp, "poster.png");
+	write(picture, "not really a picture\n");
+	const otherTemp = path.join(boxOf("fence-other-room"), "temp-0f1e2d3c4b5a");
+	write(path.join(otherTemp, "poster.png"), "another room's picture\n");
+	write(path.join(boxOf(tempRoom), "caches", "pip", "note.txt"), "a cache\n");
+	// The folder ask is offered with someone there: a refusal of the room's own temp still sends the model to no ask.
+	const inTempRoom = toolsFor(tempRoom, "localFiles", sales, undefined, { asks: () => true, commandsTemp: () => ownTemp });
+	const tempRowsFailed: string[] = [];
+	const refusedAsOwnTemp = (outcome: Outcome, shown: string, what: string) => {
+		const error = outcome.error ?? "";
+		if (error !== ownTempRefusal(shown)) tempRowsFailed.push(`${what} must be refused as the answer's own temp, got ${JSON.stringify(outcome).slice(0, 400)}`);
+		if (/Tell the person|secret|open it themselves|Call ask_for_folder/.test(error)) tempRowsFailed.push(`${what}: the refusal names a secret file, a step for the person or the folder ask, got ${error}`);
+	};
+	opens(await inTempRoom("read", { path: "figures.md" }), "sales figures", "a room with a running temp: its own folder");
+	refusedAsOwnTemp(await inTempRoom("read", { path: picture }), picture, "a read in the room's own temp");
+	refusedAsOwnTemp(await inTempRoom("ls", { path: ownTemp }), ownTemp, "listing the room's own temp");
+	const intoTemp = path.join(ownTemp, "result.png");
+	refusedAsOwnTemp(await inTempRoom("write", { path: intoTemp, content: "x\n" }), intoTemp, "a write in the room's own temp");
+	assert(!fs.existsSync(intoTemp), "the refused write left no file in the room's own temp");
+	refusedAsOwnTemp(await inTempRoom("edit", { path: picture, edits: [{ oldText: "not really", newText: "really" }] }), picture, "an edit in the room's own temp");
+	assert(fs.readFileSync(picture, "utf8") === "not really a picture\n", "the refused edit left the file as it was");
+	const ownTempCard = stepOutcome(ownTempRefusal(picture), { name: "read", args: { path: picture } });
+	if (ownTempCard?.line !== "Blocked: a secret file or the app's own data" || ownTempCard.refused !== true) tempRowsFailed.push(`the step card for the room's own temp must read as today's closed path, got ${JSON.stringify(ownTempCard)}`);
+	assert(tempRowsFailed.length === 0, tempRowsFailed.join("\n"));
+	refusedAs(await inTempRoom("read", { path: path.join(otherTemp, "poster.png") }), CLOSED, "a read in another room's temp");
+	refusedAs(await inTempRoom("write", { path: path.join(otherTemp, "result.png"), content: "x\n" }), CLOSED, "a write in another room's temp");
+	refusedAs(await inTempRoom("read", { path: path.join(boxOf(tempRoom), "caches", "pip", "note.txt") }), CLOSED, "the room's caches, outside its temp");
+	refusedAs(await inTempRoom("read", { path: path.join(sales, ".env") }), CLOSED, "a key in the room's folder, with a running temp");
+	// With no answer running there is no temp of its own: the same path reads as the app's data.
+	refusedAs(await toolsFor(tempRoom, "localFiles")("read", { path: picture }), CLOSED, "the room's temp with no answer running");
 
 	console.log("room-files-fence-smoke: OK");
 } finally {

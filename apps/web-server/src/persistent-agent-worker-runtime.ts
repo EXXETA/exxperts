@@ -7,6 +7,7 @@ import {
 } from "@exxeta/exxperts-runtime";
 import { type CallKind, callCacheRetention } from "./memory-call-cache.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
+import { endRoomSession } from "./room-session-end.js";
 import { serverHooks } from "./server-hooks.js";
 import { modelCallMetadata, type UsageKind } from "./usage-log.js";
 
@@ -350,11 +351,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 			throw new IsolatedPersistentAgentWorkerTurnError(workerLabel, "aborted", `it sent nothing for ${seconds} seconds and was stopped`, { reason: "stalled", usage });
 		}
 	} finally {
-		try {
-			created.session.dispose();
-		} catch {
-			// Best-effort cleanup only.
-		}
+		await endRoomSession(created.session);
 	}
 
 	const failure = isolatedPersistentAgentWorkerFailure({ workerLabel, text, stopReason, errorMessage, errorStatus, errorType, emptyTextError: input.emptyTextError });

@@ -119,6 +119,89 @@ try {
 	// Writes are atomic (tmp + rename): no temp file may linger after a write.
 	assert(!fs.readdirSync(path.join(root, "room-hold-a", "runtime")).some((entry) => entry.endsWith(".tmp")), "settings writes must not leave temp files behind");
 
+	// A room the sweep can't write: every room keeps the grant and its yeses,
+	// the ones swept before it and after it alike, so nothing is half removed.
+	// A folder's refusal can be forced only off Windows and not as root.
+	const canForceFsRefusal = process.platform !== "win32" && process.getuid?.() !== 0;
+	if (canForceFsRefusal) {
+		const yes = { linear: [{ tool: "list_issues", addressPin: "a".repeat(64) }] };
+		seedRoomDir("room-locked");
+		seedRoomDir("room-z-after");
+		writePersistentRoomMcpSettings("room-hold-a", ["linear"], {}, new Date(), yes);
+		writePersistentRoomMcpSettings("room-locked", ["linear"]);
+		writePersistentRoomMcpSettings("room-z-after", ["figma", "linear"], {}, new Date(), yes);
+		const lockedRuntime = path.join(root, "room-locked", "runtime");
+		fs.chmodSync(lockedRuntime, 0o500);
+		let refused;
+		try {
+			refused = revokeMcpConnectorFromAllRooms("linear");
+		} finally {
+			fs.chmodSync(lockedRuntime, 0o700);
+		}
+		assert(refused.failures.map((failure) => failure.agentId).join(",") === "room-locked", `the room that can't be written is named, got ${JSON.stringify(refused.failures)}`);
+		assert(refused.revokedFrom.length === 0, `a refused sweep takes the grant from no room, got ${refused.revokedFrom.join(",")}`);
+		for (const [room, grants, yeses] of [["room-clean", "linear", 0], ["room-hold-a", "linear", 1], ["room-locked", "linear", 0], ["room-z-after", "figma,linear", 1]] as const) {
+			const kept = readPersistentRoomMcpSettings(room);
+			assert(kept.grantedConnectors.join(",") === grants, `${room} keeps its grants, got ${kept.grantedConnectors.join(",")}`);
+			assert((kept.allowedTools.linear ?? []).length === yeses, `${room} keeps its yeses, got ${JSON.stringify(kept.allowedTools)}`);
+		}
+		// Once the room can be written, the same sweep finishes everywhere.
+		const finished = revokeMcpConnectorFromAllRooms("linear");
+		assert(finished.failures.length === 0 && finished.revokedFrom.sort().join(",") === "room-clean,room-hold-a,room-locked,room-z-after", `the retry takes it from every room, got ${JSON.stringify(finished)}`);
+		assert(readPersistentRoomMcpSettings("room-z-after").grantedConnectors.join(",") === "figma" && !Object.hasOwn(readPersistentRoomMcpSettings("room-z-after").allowedTools, "linear"), "and its yeses with it");
+
+		// A room whose file can't be read, or whose folder can't be, stops the
+		// sweep: its grant can't be known. A room's own reading stays empty.
+		writePersistentRoomMcpSettings("room-hold-b", ["notion"]);
+		writePersistentRoomMcpSettings("room-locked", ["notion"]);
+		for (const [what, locked, mode] of [["file", persistentRoomMcpSettingsPath("room-locked"), 0o600], ["folder", path.join(root, "room-locked"), 0o700]] as const) {
+			fs.chmodSync(locked, 0o000);
+			let unread;
+			try {
+				unread = revokeMcpConnectorFromAllRooms("notion");
+			} finally {
+				fs.chmodSync(locked, mode);
+			}
+			assert(unread.failures.map((failure) => failure.agentId).join(",") === "room-locked" && unread.revokedFrom.length === 0, `a room whose ${what} can't be read stops the sweep, got ${JSON.stringify(unread)}`);
+			assert(readPersistentRoomMcpSettings("room-hold-b").grantedConnectors.join(",") === "notion", `a ${what} that can't be read leaves every room its grant`);
+		}
+		const readable = revokeMcpConnectorFromAllRooms("notion");
+		assert(readable.failures.length === 0 && readable.revokedFrom.sort().join(",") === "room-hold-b,room-locked", `once it can be read the sweep takes it everywhere, got ${JSON.stringify(readable)}`);
+	}
+
+	// A room file that is there but not settings this version understands
+	// stops the sweep only where its text names the connector: a hand repair
+	// or another version could read that grant again. One that never names it
+	// can't give it back, so it neither stops the sweep nor is rewritten.
+	seedRoomDir("room-garbled");
+	const garbledPath = persistentRoomMcpSettingsPath("room-garbled");
+	fs.mkdirSync(path.dirname(garbledPath), { recursive: true });
+	writePersistentRoomMcpSettings("room-hold-b", ["notion"]);
+	for (const garbled of ['{"schemaVersion": 1, "grantedConnectors": ["notion", ', JSON.stringify({ schemaVersion: 2, connectors: { notion: {} } })]) {
+		fs.writeFileSync(garbledPath, garbled);
+		const stopped = revokeMcpConnectorFromAllRooms("notion");
+		assert(stopped.failures.map((failure) => failure.agentId).join(",") === "room-garbled" && stopped.revokedFrom.length === 0, `a file not understood that names it stops the sweep, got ${JSON.stringify(stopped)}`);
+		assert(readPersistentRoomMcpSettings("room-hold-b").grantedConnectors.join(",") === "notion", "the rooms swept before it keep their grant");
+		assert(fs.readFileSync(garbledPath, "utf-8") === garbled, "and the file stays as it was");
+		assert(readPersistentRoomMcpSettings("room-garbled").grantedConnectors.length === 0, "the room's own reading of it is still empty");
+	}
+	// Not named: no name at all, or only a longer name that holds it.
+	for (const garbled of ["not json", '{"schemaVersion": 1, "grantedConnectors": ["notion-wiki", ']) {
+		writePersistentRoomMcpSettings("room-hold-b", ["notion"]);
+		fs.writeFileSync(garbledPath, garbled);
+		const passed = revokeMcpConnectorFromAllRooms("notion");
+		assert(passed.failures.length === 0 && passed.revokedFrom.join(",") === "room-hold-b", `a file not understood that never names it doesn't stop the sweep, got ${JSON.stringify(passed)} for ${garbled}`);
+		assert(fs.readFileSync(garbledPath, "utf-8") === garbled, "the sweep leaves a file it can't understand as it was");
+	}
+	fs.rmSync(path.join(root, "room-garbled"), { recursive: true, force: true });
+
+	// A delete that fails after the sweep puts every swept room's file back as it was, its yeses included.
+	writePersistentRoomMcpSettings("room-hold-b", ["figma", "notion"], {}, new Date("2026-11-19T01:00:00.000Z"), { notion: [{ tool: "search", addressPin: "b".repeat(64) }] });
+	const heldText = fs.readFileSync(persistentRoomMcpSettingsPath("room-hold-b"), "utf-8");
+	const swept = revokeMcpConnectorFromAllRooms("notion");
+	assert(swept.revokedFrom.join(",") === "room-hold-b" && readPersistentRoomMcpSettings("room-hold-b").grantedConnectors.join(",") === "figma", `the sweep takes it first, got ${JSON.stringify(swept)}`);
+	assert(swept.undo().length === 0 && fs.readFileSync(persistentRoomMcpSettingsPath("room-hold-b"), "utf-8") === heldText, "undo puts the room's file back exactly");
+
 	// Update-day migration: rooms WITHOUT a settings file get the full current
 	// list once; rooms with a file keep it; the marker makes it one-time. The
 	// full list and the marker are persistent-room-mcp-scope-smoke's.

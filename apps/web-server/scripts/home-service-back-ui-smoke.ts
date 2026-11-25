@@ -3,7 +3,7 @@
 // strip, never the browser's "Failed to fetch", and the strip clears once the
 // page reconnects after the server's restart. Archived rooms that could not be loaded say so, and are asked
 // for again on the reconnect. That second
-// ask keeps what the section was saying ("… is back on Home."), as a restore
+// ask keeps what the section was saying ("… is back in Rooms."), as a restore
 // and an outage often come together.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";

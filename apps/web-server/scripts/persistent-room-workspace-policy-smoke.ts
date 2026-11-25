@@ -2,10 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { getAgentDir } from "@exxeta/exxperts-runtime";
+
+import { agentFolderPath } from "../src/agent-folder.js";
+
 const {
 	createPersistentRoomCapabilityPolicy,
 	isFullWorkspacePath,
 	createPersistentRoomDefaultCapabilityPolicy,
+	defaultPersistentRoomForbiddenRoots,
 	deletePersistentRoomCapabilityPolicy,
 	deletePersistentRoomDefaultCapabilityPolicy,
 	persistentRoomCapabilityPolicyView,
@@ -264,6 +269,69 @@ try {
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: path.join(homeRoot, ".exxperts") }), "forbidden_root", "the whole state tree");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: siblingProfileRoot }), "forbidden_root", "another profile's tree");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: homeRoot }), "ancestor_of_forbidden_root", "a folder holding the whole state family");
+	// A developer setting can move the agent folder (the sign-in file, the
+	// connector settings, the library) out of every state tree: it stays the
+	// app's data, with the same sentence, and a folder beside it stays the person's.
+	const refusal = (root: string): string => {
+		try {
+			createPersistentRoomCapabilityPolicy({ ...baseInput, root });
+		} catch (error) {
+			return error instanceof PersistentRoomWorkspacePolicyError ? `${error.code}: ${error.message}` : String(error);
+		}
+		return "accepted";
+	};
+	const stateTreeIs = refusal(path.join(homeRoot, ".exxperts")).replace(/^[a-z_]+: /, "");
+	const stateTreeHeld = refusal(homeRoot).replace(/^[a-z_]+: /, "");
+	const movedAgentRoot = path.join(tmp, "code", "agent");
+	const besideMovedAgent = path.join(tmp, "code", "project");
+	for (const dir of [path.join(movedAgentRoot, "skills", "report"), besideMovedAgent]) fs.mkdirSync(dir, { recursive: true });
+	const ordinaryRoots = JSON.stringify(defaultPersistentRoomForbiddenRoots(baseInput));
+	process.env.EXXPERTS_CODING_AGENT_DIR = movedAgentRoot;
+	try {
+		for (const [root, expected, label] of [
+			[movedAgentRoot, `forbidden_root: ${stateTreeIs}`, "the moved agent folder"],
+			[path.join(movedAgentRoot, "skills", "report"), `under_forbidden_root: ${stateTreeIs}`, "a skill's folder in the moved library"],
+			[path.dirname(movedAgentRoot), `ancestor_of_forbidden_root: ${stateTreeHeld}`, "a folder holding the moved agent folder"],
+			[besideMovedAgent, "accepted", "a folder beside the moved agent folder"],
+		] as const) {
+			const got = refusal(root);
+			assert(got === expected, `${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
+		}
+		// A setting that names a link in the state tree leading out of it: the folder it leads to is the app's data.
+		const agentLink = path.join(homeRoot, ".exxperts", "agent-link");
+		// Junctions work on Windows without symlink privileges; "dir" everywhere else.
+		fs.symlinkSync(movedAgentRoot, agentLink, process.platform === "win32" ? "junction" : "dir");
+		process.env.EXXPERTS_CODING_AGENT_DIR = agentLink;
+		const throughLink = refusal(movedAgentRoot);
+		assert(throughLink === `forbidden_root: ${stateTreeIs}`, `the agent folder named through a link in the state tree: ${JSON.stringify(throughLink)}`);
+		assert(refusal(besideMovedAgent) === "accepted", "a folder beside the agent folder named through a link");
+		// The ordinary set-up, the agent folder inside a state tree, lists the same roots as with no setting.
+		process.env.EXXPERTS_CODING_AGENT_DIR = stateAgentRoot;
+		assert(JSON.stringify(defaultPersistentRoomForbiddenRoots(baseInput)) === ordinaryRoots, "an agent folder inside the state tree changed the forbidden roots");
+	} finally {
+		delete process.env.EXXPERTS_CODING_AGENT_DIR;
+	}
+	// The server's agent folder is the runtime's, for each way the settings name it.
+	const savedStateHome = process.env.EXXPERTS_STATE_HOME;
+	try {
+		for (const [agentDir, home, label] of [
+			[undefined, undefined, "no setting"],
+			[undefined, homeRoot, "a moved state tree"],
+			[movedAgentRoot, undefined, "an absolute path"],
+			["~", undefined, "the login home"],
+			["~/code/agent", homeRoot, "a path from the login home"],
+		] as const) {
+			if (agentDir === undefined) delete process.env.EXXPERTS_CODING_AGENT_DIR;
+			else process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
+			if (home === undefined) delete process.env.EXXPERTS_STATE_HOME;
+			else process.env.EXXPERTS_STATE_HOME = home;
+			assert(agentFolderPath() === getAgentDir(), `${label}: the server's agent folder ${agentFolderPath()} is not the runtime's ${getAgentDir()}`);
+		}
+	} finally {
+		delete process.env.EXXPERTS_CODING_AGENT_DIR;
+		if (savedStateHome === undefined) delete process.env.EXXPERTS_STATE_HOME;
+		else process.env.EXXPERTS_STATE_HOME = savedStateHome;
+	}
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: "Projects/demo" }), "root_not_absolute", "a relative path");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: '""' }), "missing_root", "a pair of quotes alone");
 	for (const [input, full] of [["C:\\Users\\you\\Projects", true], ["c:/Users/you", true], ["\\\\server\\share\\Projects", true], ["\\Projects", false], ["/Projects", false], ["C:Projects", false], ["Projects\\demo", false]] as const) {

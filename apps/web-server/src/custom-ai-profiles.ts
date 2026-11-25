@@ -3,7 +3,7 @@ import path from "node:path";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 import { PERSISTENT_AGENT_AI_PROFILES } from "./persistent-agent-ai-profiles.js";
 import type { PersistentAgentAiProfile } from "./persistent-agent-ai-profiles.js";
-import { OPENAI_COMPATIBLE_PROVIDER_ID, readOpenAiCompatibleGateways } from "./openai-compatible-gateways.js";
+import { type ModelsRunIn, OPENAI_COMPATIBLE_PROVIDER_ID, readOpenAiCompatibleGateways, storedModelsRunIn, withModelsRunIn } from "./openai-compatible-gateways.js";
 
 export const CUSTOM_AI_PROFILES_FILE = productAppStatePath("custom-ai-profiles.json");
 export const CUSTOM_AI_PROFILE_ID_PREFIX = "custom-";
@@ -48,6 +48,8 @@ export type CustomAiProfileEntry = {
 	roomModels: string[];
 	learnModel: string;
 	reviewMemoryModel: string;
+	/** Where the key's models run, as a shared server's admin states it; absent is Unknown. */
+	runsIn?: ModelsRunIn;
 };
 
 export type CustomAiProfilesReadResult = {
@@ -103,7 +105,8 @@ function parseEntry(raw: unknown, index: number, gatewayProviderIds: ReadonlySet
 	const reviewMemoryModel = nonEmptyString(raw.reviewMemoryModel);
 	if (!reviewMemoryModel) return { error: `profiles[${index}].reviewMemoryModel is required.` };
 	const label = nonEmptyString(raw.label) ?? providerId;
-	return { entry: { id, providerId, label, roomModels, learnModel, reviewMemoryModel } };
+	const runsIn = storedModelsRunIn(raw.runsIn);
+	return { entry: { id, providerId, label, roomModels, learnModel, reviewMemoryModel, ...(runsIn ? { runsIn } : {}) } };
 }
 
 export function customAiProfileFromEntry(entry: CustomAiProfileEntry): PersistentAgentAiProfile {
@@ -118,6 +121,7 @@ export function customAiProfileFromEntry(entry: CustomAiProfileEntry): Persisten
 			absorb: { provider: entry.providerId, model: entry.learnModel },
 			structuralReview: { provider: entry.providerId, model: entry.reviewMemoryModel },
 		},
+		...(entry.runsIn ? { runsIn: entry.runsIn } : {}),
 	};
 }
 
@@ -170,6 +174,8 @@ export type CustomAiProfileInput = {
 	roomModels: string[];
 	/** The provider's memory model: Memorize and Review both run on it, as a room's one Memory row does. */
 	learnModel: string;
+	/** Where its models run: absent keeps the saved entry's, null clears it. */
+	runsIn?: ModelsRunIn | null;
 };
 
 /**
@@ -195,7 +201,9 @@ export function writeCustomAiProfile(input: CustomAiProfileInput, filePath = CUS
 	if (roomModels.length === 0) throw new Error("at least one room model is required");
 	const learnModel = nonEmptyString(input.learnModel);
 	if (!learnModel) throw new Error("learnModel is required");
-	const entry: CustomAiProfileEntry = {
+	const saved = readCustomAiProfiles(filePath).entries;
+	const previous = saved.find((candidate) => candidate.providerId === providerId);
+	const entry: CustomAiProfileEntry = withModelsRunIn({
 		id: customAiProfileIdForProvider(providerId),
 		providerId,
 		label: nonEmptyString(input.label) ?? providerId,
@@ -203,8 +211,9 @@ export function writeCustomAiProfile(input: CustomAiProfileInput, filePath = CUS
 		learnModel,
 		// Review follows the memory pick; a file written before keeps what it holds.
 		reviewMemoryModel: learnModel,
-	};
-	const existing = readCustomAiProfiles(filePath).entries.filter((candidate) => candidate.providerId !== providerId);
+		...(previous?.runsIn ? { runsIn: previous.runsIn } : {}),
+	}, input.runsIn);
+	const existing = saved.filter((candidate) => candidate.providerId !== providerId);
 	existing.push(entry);
 	existing.sort((a, b) => a.id.localeCompare(b.id));
 	writeCustomAiProfilesFile(existing, filePath);

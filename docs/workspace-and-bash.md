@@ -6,7 +6,8 @@ and on Windows 11, and what that protection doesn't cover.
 
 ## What a room can reach
 
-A room's file tools stay in its folder and in the other folders you allow.
+A room's file tools stay in its folder and in the other folders you allow,
+unless its protection is off and it is on **Auto** (below).
 On a Mac, and on Windows 11 on an x64 PC, its commands do too, and they reach
 a website only after you say yes, unless you put the room on **Auto**, where
 they reach public websites without asking: the operating system's sandbox
@@ -26,8 +27,9 @@ The Folder pane has these rows, and each change is saved when you make it:
 - **Commands**: whether the room runs commands.
 - **Protection**: whether the room's commands run inside its protection,
   shown whenever the room has a folder. At the computer, where protection can
-  work, the row says "Keeps commands inside this room's folders.", with the
-  switch on or off.
+  work, the row says "Keeps commands inside this room's folders." with the
+  switch on, and "Turn on to keep commands inside this room's folders." with
+  it off.
 - **Also allowed**: other folders and sites this room can use. A folder you
   add can only be read until you choose **Allow changes**.
 
@@ -45,8 +47,12 @@ PDFs and Word documents; a scanned PDF with no text layer is called out
 instead of returning nothing. Write and Edit create and change files of any
 type.
 
-The file tools never open common secret and key files, such as `.env` files,
-keys, `.ssh` and cloud logins, and never open exxperts' own data.
+The file tools never open exxperts' own data, except to read the skills that
+are on in the room, and they don't open common secret and key files, such as
+`.env` files, keys, `.ssh` and cloud logins. In a room without protection on
+Auto they do open your key files, as its commands can; exxperts' own data and
+the connector settings file `~/.config/mcp/mcp.json` stay closed there too,
+and a `.mcp.json` file can be read but not changed.
 
 With **Can change files** off, the room and its protected commands can only
 read files, in its folder and in the other folders it may use. Where
@@ -65,11 +71,12 @@ the note in the [Quickstart](quickstart.md#4-give-the-room-a-workspace-optional)
 A new room with a folder, on a computer where protection works, starts with
 commands on, and runs them without asking, inside its protection. At the
 computer, its **Commands** row says: "Commands can open only files in this
-room's folders and reach only the sites you allow." In a protected room on
-Auto it says: "Commands can open only files in this room's folders and reach
-public websites without asking." While **Can change files** is on, they can
-change or delete the files the room can change, and nothing keeps a copy. Keep
-work you care about in git or a backup.
+room's folders and the folders of the skills that are on here, and reach only
+the sites you allow." In a protected room on Auto it says: "Commands can open
+only files in this room's folders and the folders of the skills that are on
+here, and reach public websites without asking." While **Can change files**
+is on, they can change or delete the files the room can change, and nothing
+keeps a copy. Keep work you care about in git or a backup.
 
 The chip under the message box (inside the box on a phone) shows the room's
 mode, and its menu says what each one does. A change counts from the next
@@ -88,8 +95,9 @@ this room's folders." Choosing Auto asks first: "Let this room reach public
 websites without asking?" with "Anything this room can read or remembers could
 be sent to a website, also while a scheduled task runs." Leaving Auto asks
 nothing. In a room without protection the menu has Ask ("Asks before each
-command.") and Auto ("Runs commands and reaches public websites without
-asking.") only, and Auto there asks first with "Run commands without asking?".
+command.") and Auto ("Runs commands, changes files, opens websites and uses
+connectors without asking.") only, and Auto there asks first with "Let this
+room work without asking?".
 
 On **Ask**, every command asks first: "Run this command?" shows the whole
 command and the folder it runs in (**Runs in**), with **Not now** and **Run
@@ -130,20 +138,23 @@ On a Mac it also can't:
   tools run from, such as `.vscode`, `.bashrc`, `.npmrc` and `.mcp.json`,
   anywhere in the room's folders. So a commit, a clone or `git init` must run
   outside the room (below).
+- Start LibreOffice, which must run outside the room (below).
 
 A protected command can read the computer's system folders and installed
-programs. It can also read the skills you approved for the room, and on a Mac
-your git settings files.
+programs. It can also read the skills you added that are on in the room, and
+on a Mac your git settings files.
 
 ## Another folder
 
 When a command needs a folder outside the room's, the room asks: "This room
-needs access to another folder." The question may show the folder, with
-**Allow this time**, **Allow for this room** and **Choose another folder**.
-Otherwise **Choose folder** opens the folder window, and the question then
-shows the folder you chose. **Allow this time** lasts while the room answers
-your message; **Allow for this room** puts the folder on the room's **Also
-allowed** list. You can remove it there.
+needs access to another folder." It shows the folder or file the room named,
+if it named one. Where that folder can be allowed with one click, it offers
+**Allow this time**, **Allow for this room** and **Choose another folder**;
+otherwise **Choose folder** opens the folder window, and the question then
+shows the folder you chose. For a file, allowing gives the room the whole
+folder that holds it, and the question says so. **Allow this time** lasts
+while the room answers your message; **Allow for this room** puts the folder
+on the room's **Also allowed** list. You can remove it there.
 
 ## Websites
 
@@ -197,14 +208,23 @@ a phone. While it is off:
   settings for other rooms. They aren't limited to the room's folders or its
   **Also allowed** list. At the computer, the **Commands** row says: "In this
   room, commands can reach and change any of your files, not just this
-  room's.";
-- the room's file tools and its web reader work as they do with protection
-  on;
+  room's.", and on **Auto**: "In this room, commands run without asking and
+  can reach and change any of your files.";
+- the room's web reader works as it does with protection on, and so do its
+  file tools until you choose **Auto** (below);
 - each command asks first, and Semi isn't offered. You can choose **Auto** on
-  the chip again, after a confirm ("Run commands without asking?"). On Auto
-  the room then runs commands and opens public websites without asking, also
-  after you leave. An answer that goes on without you stops after ten minutes
-  without progress, or after an hour.
+  the chip again, after a confirm: "Let this room work without asking?" with
+  "Protection is off. On Auto, this room can change or delete any of your
+  files, use its connectors and send anything it can read to a website,
+  without asking you." On Auto the room then asks you nothing, also after you
+  leave: it runs commands, opens public websites and uses its connectors'
+  tools, a tool set to Ask first included; only a tool set to Blocked doesn't
+  run. Its file tools read any file you can reach, key files such as `.env`
+  and `.ssh` included, and change it while **Can change files** is on, but
+  not in a folder set to **Can read**; exxperts' own data and the connector
+  settings file `~/.config/mcp/mcp.json` stay closed to them, and a
+  `.mcp.json` file can be read but not changed. An answer that goes on without
+  you stops after ten minutes without progress, or after an hour.
 
 Turning the **Protection** switch on again brings protection back at once, and
 with it the room's earlier mode, Semi or Auto included.
@@ -231,17 +251,25 @@ change or delete any of your files, not just this room's." or, for such a
 folder, "In this room, commands can reach, change or delete any of your files,
 not just this room's." While the room can change files, the **Commands** row
 says the same with "reach and change" in place of "reach, change or delete".
-Each command then asks first, unless you choose **Auto**, after its confirm.
+Each command then asks first, unless you choose **Auto**, after its confirm;
+on Auto the row says "On this computer, commands run without asking and can
+reach and change any of your files." or, for such a folder, the same with
+"In this room".
 
-On Windows, commands without protection run in Git Bash, so they need
-[Git for Windows](https://gitforwindows.org); see the
+On Windows, commands without protection run in Git Bash where
+[Git for Windows](https://gitforwindows.org) (or another bash) is installed,
+and otherwise in Windows PowerShell; WSL's bash doesn't count. See the
 [Quickstart's Windows notes](quickstart.md#windows-notes).
 
 ## On Windows
 
 Protected commands run in Windows PowerShell 5.1, with the same questions and
 the same site rules as on a Mac, and need no Git. A protected command gets no
-clipboard and can't type into other windows. Some things differ from a Mac:
+clipboard and can't type into other windows. If no Python is on your `PATH`, a
+protected command finds the 64-bit one you installed from python.org in its
+usual place: it can read and run what is in that Python's own folder, and
+change nothing in it unless the room may change that folder. Some things
+differ from a Mac:
 
 - The room's file tools are held to its folders by exxperts, not by Windows.
   They don't run while a command runs on the same folders.
@@ -253,10 +281,10 @@ clipboard and can't type into other windows. Some things differ from a Mac:
 - A command can look up any web address's name, and a lookup can carry data
   out.
 - A command can list the names in the folders above the room's folder, such
-  as your user folder, and above an approved skill's folder, such as your
+  as your user folder, and above the folder of a skill that is on in the room, such as your
   other skills, without opening the files there.
-- A command run outside the room runs in Git Bash, so it needs Git for
-  Windows.
+- A command run outside the room runs in Git Bash where Git for Windows (or
+  another bash) is installed, and otherwise in Windows PowerShell.
 
 ## If protection fails
 
@@ -289,9 +317,10 @@ protection didn't start. Restart your computer to bring them back."
   while you are away. On Semi a site or a folder that needs your yes is then
   refused; on Auto a folder is, and public websites are reached as when you
   are there. With protection off or not available, a room on Auto keeps
-  running commands after you leave and opens public websites without asking.
-  On Ask, no new command starts while nobody is there to say yes; one that has
-  started keeps running.
+  running commands after you leave, and opens public websites, reads and
+  changes your files and uses its connectors' tools without asking, as it
+  does while you are there. On Ask, no new command starts while nobody is
+  there to say yes; one that has started keeps running.
 - Scheduled tasks run no commands. In a room on Auto, a scheduled task's web
   reader opens public addresses without asking, as the room does when you are
   there.
@@ -326,8 +355,11 @@ protection didn't start. Restart your computer to bring them back."
 
 - A room you had set to run commands without asking is on **Auto** where
   protection works: its commands still run and reach public websites without
-  asking, now inside its protection. Where protection isn't available, it
-  keeps running commands without asking. A room set to ask first still asks.
+  asking, now inside its protection. Where protection isn't available, it is
+  on **Auto** too: it runs commands, opens public websites, reads and changes
+  your files and uses its connectors' tools without asking, as under
+  [Turning protection off](#turning-protection-off). A room set to ask first
+  still asks.
 - A room that was set to **Bounded workspace** has its commands off until you
   turn them on in **Room settings, Folder**.
 - The two access modes, **Full access** and **Bounded workspace**, are now

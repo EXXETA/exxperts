@@ -79,6 +79,23 @@ const others: Array<[string, string]> = [
 	// A script of several lines: its first line, then "…".
 	["python3 - <<'PY'\nimport json\nprint(1)\nPY", "Ran `python3 - <<'PY' …`"],
 	["ls\npwd", "Ran `ls …`"],
+	// A program written in quotes is named without them, and a space inside them is the name's own.
+	["\"/home/a/skills/s-release-stamp/scripts/stamp.sh\" \"Atlas 4.2\"", "Ran stamp.sh"],
+	["'/home/a/scripts/stamp.sh' 'Atlas 4.2'", "Ran stamp.sh"],
+	["\"/a/My tool.sh\" x", "Ran My tool.sh"],
+	["/a/My\\ tool.sh x", "Ran My tool.sh"],
+	["FOO=1 \"/a/stamp.sh\" x", "Ran stamp.sh"],
+	["FOO=\"a b\" \"/a/stamp.sh\" x", "Ran stamp.sh"],
+	["\"C:\\x y\\tool.exe\" a", "Ran tool.exe"],
+	["python3 \"scripts/x.py\"", "Ran python3"],
+	["python3 scripts/x.py", "Ran python3"],
+	["make CC=gcc build", "Ran make build"],
+	["& \"C:\\x y\\tool.exe\" a", "Ran `& \"C:\\x y\\tool.exe\" a`"],
+	["\"/a/stamp.sh\" x | head", "Ran `\"/a/stamp.sh\" x | head`"],
+	["\"/a/stamp.sh\" x\npwd", "Ran `\"/a/stamp.sh\" x …`"],
+	["echo \"abc", "Ran echo"],
+	["\"/a/stamp.sh Atlas/4.2", "Ran stamp.sh"],
+	["\"\" x", "Ran a command"],
 ];
 for (const [command, expected] of others) check(`${JSON.stringify(command)} reads "${expected}"`, said(command) === expected, said(command));
 {
@@ -98,14 +115,29 @@ check("a listing by command counts as listing a folder on the folded line", look
 	const steps = [tool("read", { path: "a.ts" }), tool("read", { path: "b.ts" }), tool("grep", { pattern: "limit" }), tool("web_search", { query: "node" }), tool("ls", { path: "src" })];
 	check("a folded card names three kinds and then how many more", look.foldedWords(steps) === "Read 2 files, searched once, searched the web and 1 more", look.foldedWords(steps));
 	const failed = [tool("read", { path: "a.ts" }), tool("bash", { command: "npm test" }, { status: "error", result: "exit 1" }), tool("bash", { command: "rm x" }, { status: "stopped" })];
-	check("what failed or did not run follows what was done", look.foldedWords(failed) === "Read a file · 1 failed, 1 not run", look.foldedWords(failed));
+	check("what failed or was stopped follows what was done", look.foldedWords(failed) === "Read a file · 1 failed, 1 stopped", look.foldedWords(failed));
+	const stoppedStep = tool("bash", { command: "soffice --headless deck.pptx" }, { status: "stopped" });
+	const declinedStep = tool("bash", { command: "rm x" }, { status: "error", result: "The user declined this command. Do not run it or retry variants of it unless the user asks." });
+	const failedStep = tool("bash", { command: "npm test" }, { status: "error", result: "exit 1" });
+	const ranStep = tool("bash", { command: "make deck" });
+	for (const [name, steps, words] of [
+		["a stopped step beside commands that ran and failed says stopped", [ranStep, ranStep, failedStep, failedStep, failedStep, failedStep, stoppedStep], "Ran 2 commands · 4 failed, 1 stopped"],
+		["a declined step stays not run", [ranStep, declinedStep], "Ran a command · 1 not run"],
+		["failed, stopped, not run, in that order, whatever order the steps came in", [declinedStep, stoppedStep, failedStep, ranStep], "Ran a command · 1 failed, 1 stopped, 1 not run"],
+		["several stopped", [stoppedStep, stoppedStep], "2 steps stopped"],
+		["several declined", [declinedStep, declinedStep], "2 steps not run"],
+		["a stopped and a declined step, with nothing done and nothing failed", [declinedStep, stoppedStep], "1 step stopped, 1 not run"],
+		["a failed and a stopped step, with nothing done", [failedStep, stoppedStep], "1 failed, 1 stopped"],
+		["a failed and a declined step, with nothing done", [failedStep, declinedStep], "1 failed, 1 not run"],
+	] as [string, any[], string][]) check(name, look.foldedWords(steps) === words, look.foldedWords(steps));
 	const searchOnce = [tool("web_search", { query: "node lts release" })];
 	check("a card whose one step searched the web says what for, as its row does", look.foldedWords(searchOnce) === "Searched the web for node lts release", look.foldedWords(searchOnce));
 	const searchTwice = [tool("web_search", { query: "node lts" }), tool("web_search", { query: "node 24" })];
 	check("two searches still count", look.foldedWords(searchTwice) === "Searched the web 2 times", look.foldedWords(searchTwice));
 	const searchFailed = [tool("web_search", { query: "node lts" }, { status: "error", result: "search failed" })];
 	check("a search that failed says so, not what it looked for", look.foldedWords(searchFailed) === "1 failed", look.foldedWords(searchFailed));
-	check("a card whose only step did not run says so", look.foldedWords([tool("bash", { command: "rm x" }, { status: "stopped" })]) === "1 step not run", look.foldedWords([tool("bash", { command: "rm x" }, { status: "stopped" })]));
+	check("a card whose only step was stopped says so", look.foldedWords([stoppedStep]) === "1 step stopped", look.foldedWords([stoppedStep]));
+	check("a card whose only step was declined says it did not run", look.foldedWords([declinedStep]) === "1 step not run", look.foldedWords([declinedStep]));
 	const asked = { kind: "approval", id: "q1", requestId: "r1", uiKind: "confirm", title: "Run this command?", done: "No" };
 	check("a step its question was declined for did not run", look.stepState({ kind: "tool", id: "s1", name: "bash", args: { command: "rm x" }, status: "running" }, asked) === "denied");
 	check("a step still being written is writing", look.stepState({ kind: "tool", id: "s1", name: "bash", args: { command: "rm" }, status: "writing" }, undefined) === "writing");
@@ -224,6 +256,38 @@ check("a listing by command counts as listing a folder on the folded line", look
 	check("a step the person declined is no failure: no failed mark", !head(turn(declined)).includes("wk-bad") && head(turn(declined)) === head(stretch(declined)), head(turn(declined)));
 	// Opening it is the person's click: thinking-open-smoke opens one in the room.
 	check("folded, the turn's cards are not drawn", !turn(steps, true).includes("the cards"));
+}
+
+// --- On a shared server a file step names the path as the AI gave it: a plain name reads as on the desktop,
+// and a refused path shows what was asked. Last in this file, as the page then stays on a shared server.
+{
+	const step = (id: string, name: string, args: Record<string, unknown>, failed = false) => ({ kind: "tool", id, name, args, status: failed ? "error" : "done", result: failed ? "This room's files have no folders yet: use a plain name, for example notes-plan.md." : "x", startedAt: 10_000, endedAt: 10_500 });
+	const drawn = (items: Record<string, any>[]) => {
+		const error = console.error;
+		console.error = (...args: unknown[]) => { if (!String(args[0]).includes("useLayoutEffect does nothing on the server")) error(...args); };
+		try {
+			return renderToStaticMarkup(createElement(workCard.WorkStretch, { items, live: false, endTs: 12_100, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined })).replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
+		} finally {
+			console.error = error;
+		}
+	};
+	const refused = [step("w", "write", { path: "drafts/plan.md", content: "x" }, true)];
+	const plain = [step("w", "write", { path: "notes-plan.md", content: "x" })];
+	const desktopRefused = drawn(refused);
+	const desktopPlain = drawn(plain);
+	check("on the desktop a file step names the file alone", desktopRefused.includes("Couldn't write plan.md") && !desktopRefused.includes("drafts/plan.md") && desktopPlain.includes("Wrote notes-plan.md"), [desktopRefused, desktopPlain]);
+	const context: any = await import(new URL("../../web-ui/src/remote-client-context.ts", import.meta.url).href);
+	const previousFetch = globalThis.fetch;
+	globalThis.fetch = (async () => ({ ok: true, status: 200, headers: new Headers(), json: async () => ({ remote: true, capability: "full", sharedServer: true }) })) as unknown as typeof fetch;
+	try {
+		check("the page reads the server as shared", (await context.fetchRemoteClientContext()).sharedServer === true);
+	} finally {
+		globalThis.fetch = previousFetch;
+	}
+	const sharedRefused = drawn(refused);
+	const sharedPlain = drawn(plain);
+	check("on a shared server a refused file step names the path as asked", sharedRefused.includes("Couldn't write drafts/plan.md"), sharedRefused);
+	check("on a shared server a file step with a plain name reads as on the desktop", sharedPlain === desktopPlain, [sharedPlain, desktopPlain]);
 }
 
 if (failures > 0) {

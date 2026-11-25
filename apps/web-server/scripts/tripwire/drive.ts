@@ -65,6 +65,8 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 	const roomPath = (room: string, rest = "") => `/api/persistent-agents/${encodeURIComponent(room)}${rest}`;
 	const makeRoom = async (name: string) => String((await must("POST", "/api/persistent-agents", { displayName: name, userName: "Synthetic User", preferredUserAddress: "Synthetic User" })).agent.id);
 	const setFolder = (room: string, root: string, bashEnabled = true) => must("PUT", roomPath(room, "/workspace-default"), { root, displayLabel: path.basename(root), workspaceAccessMode: "localFiles", bashEnabled });
+	// Given in the protection the room's chip would have read, which the server requires.
+	const setAuto = async (room: string, autoApprove: boolean) => must("PUT", roomPath(room, "/bash-settings"), { autoApprove, protection: (await must("GET", roomPath(room, "/bash-settings"))).protection });
 
 	await step("the rooms: a live and a background room with an Also allowed folder, and a nested child room", async () => {
 		rooms.live = await makeRoom("Live Room");
@@ -74,8 +76,7 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 		await setFolder(rooms.live, at.live);
 		await setFolder(rooms.child, at.child);
 		await setFolder(rooms.background, at.background);
-		// Given in the protection the room's chip would have read, which the server requires.
-		for (const room of [rooms.live, rooms.child]) await must("PUT", roomPath(room, "/bash-settings"), { autoApprove: true, protection: (await must("GET", roomPath(room, "/bash-settings"))).protection });
+		for (const room of [rooms.live, rooms.child]) await setAuto(room, true);
 		// The Also allowed list is the room's own file, written as a person's yes to a box request writes it.
 		for (const room of [rooms.live, rooms.background]) {
 			const list = path.join(at.agentsRoot, room, "runtime", "also-allowed.json");
@@ -145,17 +146,25 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 
 	await step("the nested child room's bind, a file tool's read and write, and a command", async () => {
 		const window = await api.openWindow(rooms.child);
+		if (run !== "mac") {
+			// Windows mode has no protection, so on Auto this room asks nothing and its write never reads the git settings: on Ask first, where the write reads them.
+			await setAuto(rooms.child, false);
+			const asked = await window.turn([[call("write", { path: "asked.txt", content: "written on Ask" })]]);
+			assert(fs.readFileSync(path.join(at.child, "asked.txt"), "utf8") === "written on Ask", `the write in the child room on Ask, beside its own git settings: ${asked[0]}`);
+			await setAuto(rooms.child, true);
+		}
 		const results = await window.turn([[call("read", { path: "notes.txt" })], [call("write", { path: "written.txt", content: "written child" })], [call("bash", { command: "ls" })]]);
 		assert(fs.readFileSync(path.join(at.child, "written.txt"), "utf8") === "written child", `the write in the child room, beside its own git settings: ${results[1]}`);
 		window.close();
 	});
 
-	await step("the room's asks: commands turned on by a card, a folder chosen in the computer's window, the same card with access change for a folder it can only read, and each undone", async () => {
+	await step("the room's asks: commands turned on by a card, a folder chosen in the computer's window, the same card with access change for a folder it can only read, without protection the same room on Auto asking nothing, and each undone", async () => {
 		const room = (rooms.asks = await makeRoom("Asks Room"));
 		// A room made before its first folder came with commands on: commands off, and never switched off, so the room may ask for them.
 		fs.rmSync(path.join(at.agentsRoot, room, "runtime", "commands-start-on.json"), { force: true });
 		await setFolder(room, at.asks, false);
-		await must("PUT", roomPath(room, "/bash-settings"), { autoApprove: true, protection: (await must("GET", roomPath(room, "/bash-settings"))).protection });
+		// Windows mode here has no protection, and a room without it on Auto asks nothing: so there the cards are driven on Ask, and Auto after them.
+		if (run === "mac") await setAuto(room, true);
 		const list = path.join(at.agentsRoot, room, "runtime", "also-allowed.json");
 		fs.writeFileSync(list, `${JSON.stringify({ folders: [{ path: at.readOnly, access: "read" }], sites: [] })}\n`, { mode: 0o600 });
 		const folderWindow = standInFolderWindow(at.picked, at.readOnly);
@@ -174,6 +183,22 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 			assert(!results[0]?.includes("needle here") && results[2]?.includes("needle here"), `the command before and after the commands card: ${JSON.stringify(results.slice(0, 3))}`);
 			assert(results[3]?.includes(at.picked), `the folder card's pick: ${results[3]}`);
 			assert(fs.existsSync(path.join(at.picked, "picked.txt")) && results[5]?.includes("can only read") && folderWindow.opened() === 2 && fs.existsSync(path.join(at.readOnly, "changed.txt")), `the writes in the picked folder, and in the one it could only read before and after its card: ${JSON.stringify(results.slice(4))}`);
+			if (run !== "mac") {
+				// Protection off and Auto: the folder ask opens no card, a write in the folder the card gave the room lands, and a folder it can only read stays closed.
+				// The card above let the room change the folder it could only read: the person sets it back to Can read first.
+				const reading = await must("POST", roomPath(room, "/also-allowed/access"), { path: at.readOnly, access: "read" });
+				assert((reading.list?.folders ?? []).some((entry: any) => entry.path === at.readOnly && entry.access === "read"), `Only allow reading on the folder the card let it change: ${JSON.stringify(reading.list)}`);
+				await setAuto(room, true);
+				const cards = () => window.frames.filter((frame) => frame.type === "ui_request" && frame.kind === "folder").length;
+				const cardsBefore = cards();
+				const unasked = await window.turn([
+					[call("ask_for_folder", { access: "change", reason: "To keep more notes in another folder." })],
+					[call("write", { path: path.join(at.picked, "unasked.txt"), content: "unasked" })],
+					[call("write", { path: path.join(at.readOnly, "unasked.txt"), content: "unasked" })],
+				]);
+				assert(unasked[0]?.startsWith("Nothing needs the person's approval here") && cards() === cardsBefore && folderWindow.opened() === 2, `the folder ask with protection off on Auto: ${unasked[0]}`);
+				assert(fs.readFileSync(path.join(at.picked, "unasked.txt"), "utf8") === "unasked" && unasked[2]?.endsWith("Tell the person.") && !fs.existsSync(path.join(at.readOnly, "unasked.txt")), `the writes with protection off on Auto: ${JSON.stringify(unasked.slice(1))}`);
+			}
 			const answered = (type: string, label: string) => waitUntil(() => window.frames.some((frame) => frame.type === type), label);
 			window.send({ type: "room_folder_remove", path: at.picked });
 			await answered("room_folder_removed", "Remove after the pick answered");
@@ -252,6 +277,10 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 		params.name = renamed.name;
 	});
 
+	const repoGit = (...args: string[]) => {
+		const done = spawnSync("git", ["-c", "user.name=Tripwire", "-c", "user.email=tripwire@example.invalid", ...args], { cwd: at.skillRepo, stdio: "ignore" });
+		assert(done.status === 0, `git ${args.join(" ")} in the test repository: ${done.status}`);
+	};
 	await step("the Skills page, a room's bind and read_skill, with the shared store holding linked skills, while a loop swaps a skill's folder", async () => {
 		const skill = (folder: string, name: string) => {
 			fs.mkdirSync(folder, { recursive: true });
@@ -267,10 +296,9 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 		// The test repository: the featured list's one source (EXXPERTS_SKILLS_FEATURED_SOURCES) and the import's.
 		fs.mkdirSync(path.join(at.skillRepo, "skills", "repo-skill"), { recursive: true });
 		fs.writeFileSync(path.join(at.skillRepo, "skills", "repo-skill", "SKILL.md"), "---\nname: repo-skill\ndescription: A repository skill.\n---\nFrom a repository.\n");
-		const git = (...args: string[]) => spawnSync("git", ["-c", "user.name=Tripwire", "-c", "user.email=tripwire@example.invalid", ...args], { cwd: at.skillRepo, stdio: "ignore" });
-		git("init", "-q");
-		git("add", ".");
-		git("commit", "-qm", "skills");
+		repoGit("init", "-q");
+		repoGit("add", ".");
+		repoGit("commit", "-qm", "skills");
 		const stop = swapLoop(path.join(at.skillStore, "plain-skill"), path.join(at.skillTargets, "swapped-in"));
 		try {
 			await must("GET", "/api/skills");
@@ -278,7 +306,6 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 			for (const name of ["plain-skill", "linked-skill", "linked-file-skill"]) {
 				await send("GET", `/api/skills/${name}`);
 				await send("PUT", roomPath(rooms.live, "/skill-settings"), { action: "enable", name });
-				await send("PUT", roomPath(rooms.live, "/skill-settings"), { action: "approve-execution", name });
 			}
 			await must("GET", roomPath(rooms.live, "/skill-settings"));
 			const window = await api.openWindow(rooms.live);
@@ -305,6 +332,31 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 		const found = scanned.skills?.[0]?.path ?? "skills/repo-skill";
 		await must("POST", "/api/skills/repo/candidate", { token: scanned.token, path: found });
 		await must("POST", "/api/skills/repo/import", { token: scanned.token, path: found });
+	});
+
+	await step("the imported skill checked for updates before and after its repository moved, and updated", async () => {
+		const checked = async () => (await must("POST", "/api/skills/updates/check", { names: ["repo-skill"] })).results?.[0];
+		const unmoved = await checked();
+		assert(unmoved?.state === "current", `the check before the repository moved: ${JSON.stringify(unmoved)}`);
+		const manifest = path.join(at.skillRepo, "skills", "repo-skill", "SKILL.md");
+		fs.writeFileSync(manifest, fs.readFileSync(manifest, "utf8").replace("From a repository.", "From a repository, changed."));
+		repoGit("commit", "-qam", "changed");
+		const moved = await checked();
+		assert(moved?.state === "available" && typeof moved.candidate?.id === "string", `the check after the repository moved: ${JSON.stringify(moved)}`);
+		await must("POST", "/api/skills/repo-skill/update", { candidate: moved.candidate.id, installedFilesSha256: moved.installedFilesSha256 });
+		assert(fs.readFileSync(path.join(at.agentDir, "skills", "repo-skill", "SKILL.md"), "utf8").includes("changed"), "the update swapped in the new version");
+	});
+
+	await step("the updated skill's Update automatically switched on and off, and the Skills page's notice closed", async () => {
+		const listed = async () => ((await must("GET", "/api/skills")) as any[]).find((skill) => skill.name === "repo-skill");
+		for (const on of [true, false]) {
+			await must("PUT", "/api/skills/repo-skill/auto-update", { on });
+			const shown = (await listed())?.repository?.autoUpdate;
+			assert(shown === on, `the library shows the switch ${on ? "on" : "off"}, got ${JSON.stringify(shown)}`);
+		}
+		const updatedAt = (await listed())?.update?.updated?.at;
+		assert(typeof updatedAt === "string", "the library names the update the notice would show");
+		await must("POST", "/api/skills/updates/seen", { notices: [{ name: "repo-skill", updatedAt }] });
 	});
 
 	await step("every knowledge route on a vault inside a test room, while a loop swaps a note's folder", async () => {
@@ -335,8 +387,10 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 	});
 
 	const connector = markedConnector();
+	const tool = "tripwire_tool";
+	connector.tools = [{ name: tool }];
 	await new Promise<void>((resolve) => connector.server.listen(0, "127.0.0.1", resolve));
-	await step("the Connectors page, a connector edit, a room's grant and bind, and Remove, with every import kind's file in the home", async () => {
+	await step("the Connectors page, a connector edit, a room's grant and bind, a tool's choice, Reset choices and Remove, with every import kind's file in the home", async () => {
 		// Each file names a connector of its own, so the room's list shows which imports were read.
 		const nameOf = (file: string) => `imported-${path.relative(at.home, file).replace(/[^A-Za-z0-9]+/g, "-")}`;
 		for (const file of at.connectorFiles) {
@@ -362,6 +416,13 @@ export async function drive(run: Run, at: Layout, api: Client, gateway: Gateway,
 		const window = await api.openWindow(rooms.live);
 		await window.turn([[call("mcp", { server: "tripwire-connector" })]]);
 		window.close();
+		// A tool's choice writes the choices file; Reset choices sets aside one that can't be read.
+		const choices = path.join(at.connectorDir, "mcp-tool-choices.json");
+		await must("PUT", "/api/mcp/servers/tripwire-connector/tools", { tools: { [tool]: "blocked" } });
+		assert(fs.readFileSync(choices, "utf8").includes(tool), `the choices file holds the tool's choice: ${choices}`);
+		fs.writeFileSync(choices, "not the choices\n");
+		await must("POST", "/api/mcp/tool-choices/reset", {});
+		assert(!fs.existsSync(choices) && fs.readdirSync(at.connectorDir).some((name) => name.startsWith("mcp-tool-choices.json.unreadable-")), "Reset choices set the unreadable file aside");
 		await must("DELETE", "/api/mcp/servers/tripwire-connector");
 	});
 	connector.server.close();

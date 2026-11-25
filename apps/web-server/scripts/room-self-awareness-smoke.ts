@@ -32,10 +32,12 @@ const COMMANDS_MAY_ASK = "- Commands: off. If a job truly needs a command, call 
 const COMMANDS_SWITCHED_OFF = "- Commands: off, because the person switched them off in Room settings. Don't ask for them: say what you couldn't do.";
 const COMMANDS_CANT_COME_ON = "- Commands: off. If a job needs one, say what you couldn't do; don't send them to a setting.";
 const BASH_ON_BOOT = "Run a command with the bash tool when a task needs it; each command asks the user first unless the room is on Semi or Auto.";
+/** Where a file the room makes lands, and when the panel is worth naming: never a claim that a folder file is in it. */
+const ATTACHMENTS_LINE = "A file you make in the room's folder stays there on the user's computer and is not in this room's Attachments panel, which shows only the room's own files. When you tell the user where a file is, name the folder's path. Mention the Attachments panel only when the user asks about it.";
 const KERNEL_LINES = [
 	"The user's data and your memory stay inside this exxperts installation.",
 	"- **Built in**: web search and page fetching; reading the room's Attachments (what the user added; you cannot add to them); searching the room's memory. Scheduled tasks run a prompt in this room on a schedule. You cannot create them: when asked, give the values to enter in Room settings → Scheduled tasks: Name, What should this room do?, and Runs (Daily, Weekly, One time or Advanced).",
-	"Room settings (the gear button; the room's name and Rename are at its top) has the panes Folder, Model, Memory, Instructions, Skills, Connectors, Scheduled tasks and Conversation; providers and models are in Settings → AI setup. Memory on screen: Remember keeps a conversation, Memorize turns remembered conversations into notes, Review tidies the notes, Forget starts fresh without saving. Use these on-screen names, never internal ones.",
+	"Room settings (the gear button; at its top, the pencil beside the room's name renames the room) has the panes Folder, Model, Memory, Instructions, Skills, Connectors, Scheduled tasks and Conversation; providers and models are in Settings → AI setup. Memory on screen: Remember keeps a conversation, Memorize turns remembered conversations into notes, Review tidies the notes, Forget starts fresh without saving. Use these on-screen names, never internal ones.",
 	"**exxperts documentation**: when the user asks about exxperts itself, use the links in the This installation section below. Without web access, describe capabilities at a general product level and point the user to the docs.",
 	"- When structure helps (flows, architectures, timelines), draw a small Mermaid diagram in a ```mermaid fence; the chat draws it, with Copy image. When the user wants a chart or diagram kept as a file, write it (.md, .svg or .html) into the folder if the room has one with write tools; otherwise say a folder is needed.",
 ];
@@ -98,7 +100,7 @@ try {
 		const { copy } = await firstTurn("Bounded Room", { mode: "bounded", bash: false });
 		const live = currentWorkspace(copy);
 		assert(!live.includes("- Access:") && live.includes("- Can change files: on\n") && live.includes(COMMANDS_SWITCHED_OFF) && !live.includes("ask_for_commands"), `the live part says commands are switched off, got:\n${live}`);
-		assert(live.includes("(that panel shows only the room's own files)") && !live.includes("task artifacts"), "the Attachments panel is the room's own files");
+		assert(live.includes(ATTACHMENTS_LINE) && live.split("Attachments panel").length === 3 && !live.includes(" NOT ") && !live.includes("task artifacts"), `the Attachments panel is the room's own files, said once in ordinary case, got:\n${live}`);
 		assert(!live.includes("No folder is set"), "a room with a folder is not told to set one");
 	});
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { productAppStateRoot, stateHome } from "../../../../pi-package/product-state-paths.js";
+import { agentFolderPath } from "../agent-folder.js";
 import { REPO_ROOT } from "../server-install-root.js";
 import { PERSISTENT_ROOM_DEFAULT_DENY_CREDENTIAL_PATHS, PERSISTENT_ROOM_HOME_CLOSED_PATHS } from "../persistent-room-workspace-policy.js";
 
@@ -84,7 +85,12 @@ function homePlaces(): string[] {
 	return homeFolders().flatMap((home) => listed.map((place) => path.join(home, place)));
 }
 
-/** The app's data, every data profile's among it. Listed by what is on disk now, so a profile made later counts from its first command. */
+/**
+ * The app's data, every data profile's among it, and the agent folder (the
+ * sign-in file, the connector settings, the library) where a developer setting
+ * moved it out of them. Listed by what is on disk now, so a profile made later
+ * counts from its first command.
+ */
 export function appDataPlaces(): string[] {
 	const places = [productAppStateRoot()];
 	for (const home of homeFolders()) {
@@ -95,7 +101,9 @@ export function appDataPlaces(): string[] {
 			// An unreadable home is closed as a whole below.
 		}
 	}
-	return [...new Set(places.map(realPathOf))];
+	const listed = [...new Set(places.map(realPathOf))];
+	const agentFolder = realPathOf(agentFolderPath());
+	return listed.some((place) => isInside(agentFolder, place)) ? listed : [...listed, agentFolder];
 }
 
 /** What a command in the box never reads, whatever else is open. The broad places come first; the box reopens the room inside them. `shared` names the computer's shared folders among them. */
@@ -112,6 +120,6 @@ export function isInside(child: string, parent: string): boolean {
 }
 
 /** What a yes can never open: the always-closed places, and the app's own files, which it starts outside the box. Commands may still read those. */
-export function neverOpened(): string[] {
-	return [...closedForReading().always, realPathOf(REPO_ROOT)];
+export function neverOpened(closed = closedForReading()): string[] {
+	return [...closed.always, realPathOf(REPO_ROOT)];
 }

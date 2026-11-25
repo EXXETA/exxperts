@@ -1,7 +1,7 @@
 import { AuthStorage } from "@exxeta/exxperts-runtime";
-import { apiKeyRefusal, saveProviderApiKey } from "./provider-auth.js";
+import { apiKeyRefusal, authFileNotSavedLine, saveProviderApiKey, ProviderAuthError } from "./provider-auth.js";
 import { OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
-import { type GatewayRoomModel, effectiveGatewayModel, type OpenAiCompatibleGateway, parseGatewayContextWindow, parseGatewayDetectedSnapshot, GATEWAY_DEFAULT_CONTEXT_WINDOW, writeOpenAiCompatibleGateway, findOpenAiCompatibleGateway, type GatewayModelDetected, readOpenAiCompatibleGateways, mintGatewayProviderId, GatewayStoreUnreadableError, deleteOpenAiCompatibleGateway, startGatewayProviderId, START_GATEWAY_REFUSAL } from "./openai-compatible-gateways.js";
+import { type GatewayRoomModel, effectiveGatewayModel, type OpenAiCompatibleGateway, parseGatewayContextWindow, parseGatewayDetectedSnapshot, GATEWAY_DEFAULT_CONTEXT_WINDOW, writeOpenAiCompatibleGateway, findOpenAiCompatibleGateway, type GatewayModelDetected, readOpenAiCompatibleGateways, mintGatewayProviderId, GatewayStoreUnreadableError, deleteOpenAiCompatibleGateway, startGatewayProviderId, START_GATEWAY_REFUSAL, savedModelsRunIn, withModelsRunIn, MODELS_RUN_IN_REFUSAL } from "./openai-compatible-gateways.js";
 import { readGatewayProviderBaseUrl, writeGatewayProviderEntry, removeGatewayProviderEntry, readCatalogProviderIds, ModelCatalogUnreadableError } from "./openai-compatible-gateway-catalog.js";
 import { forgetGatewayModelFind } from "./gateway-model-find.js";
 import { normalizeGatewayBaseUrl, discoverGatewayModels, isNonChatGatewayMode, GatewayDiscoveryError } from "./openai-compatible-gateway-detect.js";
@@ -9,7 +9,7 @@ import { readSavedPersistentAgentAiProfileId, clearSavedPersistentAgentAiProfile
 import { forgetKeyRefusal } from "./model-call-causes.js";
 import { providerDisplayNameCache } from "./ai-models.js";
 import { buildPersistentAgentAiProfileSelectionStatus } from "./ai-profile-models.js";
-import { serverHooks } from "./server-hooks.js";
+import { isSharedServer, serverHooks } from "./server-hooks.js";
 
 // Saved OpenAI-compatible gateways (LiteLLM, vLLM, OpenRouter, company
 // proxies), plural: each one is its own AI profile with its own base URL, key
@@ -67,6 +67,8 @@ function gatewayPayload(gateway: OpenAiCompatibleGateway) {
 		roomModels: gateway.roomModels.map(gatewayModelPayload),
 		maintenanceModel: gateway.maintenanceModel,
 		isDefault: gateway.id === OPENAI_COMPATIBLE_AI_PROFILE_ID,
+		// A shared server's: where its models run, and whether the install set it up, so AI setup offers no Remove.
+		...(isSharedServer() ? { runsIn: gateway.runsIn ?? "unknown", setByInstall: gateway.providerId === startGatewayProviderId() } : {}),
 	};
 }
 
@@ -198,6 +200,12 @@ function sameGatewayOrigin(a: string, b: string): boolean {
 	}
 }
 
+/** Whether a key is on file for the provider id. A store that could not be read may hold one, so unknown counts as yes. */
+function keyMayBeOnFile(providerId: string): boolean {
+	const auth = AuthStorage.create();
+	return auth.has(providerId) || auth.drainErrors().length > 0;
+}
+
 async function gatewayDiscoverHandler(req: any, reply: any, gatewayIdFromRoute = "") {
 	const body = (req.body ?? {}) as any;
 	const gatewayId = (gatewayIdFromRoute || String((req.params as any)?.gatewayId ?? body.gatewayId ?? "")).trim();
@@ -268,6 +276,9 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 	const key = typeof body.key === "string" ? body.key.trim() : "";
 	if (roomModels.length === 0) return reply.code(400).send({ error: "at least one room model id is required" });
 	if (submittedBaseUrl && !/^https?:\/\//.test(submittedBaseUrl)) return reply.code(400).send({ error: "baseUrl must start with http:// or https://" });
+	// Where its models run is stated only on a shared server; the desktop ignores the field.
+	const runsInSave = isSharedServer() ? savedModelsRunIn(body.runsIn) : { ok: true as const, runsIn: undefined };
+	if (!runsInSave.ok) return reply.code(400).send({ error: MODELS_RUN_IN_REFUSAL });
 
 	const gatewayId = gatewayIdFromRoute?.trim() || "";
 	const existing = gatewayId ? findOpenAiCompatibleGateway(gatewayId) : undefined;
@@ -279,21 +290,15 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 	// does not even show; the address the gateway already has is the answer.
 	const knownBaseUrl = existing ? existing.baseUrl || readGatewayProviderBaseUrl(existing.providerId) : "";
 	// The gateway the server's start provides keeps the start's key, label and
-	// address: a save that changes only its models passes, as approve-models
-	// sends the stored label and address with them.
-	if (existing && existing.providerId === startGatewayProviderId() && (key || (label && label !== existing.label) || (submittedBaseUrl && submittedBaseUrl !== knownBaseUrl))) {
+	// address: a save that changes only its models passes, with or without the
+	// stored label and address.
+	if (existing && existing.providerId === startGatewayProviderId() && (key || (label && label !== existing.label) || (submittedBaseUrl && submittedBaseUrl !== knownBaseUrl) || (runsInSave.runsIn !== undefined && (runsInSave.runsIn ?? undefined) !== existing.runsIn))) {
 		return reply.code(403).send({ error: START_GATEWAY_REFUSAL });
 	}
 	const baseUrl = submittedBaseUrl || knownBaseUrl;
 	if (!existing && !baseUrl) return reply.code(400).send({ error: "baseUrl is required" });
 	const addressRefusal = serverHooks().gatewayAddressRefusal?.(baseUrl);
 	if (addressRefusal) return reply.code(400).send({ error: addressRefusal });
-	// The stored key belongs to the server it was entered for, as in discovery:
-	// a save that moves the gateway to another server needs that server's key,
-	// or the next calls would carry the stored one there.
-	if (existing && !key && submittedBaseUrl && !sameGatewayOrigin(normalizeGatewayBaseUrl(submittedBaseUrl), normalizeGatewayBaseUrl(knownBaseUrl))) {
-		return reply.code(400).send({ error: "Enter the gateway API key to save a new address.", code: GATEWAY_KEY_FOR_NEW_ADDRESS });
-	}
 
 	// The maintenance model is usually also a room model, and then its own row's
 	// snapshot speaks for it in the catalog. When it is not, whatever detection
@@ -339,6 +344,18 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 	// a stale snapshot for a maintenance model this save just changed.
 	delete gateway.maintenanceModelDetected;
 	if (maintenanceModelDetected) gateway.maintenanceModelDetected = maintenanceModelDetected;
+	gateway = withModelsRunIn(gateway, runsInSave.runsIn);
+	// The stored key belongs to the server it was entered for, as in discovery:
+	// a save that moves the gateway to another server needs that server's key,
+	// or the next calls would carry the stored one there. A gateway made now has
+	// no server yet, so a key still on file under its provider id (a delete that
+	// could not drop it) belongs to some other one.
+	const leavesKeysServer = existing
+		? submittedBaseUrl && !sameGatewayOrigin(normalizeGatewayBaseUrl(submittedBaseUrl), normalizeGatewayBaseUrl(knownBaseUrl))
+		: keyMayBeOnFile(gateway.providerId);
+	if (!key && leavesKeysServer) {
+		return reply.code(400).send({ error: "Enter the gateway API key to save a new address.", code: GATEWAY_KEY_FOR_NEW_ADDRESS });
+	}
 	// Before any write: a key refused after the catalogue took a new address
 	// would leave the old key to be sent there.
 	const keyRefusal = key ? apiKeyRefusal(gateway.providerId, key) : null;
@@ -346,7 +363,9 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 	try {
 		saveGatewayEverywhere(gateway, key, !existing);
 	} catch (e) {
-		const status = e instanceof ModelCatalogUnreadableError || e instanceof GatewayStoreUnreadableError ? 500 : 400;
+		const notSaved = authFileNotSavedLine(gateway.providerId, e);
+		if (notSaved) reply.log.warn(...notSaved);
+		const status = e instanceof ModelCatalogUnreadableError || e instanceof GatewayStoreUnreadableError ? 500 : e instanceof ProviderAuthError ? e.statusCode : 400;
 		// The id travels with the failure so a client that retries edits the
 		// gateway it just made instead of minting a second one beside it.
 		return reply.code(status).send({ error: (e as Error).message, gateway: findOpenAiCompatibleGateway(gateway.id) ? gatewayPayload(gateway) : null });

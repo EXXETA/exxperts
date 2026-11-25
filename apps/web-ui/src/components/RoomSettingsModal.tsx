@@ -11,7 +11,9 @@ import { RoomConnectorsSection } from "./RoomConnectorsSection";
 import { RoomScheduledTasksSection } from "./RoomScheduledTasksSection";
 import { RoomDangerZone } from "./RoomDangerZone";
 import { confirmChoice } from "./confirm-dialog";
+import { PencilIcon } from "./icons";
 import { SettingsDialog } from "./settings-dialog";
+import { useSettingsLookNext } from "../settings-look";
 import { ROOM_STATE_BADGE } from "./launcher-room-card";
 import { shownRoomName, trimHumanText } from "../../../web-server/src/room-name";
 
@@ -55,7 +57,21 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, answering, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, onOpenConnectors, onOpenAiSetup, initialPane }: { status: PersistentAgentStatus; /** Whether the room is answering, from the open room's own turn; without it, the room's last read status says. */ answering?: boolean; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; onOpenConnectors?: () => void; /** Opens Settings, AI setup at a provider's row (a refused key's Replace key); without it the Model pane offers none. */ onOpenAiSetup?: (providerId: string) => void; initialPane?: SettingsPane }) {
+/** The room's name and its way to Rename: in the new look a pencil, and a click on the name does the same; the word in the old one. */
+function RoomTitle({ name, onEdit, children }: { name: string; onEdit: () => void; children?: ReactNode }) {
+	const lookNext = useSettingsLookNext();
+	return (
+		<div className="settings-dialog-title-row">
+			<h2 id="room-settings-title" className="settings-dialog-title" onClick={lookNext ? onEdit : undefined}>{name}</h2>
+			{lookNext
+				? <span className="settings-dialog-title-edit"><button className="rs-btn rs-btn-icon rs-btn-sm settings-dialog-title-action" type="button" aria-label="Rename room" title="Rename this room" onClick={onEdit}><PencilIcon size={14} /></button></span>
+				: <button className="rs-btn rs-btn-quiet rs-btn-sm settings-dialog-title-action" type="button" aria-label="Rename room" title="Rename this room" onClick={onEdit}>Rename</button>}
+			{children}
+		</div>
+	);
+}
+
+export function RoomSettingsModal({ status, answering, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, onOpenConnectors, onOpenAiSetup, initialPane }: { status: PersistentAgentStatus; /** Whether the room is answering, from the open room's own turn; without it, the room's last read status says. */ answering?: boolean; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; /** Opens Settings, Skills, at a skill's page when given its name. */ onOpenSkillsLibrary?: (skillName?: string) => void; onOpenConnectors?: () => void; /** Opens Settings, AI setup at a provider's row (a refused key's Replace key); without it the Model pane offers none. */ onOpenAiSetup?: (providerId: string) => void; initialPane?: SettingsPane }) {
 	const roomAnswering = answering ?? status.activeThread?.inFlight === true;
 	const instructionsDirtyRef = useRef(false);
 	const handleInstructionsDirtyChange = useCallback((dirty: boolean) => { instructionsDirtyRef.current = dirty; }, []);
@@ -73,7 +89,6 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 		window.addEventListener("beforeunload", askBeforeLeaving);
 		return () => window.removeEventListener("beforeunload", askBeforeLeaving);
 	}, []);
-	const [terminalOn, setTerminalOn] = useState<boolean | null>(null);
 	// The one question before closing over unsaved instructions. The Folder
 	// pane saves each change on its click, so it never has a draft. Save and
 	// close runs the draft's save; if it fails the dialog stays open on its
@@ -96,12 +111,6 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 	// Callers that open the modal at a particular pane (the Memory tab's link
 	// into this room's memory) say so once; the nav owns it from then on.
 	const [pane, setPane] = useState<SettingsPane>(initialPane ?? PANES[0].id);
-	// Skills the room paused because they changed: counted on the Skills entry
-	// until reviewed, so the way to the review is visible from any pane. The
-	// Skills pane is always mounted (only hidden), so it reports the count on
-	// its own load and again after each review.
-	const [pausedSkillCount, setPausedSkillCount] = useState(0);
-	const panes = PANES.map((entry) => (entry.id === "skills" && pausedSkillCount > 0 ? { ...entry, label: `Skills · ${pausedSkillCount} to review` } : entry));
 	// A room named only with invisible characters reads "Unnamed room", and Rename starts empty for it.
 	const currentName = shownRoomName(status.displayName) || status.id;
 	const nameToEdit = trimHumanText(status.displayName || status.id);
@@ -260,13 +269,11 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 			{nameEmptyShown && <p id={nameEmptyLineId} className="room-settings-meta room-settings-rename-hint" role="status">Type a name to save.</p>}
 		</>
 	) : (
-		<div className="settings-dialog-title-row">
-			<h2 id="room-settings-title" className="settings-dialog-title">{currentName}</h2>
-			<button className="rs-btn rs-btn-quiet rs-btn-sm settings-dialog-title-action" type="button" aria-label="Rename room" title="Rename this room" onClick={startNameEdit}>Rename</button>
+		<RoomTitle name={currentName} onEdit={startNameEdit}>
 			{status.status !== "ready" && (
 				<span className={`room-settings-status ${status.status}`}>{ROOM_STATE_BADGE[status.status]}</span>
 			)}
-		</div>
+		</RoomTitle>
 	);
 	return (
 		<SettingsDialog
@@ -277,7 +284,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 			title={title}
 			headNote={renameMessages}
 			navLabel="Room settings sections"
-			nav={[...panes, { id: "danger" as const, label: "Archive or delete", danger: true }]}
+			nav={[...PANES, { id: "danger" as const, label: "Archive or delete", danger: true }]}
 			active={pane}
 			onSelect={setPane}
 			onClose={requestClose}
@@ -285,7 +292,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 		>
 			{/* Panes stay mounted so each section fetches once and keeps its edit state across switches. */}
 			<section className="room-settings-section" hidden={pane !== "workspace"}>
-				<RoomWorkspaceSection status={status} answering={roomAnswering} onRefresh={onRefresh} onTerminalOnChange={setTerminalOn} />
+				<RoomWorkspaceSection status={status} answering={roomAnswering} onRefresh={onRefresh} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "model"}>
 				<RoomModelSection status={status} onRefresh={onRefresh} onOpenAiSetup={onOpenAiSetup ? (providerId) => closeThen(() => onOpenAiSetup(providerId)) : undefined} />
@@ -297,7 +304,7 @@ export function RoomSettingsModal({ status, answering, onClose, onArchive, onPur
 				<RoomInstructionsSection status={status} onDirtyChange={handleInstructionsDirtyChange} registerSave={registerInstructionsSave} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "skills"}>
-				<RoomSkillsSection status={status} terminalOn={terminalOn} onOpenSkillsLibrary={onOpenSkillsLibrary ? () => closeThen(onOpenSkillsLibrary) : undefined} onPausedCount={setPausedSkillCount} />
+				<RoomSkillsSection status={status} visible={pane === "skills"} onOpenSkillsLibrary={onOpenSkillsLibrary ? (skillName) => closeThen(() => onOpenSkillsLibrary(skillName)) : undefined} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "connectors"}>
 				<RoomConnectorsSection status={status} onOpenConnectors={onOpenConnectors ? () => closeThen(onOpenConnectors) : undefined} />

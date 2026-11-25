@@ -8,13 +8,16 @@
 // Offline: no provider, no network beyond 127.0.0.1. Each section can run
 // alone (ONLY=<name>).
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { CONNECTOR_REQUEST_LINES } from "../src/connector-form.js";
+import { CONNECTORS_EACH_TOOL_LINE } from "../src/room-box/card-text.js";
 
 // Its real path: a project's files are found from the working directory, which
 // comes back resolved, and a path shows as ~ only if it starts with HOME.
@@ -46,6 +49,31 @@ const component = (file: string) => import(new URL(`../../web-ui/src/components/
 const noop = () => {};
 /** The words a person reads, without the markup between them. */
 const text = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+const click = (dom: any, act: (fn: () => Promise<void> | void) => Promise<void>, found: Element) => act(async () => { found.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+const buttonNamed = (root: ParentNode, label: string) => [...root.querySelectorAll<HTMLButtonElement>("button")].find((found) => found.textContent === label);
+const jsonAnswer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+/** A room that has `name` on, for a Keep to leave as it was. */
+async function roomWith(name: string): Promise<string> {
+	const { writePersistentRoomMcpSettings } = await import("../src/persistent-room-mcp-settings.js");
+	const id = `keeps-${name}`;
+	fs.mkdirSync(path.join(root, id), { recursive: true });
+	fs.writeFileSync(path.join(root, id, "agent.json"), JSON.stringify({ agentId: id }));
+	writePersistentRoomMcpSettings(id, [name]);
+	return id;
+}
+
+/** After Keep: no delete left the page, the app still has the connector, and the room still has it on. */
+async function keptAfterKeep(name: string, asked: readonly string[], room: string): Promise<string[]> {
+	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
+	const { readPersistentRoomMcpSettings } = await import("../src/persistent-room-mcp-settings.js");
+	const problems: string[] = [];
+	const deletes = asked.filter((route) => route.startsWith("DELETE /api/mcp/servers/"));
+	if (deletes.length) problems.push(`Keep on ${name} sent ${deletes.join(", ")}`);
+	if (!(await getMcpConnectorsStatus()).servers.some((server: { name: string }) => server.name === name)) problems.push(`Keep on ${name} left it configured nowhere`);
+	if (!readPersistentRoomMcpSettings(room).grantedConnectors.includes(name)) problems.push(`Keep on ${name} took it from its room`);
+	return problems;
+}
 
 const ONLY = process.env.ONLY;
 async function section(name: string, body: () => Promise<void>): Promise<void> {
@@ -172,7 +200,7 @@ await section("test-status-advice", async () => {
 await section("imported-test-advice", async () => {
 	const { addMcpServer, removeMcpServer, testMcpServer } = await import("../src/mcp-admin.js");
 	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { CONNECTOR_WORDS, checkOf, connectorRowState, removeConsequence, rowLook, rowMenu, wentWrongLine } = await rowsModule();
+	const { CONNECTOR_WORDS, checkOf, connectorRowState, removeConsequence, rowLook, wentWrongLine } = await rowsModule();
 	const server = http.createServer((req, res) => {
 		req.resume();
 		const status = req.url?.startsWith("/key") ? 403 : 404;
@@ -202,42 +230,51 @@ await section("imported-test-advice", async () => {
 			assert(row, `${name} is on the page, got ${JSON.stringify([...rows.keys()])}`);
 			const result = await testMcpServer(name);
 			assert(!result.ok && !result.needsAuth, `${name}'s check fails, got ${JSON.stringify(result)}`);
-			const state = connectorRowState(row, checkOf(result), null);
+			const check = checkOf(result);
+			const state = connectorRowState(row, check, null);
 			const wrong = wentWrongLine(row, state, false);
 			const look = rowLook(state, false);
-			return { state: state.kind, status: look.status, line: wrong?.line ?? null, way: wrong?.button ?? null, menu: rowMenu(row, state, false), button: look.button };
+			return { state: state.kind, status: look.status, line: wrong?.line ?? null, way: wrong?.button ?? null, button: look.button, page: (await drawnPage(row, check)).offers };
 		};
 		const words = CONNECTOR_WORDS.wentWrong;
 		const { cantConnect, cantConnectNow, notAnswering } = CONNECTOR_WORDS.status;
-		const cases: Array<[string, { state: string; status: string; line: unknown; way: string | null; menu: string[]; button: string | null }]> = [
-			["from-cursor", { state: "cant-connect", status: cantConnect, line: words.imported("Cursor"), way: null, menu: [], button: null }],
-			["cursor-key", { state: "cant-connect", status: cantConnect, line: words.importedKey("Cursor"), way: null, menu: [], button: null }],
-			["cursor-tenant", { state: "cant-connect", status: cantConnect, line: words.refusedImported("Cursor"), way: null, menu: [], button: null }],
-			["cursor-local", { state: "cant-connect", status: cantConnect, line: words.program, way: "tryAgain", menu: [], button: null }],
+		// What its own page offers, in order: the fix beside What went wrong, Change address on its address,
+		// the state's own step, Check connection, and Remove where this page can remove it.
+		const { changeAddress, changeKey, checkConnection, remove, tryAgain } = CONNECTOR_WORDS.button;
+		const cases: Array<[string, { state: string; status: string; line: unknown; way: string | null; button: string | null; page: string[] }]> = [
+			["from-cursor", { state: "cant-connect", status: cantConnect, line: words.imported("Cursor"), way: null, button: null, page: [checkConnection] }],
+			["cursor-key", { state: "cant-connect", status: cantConnect, line: words.importedKey("Cursor"), way: null, button: null, page: [checkConnection] }],
+			["cursor-tenant", { state: "cant-connect", status: cantConnect, line: words.refusedImported("Cursor"), way: null, button: null, page: [checkConnection] }],
+			// A program that isn't on this computer says so by its name, with Try again for once it is installed.
+			["cursor-local", { state: "program-failed", status: CONNECTOR_WORDS.status.cantStart, line: words.programMissing("zq-no-such-program"), way: "tryAgain", button: null, page: [tryAgain, checkConnection] }],
 			// No status: nothing answering, with Try again for a network that comes back, and no promise that waiting helps.
-			["from-claude", { state: "cant-connect-now", status: notAnswering, line: words.noAnswer, way: null, menu: [], button: "tryAgain" }],
-			["own-closed", { state: "cant-connect-now", status: notAnswering, line: words.noAnswer, way: "changeAddress", menu: ["changeAddress", "remove"], button: "tryAgain" }],
-			["own-404", { state: "cant-connect", status: cantConnect, line: words.addressNotFound, way: "changeAddress", menu: ["changeAddress", "remove"], button: null }],
-			["own-tenant", { state: "cant-connect", status: cantConnect, line: words.refused, way: "remove", menu: ["changeAddress", "remove"], button: null }],
-			["own-key", { state: "cant-connect", status: cantConnect, line: words.keyRefused, way: "changeKey", menu: ["changeAddress", "remove"], button: null }],
-			// Two keys: Change key couldn't tell which one to replace, so the line says to add it again.
-			["own-two-keys", { state: "cant-connect", status: cantConnect, line: words.keyFixed, way: "remove", menu: ["changeAddress", "remove"], button: null }],
-			["shared-404", { state: "cant-connect", status: cantConnect, line: words.addressNotFoundElsewhere, way: null, menu: ["remove"], button: null }],
-			["shared-key", { state: "cant-connect", status: cantConnect, line: words.keyRefusedElsewhere, way: null, menu: ["remove"], button: null }],
-			["shared-tenant", { state: "cant-connect", status: cantConnect, line: words.refusedElsewhere, way: null, menu: ["remove"], button: null }],
-			// A directory connector its service turned down has no row button; its menu checks again.
-			["notion", { state: "cant-connect", status: cantConnect, line: words.turnedDown, way: null, menu: ["checkConnection", "remove"], button: null }],
+			["from-claude", { state: "cant-connect-now", status: notAnswering, line: words.noAnswer, way: null, button: "tryAgain", page: [tryAgain, checkConnection] }],
+			["own-closed", { state: "cant-connect-now", status: notAnswering, line: words.noAnswer, way: "changeAddress", button: "tryAgain", page: [changeAddress, changeKey, tryAgain, checkConnection, remove] }],
+			["own-404", { state: "cant-connect", status: cantConnect, line: words.addressNotFound, way: "changeAddress", button: null, page: [changeAddress, changeKey, checkConnection, remove] }],
+			// Added here with no key (a tenant header is none): its first key goes in through Change key.
+			["own-tenant", { state: "cant-connect", status: cantConnect, line: words.refusedKeyInPlace, way: "changeKey", button: null, page: [changeKey, changeAddress, checkConnection, remove] }],
+			["own-key", { state: "cant-connect", status: cantConnect, line: words.keyRefused, way: "changeKey", button: null, page: [changeKey, changeAddress, checkConnection, remove] }],
+			// Two keys: Change key couldn't tell which one to replace, so the line says to add it again, and leaves Remove to the page's Remove row.
+			["own-two-keys", { state: "cant-connect", status: cantConnect, line: words.keyFixed, way: "remove", button: null, page: [changeAddress, checkConnection, remove] }],
+			["shared-404", { state: "cant-connect", status: cantConnect, line: words.addressNotFoundElsewhere, way: null, button: null, page: [checkConnection, remove] }],
+			["shared-key", { state: "cant-connect", status: cantConnect, line: words.keyRefusedElsewhere, way: null, button: null, page: [checkConnection, remove] }],
+			["shared-tenant", { state: "cant-connect", status: cantConnect, line: words.refusedElsewhere, way: null, button: null, page: [checkConnection, remove] }],
+			// A directory connector its service turned down has no row button; its page checks again.
+			["notion", { state: "cant-connect", status: cantConnect, line: words.turnedDown, way: null, button: null, page: [checkConnection, remove] }],
 		];
 		assert(cantConnectNow !== notAnswering, "a busy service and one not answering read differently");
+		// Each case is told apart, so one run shows every one that fails.
+		const problems: string[] = [];
 		for (const [name, expected] of cases) {
 			const got = await failed(name);
-			assert(JSON.stringify(got) === JSON.stringify(expected), `${name}'s failed check should give ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
+			if (JSON.stringify(got) !== JSON.stringify(expected)) problems.push(`${name}'s failed check should give ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
 		}
+		assert(problems.length === 0, problems.join("\n"));
 		// Remove's question says what Remove does: the shared file's connector goes for other apps too, ours alone does not.
 		const consequence = (name: string) => removeConsequence(rows.get(name), []) ?? "";
 		assert(consequence("shared-404").includes(CONNECTOR_WORDS.removeSharedFile), `removing a connector in the shared file says other apps lose it, got ${JSON.stringify(consequence("shared-404"))}`);
 		assert(!consequence("own-404").includes(CONNECTOR_WORDS.removeSharedFile), `removing our own connector names no other app, got ${JSON.stringify(consequence("own-404"))}`);
-		// Remove agrees with the menu: it refuses the imported one and takes the shared one.
+		// Remove agrees with the page: it refuses the imported one and takes the shared one.
 		const removed = await removeMcpServer("shared-404");
 		assert(removed.removedFrom.length === 1, `Remove takes the shared one, got ${JSON.stringify(removed)}`);
 		let refused = "";
@@ -249,15 +286,14 @@ await section("imported-test-advice", async () => {
 	}
 });
 
-// Item 5: the page offers Remove on exactly the rows the server removes, and
-// names the tool on the others. Each row is the real status drawn by the real
-// row, and each is then really removed, so the two cannot drift apart.
+// Item 5: a connector's page offers Remove on exactly the connectors the server
+// removes, and names the tool on the others. Each is the real status drawn by
+// the real row and page, and each is then really removed, so the two cannot
+// drift apart.
 await section("imported-remove", async () => {
 	const { removeMcpServer } = await import("../src/mcp-admin.js");
 	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
-	const { CONNECTOR_WORDS, connectorRowState, rowMenu } = await rowsModule();
-	assert(typeof ConnectorRow === "function", "the page's connector row can be drawn");
+	const { CONNECTOR_WORDS } = await rowsModule();
 	const url = "http://127.0.0.1:9/mcp";
 	const writeJson = (file: string, value: unknown) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
 	const configPath = path.join(agentDir, "mcp.json");
@@ -269,10 +305,11 @@ await section("imported-remove", async () => {
 	writeJson(path.join(tempHome, ".config", "mcp", "mcp.json"), { mcpServers: { "only-shared": { url }, "cursor-and-shared": { url } } });
 	writeJson(configPath, { imports: ["cursor", "claude-code"], mcpServers: { "only-ours": { url }, "cursor-and-ours": { url } } });
 	const statusRows = async () => new Map((await getMcpConnectorsStatus()).servers.map((row: { name: string }) => [row.name, row]));
-	const draw = (server: any, { open = false, readOnly = false } = {}) => {
-		const html = renderToStaticMarkup(createElement(ConnectorRow, { server, check: null, open, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: noop, readOnly })) as string;
-		const tag = /<span class="connector-dir-kind"[^>]*>(.*?)<\/span>/.exec(html)?.[1];
-		return { words: text(html), tag: tag === undefined ? null : text(tag), offersRemove: rowMenu(server, connectorRowState(server, null, null), readOnly).includes("remove") };
+	// Its row in the list, and its own page.
+	const draw = async (server: any, { readOnly = false } = {}) => {
+		const row = await drawnRow(server, null, { readOnly });
+		const page = await drawnPage(server, null, { readOnly });
+		return { row: row.words, tag: row.tag, page: page.words, offersRemove: page.offers.includes(CONNECTOR_WORDS.button.remove) };
 	};
 	const rows = await statusRows();
 	const cases: Array<{ name: string; tool: string | null }> = [
@@ -286,18 +323,17 @@ await section("imported-remove", async () => {
 	];
 	for (const { name, tool } of cases) {
 		const server = rows.get(name);
-		const closed = draw(server);
-		const opened = draw(server, { open: true });
-		assert(closed.offersRemove === !tool, `${name} ${tool ? "offers no" : "keeps its"} Remove, got ${closed.words}`);
+		const drawn = await draw(server);
+		assert(drawn.offersRemove === !tool, `${name}'s page ${tool ? "offers no" : "keeps its"} Remove, got ${drawn.page}`);
 		if (tool) {
 			const sentence = CONNECTOR_WORDS.importedNote(tool);
-			assert(closed.tag === CONNECTOR_WORDS.tagImported(tool), `${name}'s closed row says where it came from, got ${closed.tag}`);
-			assert(!closed.words.includes(sentence), `${name}'s closed row leaves the sentence to the opened row, got ${closed.words}`);
-			assert(opened.words.includes(sentence), `${name}'s opened row says ${JSON.stringify(sentence)}, got ${opened.words}`);
-			assert(opened.words.includes(url) && !opened.words.includes("mcp.json"), `${name}'s opened row keeps the address and names no file, got ${opened.words}`);
+			assert(drawn.tag === CONNECTOR_WORDS.tagImported(tool), `${name}'s row says where it came from, got ${drawn.tag}`);
+			assert(!drawn.row.includes(sentence), `${name}'s row leaves the sentence to its page, got ${drawn.row}`);
+			assert(drawn.page.includes(sentence), `${name}'s page says ${JSON.stringify(sentence)}, got ${drawn.page}`);
+			assert(drawn.page.includes(url) && !drawn.page.includes("mcp.json"), `${name}'s page keeps the address and names no file, got ${drawn.page}`);
 		} else {
-			assert(closed.tag === CONNECTOR_WORDS.tagCustom, `${name} is the person's own, got ${closed.tag}`);
-			assert(!opened.words.includes("remove it there"), `${name} names no other tool, got ${opened.words}`);
+			assert(drawn.tag === CONNECTOR_WORDS.tagCustom, `${name} is the person's own, got ${drawn.tag}`);
+			assert(!drawn.page.includes("remove it there"), `${name} names no other tool, got ${drawn.page}`);
 		}
 		let refused = "";
 		const removed = await removeMcpServer(name).catch((error: Error) => { refused = error.message; });
@@ -307,28 +343,27 @@ await section("imported-remove", async () => {
 	for (const name of ["only-ours", "only-shared"]) assert(!after.has(name), `${name} is gone after Remove, got ${JSON.stringify([...after.keys()])}`);
 	// Our own copy gone, the row that stays is Cursor's: it stops offering Remove.
 	for (const name of ["cursor-and-ours", "cursor-and-shared", "cursor-and-project"]) {
-		const left = draw(after.get(name), { open: true });
-		assert(!left.offersRemove && left.words.includes(CONNECTOR_WORDS.importedNote("Cursor")), `${name}'s Cursor copy left behind offers no Remove, got ${left.words}`);
+		const left = await draw(after.get(name));
+		assert(!left.offersRemove && left.page.includes(CONNECTOR_WORDS.importedNote("Cursor")) && left.tag === CONNECTOR_WORDS.tagImported("Cursor"), `${name}'s Cursor copy left behind says where it came from and offers no Remove, got ${left.tag}: ${left.page}`);
 	}
 	// The adapter reads only tools the page has a name for, so a tool it learns later goes by its id.
 	const cursorRow = after.get("only-cursor") as any;
-	const unnamed = draw({ ...cursorRow, source: { ...cursorRow.source, importKind: "zed", importFile: "~/.zed/mcp.json" } }, { open: true });
-	assert(!unnamed.offersRemove && unnamed.tag === CONNECTOR_WORDS.tagImported("zed") && unnamed.words.includes(CONNECTOR_WORDS.importedNote("zed")), `a tool with no name on the page goes by its id, got ${unnamed.words}`);
+	const unnamed = await draw({ ...cursorRow, source: { ...cursorRow.source, importKind: "zed", importFile: "~/.zed/mcp.json" } });
+	assert(!unnamed.offersRemove && unnamed.tag === CONNECTOR_WORDS.tagImported("zed") && unnamed.page.includes(CONNECTOR_WORDS.importedNote("zed")), `a tool with no name on the page goes by its id, got ${unnamed.page}`);
 	// A window that cannot change connectors has no Remove to stand in for, but the row still says where it came from.
-	const readOnly = draw(cursorRow, { open: true, readOnly: true });
-	assert(!readOnly.offersRemove && !readOnly.words.includes(CONNECTOR_WORDS.importedNote("Cursor")), `a read-only row offers neither Remove nor the way to it, got ${readOnly.words}`);
+	const readOnly = await draw(cursorRow, { readOnly: true });
+	assert(!readOnly.offersRemove && !readOnly.page.includes(CONNECTOR_WORDS.importedNote("Cursor")), `a read-only page offers neither Remove nor the way to it, got ${readOnly.page}`);
 	assert(readOnly.tag === CONNECTOR_WORDS.tagImported("Cursor"), `a read-only row still says where it came from, got ${readOnly.tag}`);
 });
 
 // A sign-in that has expired with nothing to renew it needs the person:
 // Reconnect. One still valid, or one that renews itself, reads Connected with
-// no button. Each row is the real status of a sign-in the adapter's own store
-// holds, drawn by the real row.
+// no button, and Disconnect on its page. Each is the real status of
+// a sign-in the adapter's own store holds, drawn by the real row and page.
 await section("expired-login", async () => {
 	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
 	const authStore = await import("pi-mcp-adapter/mcp-auth.ts" as string);
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
-	const { CONNECTOR_WORDS, connectorRowState, rowMenu } = await rowsModule();
+	const { CONNECTOR_WORDS } = await rowsModule();
 	const url = "http://127.0.0.1:9/mcp";
 	const names = ["expired-login", "expired-renewable", "valid-login"];
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: Object.fromEntries(names.map((name) => [name, { url }])) }));
@@ -337,37 +372,35 @@ await section("expired-login", async () => {
 	authStore.updateTokens("expired-renewable", { accessToken: "synthetic-renewable", refreshToken: "synthetic-refresh", expiresAt: now - 3600 }, url);
 	authStore.updateTokens("valid-login", { accessToken: "synthetic-valid", expiresAt: now + 3600 }, url);
 	const rows = new Map((await getMcpConnectorsStatus()).servers.map((row: { name: string }) => [row.name, row]));
-	const drawn = (name: string) => {
+	const drawn = async (name: string) => {
 		const server = rows.get(name);
-		const html = renderToStaticMarkup(createElement(ConnectorRow, { server, check: null, open: false, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: noop, readOnly: false })) as string;
-		const status = /<span class="connector-item-status[^"]*">(.*?)<\/span>/.exec(html)?.[1];
-		const button = /<span class="connector-item-slot">.*?<span class="connector-slot-label">(.*?)<\/span>/.exec(html)?.[1] ?? null;
-		return { status, button, disconnect: rowMenu(server, connectorRowState(server, null, null), false).includes("disconnect") };
+		const { status, button } = await drawnRow(server, null);
+		return { status, button, disconnect: (await drawnPage(server, null)).offers.includes(CONNECTOR_WORDS.button.disconnect) };
 	};
 	const { status, button } = CONNECTOR_WORDS;
 	const cases: Array<[string, { status: string; button: string | null; disconnect: boolean }]> = [
-		["expired-login", { status: status.needsReconnecting, button: button.reconnect, disconnect: true }],
+		// Expired with nothing to renew it: its one step is Reconnect; that token opens nothing, so there is nothing to disconnect.
+		["expired-login", { status: status.needsReconnecting, button: button.reconnect, disconnect: false }],
 		["expired-renewable", { status: status.connected, button: null, disconnect: true }],
 		["valid-login", { status: status.connected, button: null, disconnect: true }],
 	];
 	for (const [name, expected] of cases) {
-		const got = drawn(name);
+		const got = await drawn(name);
 		assert(JSON.stringify(got) === JSON.stringify(expected), `${name}'s row should read ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
 	}
 });
 
 // A check that says the connector needs a sign-in again offers Reconnect; a
 // sign-in that fails reads "Sign-in didn't finish" with its reason and Try
-// again; once a sign-in succeeds the row reads Connected with no button. The
-// real row is clicked in a page; the check runs the real adapter against a
-// stand-in that refuses the stored token, and the sign-in is a stand-in that
-// stores fresh tokens, as a finished sign-in does.
-await section("login-after-test", async () => {
+// again, the service's own words on its page under Technical details; once a
+// sign-in succeeds the row reads Connected with no button. The pane runs as
+// it does on screen, in StrictMode: its own check runs the real adapter
+// against a stand-in that refuses the stored token, and the sign-in is a
+// stand-in that stores fresh tokens, as a finished sign-in does.
+await sectionInOwnProcess("login-after-test", async () => {
 	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { testMcpServer } = await import("../src/mcp-admin.js");
 	const authStore = await import("pi-mcp-adapter/mcp-auth.ts" as string);
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
-	const { CONNECTOR_WORDS, checkOf } = await rowsModule();
+	const { CONNECTOR_WORDS, lineText } = await rowsModule();
 	const provider = http.createServer((req, res) => {
 		req.resume();
 		req.on("end", () => { res.writeHead(401, { "Content-Type": "text/plain" }); res.end("stand-in refused the token"); });
@@ -379,79 +412,48 @@ await section("login-after-test", async () => {
 	const later = () => Math.floor(Date.now() / 1000) + 3600;
 	authStore.updateTokens(name, { accessToken: "synthetic-revoked", expiresAt: later() }, url);
 	let loginFails = true;
-	const { lineText } = await rowsModule();
+	let started = false;
 	const FAILED = lineText(CONNECTOR_WORDS.wentWrong.busy, false);
-	const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-	// The page and the adapter share this process's fetch: only the page's own calls are answered here.
-	const realFetch = globalThis.fetch;
-	const pageFetch = async (input: unknown, init?: { method?: string }) => {
-		if (typeof input !== "string" || !input.startsWith("/api/")) return realFetch(input as string, init as RequestInit);
-		const route = `${init?.method ?? "GET"} ${String(input)}`;
-		const base = `/api/mcp/servers/${name}`;
-		if (route === `POST ${base}/login`) {
-			if (!loginFails) authStore.updateTokens(name, { accessToken: "synthetic-fresh", expiresAt: later() }, url);
-			return json({ started: true });
-		}
-		if (route === `GET ${base}/login`) return json(loginFails ? { pending: false, cause: "busy", detail: "stand-in: sign-in refused" } : { pending: false });
-		throw new Error(`the row asked for ${route}, which this smoke does not answer`);
-	};
-	const { JSDOM } = await import("jsdom");
-	const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>');
-	const globals = globalThis as any;
-	const previous = { window: globals.window, document: globals.document, fetch: globals.fetch, act: globals.IS_REACT_ACT_ENVIRONMENT };
-	globals.window = dom.window;
-	globals.document = dom.window.document;
-	globals.fetch = pageFetch;
-	globals.IS_REACT_ACT_ENVIRONMENT = true;
-	const ownNavigator = !("navigator" in globalThis);
-	if (ownNavigator) globals.navigator = dom.window.navigator;
-	const { createRoot } = pageRequire("react-dom/client");
-	const { act } = pageRequire("react");
-	const container = dom.window.document.getElementById("root")!;
-	const root = createRoot(container);
 	try {
-		// The page keeps the newest check per row and draws the row again when it changes.
-		let check: unknown = null;
-		const draw = async () => {
-			const server = (await getMcpConnectorsStatus()).servers.find((row: { name: string }) => row.name === name);
-			assert(server, `${name} is on the page`);
-			// In StrictMode, as the page is mounted while it is developed: its effects run, are undone and run again.
-			await act(async () => root.render(createElement(React.StrictMode, null, createElement(ConnectorRow, { server, check, open: true, onToggle: noop, onCheck: (_: string, next: unknown) => { check = next; }, onChanged: draw, onNotice: noop, readOnly: false }))));
-		};
-		const status = () => container.querySelector(".connector-item-status")?.textContent;
-		const button = () => container.querySelector(".connector-item-slot .connector-slot-label")?.textContent ?? null;
-		const click = (label: string) => act(async () => {
-			const found = container.querySelector(".connector-item-slot button");
-			assert(found && button() === label, `the row offers ${label}, got ${JSON.stringify(button())}`);
-			found.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-		});
-		const waitFor = async (what: string, done: () => boolean) => {
-			for (let tries = 0; tries < 200 && !done(); tries++) await act(() => sleep(50));
-			assert(done(), `waited for ${what}, the row reads ${container.textContent}`);
-		};
-		await draw();
-		assert(status() === CONNECTOR_WORDS.status.connected && button() === null, `a row with a stored token reads Connected with no button, got ${JSON.stringify([status(), button()])}`);
-		// The page's background check: the real adapter against the refusing stand-in.
-		check = checkOf(await testMcpServer(name));
-		await draw();
-		assert(status() === CONNECTOR_WORDS.status.needsReconnecting && button() === CONNECTOR_WORDS.button.reconnect, `after a check that needs a sign-in, the row offers Reconnect, got ${JSON.stringify([status(), button()])}`);
-		await click(CONNECTOR_WORDS.button.reconnect);
-		await waitFor("the failed sign-in", () => status() === CONNECTOR_WORDS.status.signInFailed);
-		assert(button() === CONNECTOR_WORDS.button.tryAgain && container.textContent!.includes(FAILED), `a sign-in that failed offers Try again and says why, got ${container.textContent}`);
-		// The service's own words wait under Technical details, as a failed check's do.
-		const fold = container.querySelector(".connector-tech");
-		assert(fold?.querySelector("summary")?.textContent === CONNECTOR_WORDS.details.technicalDetails && fold?.querySelector("code")?.textContent === "stand-in: sign-in refused", `a failed sign-in keeps the service's words under Technical details, got ${container.textContent}`);
-		loginFails = false;
-		await click(CONNECTOR_WORDS.button.tryAgain);
-		await waitFor("the sign-in to finish", () => status() === CONNECTOR_WORDS.status.connected);
-		assert(button() === null, `after the sign-in succeeds the row has no button, got ${JSON.stringify(button())}`);
+		// Before any check, a stored token reads Connected with no button.
+		const before = await drawnRow((await getMcpConnectorsStatus()).servers.find((row: { name: string }) => row.name === name), null);
+		assert(before.status === CONNECTOR_WORDS.status.connected && before.button === null, `a row with a stored token reads Connected with no button, got ${JSON.stringify(before)}`);
+		const base = `/api/mcp/servers/${name}`;
+		await connectorsPage((route) => {
+			if (route === `POST ${base}/login`) {
+				started = true;
+				if (!loginFails) authStore.updateTokens(name, { accessToken: "synthetic-fresh", expiresAt: later() }, url);
+				return jsonAnswer({ started: true });
+			}
+			// Only a sign-in this smoke started has an answer; on opening, nothing waits.
+			if (route === `GET ${base}/login`) return jsonAnswer(!started ? { pending: false } : loginFails ? { pending: false, cause: "busy", detail: "stand-in: sign-in refused" } : { pending: false });
+			return null;
+		}, async ({ container, dom, act, waitFor, rowOf, openPage, back, pageButton }) => {
+			const status = () => rowOf(name)?.querySelector(".connector-item-status")?.textContent;
+			const button = () => rowOf(name)?.querySelector(".connector-item-slot .connector-slot-label")?.textContent ?? null;
+			const press = async (label: string) => {
+				const found = rowOf(name)?.querySelector(".connector-item-slot button");
+				assert(found && button() === label, `the row offers ${label}, got ${JSON.stringify(button())}`);
+				await click(dom, act, found);
+			};
+			// The pane's own check: the real adapter against the refusing stand-in.
+			await waitFor("the pane's own check", () => status() === CONNECTOR_WORDS.status.needsReconnecting);
+			assert(button() === CONNECTOR_WORDS.button.reconnect, `after a check that needs a sign-in, the row offers Reconnect, got ${JSON.stringify(button())}`);
+			await press(CONNECTOR_WORDS.button.reconnect);
+			await waitFor("the failed sign-in", () => status() === CONNECTOR_WORDS.status.signInFailed);
+			assert(button() === CONNECTOR_WORDS.button.tryAgain, `a sign-in that failed offers Try again, got ${JSON.stringify(button())}`);
+			// Its page says why in full, and keeps the service's own words under Technical details, as a failed check's are.
+			await openPage(name);
+			assert(container.querySelector(".connector-fact-wrong")?.textContent?.includes(FAILED), `a failed sign-in's page says why, got ${container.textContent}`);
+			const fold = container.querySelector(".connector-page .connector-tech");
+			assert(fold?.querySelector("summary")?.textContent === CONNECTOR_WORDS.details.technicalDetails && fold?.querySelector("code")?.textContent === "stand-in: sign-in refused", `a failed sign-in keeps the service's words under Technical details, got ${container.textContent}`);
+			loginFails = false;
+			await click(dom, act, pageButton(CONNECTOR_WORDS.button.tryAgain)!);
+			await waitFor("the sign-in to finish", () => pageButton(CONNECTOR_WORDS.button.disconnect) !== undefined);
+			await back();
+			assert(status() === CONNECTOR_WORDS.status.connected && button() === null, `after the sign-in succeeds the row reads Connected with no button, got ${JSON.stringify([status(), button()])}`);
+		}, { strict: true });
 	} finally {
-		await act(async () => root.unmount());
-		globals.window = previous.window;
-		globals.document = previous.document;
-		globals.fetch = previous.fetch;
-		globals.IS_REACT_ACT_ENVIRONMENT = previous.act;
-		if (ownNavigator) delete globals.navigator;
 		provider.closeAllConnections();
 		provider.close();
 	}
@@ -463,9 +465,12 @@ await section("login-after-test", async () => {
 // Connect, as does one that names its own sign-in app; a program never starts.
 // A sign-in the service refuses, or one that needs the service's own sign-in
 // app or has no sign-in, fails the same way twice: its row offers no Try
-// again. One the service was too busy for, that ran too long, or that failed
-// for a reason not known keeps it. The
-// server reads the adapter's own error into these causes.
+// again. One the person said no to, the service was too busy for, that ran
+// too long, or that failed for a reason not known keeps it. The server reads
+// the adapter's own error into these causes, a refusal by the standard's code
+// whether the service sent a description with it or not, and a sign-in whose
+// discovery answered with a web page as one with no sign-in. One with no
+// sign-in, whose check found it wants one, says only a key can help.
 await section("sign-in-causes", async () => {
 	const { loginFailureOf } = await import("../src/mcp-admin.js");
 	const { rowLook, wentWrongLine, technicalDetails, CONNECTOR_WORDS } = await rowsModule();
@@ -479,35 +484,106 @@ await section("sign-in-causes", async () => {
 		file: { ...web, editable: false, source: { kind: "import", importKind: "global MCP config", path: "~/.config/mcp/mcp.json" } },
 		app: { ...web, editable: false, source: { kind: "import", importKind: "cursor", importFile: "~/.cursor/mcp.json", path: "~/.exxperts/agent/mcp.json" } },
 	};
-	const cases: Array<[string, string, string, string | null, (place: "here" | "file" | "app") => unknown]> = [
+	// The adapter's error: its words, and the service's refusal code on it where the service sent one (patch 1).
+	const refusal = (code: string, description?: string) => Object.assign(new Error(description ?? code), { signInRefusal: code });
+	const cases: Array<[string | Error, string, string, string | null, (place: "here" | "file" | "app") => unknown]> = [
 		["HTTP 403: Invalid OAuth error response: SyntaxError: Unexpected token 'F'. Raw body: Forbidden", "refused", cantSignIn, null, (place) => failed.refused(place, "Cursor")],
 		["Incompatible auth server: does not support dynamic client registration", "needs-own-app", cantSignIn, null, (place) => failed.needsOwnApp(place, "Cursor")],
 		["HTTP 404 trying to load well-known OAuth metadata", "no-sign-in", cantSignIn, null, () => failed.noSignIn],
+		// The discovery address answered with an ordinary web page.
+		[`SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON`, "no-sign-in", cantSignIn, null, () => failed.noSignIn],
+		// The service's refusal, by the standard's code, bare and with the service's description.
+		[refusal("access_denied"), "declined", signInFailed, tryAgain, () => failed.declined],
+		[refusal("access_denied", "The user said no"), "declined", signInFailed, tryAgain, () => failed.declined],
+		[refusal("server_error"), "busy", signInFailed, tryAgain, () => CONNECTOR_WORDS.wentWrong.busy],
+		[refusal("temporarily_unavailable", "Try again in a minute"), "busy", signInFailed, tryAgain, () => CONNECTOR_WORDS.wentWrong.busy],
+		[refusal("invalid_target"), "refused", cantSignIn, null, (place) => failed.refused(place, "Cursor")],
+		[refusal("invalid_target", "The resource is not allowed"), "refused", cantSignIn, null, (place) => failed.refused(place, "Cursor")],
+		[refusal("invalid_scope", "Unknown scope"), "refused", cantSignIn, null, (place) => failed.refused(place, "Cursor")],
+		[refusal("invalid_request"), "refused", cantSignIn, null, (place) => failed.refused(place, "Cursor")],
+		[refusal("unauthorized_client", "Not allowed"), "refused", cantSignIn, null, (place) => failed.refused(place, "Cursor")],
+		[refusal("unsupported_response_type"), "refused", cantSignIn, null, (place) => failed.refused(place, "Cursor")],
+		// A code that isn't the standard's is no refusal of its own; nor are words that look like one, without the code.
+		[refusal("made_up_code", "Something else"), "other", signInFailed, tryAgain, () => failed.other],
+		["access_denied", "other", signInFailed, tryAgain, () => failed.other],
 		["HTTP 503 trying to load well-known OAuth metadata", "busy", signInFailed, tryAgain, () => CONNECTOR_WORDS.wentWrong.busy],
 		// A 501 is no busy service: waiting won't help, so it isn't worded as if it would.
 		["Error POSTing to endpoint (HTTP 501): Not Implemented", "other", signInFailed, tryAgain, () => failed.other],
 		["The sign-in timed out waiting for the browser", "too-slow", signInFailed, tryAgain, () => failed.tooSlow],
 		["fetch failed", "other", signInFailed, tryAgain, () => failed.other],
 	];
-	for (const [message, cause, status, button, lineFor] of cases) {
-		const failure = loginFailureOf(message);
+	for (const [error, cause, status, button, lineFor] of cases) {
+		const failure = loginFailureOf(error);
+		const message = typeof error === "string" ? error : error.message;
 		const state = { kind: "sign-in-failed", cause: failure.cause, detail: failure.detail };
 		const look = rowLook(state, false);
 		for (const place of ["here", "file", "app"] as const) {
 			// The page words the line from the cause; the service's words always go under Technical details.
 			const wrong = wentWrongLine(places[place], state, false);
 			const got = [failure.cause, look.status, look.button, wrong?.line, wrong?.button ?? null, technicalDetails(state)];
-			// Added here, a line that starts with removing it has Remove under it.
-			const expected = [cause, status, button, lineFor(place), place === "here" && (cause === "refused" || cause === "needs-own-app") ? "remove" : null, message];
-			assert(JSON.stringify(got) === JSON.stringify(expected), `${JSON.stringify(message)} on one added ${place} should give ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
+			// Added here by its address with no key, a refused sign-in's way on is Change key, and so is one that found no sign-in on offer;
+			// elsewhere, a line that starts with removing it has Remove under it.
+			const keyInPlace = place === "here" && (cause === "refused" || cause === "no-sign-in");
+			const keyLine = cause === "refused" ? failed.refusedKeyInPlace : failed.noSignInKey;
+			const expected = [cause, status, button, keyInPlace ? keyLine : lineFor(place), keyInPlace ? "changeKey" : place === "here" && cause === "needs-own-app" ? "remove" : null, message];
+			assert(JSON.stringify(got) === JSON.stringify(expected), `${JSON.stringify([message, (error as { signInRefusal?: string }).signInRefusal])} on one added ${place} should give ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
 		}
 	}
-	// The refused sign-in's line is the decided one, word for word, and from another app it names that app.
+	// The refused sign-in's line, word for word, and from another app it names that app.
 	const { lineText } = await rowsModule();
-	assert(lineText(failed.refused("here", ""), false) === "This service doesn't let exxperts sign in, so trying again won't help. If you get a key for it, remove this connector and add it again with the key.", "the refused sign-in line is the one decided");
-	assert(lineText(failed.refused("app", "Cursor"), false).endsWith("remove it in Cursor, then use Add custom connector with that key."), "from another app, the refused sign-in names it");
+	assert(lineText(failed.refused("here", ""), false) === "This service doesn't let exxperts sign in, so trying again won't help. If you have a key for it, remove this connector and add it again with the key.", "the refused sign-in line, word for word");
+	assert(lineText(failed.refusedKeyInPlace, false) === "This service doesn't let exxperts sign in, so trying again won't help. If you have a key for it, use Change key.", "a refused sign-in where a first key goes in place says Change key");
+	assert(lineText(failed.refused("app", "Cursor"), false).endsWith("remove it in Cursor, then add it by its web address with that key."), "from another app, the refused sign-in names it");
 	// A sign-in with no answer by the page's deadline may still finish another time.
 	assert(rowLook({ kind: "sign-in-failed" }, false).button === tryAgain, "a sign-in that never answered offers Try again");
+	assert(lineText(failed.declined, false) === "The service didn't give exxperts access. If you said no there by mistake, try again.", "the declined sign-in's line is the one proposed");
+	// No sign-in offered, by a connector whose newest check (the page's own, or the kept one) found it wants one:
+	// only a key helps, given in place on one added here by its address, else by where it was added.
+	const { connectorRowState } = await rowsModule();
+	const noSignIn = { kind: "sign-in-failed", cause: "no-sign-in" };
+	const fact = "It wants a sign-in or a key, and doesn't offer a sign-in here.";
+	for (const status of [401, 403]) {
+		const wantsOne = { at: Date.now(), ok: false, needsAuth: true, httpStatus: status };
+		const wants = (["here", "file", "app"] as const).map((place) => wentWrongLine(places[place], connectorRowState(places[place], wantsOne, noSignIn), false));
+		const expected = [
+			{ line: { fact, way: "If you have a key for it, use Change key." }, button: "changeKey" },
+			{ line: { fact, way: CONNECTOR_WORDS.wentWrong.refusedElsewhere.way }, button: null },
+			{ line: { fact, way: CONNECTOR_WORDS.wentWrong.refusedImported("Cursor").way }, button: null },
+		];
+		assert(JSON.stringify(wants) === JSON.stringify(expected), `a ${status} with no sign-in offered says only a key helps, got ${JSON.stringify(wants)}`);
+		// Read from the kept check alone, as Settings opened again reads it.
+		const kept = { ...places.here, lastCheck: wantsOne };
+		assert(JSON.stringify(wentWrongLine(kept, connectorRowState(kept, kept.lastCheck, noSignIn), false)) === JSON.stringify(expected[0]), `a ${status} kept says the same`);
+	}
+	// From the directory, or set to sign in on purpose (its own sign-in app among them), it can't take one in place:
+	// its way starts with removing it.
+	const fromDirectory = { ...places.here, name: "notion" };
+	const signsInOnPurpose = { ...places.here, auth: { ...places.here.auth, explicit: true } };
+	const wantsOne = { at: Date.now(), ok: false, needsAuth: true, httpStatus: 401 };
+	for (const [what, server] of [["from the directory", fromDirectory], ["set to sign in on purpose", signsInOnPurpose]] as const) {
+		const got = wentWrongLine(server, connectorRowState(server, wantsOne, noSignIn), false);
+		assert(JSON.stringify(got) === JSON.stringify({ line: { fact, way: CONNECTOR_WORDS.wentWrong.refused.way }, button: "remove" }), `one ${what} isn't offered Change key, got ${JSON.stringify(got)}`);
+		// A refused sign-in and a refused check on it say the same: remove it and add it again with the key.
+		const refusedSignIn = wentWrongLine(server, { kind: "sign-in-failed", cause: "refused" }, false);
+		assert(JSON.stringify(refusedSignIn) === JSON.stringify({ line: failed.refused("here", ""), button: "remove" }), `one ${what} refused at its sign-in is told to add it again, got ${JSON.stringify(refusedSignIn)}`);
+		const refusedCheck = wentWrongLine(server, { kind: "cant-connect", cause: "refused" }, false);
+		assert(JSON.stringify(refusedCheck) === JSON.stringify({ line: CONNECTOR_WORDS.wentWrong.refused, button: "remove" }), `one ${what} its service turned down is told to add it again, got ${JSON.stringify(refusedCheck)}`);
+	}
+	// One added here by its address with no key, turned down by its service: Change key, as for the sign-in.
+	const refusedHere = wentWrongLine(places.here, { kind: "cant-connect", cause: "refused" }, false);
+	assert(JSON.stringify(refusedHere) === JSON.stringify({ line: { fact: "Its service turned the connection down.", way: "If you have a key for it, use Change key." }, button: "changeKey" }), `one added here its service turned down offers Change key, got ${JSON.stringify(refusedHere)}`);
+	// No sign-in on offer for one never checked: added here, a key goes in place; elsewhere it likely works without one.
+	assert(JSON.stringify(wentWrongLine(places.here, connectorRowState(places.here, null, noSignIn), false)) === JSON.stringify({ line: failed.noSignInKey, button: "changeKey" }), "one added here, never checked, is led to Change key");
+	for (const place of ["file", "app"] as const) assert(JSON.stringify(wentWrongLine(places[place], connectorRowState(places[place], null, noSignIn), false)) === JSON.stringify({ line: failed.noSignIn, button: null }), `one added ${place}, never checked, likely works without one`);
+	// One whose check connected stays connected, with nothing gone wrong: the same line sits in its Sign-in row instead.
+	const { noSignInLine } = await rowsModule();
+	const connectedCheck = { at: Date.now(), ok: true };
+	for (const place of ["here", "file", "app"] as const) {
+		const state = connectorRowState(places[place], connectedCheck, noSignIn);
+		const got = [state, wentWrongLine(places[place], state, false), noSignInLine(places[place], state)];
+		const expected = [{ kind: "connected", noSignIn: true }, null, place === "here" ? failed.noSignInKey : failed.noSignIn];
+		assert(JSON.stringify(got) === JSON.stringify(expected), `one added ${place}, connected, stays connected with the line beside its sign-in, got ${JSON.stringify(got)}`);
+	}
 });
 
 await section("background-checks", async () => {
@@ -576,133 +652,283 @@ async function inPage(pageFetch: ((input: unknown, init?: { method?: string; bod
 	}
 }
 
-// A key the service turned down is changed in the row: a custom connector's
-// edit shows its address and the key, a directory connector's shows only the
-// key, since its address is the directory's. The real row is clicked in a page.
-await section("change-key", async () => {
-	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
+/** The real row state for a status row and the check the page holds, with no work under way. */
+function workFor(rows: any, check: unknown, activity: unknown = null) {
+	return { state: (server: any) => rows.connectorRowState(server, check, activity), busy: () => null, failure: () => null, press: noop, check: noop, disconnect: noop, remove: noop, saved: async () => {}, outOfDate: async () => {} };
+}
+/** The page's buttons and button links by their words, its way back and Copy aside. */
+function offersIn(html: string, words: any): string[] {
+	return [...html.matchAll(/<(button|a)\b[^>]*class="[^"]*\brs-btn\b[^"]*"[^>]*>(.*?)<\/\1>/g)].map((found) => text(found[2])).filter((label) => label !== words.details.copy);
+}
+/** A connector's own page drawn for a status row and a check: its words, and what it offers. */
+async function drawnPage(server: any, check: unknown, { readOnly = false, sharedFile = null as string | null, activity = null as unknown } = {}): Promise<{ words: string; offers: string[]; html: string }> {
+	const rows = await rowsModule();
+	const { ConnectorPage } = await component("connector-page.tsx");
+	const html = renderToStaticMarkup(createElement(ConnectorPage, { server, work: workFor(rows, check, activity), readOnly, sharedFile, edit: null, onEdit: noop, onBack: noop, notice: null })) as string;
+	return { words: text(html), offers: offersIn(html, rows.CONNECTOR_WORDS), html };
+}
+/** A connector's row in the list drawn for a status row and a check. */
+async function drawnRow(server: any, check: unknown, { readOnly = false, activity = null as unknown } = {}): Promise<{ words: string; status: string | null; button: string | null; tag: string | null }> {
+	const rows = await rowsModule();
 	const { ConnectorRow } = await component("ConnectorsPage.tsx");
-	const { CONNECTOR_WORDS } = await rowsModule();
-	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {
-		github: { url: "http://127.0.0.1:9/mcp", headers: { Authorization: "Bearer synthetic-key" } },
-		"team-wiki": { url: "http://127.0.0.1:9/wiki", headers: { Authorization: "Bearer synthetic-key" } },
-	} }));
-	const rows = new Map((await getMcpConnectorsStatus()).servers.map((server: any) => [server.name, server]));
-	const notices: string[] = [];
-	const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+	const html = renderToStaticMarkup(createElement(ConnectorRow, { server, work: workFor(rows, check, activity), readOnly, onOpen: noop })) as string;
+	const tag = /<span class="connector-dir-kind"[^>]*>(.*?)<\/span>/.exec(html)?.[1];
+	const status = /<span class="connector-item-status">(.*?)<\/span>/.exec(html)?.[1];
+	return { words: text(html), status: status === undefined ? null : text(status), button: /<span class="connector-item-slot">.*?<span class="connector-slot-label">(.*?)<\/span>/.exec(html)?.[1] ?? null, tag: tag === undefined ? null : text(tag) };
+}
+
+/**
+ * Settings, Connectors as it runs, in a jsdom page (in a section of its own
+ * process: the page keeps its first answer about where it runs): the list from the real
+ * status, checks by the real adapter (against this smoke's stand-ins), the
+ * real sign-in state, and whatever else `answers` stages first. A sign-in is
+ * never started for real: a section that presses Connect stages its answer.
+ */
+async function connectorsPage(answers: (route: string, init?: { method?: string; body?: unknown }) => Response | null | Promise<Response | null>, body: (page: { container: HTMLElement; dom: any; act: (fn: () => Promise<void> | void) => Promise<void>; asked: string[]; waitFor: (what: string, done: () => boolean) => Promise<void>; rowOf: (name: string) => Element | null; openPage: (name: string) => Promise<void>; back: () => Promise<void>; pageButton: (label: string) => HTMLButtonElement | undefined; dialog: () => Element | null }) => Promise<void>, { strict = false } = {}): Promise<void> {
+	const { ConnectorsPage } = await component("ConnectorsPage.tsx");
+	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
+	const { testMcpServer, getMcpServerLoginState, removeMcpServer } = await import("../src/mcp-admin.js");
+	const { startRefusalLookup } = await import("../src/connector-start-check.js");
+	const { shownName } = await rowsModule();
+	const asked: string[] = [];
+	// The page's requests still out: the pane stays until they are answered, so nothing lands after it is gone.
+	let open = 0;
+	// The page and the adapter share this process's fetch: only the page's own calls are answered here.
+	const realFetch = globalThis.fetch;
 	await inPage(async (input, init) => {
-		const route = `${init?.method ?? "GET"} ${String(input)}`;
-		if (route.startsWith("PUT /api/mcp/servers/")) return json({ sameSite: true });
-		if (route.startsWith("POST /api/mcp/servers/")) return json({ ok: true, toolCount: 1 });
-		throw new Error(`the row asked for ${route}, which this smoke does not answer`);
+		if (typeof input !== "string" || !input.startsWith("/api/")) return realFetch(input as string, init as RequestInit);
+		open++;
+		try {
+			return await answerPage(input, init);
+		} finally {
+			open--;
+		}
 	}, async ({ container, dom, act, render }) => {
-		const fieldsAfterChangeKey = async (name: string) => {
-			const server = rows.get(name);
-			assert(server, `${name} is on the page`);
-			const check = { at: Date.now(), ok: false, httpStatus: 401, error: "HTTP 401" };
-			await render(createElement(ConnectorRow, { key: name, server, check, open: true, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: (line: string) => { notices.push(line); }, readOnly: false }));
-			const way = [...container.querySelectorAll("button.connector-way")].find((found) => found.textContent === CONNECTOR_WORDS.button.changeKey);
-			assert(way, `${name}'s turned-down key offers ${CONNECTOR_WORDS.button.changeKey}, the row reads ${container.textContent}`);
-			await act(async () => { way.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-			const field = (label: string) => container.querySelector(`.connector-edit input[aria-label="${label}"]`) !== null;
-			return { address: field(CONNECTOR_WORDS.details.address), key: field(CONNECTOR_WORDS.details.key) };
-		};
-		const custom = await fieldsAfterChangeKey("team-wiki");
-		assert(custom.address && custom.key, `a custom connector's key edit shows its address and the key, got ${JSON.stringify(custom)}`);
-		const directory = await fieldsAfterChangeKey("github");
-		assert(!directory.address && directory.key, `a directory connector's key edit shows only the key, got ${JSON.stringify(directory)}`);
-		// Nothing typed, nothing to save; a new key alone is saved as a key, not as a new address.
-		const saveButton = () => [...container.querySelectorAll<HTMLButtonElement>(".connector-edit button")].find((found) => found.textContent === CONNECTOR_WORDS.button.save);
-		assert(saveButton()?.disabled === true, "the key edit's Save waits for a new key");
-		const keyField = container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.key}"]`)!;
-		// The page's React takes this window for an old browser and reads typing on a key event in a focused field.
-		await act(async () => {
-			keyField.focus();
-			Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!.call(keyField, "synthetic-new-key");
-			keyField.dispatchEvent(new dom.window.KeyboardEvent("keyup", { key: "y", bubbles: true }));
-		});
-		const save = saveButton();
-		assert(save && !save.disabled, "the key edit offers Save once a key is typed");
-		await act(async () => { save.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-		for (let tries = 0; tries < 60 && notices.length === 0; tries++) await act(() => sleep(50));
-		assert(JSON.stringify(notices) === JSON.stringify([CONNECTOR_WORDS.keySaved]), `saving a new key alone says the key is saved, got ${JSON.stringify(notices)}`);
+		try {
+			await drawn({ container, dom, act, render });
+		} finally {
+			for (let tries = 0; tries < 200 && open > 0; tries++) await act(() => sleep(50));
+		}
 	});
+	async function answerPage(input: string, init?: { method?: string; body?: unknown }): Promise<Response> {
+		const route = `${init?.method ?? "GET"} ${input}`;
+		asked.push(route);
+		const staged = await answers(route, init);
+		if (staged) return staged;
+		if (route === "GET /api/remote/client-context") return jsonAnswer({ remote: false, capability: "full", sharedServer: false, person: null });
+		if (route === "GET /api/mcp/status") return jsonAnswer(await getMcpConnectorsStatus(startRefusalLookup));
+		const one = /^(GET|POST) \/api\/mcp\/servers\/([^/]+)\/(test|login)$/.exec(route);
+		if (one?.[1] === "POST" && one[3] === "test") return jsonAnswer(await testMcpServer(decodeURIComponent(one[2])));
+		if (one?.[1] === "GET" && one[3] === "login") return jsonAnswer(await getMcpServerLoginState(decodeURIComponent(one[2])));
+		// Remove reaches the real removal, so a question answered Keep that removed all the same would show in the app and the rooms.
+		const removal = /^DELETE \/api\/mcp\/servers\/([^/]+)$/.exec(route);
+		if (removal) return removeMcpServer(decodeURIComponent(removal[1])).then(jsonAnswer, (error: Error & { statusCode?: number }) => jsonAnswer({ error: error.message }, error.statusCode ?? 500));
+		throw new Error(`the page asked for ${route}, which this smoke does not answer`);
+	}
+	async function drawn({ container, dom, act, render }: { container: HTMLElement; dom: any; act: (fn: () => Promise<void> | void) => Promise<void>; render: (element: unknown) => Promise<void> }): Promise<void> {
+		// The app's dialog asks what had the focus by this window's own element type.
+		const previousElement = (globalThis as any).HTMLElement;
+		(globalThis as any).HTMLElement = dom.window.HTMLElement;
+		// The app's dialog host sits at its root, beside the pane.
+		const { ConfirmDialogHost } = await component("confirm-dialog.tsx");
+		const page = createElement(React.Fragment, null, createElement(ConnectorsPage, {}), createElement(ConfirmDialogHost));
+		await render(strict ? createElement(React.StrictMode, null, page) : page);
+		const waitFor = async (what: string, done: () => boolean) => {
+			for (let tries = 0; tries < 200 && !done(); tries++) await act(() => sleep(50));
+			assert(done(), `waited for ${what}, the page reads ${container.textContent}`);
+		};
+		const shown = new Map<string, string>(((await getMcpConnectorsStatus()).servers as any[]).map((server) => [server.name, shownName(server)]));
+		const rowOf = (name: string) => [...container.querySelectorAll(".connector-list .connector-item")].find((row) => row.querySelector(".connector-item-name-text")?.textContent === (shown.get(name) ?? name)) ?? null;
+		await waitFor("the list", () => container.querySelector(".connector-list, .settings-empty") !== null);
+		const openPage = async (name: string) => {
+			await waitFor(`${name}'s row`, () => rowOf(name) !== null);
+			await click(dom, act, rowOf(name)!.querySelector(".connector-item-hit")!);
+			await waitFor(`${name}'s page`, () => container.querySelector(".connector-page") !== null);
+		};
+		const back = async () => {
+			await click(dom, act, container.querySelector(".connector-page-back")!);
+			await waitFor("the list", () => container.querySelector(".connector-list") !== null);
+		};
+		const pageButton = (label: string) => buttonNamed(container.querySelector(".connector-page") ?? container, label);
+		const dialog = () => dom.window.document.querySelector(".confirm-dialog-backdrop");
+		try {
+			await body({ container, dom, act, asked, waitFor, rowOf, openPage, back, pageButton, dialog });
+		} finally {
+			(globalThis as any).HTMLElement = previousElement;
+		}
+	}
+}
+
+// A key the service turned down is changed on the connector's page: a custom
+// connector's edit shows its address and the key, a directory connector's
+// shows only the key, since its address is the directory's; saving a key alone
+// says the key is saved. Each one's last check, as the server keeps it, is a
+// stand-in turning the key down.
+await sectionInOwnProcess("change-key", async () => {
+	const { CONNECTOR_WORDS } = await rowsModule();
+	const { writeMcpConnectorCheck } = await import("../src/mcp-status.js");
+	const refuser = http.createServer((req, res) => {
+		req.resume();
+		req.on("end", () => { res.writeHead(401, { "Content-Type": "text/plain" }); res.end("stand-in turned the key down"); });
+	});
+	await new Promise<void>((resolve) => refuser.listen(0, "127.0.0.1", resolve));
+	const at = `http://127.0.0.1:${(refuser.address() as AddressInfo).port}`;
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {
+		github: { url: `${at}/mcp`, headers: { Authorization: "Bearer synthetic-key" } },
+		"team-wiki": { url: `${at}/wiki`, headers: { Authorization: "Bearer synthetic-key" } },
+	} }));
+	for (const name of ["github", "team-wiki"]) writeMcpConnectorCheck(name, { at: Date.now(), ok: false, httpStatus: 401, error: "HTTP 401" });
+	const saves: unknown[] = [];
+	let listHeld: Promise<void> | null = null;
+	try {
+		await connectorsPage(async (route, init) => {
+			if (route.startsWith("PUT /api/mcp/servers/")) {
+				saves.push(JSON.parse(String(init?.body)));
+				return jsonAnswer({ sameSite: true });
+			}
+			if (route === "GET /api/mcp/status" && listHeld) await listHeld;
+			return null;
+		}, async ({ container, dom, act, waitFor, openPage, back, pageButton }) => {
+			const fieldsAfterChangeKey = async (name: string) => {
+				await openPage(name);
+				await waitFor(`${name}'s turned-down key offers ${CONNECTOR_WORDS.button.changeKey}`, () => pageButton(CONNECTOR_WORDS.button.changeKey) !== undefined);
+				await click(dom, act, pageButton(CONNECTOR_WORDS.button.changeKey)!);
+				const field = (label: string) => container.querySelector(`.connector-edit input[aria-label="${label}"]`) !== null;
+				return { address: field(CONNECTOR_WORDS.details.address), key: field(CONNECTOR_WORDS.details.key) };
+			};
+			const custom = await fieldsAfterChangeKey("team-wiki");
+			assert(custom.address && custom.key, `a custom connector's key edit shows its address and the key, got ${JSON.stringify(custom)}`);
+			await back();
+			const directory = await fieldsAfterChangeKey("github");
+			assert(!directory.address && directory.key, `a directory connector's key edit shows only the key, got ${JSON.stringify(directory)}`);
+			// Nothing typed, nothing to save; a new key alone is saved as a key, not as a new address.
+			const saveButton = () => [...container.querySelectorAll<HTMLButtonElement>(".connector-edit button")].find((found) => found.textContent === CONNECTOR_WORDS.button.save);
+			assert(saveButton()?.disabled === true, "the key edit's Save waits for a new key");
+			await typeInto(dom, act, container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.key}"]`)!, "synthetic-new-key");
+			const save = saveButton();
+			assert(save && !save.disabled, "the key edit offers Save once a key is typed");
+			// Saved, it reads Checking… while it is read again, never its old state or a step for it.
+			let releaseList = () => {};
+			listHeld = new Promise<void>((resolve) => { releaseList = resolve; });
+			await click(dom, act, save);
+			await waitFor("the saved line", () => container.querySelector(".connector-notice") !== null);
+			const statusNow = container.querySelector(".connector-page .connector-facts .connector-item-status")?.textContent;
+			listHeld = null;
+			await act(async () => releaseList());
+			assert(statusNow === CONNECTOR_WORDS.status.checking, `a saved key reads Checking… while the list is read again, got ${statusNow}`);
+			assert(container.querySelector(".connector-notice")?.textContent === CONNECTOR_WORDS.keySaved, `saving a new key alone says the key is saved, got ${container.querySelector(".connector-notice")?.textContent}`);
+			assert(JSON.stringify(saves) === JSON.stringify([{ url: `${at}/mcp`, key: "synthetic-new-key" }]), `the key goes with the address it had, got ${JSON.stringify(saves)}`);
+		});
+	} finally {
+		refuser.closeAllConnections();
+		refuser.close();
+	}
+	// A first key, for one added by its address without one, is kept exactly as Add keeps a key given there, its
+	// other headers beside it; its rooms and its tool choices stay. One with its own sign-in app can't take one, as at Add.
+	{
+		const { addMcpServer, changeMcpServerAddress } = await import("../src/mcp-admin.js");
+		const { setConnectorToolChoices, readConnectorToolChoices } = await import("../src/connector-tool-choices.js");
+		const { readPersistentRoomMcpSettings } = await import("../src/persistent-room-mcp-settings.js");
+		const { CONNECTOR_FORM_LINES } = await import("../src/connector-form.js");
+		const address = (name: string) => `http://127.0.0.1:9/${name}`;
+		const tenant = { "X-Tenant": "acme" };
+		const later = await addMcpServer({ name: "Key later", url: address("key-later"), headers: tenant });
+		const atAdd = await addMcpServer({ name: "Key at add", url: address("key-at-add"), bearerToken: "synthetic-first-key", headers: tenant });
+		const room = await roomWith(later.name);
+		setConnectorToolChoices(later.name, { search: { choice: "blocked" }, read: { choice: "ask" } });
+		const choicesBefore = JSON.stringify(readConnectorToolChoices());
+		const changed = await changeMcpServerAddress(later.name, { url: address("key-later"), key: "synthetic-first-key" });
+		assert(changed.sameSite, "a first key at the same address stays on its site");
+		const entries = () => JSON.parse(fs.readFileSync(path.join(agentDir, "mcp.json"), "utf-8")).mcpServers;
+		// Compared whole but for its own name and address, and only the fields' names are ever printed: the key stays out of the output.
+		const sorted = (entry: Record<string, unknown>) => JSON.stringify(Object.fromEntries(Object.entries({ ...entry, url: null, displayName: null }).sort(([one], [other]) => one.localeCompare(other))));
+		const [given, added] = [entries()[later.name], entries()[atAdd.name]];
+		assert(sorted(given) === sorted(added), `a first key is kept as Add keeps one, got the fields ${JSON.stringify(Object.keys(given))} beside ${JSON.stringify(Object.keys(added))}`);
+		assert(readPersistentRoomMcpSettings(room).grantedConnectors.includes(later.name), "a first key leaves it on in its room");
+		assert(JSON.stringify(readConnectorToolChoices()) === choicesBefore, "a first key leaves its tool choices as they were");
+		const withApp = await addMcpServer({ name: "App later", url: address("app-later"), oauth: { clientId: "synthetic-client" } });
+		const before = JSON.stringify(entries()[withApp.name]);
+		let refusal = "";
+		try {
+			await changeMcpServerAddress(withApp.name, { url: address("app-later"), key: "synthetic-first-key" });
+		} catch (error) {
+			refusal = (error as Error).message;
+		}
+		assert(refusal === CONNECTOR_FORM_LINES.keyAndSignInApp && JSON.stringify(entries()[withApp.name]) === before, `one with its own sign-in app is refused a key, as at Add, and unchanged, got ${JSON.stringify(refusal)}`);
+	}
+
 	// After adding from the directory, Connect is the next step only for one that signs in.
 	const { addedNotice } = await rowsModule();
-	for (const [kind, line] of [["oauth", CONNECTOR_WORDS.addedFromDirectory("X")], ["oauth-client", CONNECTOR_WORDS.addedFromDirectory("X")], ["open", CONNECTOR_WORDS.addedCustom("X")], ["token", CONNECTOR_WORDS.addedCustom("X")]]) {
+	for (const [kind, line] of [["oauth", CONNECTOR_WORDS.addedFromDirectory("X")], ["open", CONNECTOR_WORDS.addedCustom("X")], ["token", CONNECTOR_WORDS.addedCustom("X")]]) {
 		assert(addedNotice({ name: "X", kind }) === line, `adding a ${kind} entry says ${JSON.stringify(line)}, got ${JSON.stringify(addedNotice({ name: "X", kind }))}`);
 	}
 });
 
-// Esc in the row's "⋯" closes only the menu, never the Settings window around
-// it. Saving an address on the same site checks it at once, a connector that
-// needs no sign-in included. A sign-in that failed can be checked from "⋯",
-// as its line says.
-await section("row-menu-and-save", async () => {
-	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
-	const { CONNECTOR_WORDS, connectorRowState, rowMenu } = await rowsModule();
+// Esc in the Add connector menu closes it (the browser smokes hold that it
+// leaves the Settings window open). Saving an address on the same site says
+// so and checks it at once, a connector that needs no sign-in included. A
+// sign-in that failed can be checked from its page, as its line says, and a
+// page says when no room uses it.
+await sectionInOwnProcess("menu-and-save", async () => {
+	const { getMcpConnectorsStatus, writeMcpConnectorCheck } = await import("../src/mcp-status.js");
+	const { CONNECTOR_WORDS } = await rowsModule();
+	const missing = http.createServer((req, res) => {
+		req.resume();
+		req.on("end", () => { res.writeHead(404, { "Content-Type": "text/plain" }); res.end("not here"); });
+	});
+	await new Promise<void>((resolve) => missing.listen(0, "127.0.0.1", resolve));
+	const at = `http://127.0.0.1:${(missing.address() as AddressInfo).port}`;
 	const name = "plain-wiki";
-	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { [name]: { url: "http://127.0.0.1:9/plain" } } }));
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { [name]: { url: `${at}/plain` } } }));
+	writeMcpConnectorCheck(name, { at: Date.now(), ok: false, httpStatus: 404, error: "HTTP 404" });
 	const server: any = (await getMcpConnectorsStatus()).servers.find((row: { name: string }) => row.name === name);
 	assert(server && server.auth.mode === "oauth" && !server.auth.explicit && !server.auth.hasStoredTokens, `${name} is a bare address that may need no sign-in, got ${JSON.stringify(server?.auth)}`);
 	// Each case is told apart, so one run shows every one that fails.
 	const problems: string[] = [];
-	const notices: string[] = [];
-	if (!rowMenu(server, connectorRowState(server, null, { kind: "sign-in-failed", error: "no sign-in here" }), false).includes("checkConnection")) problems.push("a failed sign-in's menu offers Check connection");
-	const asked: string[] = [];
-	const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-	await inPage(async (input, init) => {
-		const route = `${init?.method ?? "GET"} ${String(input)}`;
-		asked.push(route);
-		if (route === `PUT /api/mcp/servers/${name}/address`) return json({ name, sameSite: true });
-		if (route === `POST /api/mcp/servers/${name}/test`) return json({ ok: true, toolCount: 1 });
-		throw new Error(`the row asked for ${route}, which this smoke does not answer`);
-	}, async ({ container, dom, act, render }) => {
-		let escapesOutside = 0;
-		dom.window.document.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Escape") escapesOutside++; });
-		const check = { at: Date.now(), ok: false, httpStatus: 404, error: "HTTP 404" };
-		await render(createElement(ConnectorRow, { server, check, open: true, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: (line: string) => { notices.push(line); }, readOnly: false }));
-		// No room uses it, and the opened row says so (a phone hides the row's rooms link).
-		const labels = [...container.querySelectorAll(".connector-label")].map((label) => [label.textContent, label.nextElementSibling?.textContent]);
-		if (!labels.some(([label, value]) => label === CONNECTOR_WORDS.details.usedIn && value === CONNECTOR_WORDS.roomsLink(0))) problems.push(`an opened row no room uses says so under ${CONNECTOR_WORDS.details.usedIn}, got ${JSON.stringify(labels)}`);
-		await act(async () => { container.querySelector("button.connector-item-more")!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-		const item = container.ownerDocument.querySelector(".ai-profile-menu [role=menuitem]");
-		assert(item, "the row's menu opened");
-		await act(async () => { item.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-		assert(container.ownerDocument.querySelector(".ai-profile-menu") === null, "Esc closes the menu");
-		if (escapesOutside !== 0) problems.push("Esc in the menu reaches nothing around the row");
-		const way = [...container.querySelectorAll("button.connector-way")].find((found) => found.textContent === CONNECTOR_WORDS.button.changeAddress);
-		assert(way, `a missing address offers ${CONNECTOR_WORDS.button.changeAddress}, the row reads ${container.textContent}`);
-		await act(async () => { way.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-		const saveButton = () => [...container.querySelectorAll<HTMLButtonElement>(".connector-edit button")].find((found) => found.textContent === CONNECTOR_WORDS.button.save);
-		if (saveButton()?.disabled !== true) problems.push("the address edit's Save waits for a change");
-		const unchanged = container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.address}"]`)!;
-		await act(async () => { unchanged.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
-		await act(() => sleep(50));
-		assert(!asked.includes(`PUT /api/mcp/servers/${name}/address`) && notices.length === 0, `Enter in the address edit waits for a change, as Save does, the row asked ${JSON.stringify(asked)}`);
-		// A new address on the same site, typed as the page's React reads typing here (a key event in a focused field).
-		const addressField = container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.address}"]`)!;
-		await act(async () => {
-			addressField.focus();
-			Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!.call(addressField, "http://127.0.0.1:9/plain/mcp");
-			addressField.dispatchEvent(new dom.window.KeyboardEvent("keyup", { key: "p", bubbles: true }));
+	if (!(await drawnPage(server, null, { activity: { kind: "sign-in-failed", error: "no sign-in here" } })).offers.includes(CONNECTOR_WORDS.button.checkConnection)) problems.push("a failed sign-in's page offers Check connection");
+	try {
+		await connectorsPage((route) => (route === `PUT /api/mcp/servers/${name}/address` ? jsonAnswer({ name, sameSite: true }) : null), async ({ container, dom, act, asked, waitFor, openPage, pageButton }) => {
+			// The Add connector menu: Esc on its item closes it.
+			await click(dom, act, container.querySelector(".connector-add-btn")!);
+			const item = await (async () => {
+				await waitFor("the Add connector menu", () => dom.window.document.querySelector(".ai-profile-menu [role=menuitem]") !== null);
+				return dom.window.document.querySelector(".ai-profile-menu [role=menuitem]")!;
+			})();
+			await act(async () => { item.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+			if (dom.window.document.querySelector(".ai-profile-menu") !== null) problems.push("Esc closes the Add connector menu");
+			await openPage(name);
+			// No room uses it, and its page says so (a phone hides the row's rooms link).
+			const facts = [...container.querySelectorAll(".connector-facts .connector-fact")].map((fact) => [fact.querySelector(".settings-row-label")?.textContent, fact.querySelector(".connector-fact-value")?.textContent]);
+			if (!facts.some(([label, value]) => label === CONNECTOR_WORDS.details.usedIn && value === CONNECTOR_WORDS.roomsLink(0))) problems.push(`a page no room uses says so under ${CONNECTOR_WORDS.details.usedIn}, got ${JSON.stringify(facts)}`);
+			await waitFor(`a missing address offers ${CONNECTOR_WORDS.button.changeAddress}`, () => pageButton(CONNECTOR_WORDS.button.changeAddress) !== undefined);
+			await click(dom, act, pageButton(CONNECTOR_WORDS.button.changeAddress)!);
+			const saveButton = () => [...container.querySelectorAll<HTMLButtonElement>(".connector-edit button")].find((found) => found.textContent === CONNECTOR_WORDS.button.save);
+			if (saveButton()?.disabled !== true) problems.push("the address edit's Save waits for a change");
+			const addressField = () => container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.address}"]`)!;
+			await act(async () => { addressField().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+			await act(() => sleep(50));
+			if (asked.includes(`PUT /api/mcp/servers/${name}/address`) || container.querySelector(".connector-notice")) problems.push(`Enter in the address edit waits for a change, as Save does, the page asked ${JSON.stringify(asked)}`);
+			// A new address on the same site.
+			await typeInto(dom, act, addressField(), `${at}/plain/mcp`);
+			const save = saveButton();
+			assert(save && !save.disabled, "the address edit offers Save once the address changes");
+			const checksBefore = asked.filter((route) => route === `POST /api/mcp/servers/${name}/test`).length;
+			await click(dom, act, save);
+			await waitFor("the check after the save", () => asked.filter((route) => route === `POST /api/mcp/servers/${name}/test`).length > checksBefore);
+			if (container.querySelector(".connector-notice")?.textContent !== CONNECTOR_WORDS.addressSaved) problems.push(`an address save says the address is saved, got ${JSON.stringify(container.querySelector(".connector-notice")?.textContent)}`);
 		});
-		const save = saveButton();
-		assert(save && !save.disabled, "the address edit offers Save once the address changes");
-		await act(async () => { save.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-		for (let tries = 0; tries < 100 && !asked.includes(`POST /api/mcp/servers/${name}/test`); tries++) await act(() => sleep(50));
-		if (JSON.stringify(notices) !== JSON.stringify([CONNECTOR_WORDS.addressSaved])) problems.push(`an address save says the address is saved, got ${JSON.stringify(notices)}`);
-		if (!asked.includes(`POST /api/mcp/servers/${name}/test`)) problems.push(`a same-site save is checked at once, the row asked ${JSON.stringify(asked)}`);
-	});
+	} finally {
+		missing.closeAllConnections();
+		missing.close();
+	}
 	assert(problems.length === 0, problems.join("; "));
 });
 
 // A program's command sits right under What went wrong, where a web
-// connector's address sits, so "Check its command" points at the next line.
+// connector's address sits, so "Check its command" points at the next line;
+// where it stands comes after, then the rooms it is on in.
 await section("details-order", async () => {
 	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
 	const { CONNECTOR_WORDS } = await rowsModule();
 	const words = CONNECTOR_WORDS.details;
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { "local-files": { command: "node", args: ["files-server.js"] }, "plain-wiki": { url: "http://127.0.0.1:9/plain" } } }));
@@ -712,46 +938,37 @@ await section("details-order", async () => {
 		const server = servers.find((row: { name: string }) => row.name === name);
 		assert(server, `${name} is listed`);
 		const check = name === "plain-wiki" ? { at: Date.now(), ok: false, httpStatus: 404, error: "HTTP 404" } : { at: Date.now(), ok: false, error: "spawn node ENOENT" };
-		await inPage(async (input, init) => { throw new Error(`the row asked for ${init?.method ?? "GET"} ${String(input)}, which this smoke does not answer`); }, async ({ container, render }) => {
-			await render(createElement(ConnectorRow, { server, check, open: true, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: noop, readOnly: false }));
-			orders[name] = [...container.querySelectorAll(".connector-label")].map((label) => label.textContent);
-		});
+		const { html } = await drawnPage(server, check);
+		orders[name] = [...html.matchAll(/<span class="settings-row-label">(.*?)<\/span>/g)].map((found) => text(found[1])).filter((label) => label !== CONNECTOR_WORDS.remove.title);
 	}
-	assert(JSON.stringify(orders["plain-wiki"]) === JSON.stringify([words.wentWrong, words.address, words.usedIn]), `a web connector's details read What went wrong, Address, Used in, got ${JSON.stringify(orders["plain-wiki"])}`);
-	assert(JSON.stringify(orders["local-files"]) === JSON.stringify([words.wentWrong, words.runs, words.usedIn]), `a program's details read What went wrong, Runs, Used in, got ${JSON.stringify(orders["local-files"])}`);
+	assert(JSON.stringify(orders["plain-wiki"]) === JSON.stringify([words.wentWrong, words.address, words.key, words.connection, words.usedIn]), `a web connector's page reads What went wrong, Web address, Key, Connection, On in, got ${JSON.stringify(orders["plain-wiki"])}`);
+	assert(JSON.stringify(orders["local-files"]) === JSON.stringify([words.wentWrong, words.runs, words.connection, words.usedIn]), `a program's page reads What went wrong, Runs, Connection, On in, got ${JSON.stringify(orders["local-files"])}`);
 });
 
 // A check the server says outlived a change to its connector (a new address
-// meanwhile) is not about it any more: the row keeps nothing of it. An
+// meanwhile) is not about it any more: the page keeps nothing of it. An
 // ordinary answer next to it is kept.
-await section("superseded-check", async () => {
-	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
+await sectionInOwnProcess("superseded-check", async () => {
+	const { writeMcpConnectorCheck } = await import("../src/mcp-status.js");
 	const { CONNECTOR_WORDS } = await rowsModule();
 	const name = "moving-wiki";
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { [name]: { url: "http://127.0.0.1:9/moving", auth: false } } }));
-	const server: any = (await getMcpConnectorsStatus()).servers.find((row: { name: string }) => row.name === name);
-	const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
-	let answer: Record<string, unknown> = {};
-	await inPage(async (input, init) => {
-		const route = `${init?.method ?? "GET"} ${String(input)}`;
-		if (route === `POST /api/mcp/servers/${name}/test`) return json(answer);
-		throw new Error(`the row asked for ${route}, which this smoke does not answer`);
-	}, async ({ container, dom, act, render }) => {
-		const kept: unknown[] = [];
-		const checkFromMenu = async (reply: Record<string, unknown>) => {
+	writeMcpConnectorCheck(name, { at: Date.now(), ok: true });
+	// It answers, until a check below says otherwise.
+	let answer: Record<string, unknown> = { ok: true, toolCount: 0 };
+	await connectorsPage((route) => (route === `POST /api/mcp/servers/${name}/test` ? jsonAnswer(answer) : null), async ({ container, dom, act, asked, waitFor, openPage, pageButton }) => {
+		await openPage(name);
+		const status = () => container.querySelector(".connector-page .connector-facts .connector-item-status")?.textContent;
+		const checkWith = async (reply: Record<string, unknown>) => {
 			answer = reply;
-			kept.length = 0;
-			await render(createElement(ConnectorRow, { server, check: { at: Date.now(), ok: true }, open: false, onToggle: noop, onCheck: (_: string, check: unknown) => { kept.push(check); }, onChanged: async () => {}, onNotice: noop, readOnly: false }));
-			await act(async () => { container.querySelector("button.connector-item-more")!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-			const item = [...container.ownerDocument.querySelectorAll(".ai-profile-menu [role=menuitem]")].find((found) => found.textContent === CONNECTOR_WORDS.menu.checkConnection);
-			assert(item, "a connected row's menu offers Check connection");
-			await act(async () => { item.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-			for (let tries = 0; tries < 60 && container.querySelector(".connector-item-status")?.textContent === CONNECTOR_WORDS.status.checking; tries++) await act(() => sleep(50));
-			return kept.length;
+			const before = asked.filter((route) => route === `GET /api/mcp/status`).length;
+			await click(dom, act, pageButton(CONNECTOR_WORDS.button.checkConnection)!);
+			// The check has ended once the list is read again after it.
+			await waitFor("the check to end", () => asked.filter((route) => route === `GET /api/mcp/status`).length > before && status() !== CONNECTOR_WORDS.status.checking);
+			return status();
 		};
-		assert((await checkFromMenu({ ok: false, httpStatus: 404, error: "HTTP 404" })) === 1, "an ordinary check's answer is kept");
-		assert((await checkFromMenu({ ok: false, httpStatus: 404, error: "HTTP 404", superseded: true })) === 0, "a superseded check's answer is not kept");
+		assert((await checkWith({ ok: false, httpStatus: 404, error: "HTTP 404", superseded: true })) === CONNECTOR_WORDS.status.connected, `a superseded check's answer is not kept, it reads ${status()}`);
+		assert((await checkWith({ ok: false, httpStatus: 404, error: "HTTP 404" })) === CONNECTOR_WORDS.status.cantConnect, "an ordinary check's answer is kept");
 	});
 });
 
@@ -764,18 +981,120 @@ async function typeInto(dom: any, act: (fn: () => Promise<void> | void) => Promi
 	});
 }
 
-const click = (dom: any, act: (fn: () => Promise<void> | void) => Promise<void>, found: Element) => act(async () => { found.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
-const buttonNamed = (root: ParentNode, label: string) => [...root.querySelectorAll<HTMLButtonElement>("button")].find((found) => found.textContent === label);
-const jsonAnswer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+// The check of a program that downloads at its first start, ending just
+// before its page would say it is getting ready, while the list is read
+// again, leaves it as the check found it, with no Cancel; one that runs past
+// that says it is getting ready, with Cancel, until it ends. Check connection
+// is pressed on its page.
+await sectionInOwnProcess("getting-ready-ends", async () => {
+	const { writeMcpConnectorCheck } = await import("../src/mcp-status.js");
+	const { CONNECTOR_WORDS } = await rowsModule();
+	const name = "slow-notes";
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { [name]: { command: "uvx", args: ["notes-server"] } } }));
+	writeMcpConnectorCheck(name, { at: Date.now(), ok: true });
+	// The page says such a program is getting ready after 3 seconds of its check.
+	const READY_AFTER_MS = 3000;
+	let answerAfter = 0;
+	let listReadTakes = 0;
+	let listReads = 0;
+	await connectorsPage(async (route) => {
+		if (route === `POST /api/mcp/servers/${name}/test`) {
+			await sleep(answerAfter);
+			return jsonAnswer({ ok: true, toolCount: 1 });
+		}
+		if (route === "GET /api/mcp/status") {
+			await sleep(listReadTakes);
+			listReads++;
+		}
+		return null;
+	}, async ({ container, dom, act, waitFor, openPage, pageButton }) => {
+		await openPage(name);
+		const status = () => container.querySelector(".connector-page .connector-facts .connector-item-status")?.textContent;
+		const stateButton = () => container.querySelector(".connector-page .connector-facts .connector-fact:not(.connector-fact-wrong) .connector-slot-label")?.textContent ?? null;
+		answerAfter = 0;
+		listReadTakes = READY_AFTER_MS + 1500;
+		const readsBefore = listReads;
+		await click(dom, act, pageButton(CONNECTOR_WORDS.button.checkConnection)!);
+		let saidReady = false;
+		await waitFor("the list read after the check", () => {
+			if (status() === CONNECTOR_WORDS.status.gettingReady) saidReady = true;
+			return listReads > readsBefore;
+		});
+		assert(!saidReady && status() === CONNECTOR_WORDS.status.connected && stateButton() === null, `a check that ended before the list was read again leaves it as it found it, got ${JSON.stringify([saidReady, status(), stateButton()])}`);
+		answerAfter = READY_AFTER_MS + 1000;
+		listReadTakes = 0;
+		await click(dom, act, pageButton(CONNECTOR_WORDS.button.checkConnection)!);
+		await waitFor("it to say it is getting ready", () => status() === CONNECTOR_WORDS.status.gettingReady);
+		assert(stateButton() === CONNECTOR_WORDS.button.cancel, `a long check offers Cancel, got ${JSON.stringify(stateButton())}`);
+		await waitFor("the long check to end", () => status() !== CONNECTOR_WORDS.status.gettingReady);
+		assert(status() === CONNECTOR_WORDS.status.connected && stateButton() === null, `a long check that ends leaves it as it found it, got ${JSON.stringify([status(), stateButton()])}`);
+	});
+});
+
+// A shared server refuses a first key as it did, with the same sentence, and
+// writes nothing: what a first key means there for who may use the connector
+// is not decided here. Its neighbour on this computer is "change-key".
+await sectionInOwnProcess("first-key-shared-server", async () => {
+	const { registerServerHooks } = await import("../src/server-hooks.js");
+	registerServerHooks({});
+	const { addMcpServer, changeMcpServerAddress } = await import("../src/mcp-admin.js");
+	const { CONNECTOR_FORM_LINES } = await import("../src/connector-form.js");
+	const added = await addMcpServer({ name: "Key later", url: "http://127.0.0.1:9/key-later" });
+	const file = path.join(agentDir, "mcp.json");
+	const before = fs.readFileSync(file, "utf-8");
+	let refusal = "";
+	try {
+		await changeMcpServerAddress(added.name, { url: "http://127.0.0.1:9/key-later", key: "synthetic-first-key" });
+	} catch (error) {
+		refusal = (error as Error).message;
+	}
+	assert(refusal === CONNECTOR_FORM_LINES.keyNotChangeable, `a shared server refuses a first key with its sentence, got ${JSON.stringify(refusal)}`);
+	assert(fs.readFileSync(file, "utf-8") === before, "a refused first key writes nothing");
+});
+
+// The check the page starts by itself, behind the list, ending while the
+// person's own check of that connector still runs, leaves the row "Checking…"
+// with the pressed button busy, until the person's check ends.
+await sectionInOwnProcess("background-check-yields", async () => {
+	const { writeMcpConnectorCheck } = await import("../src/mcp-status.js");
+	const { CONNECTOR_WORDS } = await rowsModule();
+	const name = "busy-wiki";
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { [name]: { url: "http://127.0.0.1:9/busy-wiki" } } }));
+	writeMcpConnectorCheck(name, { at: Date.now(), ok: false, httpStatus: 503, error: "HTTP 503" });
+	const held: Array<() => void> = [];
+	let listReads = 0;
+	await connectorsPage(async (route) => {
+		if (route === "GET /api/mcp/status") listReads++;
+		if (route !== `POST /api/mcp/servers/${name}/test`) return null;
+		await new Promise<void>((resolve) => held.push(resolve));
+		return jsonAnswer(held.length === 1 ? { ok: false, httpStatus: 503, error: "HTTP 503" } : { ok: true, toolCount: 1 });
+	}, async ({ dom, act, waitFor, rowOf }) => {
+		const status = () => rowOf(name)?.querySelector(".connector-item-status")?.textContent;
+		await waitFor("the check behind the list", () => held.length === 1);
+		// Behind the list it shows what was last known, with Try again.
+		await waitFor("Try again on its row", () => buttonNamed(rowOf(name)!, CONNECTOR_WORDS.button.tryAgain) !== undefined);
+		await click(dom, act, buttonNamed(rowOf(name)!, CONNECTOR_WORDS.button.tryAgain)!);
+		await waitFor("the person's own check", () => held.length === 2);
+		assert(status() === CONNECTOR_WORDS.status.checking, `the person's check reads Checking…, got ${status()}`);
+		// Once the check behind the list has ended, the list is read again.
+		const readsBefore = listReads;
+		await act(async () => held[0]());
+		await waitFor("the list read after the check behind it", () => listReads > readsBefore);
+		assert(status() === CONNECTOR_WORDS.status.checking && buttonNamed(rowOf(name)!, CONNECTOR_WORDS.button.tryAgain)?.getAttribute("aria-busy") === "true", `the check behind the list ending leaves the person's own running, got ${JSON.stringify([status(), rowOf(name)?.textContent])}`);
+		await act(async () => held[1]());
+		await waitFor("the person's check to end", () => status() === CONNECTOR_WORDS.status.connected);
+	});
+});
 
 // A new address on another site: the line under the field says what the move
 // keeps and what the person must do again, a key is asked for and Save waits
 // for it; one that would lose its own sign-in app or a header that isn't its
-// key can't move there, and Save stays off.
-await section("another-site-edit", async () => {
+// key can't move there, and Save stays off. Change address is pressed on each
+// connector's page; Remove under the line asks the app's question.
+await sectionInOwnProcess("another-site-edit", async () => {
 	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
 	const authStore = await import("pi-mcp-adapter/mcp-auth.ts" as string);
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
 	const { CONNECTOR_WORDS, shownName } = await rowsModule();
 	const { CONNECTOR_FORM_LINES } = await import("../src/connector-form.js");
 	const url = (name: string) => `http://127.0.0.1:9/${name}`;
@@ -800,21 +1119,21 @@ await section("another-site-edit", async () => {
 		["tenant-wiki", { hint: lines.cantMoveSite, key: false, save: false }],
 	];
 	const problems: string[] = [];
-	await inPage(async (input, init) => { throw new Error(`the row asked for ${init?.method ?? "GET"} ${String(input)}, which this smoke does not answer`); }, async ({ container, dom, act, render }) => {
+	const keepRooms = new Map<string, string>();
+	for (const [name] of cases) keepRooms.set(name, await roomWith(name));
+	await connectorsPage(() => null, async ({ container, dom, act, asked, waitFor, openPage, back, pageButton, dialog }) => {
 		for (const [name, expected] of cases) {
 			const server = rows.get(name);
 			assert(server, `${name} is on the page`);
-			await render(createElement(ConnectorRow, { key: name, server, check: null, open: true, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: noop, readOnly: false }));
-			await click(dom, act, container.querySelector("button.connector-item-more")!);
-			const item = [...container.ownerDocument.querySelectorAll(".ai-profile-menu [role=menuitem]")].find((found) => found.textContent === CONNECTOR_WORDS.menu.changeAddress);
-			assert(item, `${name}'s menu offers ${CONNECTOR_WORDS.menu.changeAddress}`);
-			await click(dom, act, item);
+			await openPage(name);
+			await waitFor(`${name}'s page offers ${CONNECTOR_WORDS.button.changeAddress}`, () => pageButton(CONNECTOR_WORDS.button.changeAddress) !== undefined);
+			await click(dom, act, pageButton(CONNECTOR_WORDS.button.changeAddress)!);
 			const address = container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.address}"]`)!;
 			await typeInto(dom, act, address, `http://localhost:9/${name}`);
 			const keyField = container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.key}"]`);
 			const got = { hint: container.querySelector(".connector-edit-hint")?.textContent ?? null, key: keyField !== null, save: buttonNamed(container, CONNECTOR_WORDS.button.save)?.disabled === false };
 			if (JSON.stringify(got) !== JSON.stringify(expected)) problems.push(`${name} on another site should show ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
-			// The line that says to remove it has Remove under it, asking the row's own question; no other line has one.
+			// The line that says to remove it has Remove under it, asking the app's own question; no other line has one.
 			const remove = [...container.querySelectorAll<HTMLButtonElement>(".connector-edit button.connector-way")].find((button) => button.textContent === CONNECTOR_WORDS.button.remove);
 			if (Boolean(remove) !== (expected.hint === lines.cantMoveSite)) problems.push(`${name} on another site ${remove ? "shows" : "has no"} Remove under its line`);
 			// Enter on a button presses that button: the edit leaves its key alone.
@@ -826,24 +1145,30 @@ await section("another-site-edit", async () => {
 			}
 			if (remove) {
 				await click(dom, act, remove);
-				const asked = container.querySelector(".connector-ask-q strong")?.textContent;
-				if (asked !== CONNECTOR_WORDS.removeQuestion(shownName(server))) problems.push(`${name}'s Remove should ask the row's own question, got ${asked ?? "none"}`);
+				await waitFor(`${name}'s Remove question`, () => dialog() !== null);
+				const question = dialog()!.querySelector("h2")?.textContent;
+				if (question !== CONNECTOR_WORDS.removeQuestion(shownName(server))) problems.push(`${name}'s Remove should ask the app's question, got ${question ?? "none"}`);
+				await click(dom, act, buttonNamed(dialog()!, CONNECTOR_WORDS.button.keep)!);
+				await waitFor(`${name}'s Remove question to close`, () => dialog() === null);
+				const kept = await keptAfterKeep(name, asked, keepRooms.get(name)!);
+				assert(kept.length === 0, kept.join("; "));
 			}
 			if (keyField) {
 				await typeInto(dom, act, keyField, "synthetic-new-key");
 				if (buttonNamed(container, CONNECTOR_WORDS.button.save)?.disabled !== false) problems.push(`${name}'s Save comes on once the key is typed`);
 			}
+			await back();
 		}
 	});
 	assert(problems.length === 0, problems.join("; "));
 });
 
-// A line that says to remove a connector added here has Remove under it, which
-// asks the row's own question; a row from a file names the file where a row
-// from another app names the app, by the path the page's line about it shows.
-await section("remove-way-and-file-note", async () => {
-	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
+// A line that says to remove a connector added here leaves Remove to the
+// page's Remove row, which asks the app's question; a connector from a file
+// names the file where one from another app names the app, by the path the
+// page's line about it shows.
+await sectionInOwnProcess("remove-way-and-file-note", async () => {
+	const { getMcpConnectorsStatus, writeMcpConnectorCheck } = await import("../src/mcp-status.js");
 	const { CONNECTOR_WORDS, shownName } = await rowsModule();
 	const url = (name: string) => `http://127.0.0.1:9/${name}`;
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: {
@@ -859,113 +1184,173 @@ await section("remove-way-and-file-note", async () => {
 	assert(sharedPath, `the status names the shared file, got ${JSON.stringify(status.configSources)}`);
 	const project = { ...rows.get("shared-wiki"), name: "project-wiki", source: { kind: "project", path: "~/work/.mcp.json" }, inSharedFile: undefined };
 	const refused = { at: Date.now(), ok: false, httpStatus: 403, error: "HTTP 403: Forbidden" };
-	const wrongBox = (container: HTMLElement) => container.querySelector(".connector-details");
-	const wayNamed = (container: HTMLElement, label: string) => [...(wrongBox(container)?.querySelectorAll<HTMLButtonElement>("button.connector-way") ?? [])].find((button) => button.textContent === label) ?? null;
-	await inPage(async (input, init) => { throw new Error(`the row asked for ${init?.method ?? "GET"} ${String(input)}, which this smoke does not answer`); }, async ({ container, dom, act, render }) => {
-		const draw = (server: any, readOnly = false) => render(createElement(ConnectorRow, { key: `${server.name}-${readOnly}`, server, check: refused, open: true, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: noop, readOnly, sharedFile: sharedPath }));
-		// Two keys: the line says to remove it and add it again, and Remove under it asks the row's own question.
-		await draw(rows.get("two-keys"));
-		const remove = wayNamed(container, CONNECTOR_WORDS.button.remove);
-		assert(remove, `the two-keys line has Remove under it, the row reads ${container.textContent}`);
-		await click(dom, act, remove!);
-		assert(container.querySelector(".connector-ask-q strong")?.textContent === CONNECTOR_WORDS.removeQuestion(shownName(rows.get("two-keys"))), `Remove asks the row's own question, the row reads ${container.textContent}`);
-		// One key: Change key is its way on, and nothing says to remove it.
-		await draw(rows.get("one-key"));
-		assert(wayNamed(container, CONNECTOR_WORDS.button.changeKey) && !wayNamed(container, CONNECTOR_WORDS.button.remove), `one key: Change key, no Remove, the row reads ${container.textContent}`);
-		assert(!container.querySelector(".connector-note"), `a connector added here names no file, the row reads ${container.textContent}`);
-		// Over remote access the line shows its fact only, with no button.
-		await draw(rows.get("two-keys"), true);
-		assert(!wayNamed(container, CONNECTOR_WORDS.button.remove), `over remote access no Remove, the row reads ${container.textContent}`);
-		// From the shared file: its line sends the person there, with no Remove under it, and the row names the file as the page's line does.
-		await draw(rows.get("shared-wiki"));
-		const shared = CONNECTOR_WORDS.addedInSharedFile;
-		assert(!wayNamed(container, CONNECTOR_WORDS.button.remove), `a shared file's line has no Remove under it, the row reads ${container.textContent}`);
-		assert(container.querySelector(".connector-note")?.textContent === `${shared.before}${sharedPath}${shared.after}`, `a row from the shared file names it, the row reads ${container.textContent}`);
-		// From a file in the folder exxperts runs from: the row names that file.
-		await draw(project);
-		const own = CONNECTOR_WORDS.addedInProjectFile;
-		assert(container.querySelector(".connector-note")?.textContent === `${own.before}~/work/.mcp.json${own.after}`, `a row from a project's file names it, the row reads ${container.textContent}`);
+	const draw = (server: any, readOnly = false) => drawnPage(server, refused, { readOnly, sharedFile: sharedPath });
+	// The buttons in the What went wrong row alone: up to the next fact row.
+	const besideTheLine = (html: string) => {
+		const at = html.indexOf("connector-fact-wrong");
+		if (at < 0) return [];
+		const end = html.indexOf('class="settings-row connector-fact"', at);
+		return offersIn(html.slice(at, end < 0 ? undefined : end), CONNECTOR_WORDS);
+	};
+	const note = (html: string) => { const found = /<p class="connector-note">(.*?)<\/p>/.exec(html)?.[1]; return found === undefined ? null : text(found); };
+	// Two keys: the line says to remove it and add it again; the page's one Remove is its Remove row's.
+	const twoKeys = await draw(rows.get("two-keys"));
+	assert(twoKeys.words.includes(CONNECTOR_WORDS.wentWrong.keyFixed.fact) && JSON.stringify(besideTheLine(twoKeys.html)) === "[]" && twoKeys.offers.filter((label) => label === CONNECTOR_WORDS.button.remove).length === 1, `two keys: the line, nothing beside it, one Remove on the page, got ${JSON.stringify(twoKeys.offers)}: ${twoKeys.words}`);
+	// One key: Change key is its way on, beside the line, and nothing says to remove it.
+	const oneKey = await draw(rows.get("one-key"));
+	assert(JSON.stringify(besideTheLine(oneKey.html)) === JSON.stringify([CONNECTOR_WORDS.button.changeKey]), `one key: Change key beside the line, got ${JSON.stringify(besideTheLine(oneKey.html))}`);
+	assert(note(oneKey.html) === null, `a connector added here names no file, got ${note(oneKey.html)}`);
+	// Over remote access no Remove at all.
+	assert(!(await draw(rows.get("two-keys"), true)).offers.includes(CONNECTOR_WORDS.button.remove), "over remote access no Remove");
+	// From the shared file: its line sends the person there, with nothing beside it, and the page names the file as the list's line does.
+	const sharedWiki = await draw(rows.get("shared-wiki"));
+	const shared = CONNECTOR_WORDS.addedInSharedFile;
+	assert(JSON.stringify(besideTheLine(sharedWiki.html)) === "[]", `a shared file's line has nothing beside it, got ${JSON.stringify(besideTheLine(sharedWiki.html))}`);
+	assert(note(sharedWiki.html) === `${shared.before}${sharedPath}${shared.after}`, `a connector from the shared file names it, got ${note(sharedWiki.html)}`);
+	// From a file in the folder exxperts runs from: the page names that file.
+	const own = CONNECTOR_WORDS.addedInProjectFile;
+	assert(note((await draw(project)).html) === `${own.before}~/work/.mcp.json${own.after}`, `a connector from a project's file names it, got ${note((await draw(project)).html)}`);
+	// The page's Remove asks the app's question, named as the list names it.
+	writeMcpConnectorCheck("two-keys", refused);
+	const keepRoom = await roomWith("two-keys");
+	await connectorsPage(() => null, async ({ dom, act, asked, waitFor, openPage, pageButton, dialog }) => {
+		await openPage("two-keys");
+		await click(dom, act, pageButton(CONNECTOR_WORDS.button.remove)!);
+		await waitFor("the Remove question", () => dialog() !== null);
+		assert(dialog()!.querySelector("h2")?.textContent === CONNECTOR_WORDS.removeQuestion(shownName(rows.get("two-keys"))), `Remove asks the app's question, got ${dialog()!.textContent}`);
+		await click(dom, act, buttonNamed(dialog()!, CONNECTOR_WORDS.button.keep)!);
+		await waitFor("the question to close", () => dialog() === null);
+		const kept = await keptAfterKeep("two-keys", asked, keepRoom);
+		assert(kept.length === 0, kept.join("; "));
 	});
 });
 
-// An answer that says the row is out of date: the list is read again, so a
+// A removal whose clean-up fails once the connector's files are written: the
+// last check can't be forgotten, as its file can't be written. The delete
+// answers that it happened and the page shows the connector gone; one added
+// later by the same name starts with no last check all the same.
+await sectionInOwnProcess("remove-after-files", async () => {
+	const { readMcpConnectorChecks, writeMcpConnectorCheck, getMcpConnectorsStatus } = await import("../src/mcp-status.js");
+	const { addMcpServer, removeMcpServer } = await import("../src/mcp-admin.js");
+	const { readPersistentRoomMcpSettings } = await import("../src/persistent-room-mcp-settings.js");
+	const { CONNECTOR_WORDS } = await rowsModule();
+	const url = "http://127.0.0.1:9/team-wiki";
+	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { "team-wiki": { url, auth: false } } }));
+	writeMcpConnectorCheck("team-wiki", { at: Date.now(), ok: false, httpStatus: 403, error: "HTTP 403: Forbidden" });
+	const room = await roomWith("team-wiki");
+	// The checks file is written through a temporary file named by this process: a folder in its place stops the write.
+	const blocked = path.join(agentDir, `mcp-connector-checks.json.${process.pid}.tmp`);
+	fs.mkdirSync(path.join(blocked, "in-the-way"), { recursive: true });
+	const answered: number[] = [];
+	await connectorsPage(async (route) => {
+		const removal = /^DELETE \/api\/mcp\/servers\/([^/]+)$/.exec(route);
+		if (!removal) return null;
+		try {
+			const removed = await removeMcpServer(decodeURIComponent(removal[1]));
+			answered.push(200);
+			return jsonAnswer(removed);
+		} catch (error) {
+			const status = (error as { statusCode?: number }).statusCode ?? 500;
+			answered.push(status);
+			return jsonAnswer({ error: (error as Error).message }, status);
+		}
+	}, async ({ container, dom, act, waitFor, rowOf, openPage, pageButton, dialog }) => {
+		await openPage("team-wiki");
+		await click(dom, act, pageButton(CONNECTOR_WORDS.button.remove)!);
+		await waitFor("the Remove question", () => dialog() !== null);
+		await click(dom, act, buttonNamed(dialog()!, CONNECTOR_WORDS.button.remove)!);
+		await waitFor("the delete's answer", () => answered.length > 0);
+		assert(JSON.stringify(answered) === "[200]", `a removal whose files are written answers 200, got ${JSON.stringify(answered)}`);
+		await waitFor("the list without it", () => container.querySelector(".connector-page") === null && rowOf("team-wiki") === null);
+		assert(!(container.textContent ?? "").includes(CONNECTOR_WORDS.remove.failed), `the page says nothing failed, it reads ${container.textContent}`);
+	});
+	assert(!(await getMcpConnectorsStatus()).servers.some((server: { name: string }) => server.name === "team-wiki"), "the app no longer has it");
+	assert(!readPersistentRoomMcpSettings(room).grantedConnectors.includes("team-wiki"), "the room no longer has it on");
+	fs.rmSync(blocked, { recursive: true });
+	// The old check is still in its file: a namesake added now must not read it.
+	assert(Object.hasOwn(readMcpConnectorChecks(), "team-wiki"), "the failed clean-up left the old check in its file");
+	const added = await addMcpServer({ name: "Team wiki", url });
+	assert(added.name === "team-wiki", `the namesake takes the same name, got ${added.name}`);
+	const namesake = (await getMcpConnectorsStatus()).servers.find((server: { name: string }) => server.name === "team-wiki");
+	assert(namesake && namesake.lastCheck === null, `a namesake starts with no last check, got ${JSON.stringify(namesake?.lastCheck)}`);
+});
+
+// An answer that says the page is out of date: the list is read again, so a
 // connector that no longer exists leaves it, and one that can't be changed
-// here says so on its row with the edit closed.
-await section("out-of-date", async () => {
-	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
+// here says so on its page with the edit closed.
+await sectionInOwnProcess("out-of-date", async () => {
+	const { writeMcpConnectorCheck } = await import("../src/mcp-status.js");
 	const { CONNECTOR_WORDS } = await rowsModule();
 	const { CONNECTOR_FORM_LINES } = await import("../src/connector-form.js");
 	const name = "stale-wiki";
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { [name]: { url: "http://127.0.0.1:9/stale", auth: false } } }));
-	const server: any = (await getMcpConnectorsStatus()).servers.find((row: { name: string }) => row.name === name);
-	const answers: Record<string, Response> = {};
-	await inPage(async (input, init) => {
-		const route = `${init?.method ?? "GET"} ${String(input)}`;
-		const answer = answers[route];
-		if (answer) return answer.clone();
-		throw new Error(`the row asked for ${route}, which this smoke does not answer`);
-	}, async ({ container, dom, act, render }) => {
-		let reads = 0;
-		const draw = () => render(createElement(ConnectorRow, { server, check: { at: Date.now(), ok: true }, open: true, onToggle: noop, onCheck: noop, onChanged: async () => { reads++; }, onNotice: noop, readOnly: false }));
-		const fromMenu = async (label: string) => {
-			await click(dom, act, container.querySelector("button.connector-item-more")!);
-			const item = [...container.ownerDocument.querySelectorAll(".ai-profile-menu [role=menuitem]")].find((found) => found.textContent === label);
-			assert(item, `the menu offers ${label}`);
-			await click(dom, act, item);
-		};
-		const waitForRead = async (what: string) => {
-			for (let tries = 0; tries < 60 && reads === 0; tries++) await act(() => sleep(50));
-			assert(reads > 0, `${what}: the list is read again`);
-		};
+	writeMcpConnectorCheck(name, { at: Date.now(), ok: true });
+	const answers: Record<string, Response> = { [`POST /api/mcp/servers/${name}/test`]: jsonAnswer({ ok: true, toolCount: 0 }) };
+	await connectorsPage((route) => answers[route]?.clone() ?? null, async ({ container, dom, act, asked, waitFor, openPage, pageButton, dialog }) => {
+		const reads = () => asked.filter((route) => route === "GET /api/mcp/status").length;
+		const pageError = () => container.querySelector(".connector-page-error span")?.textContent;
+		await openPage(name);
 		// Change address refused because it was moved to a file this page doesn't change.
 		answers[`PUT /api/mcp/servers/${name}/address`] = jsonAnswer({ error: CONNECTOR_FORM_LINES.addressNotChangeable }, 409);
-		await draw();
-		await fromMenu(CONNECTOR_WORDS.menu.changeAddress);
+		let before = reads();
+		await click(dom, act, pageButton(CONNECTOR_WORDS.button.changeAddress)!);
 		await typeInto(dom, act, container.querySelector<HTMLInputElement>(`.connector-edit input[aria-label="${CONNECTOR_WORDS.details.address}"]`)!, "http://127.0.0.1:9/stale/v2");
 		// Saved by the button, as a click takes the focus from the field first.
 		await act(async () => { (dom.window.document.activeElement as HTMLElement | null)?.blur(); });
 		await click(dom, act, buttonNamed(container, CONNECTOR_WORDS.button.save)!);
-		await waitForRead("a change refused as out of date");
-		assert(container.querySelector(".connector-edit") === null && container.querySelector(".connector-row-error")?.textContent === CONNECTOR_FORM_LINES.addressNotChangeable, `the edit closes and the row says why, got ${container.textContent}`);
+		await waitFor("the list read again after a change refused as out of date", () => reads() > before);
+		await waitFor("the page to say why", () => pageError() === CONNECTOR_FORM_LINES.addressNotChangeable);
+		assert(container.querySelector(".connector-edit") === null, `the edit closes, got ${container.textContent}`);
 		// A check of a connector that no longer exists.
-		reads = 0;
 		answers[`POST /api/mcp/servers/${name}/test`] = jsonAnswer({ error: CONNECTOR_REQUEST_LINES.noLongerExists }, 404);
-		await draw();
-		await fromMenu(CONNECTOR_WORDS.menu.checkConnection);
-		await waitForRead("a check of a connector that no longer exists");
+		before = reads();
+		await click(dom, act, pageButton(CONNECTOR_WORDS.button.checkConnection)!);
+		await waitFor("the list read again after a check of a connector that no longer exists", () => reads() > before);
 		// Remove refused: added somewhere this page doesn't change.
-		reads = 0;
 		answers[`DELETE /api/mcp/servers/${name}`] = jsonAnswer({ error: CONNECTOR_REQUEST_LINES.notRemovable(null) }, 409);
-		await draw();
-		await fromMenu(CONNECTOR_WORDS.menu.remove);
-		await click(dom, act, buttonNamed(container, CONNECTOR_WORDS.button.remove)!);
-		await waitForRead("a refused Remove");
-		assert(container.querySelector(".connector-row-error")?.textContent === CONNECTOR_REQUEST_LINES.notRemovable(null), `a refused Remove says why, got ${container.textContent}`);
+		before = reads();
+		await click(dom, act, pageButton(CONNECTOR_WORDS.button.remove)!);
+		await waitFor("the Remove question", () => dialog() !== null);
+		await click(dom, act, buttonNamed(dialog()!, CONNECTOR_WORDS.button.remove)!);
+		await waitFor("the list read again after a refused Remove", () => reads() > before);
+		await waitFor("the page to say why Remove was refused", () => pageError() === CONNECTOR_REQUEST_LINES.notRemovable(null));
+		assert(!buttonNamed(container.querySelector(".connector-page-error")!, CONNECTOR_WORDS.button.tryAgain), "a Remove refused for good offers no Try again");
 	});
 });
 
 // Over remote access the page changes nothing, so a line shows its fact
 // alone, and "this computer" is the computer itself, not the device in hand.
+// Each is the row and the page drawn together.
 await section("remote-words", async () => {
-	const { ConnectorRow } = await component("ConnectorsPage.tsx");
 	const { CONNECTOR_WORDS, lineText } = await rowsModule();
 	const auth = { mode: "none", explicit: false, hasStoredTokens: false, tokenExpired: null, hasRefreshToken: false };
 	const base = { tools: null, usedIn: [], lastCheck: null, key: "none", movesToAnotherSite: true, source: { kind: "user", path: "~/.exxperts/agent/mcp.json" }, auth };
 	const web = { ...base, name: "team-wiki", transport: "http", target: "http://127.0.0.1:9/wiki", editable: true };
 	const program = { ...base, name: "local-files", transport: "stdio", target: "node files-server.js", editable: false };
-	const drawn = (server: unknown, check: unknown, readOnly: boolean) => text(renderToStaticMarkup(createElement(ConnectorRow, { server, check, open: true, onToggle: noop, onCheck: noop, onChanged: async () => {}, onNotice: noop, readOnly })) as string);
+	const drawn = async (server: unknown, check: unknown, readOnly: boolean) => `${(await drawnRow(server, check, { readOnly })).words} ${(await drawnPage(server, check, { readOnly })).words}`;
 	const notFound = { at: Date.now(), ok: false, httpStatus: 404, error: "HTTP 404" };
 	const words = CONNECTOR_WORDS.wentWrong;
-	const remoteWeb = drawn(web, notFound, true);
+	const remoteWeb = await drawn(web, notFound, true);
 	assert(remoteWeb.includes(words.addressNotFound.fact) && !remoteWeb.includes(words.addressNotFound.way!), `over remote access the line is its fact alone, got ${remoteWeb}`);
-	assert(drawn(web, notFound, false).includes(lineText(words.addressNotFound, false)), "on the computer itself the line keeps its way on");
-	const remoteProgram = drawn(program, null, true);
+	assert((await drawn(web, notFound, false)).includes(lineText(words.addressNotFound, false)), "on the computer itself the line keeps its way on");
+	const remoteProgram = await drawn(program, null, true);
 	assert(remoteProgram.includes(CONNECTOR_WORDS.status.programRemote) && remoteProgram.includes(CONNECTOR_WORDS.details.runsHereRemote) && !remoteProgram.includes("this computer"), `over remote access a program runs on the computer itself, got ${remoteProgram}`);
-	const remoteFailed = drawn(program, { at: Date.now(), ok: false, error: "spawn node ENOENT" }, true);
+	const remoteFailed = await drawn(program, { at: Date.now(), ok: false, error: "spawn node ENOENT" }, true);
 	assert(remoteFailed.includes(words.programRemote.fact) && !remoteFailed.includes(words.program.way!), `a program that didn't answer, over remote access, got ${remoteFailed}`);
-	const ownProgram = drawn(program, null, false);
+	const ownProgram = await drawn(program, null, false);
 	assert(ownProgram.includes(CONNECTOR_WORDS.status.program) && ownProgram.includes(CONNECTOR_WORDS.details.runsHere), `on the computer itself a program runs on this computer, got ${ownProgram}`);
+	// The lines that name the computer say which one: over remote access, the computer itself, never this one.
+	const untrusted = { at: Date.now(), ok: false, reach: "untrusted-certificate", error: "self-signed certificate" };
+	const python = { at: Date.now(), ok: false, error: "spawn python ENOENT", programFailure: { cause: "python-is-python3", found: "python3" } };
+	for (const [what, server, check, here, remote] of [
+		["an address it doesn't trust", web, untrusted, words.untrustedCertificate, words.untrustedCertificateRemote],
+		["Python by its other name", program, python, words.pythonOtherName("python3", "python"), words.pythonOtherNameRemote("python3", "python")],
+	] as const) {
+		const far = await drawn(server, check, true);
+		assert(far.includes(remote.fact) && !far.includes(here.fact), `${what}, over remote access, names the computer itself, got ${far}`);
+		const near = await drawn(server, check, false);
+		assert(near.includes(here.fact) && !near.includes(remote.fact), `${what}, on the computer itself, names this computer, got ${near}`);
+	}
 });
 
 /**
@@ -1086,7 +1471,7 @@ await sectionInOwnProcess("room-pane-own", async () => {
 	}, async ({ container, dom, act, waitFor }) => {
 		const focused = () => dom.window.document.activeElement as HTMLElement | null;
 		await waitFor("the allowed tools", () => container.querySelectorAll(".room-connector-allowed li").length === 2);
-		assert(container.querySelector(".room-connector-allowed-label")?.textContent === "Allowed without asking:" && container.textContent!.includes("Reading runs freely. Anything else asks you first, unless you allowed it below."), `the pane lists the allowed tools, got ${container.textContent}`);
+		assert(container.querySelector(".room-connector-allowed-label")?.textContent === "Allowed without asking in this room:" && container.textContent!.includes(CONNECTORS_EACH_TOOL_LINE), `the pane lists the allowed tools, got ${container.textContent}`);
 		await click(dom, act, container.querySelector('button[aria-label="Remove Create task"]')!);
 		await waitFor("one tool left", () => container.querySelectorAll(".room-connector-allowed li").length === 1);
 		assert(JSON.stringify(sent) === JSON.stringify([{ action: "forget-tool", name: "asana", tool: "create_task" }]), `Remove sends that tool alone, got ${JSON.stringify(sent)}`);
@@ -1208,6 +1593,289 @@ await section("room-names-shared", async () => {
 		assert(JSON.stringify(names) === JSON.stringify(["Team wiki"]), `a member sees the connector as it was named, got ${JSON.stringify(names)}`);
 		assert(!asked.includes("GET /api/mcp/status"), `a member's page never asks for the full status, asked ${JSON.stringify(asked)}`);
 	});
+});
+
+/** A port on this computer with nothing listening: one that was free a moment ago. */
+async function closedPort(): Promise<number> {
+	const probe = http.createServer();
+	await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+	const { port } = probe.address() as AddressInfo;
+	await new Promise<void>((resolve) => probe.close(() => resolve()));
+	return port;
+}
+
+/** Each request a stand-in got: where, whether it was the check's own direct request, its key header, and when its connection closed. */
+type Reached = { at: string; direct: boolean; key: string | undefined; arrived: number; closed?: number };
+
+/** A stand-in for a check's failures: `how` answers, holds or drops each request, and every request is kept in `reached`. */
+async function failingStandIn(reached: Reached[], how: (req: http.IncomingMessage, res: http.ServerResponse, direct: boolean) => void): Promise<{ server: http.Server; at: string }> {
+	const server = http.createServer((req, res) => {
+		let raw = "";
+		req.on("data", (chunk) => { raw += chunk; });
+		req.on("end", () => {
+			const one: Reached = { at: `${req.headers.host}${req.url}`, direct: raw.includes("exxperts-connection-test"), key: req.headers["x-api-key"] as string | undefined, arrived: Date.now() };
+			reached.push(one);
+			req.socket.once("close", () => { one.closed = Date.now(); });
+			how(req, res, one.direct);
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	return { server, at: `127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+/**
+ * A connector over HTTPS whose certificate is made here, self-signed, by
+ * openssl; null where there is no openssl. It answers as a connector would,
+ * so only the certificate stops a client.
+ */
+async function untrustedStandIn(reached: Reached[]): Promise<{ server: http.Server; at: string } | null> {
+	const folder = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-untrusted-"));
+	try {
+		execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", path.join(folder, "key.pem"), "-out", path.join(folder, "cert.pem"), "-days", "1", "-subj", "/CN=127.0.0.1"], { stdio: "ignore" });
+	} catch {
+		fs.rmSync(folder, { recursive: true, force: true });
+		return null;
+	}
+	const server = https.createServer({ key: fs.readFileSync(path.join(folder, "key.pem")), cert: fs.readFileSync(path.join(folder, "cert.pem")) }, (req, res) => {
+		reached.push({ at: `${req.headers.host}${req.url}`, direct: false, key: undefined, arrived: Date.now() });
+		res.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+	});
+	fs.rmSync(folder, { recursive: true, force: true });
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	return { server: server as unknown as http.Server, at: `127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+// A web connector's failed check says why nothing answered when it can tell:
+// nothing listening at its address, a name that isn't found, an ordinary web
+// page, or a certificate this computer doesn't trust, each with its own line
+// and Change address where the person can change it. A server that wants a
+// sign-in reads Not connected with Connect, by a 401 or a 403 to one with no
+// key and no sign-in; one that holds the
+// connection past 20 s still didn't answer in time. Asking the server directly
+// goes only to the stored address, with the stored headers, follows no
+// redirect and waits 5 s at most. The row reads the same right after the check
+// and from the kept check, as Settings opened again reads it, and what it shows
+// carries no key, no header's value and no part of the address's query.
+await section("check-says-why", async () => {
+	const { addMcpServer, testMcpServer } = await import("../src/mcp-admin.js");
+	const { getMcpConnectorsStatus, readMcpConnectorChecks } = await import("../src/mcp-status.js");
+	const { CONNECTOR_WORDS, checkOf, connectorRowState, lineText, rowLook, rowNote, wentWrongLine } = await rowsModule();
+	const words = CONNECTOR_WORDS.wentWrong;
+	const { notAnswering, notConnected, cantConnect } = CONNECTOR_WORDS.status;
+	const reached: Reached[] = [];
+	// Wants a sign-in for everything and turns down the app's own registration, as the measured service did:
+	// the connection then ends with no words of its own.
+	const refusing = await failingStandIn(reached, (req, res) => void (req.url?.startsWith("/register") ? res.writeHead(400, { "Content-Type": "application/json" }).end('{"error":"invalid_client_metadata"}') : res.writeHead(401, { "Content-Type": "text/plain" }).end("sign in first")));
+	const elsewhere = await failingStandIn(reached, (_req, res) => void res.writeHead(200).end());
+	const redirecting = await failingStandIn(reached, (_req, res) => void res.writeHead(302, { Location: `http://${elsewhere.at}/mcp` }).end());
+	// Drops the connector's own requests at once and holds the check's direct request, so only its own limit ends it.
+	const dropping = await failingStandIn(reached, (req, _res, direct) => { if (!direct) req.socket.destroy(); });
+	const holding = await failingStandIn(reached, () => {});
+	// Turns away every request without a sign-in, and answers one with a sign-in as `signed` says.
+	const signedAnswer = (signed: number) => failingStandIn(reached, (req, res) => void res.writeHead(req.headers.authorization ? signed : 401, { "Content-Type": "text/plain" }).end("no"));
+	const signedRefused = await signedAnswer(403);
+	const signedDown = await signedAnswer(503);
+	const signedOlder = await signedAnswer(405);
+	// An ordinary web page at every path, and a service that refuses everyone without a key.
+	const webPage = await failingStandIn(reached, (_req, res) => void res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end("<!DOCTYPE html><html><body>Welcome</body></html>"));
+	const forbidding = await failingStandIn(reached, (_req, res) => void res.writeHead(403, { "Content-Type": "text/plain" }).end("forbidden"));
+	// A connector behind a certificate made here, which this computer has no reason to trust.
+	const untrusted = await untrustedStandIn(reached);
+	const servers = [refusing, elsewhere, redirecting, dropping, holding, signedRefused, signedDown, signedOlder, webPage, forbidding, ...(untrusted ? [untrusted] : [])].map((one) => one.server);
+	const closed = await closedPort();
+	const QUERY_SECRET = "synthetic-query-secret";
+	const HEADER_SECRET = "synthetic-header-secret";
+	try {
+		await addMcpServer({ name: "nothing-there", url: `http://127.0.0.1:${closed}/mcp?token=${QUERY_SECRET}`, headers: { Authorization: `Bearer ${HEADER_SECRET}` } });
+		await addMcpServer({ name: "name-not-found", url: "http://exxperts-smoke-desk.invalid/mcp" });
+		await addMcpServer({ name: "wants-sign-in", url: `http://${refusing.at}/mcp` });
+		await addMcpServer({ name: "key-turned-down", url: `http://${refusing.at}/keyed`, headers: { "X-Api-Key": "synthetic-key" } });
+		await addMcpServer({ name: "moved-away", url: `http://${redirecting.at}/mcp` });
+		await addMcpServer({ name: "slow-to-say", url: `http://${dropping.at}/mcp` });
+		await addMcpServer({ name: "holds-on", url: `http://${holding.at}/mcp` });
+		await addMcpServer({ name: "signed-in-refused", url: `http://${signedRefused.at}/mcp` });
+		await addMcpServer({ name: "signed-in-down", url: `http://${signedDown.at}/mcp` });
+		await addMcpServer({ name: "signed-in-older", url: `http://${signedOlder.at}/mcp` });
+		await addMcpServer({ name: "web-page", url: `http://${webPage.at}/mcp` });
+		await addMcpServer({ name: "forbids-keyless", url: `http://${forbidding.at}/mcp` });
+		if (untrusted) await addMcpServer({ name: "untrusted", url: `https://${untrusted.at}/mcp` });
+		const authStore = await import("pi-mcp-adapter/mcp-auth.ts" as string);
+		const inAnHour = Math.floor(Date.now() / 1000) + 3600;
+		authStore.updateTokens("signed-in-refused", { accessToken: "synthetic-valid", expiresAt: inAnHour }, `http://${signedRefused.at}/mcp`);
+		authStore.updateTokens("signed-in-down", { accessToken: "synthetic-valid", expiresAt: inAnHour }, `http://${signedDown.at}/mcp`);
+		authStore.updateTokens("signed-in-older", { accessToken: "synthetic-valid", expiresAt: inAnHour }, `http://${signedOlder.at}/mcp`);
+		const { changeAddress, connect, tryAgain, reconnect } = CONNECTOR_WORDS.button;
+		const cases: Array<[string, { reach: string | null; needsAuth: boolean; status: string; line: unknown; way: string | null; button: string | null }]> = [
+			["nothing-there", { reach: "nothing-there", needsAuth: false, status: notAnswering, line: words.nothingThere, way: "changeAddress", button: "tryAgain" }],
+			["name-not-found", { reach: "name-not-found", needsAuth: false, status: CONNECTOR_WORDS.status.addressNotFound, line: words.nameNotFound, way: "changeAddress", button: "tryAgain" }],
+			// No key and no sign-in kept: the 401 is a sign-in to make, as a sign-in known to be missing reads.
+			["wants-sign-in", { reach: null, needsAuth: true, status: notConnected, line: null, way: null, button: "connect" }],
+			["key-turned-down", { reach: null, needsAuth: false, status: cantConnect, line: words.keyRefused, way: "changeKey", button: null }],
+			// A redirect is an answer of its own, never followed to the other host.
+			["moved-away", { reach: null, needsAuth: false, status: cantConnect, line: words.addressRefused, way: "changeAddress", button: null }],
+			["slow-to-say", { reach: null, needsAuth: false, status: notAnswering, line: words.noAnswer, way: "changeAddress", button: "tryAgain" }],
+			["holds-on", { reach: null, needsAuth: false, status: notAnswering, line: words.noAnswer, way: "changeAddress", button: "tryAgain" }],
+			// A sign-in kept: the signed request's own answer wins where it isn't about the sign-in; a refusal, or the
+			// older transport's 405 after one, leaves the direct request's refusal standing.
+			["signed-in-refused", { reach: null, needsAuth: true, status: CONNECTOR_WORDS.status.needsReconnecting, line: null, way: null, button: "reconnect" }],
+			["signed-in-older", { reach: null, needsAuth: true, status: CONNECTOR_WORDS.status.needsReconnecting, line: null, way: null, button: "reconnect" }],
+			["signed-in-down", { reach: null, needsAuth: false, status: CONNECTOR_WORDS.status.cantConnectNow, line: words.busy, way: null, button: "tryAgain" }],
+			// It answered at once, but with an ordinary web page: its address is the way on, not trying again.
+			["web-page", { reach: "web-page", needsAuth: false, status: cantConnect, line: words.webPage, way: "changeAddress", button: null }],
+			// A 403 with no key and no sign-in kept wants a sign-in, as a 401 does.
+			["forbids-keyless", { reach: null, needsAuth: true, status: notConnected, line: null, way: null, button: "connect" }],
+		];
+		// Turned down at once for its certificate: never an answer to use, and its address is the way on.
+		if (untrusted) cases.push(["untrusted", { reach: "untrusted-certificate", needsAuth: false, status: cantConnect, line: words.untrustedCertificate, way: "changeAddress", button: null }]);
+		else console.log("check-says-why: the certificate row skipped (no openssl to make a certificate)");
+		assert(changeAddress && connect && tryAgain && reconnect, "the buttons have words");
+		const results = new Map<string, any>();
+		for (const [name] of cases) results.set(name, await testMcpServer(name));
+		// Settings opened again: the status as it reads the kept checks.
+		const rows = new Map<string, any>((await getMcpConnectorsStatus()).servers.map((row: { name: string }) => [row.name, row]));
+		const problems: string[] = [];
+		const seen = (row: any, check: unknown) => {
+			const state = connectorRowState(row, check, null);
+			const wrong = wentWrongLine(row, state, false);
+			const look = rowLook(state, false);
+			return { status: look.status, line: wrong?.line ?? null, way: wrong?.button ?? null, button: look.button, note: rowNote(row, state, false), remote: wrong ? lineText(wrong.line, true) : null };
+		};
+		for (const [name, expected] of cases) {
+			const result = results.get(name);
+			const row = rows.get(name);
+			const got = { reach: result.reach ?? null, needsAuth: Boolean(result.needsAuth), ...seen(row, checkOf(result)) };
+			const want = { ...expected, note: (expected.line as { fact: string } | null)?.fact ?? null, remote: (expected.line as { fact: string } | null)?.fact ?? null };
+			if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${name}'s check should read ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+			const again = seen(row, row.lastCheck);
+			const { reach: _reach, needsAuth: _needsAuth, ...right } = got;
+			if (JSON.stringify(again) !== JSON.stringify(right)) problems.push(`${name} reads the same from its kept check: ${JSON.stringify(right)}, got ${JSON.stringify(again)}`);
+		}
+		assert(problems.length === 0, problems.join("\n"));
+		assert(words.webPage.fact === "Its address leads to a web page, not a connector." && words.untrustedCertificate.fact === "This computer doesn't trust its address, so it wasn't used.", "the web page's and the certificate's lines are the ones proposed");
+		assert(words.nothingThere.fact === "Nothing is answering at its address." && words.nothingThere.way === "If the address is right, try again later." && words.nameNotFound.fact === "Its web address wasn't found." && words.nameNotFound.way === "Check it, and that this computer is online.", "the new lines are the ones proposed");
+		// What the row shows of a connector with a key in its address and its header never carries either.
+		const secretRow = rows.get("nothing-there");
+		const shown = JSON.stringify([results.get("nothing-there").reach, rowNote(secretRow, connectorRowState(secretRow, checkOf(results.get("nothing-there")), null), false), wentWrongLine(secretRow, connectorRowState(secretRow, secretRow.lastCheck, null), false)]);
+		assert(!shown.includes(QUERY_SECRET) && !shown.includes(HEADER_SECRET), `the row's words carry no key, got ${shown}`);
+		// The kept check keeps a reason only as one of its two codes.
+		const checksFile = path.join(agentDir, "mcp-connector-checks.json");
+		const kept = JSON.parse(fs.readFileSync(checksFile, "utf-8"));
+		kept.checks["odd-reach"] = { at: Date.now(), ok: false, reach: `nothing-there ${HEADER_SECRET}` };
+		fs.writeFileSync(checksFile, JSON.stringify(kept));
+		const reread = readMcpConnectorChecks();
+		assert(reread["odd-reach"] && !("reach" in reread["odd-reach"]) && reread["nothing-there"].reach === "nothing-there" && reread["name-not-found"].reach === "name-not-found" && reread["web-page"].reach === "web-page", `a kept reason is one of its codes or none, got ${JSON.stringify(reread)}`);
+		// The direct request: once per check that failed with no answer of its own, at the stored address, with the stored header.
+		const direct = reached.filter((one) => one.direct);
+		const directAt = direct.map((one) => one.at).sort();
+		// The certificate's stand-in never sees a request: its connection is turned down before one is sent.
+		const expectedAt = [`${refusing.at}/keyed`, `${refusing.at}/mcp`, `${redirecting.at}/mcp`, `${dropping.at}/mcp`, `${signedRefused.at}/mcp`, `${signedDown.at}/mcp`, `${signedOlder.at}/mcp`, `${webPage.at}/mcp`, `${forbidding.at}/mcp`].sort();
+		assert(JSON.stringify(directAt) === JSON.stringify(expectedAt), `the direct request goes to each stored address once, and never on after a redirect or past the 20 s, got ${JSON.stringify(directAt)}`);
+		assert(direct.find((one) => one.at === `${refusing.at}/keyed`)?.key === "synthetic-key" && direct.find((one) => one.at === `${refusing.at}/mcp`)?.key === undefined, "the direct request carries the stored header, and only where it is stored");
+		const held = direct.find((one) => one.at === `${dropping.at}/mcp`)!;
+		const heldFor = (held.closed ?? Date.now()) - held.arrived;
+		assert(heldFor >= 4000 && heldFor <= 7000, `the direct request waits 5 s at most, it waited ${heldFor} ms`);
+		assert(!reached.some((one) => one.at.startsWith(elsewhere.at) && one.direct), "the direct request follows no redirect to another host");
+	} finally {
+		for (const server of servers) {
+			server.closeAllConnections();
+			server.close();
+		}
+	}
+});
+
+/**
+ * A connector that lists one tool more to a client that can show its forms,
+ * and one more to one that lends it the model, as the reference connector
+ * does, with two documents and its own instructions. While it lists its tools
+ * it asks for a form and for the model, where the client said it can take
+ * them, and keeps each answer.
+ */
+async function askingConnector(instructions: string): Promise<{ server: http.Server; url: string; answers: Map<string, unknown> }> {
+	const answers = new Map<string, unknown>();
+	const waiting = new Map<string, () => void>();
+	let declared: { elicitation?: unknown; sampling?: unknown } = {};
+	const event = (message: unknown) => `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", ...(message as object) })}\n\n`;
+	const server = http.createServer((req, res) => {
+		let raw = "";
+		req.on("data", (chunk) => { raw += chunk; });
+		req.on("end", async () => {
+			if (req.method !== "POST") return void res.writeHead(405).end();
+			const message = JSON.parse(raw);
+			if (message.method === undefined && message.id !== undefined) {
+				answers.set(String(message.id), message.error ? { error: message.error.message } : message.result);
+				waiting.get(String(message.id))?.();
+				return void res.writeHead(202).end();
+			}
+			if (message.id === undefined) return void res.writeHead(202).end();
+			const json = (result: unknown) => void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+			if (message.method === "initialize") {
+				declared = message.params?.capabilities ?? {};
+				return json({ protocolVersion: message.params?.protocolVersion, capabilities: { tools: {}, resources: {} }, serverInfo: { name: "asking-connector", version: "1.0.0" }, instructions });
+			}
+			if (message.method === "resources/list") return json({ resources: [{ uri: "notes://all", name: "notes" }, { uri: "notes://spaces", name: "spaces" }] });
+			if (message.method !== "tools/list") return json({});
+			const tools = [{ name: "search_notes" }, { name: "list_spaces" }, ...(declared.elicitation ? [{ name: "fill_in" }] : []), ...(declared.sampling ? [{ name: "summarize" }] : [])];
+			const asks = [
+				...(declared.elicitation ? [{ id: "ask-form", method: "elicitation/create", params: { mode: "form", message: "Which space?", requestedSchema: { type: "object", properties: { space: { type: "string" } } } } }] : []),
+				...(declared.sampling ? [{ id: "ask-model", method: "sampling/createMessage", params: { messages: [{ role: "user", content: { type: "text", text: "Summarise the notes." } }], maxTokens: 20 } }] : []),
+			];
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			for (const ask of asks) res.write(event(ask));
+			await Promise.all(asks.map((ask) => new Promise<void>((resolve) => { waiting.set(ask.id, resolve); setTimeout(resolve, 5000); })));
+			res.end(event({ id: message.id, result: { tools: tools.map((tool) => ({ inputSchema: { type: "object" }, ...tool })) } }));
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`, answers };
+}
+
+// The page's check meets a connector as a room does: it says it can show forms
+// and offers no model, so the connector lists what it lists to a room, and a
+// form it asks for during the check is declined, so nothing reaches the
+// person. It keeps the connector's own instructions with its list, cut at
+// 4,096 characters. The row gives the
+// tools but the one switched off and leaves the documents out; the room's pane
+// gives the same tools, and the two add up to the model's line, on a shared
+// server too.
+await sectionInOwnProcess("check-like-a-room", async () => {
+	const { testMcpServer } = await import("../src/mcp-admin.js");
+	const { getMcpConnectorsStatus } = await import("../src/mcp-status.js");
+	const { CONNECTOR_WORDS, connectorRowState, rowNote } = await rowsModule();
+	const { buildRoomScopedProxyDescription } = await import("../../../pi-package/extensions/mcp/room-scope.js");
+	const cacheMod = await import("pi-mcp-adapter/metadata-cache.ts" as string);
+	const instructions = `Read the notes before the spaces. ${"Each space has its own notes. ".repeat(160)}`;
+	assert(instructions.length > 4096, "the instructions run past the cut");
+	const connector = await askingConnector(instructions);
+	try {
+		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { "notes-desk": { url: connector.url, excludeTools: ["list_spaces"] } } }));
+		const result = await testMcpServer("notes-desk");
+		assert(result.ok && JSON.stringify([...(result.toolNames ?? [])].sort()) === JSON.stringify(["fill_in", "list_spaces", "search_notes"]), `the check lists what a room is offered, got ${JSON.stringify(result)}`);
+		assert(JSON.stringify(connector.answers.get("ask-form")) === JSON.stringify({ action: "decline" }), `a form asked for during the check is declined, got ${JSON.stringify(connector.answers.get("ask-form"))}`);
+		assert(!connector.answers.has("ask-model"), `no model is offered, so the connector asks for none, got ${JSON.stringify(connector.answers.get("ask-model"))}`);
+		const saved = cacheMod.loadMetadataCache().servers["notes-desk"];
+		assert(saved.instructions === instructions.slice(0, 4096), `the connector's instructions are kept with its list, cut at 4,096, got ${String(saved.instructions).length} characters`);
+		// Three tools, one switched off, and two documents: two tools and two documents, four to the model.
+		const room = await roomWith("notes-desk");
+		const modelCount = async () => /notes-desk \((\d+) tools\)/.exec(await buildRoomScopedProxyDescription(room))?.[1];
+		const row = (await getMcpConnectorsStatus()).servers.find((one: { name: string }) => one.name === "notes-desk") as any;
+		assert(row.tools.count === 2 && row.tools.documents === 2 && (await modelCount()) === "4", `the row's tools and documents add up to the model's line, got ${row.tools.count} and ${row.tools.documents} against ${await modelCount()}`);
+		const note = rowNote(row, connectorRowState(row, null, null), false);
+		assert(note === "2 tools", `the row counts its tools and leaves its documents out, got ${note}`);
+		assert(CONNECTOR_WORDS.toolCount(1) === "1 tool" && CONNECTOR_WORDS.toolCount(4) === "4 tools", "one tool is counted as one");
+		await roomPane({ remote: false, sharedServer: false }, (route) => (route === `GET ${ROOM_ROUTE}` ? jsonAnswer(roomAnswer(["notes-desk"], [{ name: "notes-desk", configured: true }])) : route === "GET /api/mcp/status" ? getMcpConnectorsStatus().then((status) => jsonAnswer(status)) : null), async ({ container, waitFor }) => {
+			await waitFor("the room's connector", () => container.querySelector(".room-skills-desc") !== null);
+			const desc = container.querySelector(".room-skills-desc")!.textContent ?? "";
+			assert(desc.endsWith(" · 2 tools"), `the room's pane gives the same tool count, got ${desc}`);
+		});
+		// On a shared server the lists leave documents and switched-off tools out, and the count stays the model's.
+		const { registerServerHooks } = await import("../src/server-hooks.js");
+		registerServerHooks({});
+		const shared = (await getMcpConnectorsStatus()).servers.find((one: { name: string }) => one.name === "notes-desk") as any;
+		assert(shared.tools.count === 2 && shared.tools.documents === 2 && shared.tools.resources === undefined && shared.tools.excluded === undefined && (await modelCount()) === "4", `on a shared server the two counts are the same, got ${JSON.stringify(shared.tools)}`);
+	} finally {
+		connector.server.closeAllConnections();
+		connector.server.close();
+	}
 });
 
 console.log("memory-connectors-bugs smoke passed");

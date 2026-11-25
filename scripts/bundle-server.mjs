@@ -60,7 +60,7 @@ export const FILE_PACKAGES = [
 	{ name: "qrcode-terminal", reason: "remote-qr.ts loads it through createRequire, which esbuild cannot follow" },
 	{ name: "jszip", reason: "the shelf worker, a separate forked file, opens docx and xlsx with it" },
 	{ name: "@anthropic-ai/sandbox-runtime", reason: "the box worker, a separate forked file, holds the library's proxy and log monitor; the win-x64 desktop payload leaves it out (DESKTOP_TARGET_DROP in apps/desktop/scripts/prune-payload.mjs)" },
-	{ name: "@microsoft/mxc-sdk", reason: "the Windows box worker, a bundle of its own, imports it, and it finds its native library from its own folder; only the win-x64 desktop payload keeps it (DESKTOP_TARGET_DROP in apps/desktop/scripts/prune-payload.mjs)" },
+	{ name: "@microsoft/mxc-sdk", reason: "the Windows box worker, a bundle of its own, imports it, and it finds its native library from its own folder; only the win-x64 archive and its desktop payload carry it (ARCHIVE_TARGET_DROP in scripts/bundle-release-prune.mjs)" },
 ];
 
 // A file of one of our runtime packages, whether esbuild reached it through
@@ -383,22 +383,31 @@ function resolvePackageDir(name, from, root) {
 
 // The folders of every package the bundled server loads as files, with the
 // packages they depend on, resolved the way node does from the bundle's
-// folder: what a payload that drops everything else must keep. `missing`
-// names what could not be found. `exclude` names optional dependencies a
-// trimmed payload leaves out on purpose; a package that a kept package
-// requires is kept all the same. `leaveOut` names shipped packages a trimmed
-// payload leaves out on purpose: the walk does not start from them, so what
-// only they need goes with them, and what a kept package needs is still kept
-// and still checked. `cut` names dependencies, as { name, from }, that the
-// walk does not follow from that package, for code of it nothing loads.
+// folder: what a payload that drops everything else must keep. `leaveOut`
+// names shipped packages a trimmed payload leaves out on purpose: the walk
+// does not start from them, so what only they need goes with them, and what a
+// kept package needs is still kept and still checked. The rest is
+// packageDirs'.
 export function shippedPackageDirs(root, { exclude = [], leaveOut = [], cut = [] } = {}) {
-	const base = path.resolve(root);
-	const outDir = path.join(base, ...OUT_DIR);
-	const dirs = new Set();
-	const missing = [];
-	const queue = [...EXTERNAL_PACKAGES.filter((pkg) => pkg.ships), ...FILE_PACKAGES]
+	const outDir = path.join(path.resolve(root), ...OUT_DIR);
+	const start = [...EXTERNAL_PACKAGES.filter((pkg) => pkg.ships), ...FILE_PACKAGES]
 		.filter(({ name }) => !leaveOut.includes(name))
 		.map(({ name }) => ({ name, from: outDir }));
+	return packageDirs(root, start, { exclude, cut });
+}
+
+// The folders of the `start` packages, each { name, from, optional? }, and of
+// every package they depend on, resolved the way node does from `from`.
+// `missing` names what could not be found; a missing optional one is no
+// fault. `exclude` names optional dependencies a trimmed payload leaves out on
+// purpose; a package that a kept package requires is kept all the same. `cut`
+// names dependencies, as { name, from }, that the walk does not follow from
+// that package, for code of it nothing loads.
+export function packageDirs(root, start, { exclude = [], cut = [] } = {}) {
+	const base = path.resolve(root);
+	const dirs = new Set();
+	const missing = [];
+	const queue = [...start];
 	while (queue.length > 0) {
 		const { name, from, neededBy, optional } = queue.shift();
 		const dir = resolvePackageDir(name, from, base);

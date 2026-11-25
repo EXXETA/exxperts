@@ -327,15 +327,11 @@ try {
 		same(recorded(), "0.14.4", "the newer record stands");
 	});
 
-	await check("on a shared server a browser drops what its seen mark covers, and with no mark sees only the newest line", async () => {
+	await check("on a shared server no release shows, whatever this browser has seen", async () => {
 		const { sharedServerReleases } = await import(new URL("../../web-ui/src/components/whats-new-dialog.tsx", import.meta.url).href) as { sharedServerReleases: (sections: Sections, seenMark: string | null) => Sections };
-		const shown = (seenMark: string | null) => versionsOf({ ...TWO_MAJORS, sections: sharedServerReleases(TWO_MAJORS.sections as Sections, seenMark) });
-		same(shown("0.14.1"), { major: [], minor: ["0.14.3", "0.14.2"] }, "a mark inside the newest line");
-		same(shown("0.13.1"), { major: ["0.14.0"], minor: ["0.14.3", "0.14.2", "0.14.1", "0.13.2"] }, "a mark in an older line");
-		const newestLine = { major: ["0.14.0"], minor: ["0.14.3", "0.14.2", "0.14.1"] };
-		same(shown(null), newestLine, "no mark: the newest line only");
-		same(shown("not a version"), newestLine, "a mark that is not a version counts as none");
-		same(shown("0.14.3"), { major: [], minor: [] }, "a mark at the running version leaves nothing");
+		for (const seenMark of [null, "0.13.1", "0.14.1", "not a version"]) {
+			same(versionsOf({ ...TWO_MAJORS, sections: sharedServerReleases(TWO_MAJORS.sections as Sections, seenMark) }), { major: [], minor: [] }, `mark ${JSON.stringify(seenMark)}`);
+		}
 	});
 
 	await check("majors show in full, patches are closed rows naming what they touch, and an empty section is not shown", async () => {
@@ -390,8 +386,8 @@ try {
 			}
 			return baseUrl;
 		})();
-		/** The real page, its What's new request answered with `payload`. */
-		const openPage = async (payload: Payload, run: (page: Page, seenPosts: () => number) => Promise<void>, shared?: { seenMark: string }): Promise<void> => {
+		/** The real page, its What's new request answered with `payload`; on a shared server, `seenMark` is what this browser saw last, null for never. */
+		const openPage = async (payload: Payload, run: (page: Page, seenPosts: () => number) => Promise<void>, shared?: { seenMark: string | null }): Promise<void> => {
 			const baseUrl = await serverUrl();
 			const browser = await chromium.launch();
 			try {
@@ -404,11 +400,12 @@ try {
 				});
 				if (shared) {
 					await context.route((url) => url.pathname === "/api/remote/client-context", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ remote: false, capability: "full", sharedServer: true }) }));
-					await context.addInitScript((mark) => { try { localStorage.setItem("exxperts.whats-new-seen", mark); } catch {} }, shared.seenMark);
+					if (shared.seenMark !== null) await context.addInitScript((mark) => { try { localStorage.setItem("exxperts.whats-new-seen", mark); } catch {} }, shared.seenMark);
 				}
 				const page = await context.newPage();
 				await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
-				await page.locator(".whats-new-dialog").waitFor({ timeout: 20_000 });
+				// A shared server opens no window: the first-run guide, due on this empty server, is the state to wait for.
+				await page.locator(shared ? ".help-overlay" : ".whats-new-dialog").waitFor({ timeout: 20_000 });
 				await run(page, () => seenPosts);
 				await context.close();
 			} finally {
@@ -416,6 +413,12 @@ try {
 			}
 		};
 
+		/** Home has drawn and every request it sends on arrival has answered. */
+		const homeSettled = async (page: Page): Promise<void> => {
+			await page.getByRole("heading", { name: "Your rooms." }).waitFor({ timeout: 20_000 });
+			await page.waitForLoadState("networkidle");
+			await page.evaluate(() => new Promise(requestAnimationFrame));
+		};
 		const rowStates = (page: Page) => page.locator(".whats-new-row-toggle").evaluateAll((buttons) => buttons.map((button) => `${button.querySelector(".whats-new-release-version")?.textContent} ${button.getAttribute("aria-expanded") === "true" ? "open" : "closed"}`));
 		const visibleEntries = (page: Page) => page.locator(".whats-new-dialog .whats-new-entry:visible").allInnerTexts();
 
@@ -465,14 +468,22 @@ try {
 			assert(seenPosts() === 1, `Escape sends seen once, sent ${seenPosts()}`);
 		}));
 
-		await check("on a shared server the page shows only what is newer than this browser's seen mark", () => openPage(TWO_MAJORS, async (page, seenPosts) => {
-			const dialog = page.locator(".whats-new-dialog");
-			same(await dialog.locator(".whats-new-section-head").allInnerTexts(), ["Minor releases"], "the majors, all at or below the mark, are gone");
-			same(await rowStates(page), ["0.14.3 open", "0.14.2 closed"], "the releases after the mark, the newest open");
-			await dialog.getByRole("button", { name: "Close" }).click();
-			await dialog.waitFor({ state: "detached", timeout: 5000 });
-			assert(seenPosts() === 0, `a shared server is never sent seen, sent ${seenPosts()}`);
-		}, { seenMark: "0.14.1" }));
+		for (const seenMark of [null, "0.13.1"]) {
+			const who = seenMark === null ? "a browser that has never seen a version" : "a browser that saw an older version";
+			await check(`on a shared server ${who} gets no What's new window, and the first-run guide opens at once`, () => openPage(TWO_MAJORS, async (page, seenPosts) => {
+				const guide = page.getByRole("dialog", { name: "How exxperts works" });
+				await homeSettled(page);
+				assert(await guide.count() === 1, "the first-run guide is open");
+				assert(await page.locator(".whats-new-dialog").count() === 0, "no What's new window opens");
+				same(await page.evaluate(() => localStorage.getItem("exxperts.whats-new-seen")), seenMark, "the seen mark is left as it was");
+				await page.keyboard.press("Escape");
+				await guide.waitFor({ state: "detached", timeout: 5000 });
+				await page.reload();
+				await homeSettled(page);
+				assert(await page.locator(".whats-new-dialog, .help-overlay").count() === 0, "a reload brings neither back");
+				assert(seenPosts() === 0, `a shared server is never sent seen, sent ${seenPosts()}`);
+			}, { seenMark }));
+		}
 	}
 } finally {
 	await stopSmokeServer(server);

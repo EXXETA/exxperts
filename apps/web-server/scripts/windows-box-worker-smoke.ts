@@ -30,8 +30,8 @@ import { BOX_ROOT_NAME, type BoxRoot, defaultBoxRoot, openBoxRoot } from "../src
 import { atOrInside, COMMAND_VARIABLE, type WindowsBoxRequest } from "../src/room-box/windows/box-request.js";
 import { type Machine, runStartCheck, type StartAnswer, type WindowsSystem } from "../src/room-box/windows/start-check.js";
 import { WindowsRoomBox, type WindowsRoomBoxOptions, windowsSkillFolder } from "../src/room-box/windows/windows-engine.js";
-import { approvePersistentRoomSkillExecution, enablePersistentRoomSkill, revokePersistentRoomSkillExecution } from "../src/persistent-room-skill-settings.js";
-import { approvedSkills, resolveExecutableSkillFiles } from "../src/skills-executable.js";
+import { disablePersistentRoomSkill, enablePersistentRoomSkill } from "../src/persistent-room-skill-settings.js";
+import { roomSkillFolders } from "../src/skills-executable.js";
 import { agentSkillsDir, sha256, writeSkillProvenance } from "../src/skills-store.js";
 // @ts-expect-error: plain JavaScript, loaded as the kit in the worker and for its path helpers here.
 import { nativePath, requestPath } from "./windows-box-stand-in.mjs";
@@ -929,9 +929,9 @@ await row("requests: no telemetry is asked for: spawn takes the request alone, a
 	assert(!JSON.stringify(spawned.environment).includes("secret-token") && Object.keys(spawned.environment).every((name) => !name.startsWith("MXC_")), "the server's secrets reach a command");
 });
 
-// ---- Approved skills' folders -------------------------------------------------------------------------
+// ---- The folders of the skills on in the room -----------------------------------------------------
 
-await row("requests: an approved skill's folder is read, by its real path, and never written; another skill's, a changed one's, a withdrawn one's, a linked one's and one on a share are not", async () => {
+await row("requests: an on skill's folder is read, by its real path, and never written, as it now is; an off one's, a linked one's and one on a share are not, and one holding a link stays for the file tools alone", async () => {
 	const roomId = "windows-smoke-skills";
 	fs.mkdirSync(persistentAgentRootPath(roomId), { recursive: true });
 	// The skills library in the smoke's own folder, so a run outside a temporary home never touches the person's skills.
@@ -939,30 +939,27 @@ await row("requests: an approved skill's folder is read, by its real path, and n
 	process.env.EXXPERTS_CODING_AGENT_DIR = folderAt("agent");
 	const library = agentSkillsDir();
 	assert(library === path.join(work, "agent", "skills"), library);
-	/** A user-store skill as accept leaves it, enabled in the room: its provenance written last, so the digest covers the tree. */
-	const plant = (name: string, at = path.join(library, name)) => {
+	/** A user-store skill as accept leaves it, switched on in the room unless `on` is false. */
+	const plant = (name: string, at = path.join(library, name), on = true) => {
 		fs.mkdirSync(path.join(at, "scripts"), { recursive: true });
 		const manifest = `---\nname: ${name}\ndescription: a test skill\n---\n\nRun scripts/run.ps1.\n`;
 		fs.writeFileSync(path.join(at, "SKILL.md"), manifest);
 		fs.writeFileSync(path.join(at, "scripts", "run.ps1"), "Write-Output ran\n");
 		writeSkillProvenance(at, { source: "upload", importedAt: new Date().toISOString(), license: null, sha256: sha256(manifest) });
-		assert(enablePersistentRoomSkill(roomId, name, () => manifest).ok, `${name} was not enabled`);
+		if (on) assert(enablePersistentRoomSkill(roomId, name, () => manifest).ok, `${name} was not enabled`);
 		return path.join(library, name);
 	};
-	const approve = (name: string) => assert(approvePersistentRoomSkillExecution(roomId, name, (each) => resolveExecutableSkillFiles(each)?.filesSha256 ?? null).ok, `${name} was not approved`);
 	const report = plant("report");
-	approve("report");
-	const other = plant("other");
+	const other = plant("other", undefined, false);
 	const linkedTree = plant("linked-tree");
 	fs.symlinkSync(folderAt("outside-skill"), path.join(linkedTree, "scripts", "outside"));
-	approve("linked-tree");
 	fs.mkdirSync(library, { recursive: true });
 	const linkedFolder = plant("linked-folder", folderAt("skill-elsewhere"));
 	fs.symlinkSync(folderAt("skill-elsewhere"), linkedFolder);
-	approve("linked-folder");
-	// Each is approved and current, so only the guards keep the linked ones out.
-	assert(approvedSkills(roomId).map((skill) => skill.name).sort().join() === "linked-folder,linked-tree,report", show(approvedSkills(roomId)));
-	const box = engine({ roomId, rights: () => ({ canChangeFiles: true, skillFolders: approvedSkills(roomId).map((skill) => skill.skillDir) }) });
+	// A folder that is a link opens nowhere; a plain one holding a link stays open to the file tools.
+	assert(roomSkillFolders(roomId).map((skill) => skill.name).sort().join() === "linked-tree,report", show(roomSkillFolders(roomId)));
+	assert(windowsSkillFolder(linkedTree, requestPath) === undefined, "a skill folder holding a link was given to the protection");
+	const box = engine({ roomId, rights: () => ({ canChangeFiles: true, skillFolders: roomSkillFolders(roomId).map((skill) => skill.skillDir) }) });
 	const last = async (command: string) => {
 		const result = await exec(box, command);
 		assert(result.error === null, show(result));
@@ -974,22 +971,19 @@ await row("requests: an approved skill's folder is read, by its real path, and n
 		const named = requestPath(fs.realpathSync.native(place)).toLowerCase();
 		return [...request.filesystem.readonlyPaths, ...request.filesystem.readwritePaths].filter((each) => each.toLowerCase() === named || each.toLowerCase().startsWith(`${named}\\`));
 	};
-	let request = await last("Write-Output approved");
+	let request = await last("Write-Output on");
 	assert(request.filesystem.readonlyPaths.includes(real) && !request.filesystem.readwritePaths.some((place) => real.toLowerCase().startsWith(place.toLowerCase())), show(request.filesystem));
-	for (const [what, place] of [["another skill", other], ["a link in its tree", linkedTree], ["a folder that is a link", linkedFolder], ["the link's target", path.join(work, "skill-elsewhere")]] as const) {
+	for (const [what, place] of [["a skill that is off", other], ["a link in its tree", linkedTree], ["a folder that is a link", linkedFolder], ["the link's target", path.join(work, "skill-elsewhere")]] as const) {
 		assert(granted(request, place).length === 0, `${what} reached the request: ${show(request.filesystem)}`);
 	}
-	assert(show(granted(request, library)) === show([real]), `the library, beyond the approved skill: ${show(request.filesystem)}`);
-	// One changed byte closes it until the person approves it again.
+	assert(show(granted(request, library)) === show([real]), `the library, beyond the skill that is on: ${show(request.filesystem)}`);
+	// One changed byte changes nothing: the folder is read as it now is.
 	fs.appendFileSync(path.join(report, "scripts", "run.ps1"), "#");
 	request = await last("Write-Output changed");
-	assert(!request.filesystem.readonlyPaths.includes(real), "a changed skill's folder reached the request");
-	approve("report");
-	request = await last("Write-Output approved again");
-	assert(request.filesystem.readonlyPaths.includes(real), "the skill approved again is not read");
-	assert(revokePersistentRoomSkillExecution(roomId, "report").ok, "the approval was not withdrawn");
-	request = await last("Write-Output withdrawn");
-	assert(!request.filesystem.readonlyPaths.includes(real), "a withdrawn skill's folder reached the request");
+	assert(request.filesystem.readonlyPaths.includes(real), "a changed skill's folder left the request");
+	assert(disablePersistentRoomSkill(roomId, "report").ok, "the skill was not switched off");
+	request = await last("Write-Output off");
+	assert(!request.filesystem.readonlyPaths.includes(real), "a skill switched off reached the request");
 	await box.endTurn();
 	// A folder the box would name by a share is never given, and its local neighbour is.
 	assert(windowsSkillFolder(report, () => String.raw`\\host\share\report`) === undefined && windowsSkillFolder(report, requestPath) === fs.realpathSync.native(report), "a skill folder on a share");

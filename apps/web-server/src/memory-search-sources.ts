@@ -54,6 +54,9 @@ import { recentContextSessions } from "./absorb-consolidation.js";
 import { settleRoom } from "./room-settle.js";
 import { buildIndex, type SearchDocument, type SearchIndex, type SearchSource } from "./memory-search-index.js";
 import { readSessionPathMessages } from "./session-path-reader.js";
+import { skillNotesAsLines } from "./skill-pick.js";
+import { withoutMessageFromLine } from "./cut-answer-note.js";
+import { messagesWithSenderLine } from "./edit-last-message.js";
 // The reason words live with the tool that reads them back to the room: a
 // person reading a search result and a room reading a recall are reading one
 // archive, and one table is how they keep saying the same thing.
@@ -372,12 +375,14 @@ function textOfContent(content: unknown): string {
  * that returned them would answer a question about a conversation with its
  * plumbing.
  */
-function transcriptTurns(messages: readonly unknown[]): TranscriptTurn[] {
+function transcriptTurns(messages: readonly unknown[], withSenderLine: ReadonlySet<unknown>): TranscriptTurn[] {
 	const turns: TranscriptTurn[] = [];
 	for (const raw of messages) {
 		const message = raw as { role?: unknown; content?: unknown };
 		if (message?.role !== "user" && message?.role !== "assistant") continue;
-		const text = textOfContent(message.content);
+		// A skill the person picked is one line here: its text is never found as theirs. The line naming who sent it is not theirs either.
+		const said = textOfContent(message.content);
+		const text = message.role === "user" ? skillNotesAsLines(withSenderLine.has(raw) ? withoutMessageFromLine(said) : said) : said;
 		if (!text) continue;
 		turns.push({ speaker: message.role, text });
 	}
@@ -498,7 +503,7 @@ function conversationDocuments(
 			if (cached && stat && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) turns = cached.turns;
 			else {
 				const session = openPersistentAgentPiSessionManager(agentId, { sessionFileRelPath: relPath, sessionId }, runtimeCwd);
-				turns = transcriptTurns(readSessionPathMessages(session));
+				turns = transcriptTurns(readSessionPathMessages(session), messagesWithSenderLine(session));
 				if (stat) TURNS_BY_FILE.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, turns });
 			}
 		} catch (error) {

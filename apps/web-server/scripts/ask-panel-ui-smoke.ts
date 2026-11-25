@@ -35,7 +35,18 @@
 //   with the room's real question in a room with protection off and in one with it left on, Run
 //   once runs the command, Not now, Escape and a message leave it not run with the model reading
 //   today's no, and the steps keep one row for the command and none for the question;
-// - a reload draws no panel from a saved question.
+// - a reload draws no panel from a saved question;
+// - a connector's form: one card in the question's place at 1280 and 390 px,
+//   light and dark, with nothing to scroll sideways: the connector's message
+//   under From, each field with its own label, Required, Send and Not now; Tab
+//   goes through its fields in order, Enter in a field and Escape send nothing;
+//   Send carries what was typed, ticked and picked, the server's lines show
+//   under their fields with what was typed kept and the focus on the first; Not now, a form sent, and one
+//   the connector stopped waiting for each leave their row in the steps; a
+//   date and time is picked, and goes as the adapter's own check takes it,
+//   and the connector's own one shows in the picker and goes unchanged; a list
+//   with nothing picked shows its prompt, which goes as no value, so the
+//   server's check gives a required list its line and an optional one nothing.
 //
 // Run: npm run smokes -- ask-panel-ui
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -48,9 +59,11 @@ import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContextOptions, type Page } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, putRunWithoutAsking } from "./smoke-server-process.js";
 import { sendFromBox, waitEvery } from "./smoke-wait.js";
-import { connectorAllowRoomLine, connectorApprovalSubject, connectorApprovalTitle, connectorRiskLine, PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../src/room-approval-titles.js";
+import { CONNECTOR_CHOICE_WORDS, connectorApprovalTitle, connectorChangeLine, connectorRiskLine, PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "../src/room-approval-titles.js";
+import { connectorAskFrame, connectorFormFrame } from "../src/web-ui-context.js";
+import { checkConnectorForm, connectorFormFrom, connectorFormGaveUpLine, connectorFormGoesTo, connectorFormTitle, FORM_FIELD_LINES, FORM_PICK_PROMPT, FORM_REQUIRED, FORM_SEND, FORM_SENT, readConnectorFormValues, type ConnectorFormParams } from "../src/connector-form-ask.js";
 import { COMMAND_DECLINED } from "../src/persistent-room-bash-approval.js";
-import { ALLOW_FOR_ROOM_PICK, ALLOW_THIS_TIME_PICK, ASK_PANEL_NAME, ASKED_FOR_FOLDER, CHOOSE_ANOTHER_FOLDER, CHOOSE_FOLDER, CHANGE_SAVE_FAILED, CHOOSING, FOLDER_CARD_WINDOW_CLOSED, FOLDER_PICK_REFUSED_IN_PANEL, COMMANDS_ASK_LINES, COMMANDS_ASK_TITLE, folderAskLine, folderAskTitle, FOLDER_PANE_TITLE, FOLDER_PANEL_PRESSES, moreQuestionsLine, NOT_NOW, OUTSIDE_CARD_LINE, OUTSIDE_RUN_DELAY_MS, OUTSIDE_RUN_ONCE, roomNeedsAnswer, RUNNING_NOW, RUNS_IN, SENDING_COUNTS_AS_NOT_NOW, siteCardQuestion, SITE_ALLOW_ONCE, SITE_ALLOW_ROOM, TURN_ON_ANYWAY, TURN_ON_COMMANDS, WAITING_AT_COMPUTER, WAITING_FOR_OK } from "../src/room-box/card-text.js";
+import { ALLOW_FOR_ROOM_PICK, ALLOW_THIS_TIME_PICK, ASK_PANEL_NAME, ASKED_FOR_FOLDER, CHOOSE_ANOTHER_FOLDER, CHOOSE_FOLDER, CHANGE_SAVE_FAILED, CHOOSING, FILE_LABEL, FOLDER_CARD_WINDOW_CLOSED, FOLDER_PICK_REFUSED_IN_PANEL, COMMANDS_ASK_LINES, COMMANDS_ASK_TITLE, folderAskLine, folderAskTitle, FOLDER_PANE_TITLE, FOLDER_PANEL_PRESSES, moreQuestionsLine, NOT_NOW, OUTSIDE_CARD_LINE, OUTSIDE_RUN_DELAY_MS, OUTSIDE_RUN_ONCE, roomNeedsAnswer, RUNNING_NOW, RUNS_IN, SENDING_COUNTS_AS_NOT_NOW, siteCardQuestion, SITE_ALLOW_ONCE, TURN_ON_ANYWAY, TURN_ON_COMMANDS, WAITING_AT_COMPUTER, WAITING_FOR_OK } from "../src/room-box/card-text.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -190,6 +203,42 @@ const commands = (id: string) => ({ type: "ui_request", kind: "commands", id, ti
 const RUN_TITLE = PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE;
 const runAsk = (id: string, command = "rm -r build", folder = "/Users/ana/Sales") => ({ type: "ui_request", kind: "run", id, title: RUN_TITLE, command, folder });
 
+/** A connector's form with a field of every kind, as connector-form-stand-in.mjs asks it. */
+const TRIP_FORM: ConnectorFormParams = {
+	message: "Tell us about the trip.",
+	requestedSchema: {
+		type: "object",
+		properties: {
+			name: { type: "string", title: "Your name", minLength: 2 },
+			nights: { type: "integer", title: "Nights", minimum: 1, maximum: 14 },
+			budget: { type: "number", title: "Budget" },
+			email: { type: "string", format: "email", title: "Email" },
+			site: { type: "string", format: "uri", title: "Hotel page" },
+			start: { type: "string", format: "date", title: "Start date" },
+			room: { type: "string", title: "Room", oneOf: [{ const: "single", title: "Single" }, { const: "double", title: "Double" }] },
+			extras: { type: "array", title: "Extras", items: { type: "string", enum: ["breakfast", "parking", "late checkout"] }, minItems: 1, maxItems: 2 },
+			insured: { type: "boolean", title: "Travel insurance", default: false },
+			notes: { type: "string", description: "Anything the hotel should know." },
+		},
+		required: ["name", "nights", "email", "room", "extras"],
+	},
+};
+const TRIP_LABELS = ["Your name", "Nights", "Budget", "Email", "Hotel page", "Start date", "Room", "Extras", "Travel insurance", "Notes"];
+const formAsk = (id: string, params = TRIP_FORM) => ({ type: "ui_request", id, ...connectorFormFrame({ connector: "Toy space", params }) });
+const PICK_FORM: ConnectorFormParams = {
+	message: "Which room?",
+	requestedSchema: {
+		type: "object",
+		properties: {
+			room: { type: "string", title: "Room", oneOf: [{ const: "single", title: "Single" }, { const: "double", title: "Double" }] },
+			view: { type: "string", title: "View", enum: ["sea", "garden"] },
+			size: { type: "string", title: "Size", enum: ["small", "large"], enumNames: ["Small", "Large"], default: "large" },
+		},
+		required: ["room"],
+	},
+};
+const WHEN_FORM: ConnectorFormParams = { message: "When do you arrive?", requestedSchema: { type: "object", properties: { when: { type: "string", format: "date-time", title: "Arrival" } }, required: ["when"] } };
+
 /** `phone`: the page as a phone sees it, through a stand-in of its client context. */
 async function openRoom(browser: Browser, options: BrowserContextOptions, roomName: string, phone = false) {
 	const context = await browser.newContext(options);
@@ -266,6 +315,8 @@ try {
 	const windowsId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Windows Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 	// The app's replies get a room of their own, so each answered card's words are the only ones in its steps.
 	const replyId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Reply Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
+	// A connector's form's answers too.
+	agents.createPersistentAgentFromScaffoldInput({ displayName: "Form Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
 	// The run-outside question gets a room of its own, so each of its lines in the steps is the only one.
 	const outsideId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Outside Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 	// The run-outside question in a browser whose scrollbars take space, as on a computer set to show them always.
@@ -341,7 +392,7 @@ try {
 			}
 		}
 
-		// A connector's tool: three answers where Allow for this room is offered, two where it isn't, with what the room would send.
+		// A connector's tool: three answers where Always allow is offered, two where it isn't, with what the room would send.
 		{
 			const room = await openRoom(browser, { viewport: { width: 1280, height: 900 }, userAgent: MAC }, "Panel Room");
 			try {
@@ -350,13 +401,192 @@ try {
 					const id = `connector-${lasting}`;
 					room.send({ type: "ui_request", kind: "connector", id, title, connector: "Asana", sent: `{"project":"Q3"}`, cut: 0, lasting });
 					await room.panel.locator(".ask-actions").waitFor();
-					const counts = await Promise.all([SITE_ALLOW_ONCE, "Allow for this room", NOT_NOW].map((name) => room.panel.getByRole("button", { name }).count()));
+					const counts = await Promise.all([SITE_ALLOW_ONCE, CONNECTOR_CHOICE_WORDS.allow, NOT_NOW].map((name) => room.panel.getByRole("button", { name }).count()));
 					const words = await room.panel.innerText();
 					expect(JSON.stringify(counts) === JSON.stringify([1, lasting ? 1 : 0, 1]) && await room.panel.locator(".ask-actions .rs-btn").count() === (lasting ? 3 : 2), `connector, lasting ${lasting}: ${lasting ? "three" : "two"} answers (${JSON.stringify(counts)})`);
-					expect(words.includes(connectorRiskLine("Asana")) && words.includes(`{"project":"Q3"}`) && words.includes(connectorAllowRoomLine(SITE_ALLOW_ROOM, connectorApprovalSubject(title)!)) === lasting, `connector, lasting ${lasting}: what it may do, what it would send, and what Allow for this room gives only where offered (${words})`);
+					expect(words.includes(connectorRiskLine("Asana")) && words.includes(`{"project":"Q3"}`) && words.includes("Always allow lets Delete project run without asking in every room where Asana is on, also when you're away.") === lasting, `connector, lasting ${lasting}: what it may do, what it would send, and what Always allow gives only where offered (${words})`);
 					room.send({ type: "ui_request_closed", id, reason: "unanswered" });
 					await room.panel.waitFor({ state: "detached" });
 				}
+				// The first line goes by the connector's own marks: none for a read-only tool, the softer one for a tool marked as
+				// not destructive, today's for one with no marks.
+				for (const [label, marks, lead] of [["read-only", { readOnly: true }, null], ["not destructive", { destructive: false }, connectorChangeLine("Asana")], ["no marks", {}, connectorRiskLine("Asana")]] as const) {
+					const id = `connector-marks-${label}`;
+					// The frame as the server builds it from the gate's card.
+					room.send({ type: "ui_request", id, ...connectorAskFrame({ title, connector: "Asana", sent: `{"project":"Q3"}`, cut: 0, lasting: false, ...marks }) });
+					await room.panel.locator(".ask-actions").waitFor();
+					const words = await room.panel.innerText();
+					const others = [connectorRiskLine("Asana"), connectorChangeLine("Asana")].filter((line) => line !== lead);
+					expect((lead === null || words.includes(lead)) && others.every((line) => !words.includes(line)), `connector, ${label}: ${lead ?? "no line"} on what it may do (${words})`);
+					room.send({ type: "ui_request_closed", id, reason: "unanswered" });
+					await room.panel.waitFor({ state: "detached" });
+				}
+				// What the room would send, up to 20,000 characters, shows whole in its scroll box, with the answers in view.
+				for (const [width, height] of [[1280, 900], [390, 844]] as const) {
+					await room.page.setViewportSize({ width, height });
+					const id = `connector-long-${width}`;
+					const sent = JSON.stringify({ text: "x".repeat(19_989) });
+					room.send({ type: "ui_request", kind: "connector", id, title, connector: "Asana", sent, cut: 0, lasting: false });
+					await room.panel.locator(".ask-actions").waitFor();
+					const shown = await room.panel.evaluate((panel) => {
+						const code = panel.querySelector(".ask-facts code") as HTMLElement;
+						const words = panel.querySelector(".ask-panel-in") as HTMLElement;
+						const allow = panel.querySelector(".ask-actions .rs-btn") as HTMLElement;
+						const box = allow.getBoundingClientRect();
+						return { length: code.textContent?.length ?? 0, scrolls: words.scrollHeight > words.clientHeight || code.scrollHeight > code.clientHeight, answersInView: box.top >= 0 && box.bottom <= window.innerHeight, panelHeight: panel.getBoundingClientRect().height };
+					});
+					expect(sent.length === 20_000 && shown.length === 20_000 && shown.scrolls && shown.answersInView && shown.panelHeight <= height / 2 + 1, `connector at ${width}: 20,000 characters whole, in a box that scrolls, the answers in view (${JSON.stringify(shown)})`);
+					room.send({ type: "ui_request_closed", id, reason: "unanswered" });
+					await room.panel.waitFor({ state: "detached" });
+				}
+			} finally {
+				await room.context.close();
+			}
+		}
+
+		// A connector's form: one card in the question's place, at both widths and in both themes, with nothing to scroll sideways.
+		for (const [width, height, colorScheme] of [[1280, 900, "light"], [1280, 900, "dark"], [390, 844, "light"], [390, 844, "dark"]] as const) {
+			const room = await openRoom(browser, { viewport: { width, height }, userAgent: MAC, colorScheme }, "Panel Room");
+			const at = `form ${width} ${colorScheme}`;
+			try {
+				room.send(formAsk(`form-look-${width}-${colorScheme}`));
+				await room.panel.locator(".ask-form").waitFor();
+				const words = await room.panel.innerText();
+				expect([connectorFormTitle("Toy space"), connectorFormFrom("Toy space"), "Tell us about the trip.", connectorFormGoesTo("Toy space")].every((line) => words.includes(line)), `${at}: the title, the connector's message under From, and where the details go (${words})`);
+				const fields = await room.panel.locator(".ask-form-field").evaluateAll((all) => all.map((field) => ({ name: field.querySelector(".ask-form-name")?.firstChild?.textContent ?? "", required: !!field.querySelector(".ask-form-required"), controls: field.querySelectorAll("input, select").length })));
+				expect(JSON.stringify(fields.map((field) => field.name)) === JSON.stringify(TRIP_LABELS) && fields.every((field) => field.controls > 0), `${at}: one card with each field under its own label (${JSON.stringify(fields)})`);
+				expect(fields.filter((field) => field.required).map((field) => field.name).join(",") === "Your name,Nights,Email,Room,Extras" && (await room.panel.locator(".ask-form-required").first().innerText()) === FORM_REQUIRED, `${at}: Required beside each field the form needs`);
+				const answers = await room.panel.locator(".ask-actions .rs-btn").evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).innerText.split("\n")[0]));
+				expect(answers.length === 2 && answers.includes(NOT_NOW) && answers.includes(FORM_SEND), `${at}: Send and Not now, and no other answer (${JSON.stringify(answers)})`);
+				const sideways = await room.page.evaluate(() => ({ page: document.documentElement.scrollWidth - window.innerWidth, panel: (() => { const panel = document.querySelector(".ask-panel") as HTMLElement; return panel.scrollWidth - panel.clientWidth; })() }));
+				expect(sideways.page <= 0 && sideways.panel <= 0, `${at}: nothing scrolls sideways (${JSON.stringify(sideways)})`);
+				const panelBox = await room.panel.boundingBox();
+				expect(panelBox && panelBox.height <= height / 2 + 1, `${at}: the card takes at most half the window, its fields scrolling (${panelBox?.height})`);
+				const row = room.page.locator('.wk-row[data-s="waiting"]');
+				expect(await row.count() === 1 && (await row.innerText()).includes(connectorFormTitle("Toy space")), `${at}: the steps keep one quiet row for it`);
+			} finally {
+				await room.context.close();
+			}
+		}
+
+		// A connector's form by keyboard and by its answers: Tab through the fields, Enter and Escape send nothing, Send carries
+		// what the person gave, the server's lines show under their fields, and each end leaves its row in the steps.
+		{
+			const room = await openRoom(browser, { viewport: { width: 1280, height: 900 }, userAgent: MAC }, "Form Room");
+			const { page, panel } = room;
+			try {
+				room.send(formAsk("form-keys"));
+				await panel.locator(".ask-form").waitFor();
+				const name = panel.locator("#form-field-name");
+				await name.click();
+				await page.keyboard.type("Ada");
+				await page.keyboard.press("Enter");
+				await page.keyboard.press("Escape");
+				await page.waitForTimeout(400);
+				expect(room.responses("form-keys").length === 0 && await panel.count() === 1 && await name.inputValue() === "Ada", "form: Enter in a field and Escape send nothing, and what was typed stays");
+				const order: string[] = [];
+				// A date field takes a Tab for each of its parts.
+				for (let step = 0; step < 24; step++) {
+					order.push(await page.evaluate(() => {
+						const focused = document.activeElement as HTMLElement | null;
+						const field = focused?.closest(".ask-form-field");
+						return field ? field.querySelector(".ask-form-name")?.firstChild?.textContent ?? "" : focused?.innerText?.split("\n")[0] ?? "";
+					}));
+					await page.keyboard.press("Tab");
+				}
+				const reached = order.filter((label, index) => label !== order[index - 1]);
+				expect(JSON.stringify(reached.slice(0, TRIP_LABELS.length)) === JSON.stringify(TRIP_LABELS) && reached.includes(FORM_SEND), `form: Tab goes through every field in order, then the answers (${JSON.stringify(reached)})`);
+				await panel.locator("#form-field-nights").fill("3");
+				await panel.locator("#form-field-email").fill("ada@");
+				await panel.locator("#form-field-room").selectOption("double");
+				await panel.getByLabel("breakfast").check();
+				await panel.getByLabel("Travel insurance").check();
+				await room.awake();
+				await room.main.click();
+				await waitUntil(() => room.responses("form-keys").length === 1, "form: Send was sent");
+				expect(JSON.stringify(room.response("form-keys")?.value) === JSON.stringify({ values: { name: "Ada", nights: "3", email: "ada@", room: "double", extras: ["breakfast"], insured: true } }), `form: Send carries what was typed, ticked and picked, and leaves out what is empty (${JSON.stringify(room.response("form-keys")?.value)})`);
+				room.send({ type: "ui_request_update", id: "form-keys", fieldLines: { email: FORM_FIELD_LINES.email } });
+				await panel.locator(".ask-form-line").waitFor();
+				const lineUnder = await panel.locator('.ask-form-field[data-wrong="1"]').evaluateAll((all) => all.map((field) => `${field.querySelector(".ask-form-name")?.firstChild?.textContent}: ${field.querySelector(".ask-form-line")?.textContent}`));
+				expect(JSON.stringify(lineUnder) === JSON.stringify([`Email: ${FORM_FIELD_LINES.email}`]) && await panel.locator("#form-field-email").inputValue() === "ada@" && await name.inputValue() === "Ada", `form: the server's line shows under its field, and what was typed stays (${JSON.stringify(lineUnder)})`);
+				expect(await page.evaluate(() => document.activeElement?.id) === "form-field-email", "form: with the lines, the focus goes to the first field that doesn't fit");
+				room.reply("form-keys", "sent");
+				await panel.waitFor({ state: "detached" });
+				await page.getByText(`${FORM_SENT} · ${connectorFormTitle("Toy space")}`).first().waitFor();
+				expect(true, "form: a form sent leaves its row: Sent");
+
+				room.send(formAsk("form-no"));
+				await panel.locator(".ask-form").waitFor();
+				await page.waitForTimeout(1_100);
+				await panel.getByRole("button", { name: NOT_NOW }).click();
+				await waitUntil(() => room.responses("form-no").length === 1, "form: Not now was sent");
+				expect(room.response("form-no")?.value === "decline", `form: Not now declines (${JSON.stringify(room.response("form-no")?.value)})`);
+				room.reply("form-no", "decline");
+				await panel.waitFor({ state: "detached" });
+
+				room.send(formAsk("form-gave-up"));
+				await panel.locator(".ask-form").waitFor();
+				room.send({ type: "ui_request_closed", id: "form-gave-up", reason: "withdrawn" });
+				await panel.waitFor({ state: "detached" });
+				// Its card now holds three settled questions, so it folds: opened, its last row says so.
+				const head = page.locator('.wk-head[aria-expanded="false"]').last();
+				await head.click();
+				await page.locator(".wk-row").filter({ hasText: connectorFormGaveUpLine("Toy space") }).last().waitFor();
+				expect(true, "form: one the connector stopped waiting for says so in the steps");
+
+				// A date and time is picked, and Send writes it as the adapter's own check takes it.
+				room.send(formAsk("form-when", WHEN_FORM));
+				await panel.locator("#form-field-when").fill("2026-12-01T10:30");
+				await room.awake();
+				await room.main.click();
+				await waitUntil(() => room.responses("form-when").length === 1, "form: the date and time was sent");
+				const when = (room.response("form-when")?.value as { values?: Record<string, unknown> } | undefined)?.values?.when;
+				const { coerceAndValidateFormValues } = await import("pi-mcp-adapter/elicitation-handler.ts" as string);
+				let fits = true;
+				try { coerceAndValidateFormValues(WHEN_FORM, { when }); } catch { fits = false; }
+				expect(typeof when === "string" && /^2026-12-01T10:30:00[+-]\d\d:\d\d$/.test(when) && fits, `form: a date and time is picked, and goes with its seconds and time zone, as the adapter's check takes it (${JSON.stringify(when)})`);
+				room.reply("form-when", "sent");
+				await panel.waitFor({ state: "detached" });
+
+				// The connector's own date and time, left as it is: the picker shows it, and Send carries that same moment.
+				const given = "2026-12-01T09:30:00Z";
+				room.send(formAsk("form-when-given", { ...WHEN_FORM, requestedSchema: { ...WHEN_FORM.requestedSchema, properties: { when: { ...WHEN_FORM.requestedSchema.properties.when, default: given } } } }));
+				const picker = panel.locator("#form-field-when");
+				await picker.waitFor();
+				const shown = await picker.inputValue();
+				await room.awake();
+				await room.main.click();
+				await waitUntil(() => room.responses("form-when-given").length === 1, "form: the connector's date and time was sent");
+				const kept = (room.response("form-when-given")?.value as { values?: Record<string, unknown> } | undefined)?.values?.when;
+				expect(shown !== "" && typeof kept === "string" && Date.parse(kept) === Date.parse(given), `form: the connector's own date and time shows in the picker, and Send carries that same moment (${JSON.stringify(shown)} → ${JSON.stringify(kept)})`);
+				room.reply("form-when-given", "sent");
+				await panel.waitFor({ state: "detached" });
+
+				// A list with nothing picked says so, and its prompt never goes: the server's own check then gives a required one its line.
+				room.send(formAsk("form-pick", PICK_FORM));
+				const pickedText = (name: string) => panel.locator(`#form-field-${name}`).evaluate((select: HTMLSelectElement) => select.selectedOptions[0]?.textContent ?? "");
+				await panel.locator("#form-field-room").waitFor();
+				const untouched = [await pickedText("room"), await pickedText("view"), await pickedText("size")];
+				expect(JSON.stringify(untouched) === JSON.stringify([FORM_PICK_PROMPT, FORM_PICK_PROMPT, "Large"]), `form: a list with nothing picked shows "${FORM_PICK_PROMPT}", and one with the connector's own choice shows that (${JSON.stringify(untouched)})`);
+				await room.awake();
+				await room.main.click();
+				await waitUntil(() => room.responses("form-pick").length === 1, "form: Send with nothing picked was sent to the server");
+				const leftEmpty = readConnectorFormValues(PICK_FORM, room.response("form-pick")?.value);
+				const checkedEmpty = leftEmpty && checkConnectorForm(PICK_FORM, leftEmpty, coerceAndValidateFormValues);
+				expect(leftEmpty && JSON.stringify(Object.keys(leftEmpty).sort()) === JSON.stringify(["size"]) && checkedEmpty && "lines" in checkedEmpty && JSON.stringify(checkedEmpty.lines) === JSON.stringify({ room: FORM_FIELD_LINES.pickOne }), `form: the prompt goes as no value, and the server's check gives the required list its line and sends nothing (${JSON.stringify(room.response("form-pick")?.value)} → ${JSON.stringify(checkedEmpty)})`);
+				room.send({ type: "ui_request_update", id: "form-pick", fieldLines: checkedEmpty && "lines" in checkedEmpty ? checkedEmpty.lines : {} });
+				await panel.locator('.ask-form-field[data-wrong="1"] .ask-form-line').waitFor();
+				expect(await panel.locator('.ask-form-field[data-wrong="1"]').evaluateAll((all) => all.map((field) => `${field.querySelector(".ask-form-name")?.firstChild?.textContent}: ${field.querySelector(".ask-form-line")?.textContent}`).join("|")) === `Room: ${FORM_FIELD_LINES.pickOne}`, "form: the line shows under the list left on its prompt");
+				await panel.locator("#form-field-room").selectOption("double");
+				expect(await panel.locator('.ask-form-field[data-wrong="1"]').count() === 0 && await panel.locator(".ask-form-line").count() === 0, "form: a field the person changes drops its line and its mark until the next Send checks it");
+				await room.awake();
+				await room.main.click();
+				await waitUntil(() => room.responses("form-pick").length === 2, "form: Send with a room picked was sent");
+				const picked = readConnectorFormValues(PICK_FORM, room.responses("form-pick")[1]?.value);
+				const checkedPicked = picked && checkConnectorForm(PICK_FORM, picked, coerceAndValidateFormValues);
+				expect(checkedPicked && "content" in checkedPicked && JSON.stringify(checkedPicked.content) === JSON.stringify({ room: "double", size: "large" }), `form: an optional list left on its prompt goes with no value (${JSON.stringify(checkedPicked)})`);
+				room.reply("form-pick", "sent");
+				await panel.waitFor({ state: "detached" });
 			} finally {
 				await room.context.close();
 			}
@@ -1186,6 +1416,27 @@ try {
 				await panel.locator(".ask-path").filter({ hasText: "~/Projects/app" }).waitFor();
 				expect(JSON.stringify(await buttonsOf()) === JSON.stringify([NOT_NOW]) && await panel.getByText(folderAskLine("read"), { exact: true }).count() === 0 && await panel.getByText(folderAskLine("read", "named"), { exact: true }).count() === 0, `${at}: with no folder window and no one click, Not now alone and no access line (${JSON.stringify(await buttonsOf())})`);
 				send({ type: "ui_request_closed", id: `no-window-no-once-${at}`, reason: "unanswered" });
+				await panel.waitFor({ state: "detached" });
+				// A file the room named, in a folder with one click: a File row above the Folder row, and the line says the whole folder.
+				send({ ...folder(`file-${at}`), suggested: { name: "Scripts", path: "~/Documents/Scripts", once: true, file: "fetch_transcript.py" } });
+				await panel.locator(".ask-path").filter({ hasText: "~/Documents/Scripts" }).waitFor();
+				const fileRows = await panel.locator(".ask-fact").evaluateAll((facts) => facts.map((fact) => [fact.querySelector("dt")?.textContent, fact.querySelector("dd")?.textContent]));
+				expect(JSON.stringify(fileRows.slice(0, 2)) === JSON.stringify([[FILE_LABEL, "fetch_transcript.py"], [FOLDER_PANE_TITLE, "Scripts~/Documents/Scripts"]]), `${at}: a file's card names the file, then its folder (${JSON.stringify(fileRows)})`);
+				expect(await panel.getByText(folderAskLine("read", { file: "fetch_transcript.py" }), { exact: true }).count() === 1 && folderAskLine("read", { file: "fetch_transcript.py" }) === "It will be able to read all the files in this folder, not just fetch_transcript.py. It gets no other access.", `${at}: a file's line says the whole folder`);
+				expect(JSON.stringify(await buttonsOf()) === JSON.stringify([CHOOSE_ANOTHER_FOLDER, NOT_NOW, ALLOW_FOR_ROOM_PICK, ALLOW_THIS_TIME_PICK]), `${at}: a file's folder with one click keeps its presses (${JSON.stringify(await buttonsOf())})`);
+				send({ type: "ui_request_closed", id: `file-${at}`, reason: "unanswered" });
+				await panel.waitFor({ state: "detached" });
+				// Only the room's words for a place: the Folder row shows them as text, with Not now and Choose folder, no Allow and the line for the folder you choose.
+				const words = "~/.local/bin/⟦U+202E⟧fetch_transcript.py";
+				send({ ...folder(`named-${at}`), suggested: { named: words, once: false } });
+				const namedRow = panel.locator(".ask-fact").first();
+				await namedRow.waitFor();
+				expect(await namedRow.locator("dt").innerText() === FOLDER_PANE_TITLE && await namedRow.locator("dd").innerText() === words && await namedRow.locator(".ask-name").count() === 0, `${at}: the room's words show on the Folder row as text (${await namedRow.innerText()})`);
+				expect(await namedRow.locator(".ask-path").evaluate((element) => getComputedStyle(element).unicodeBidi) === "isolate", `${at}: the room's words are isolated`);
+				expect(JSON.stringify(await buttonsOf()) === JSON.stringify([NOT_NOW, CHOOSE_FOLDER]) && await panel.getByText(folderAskLine("read"), { exact: true }).count() === 1, `${at}: the room's words give no Allow (${JSON.stringify(await buttonsOf())})`);
+				expect(await panel.evaluate((element) => element.scrollWidth - element.clientWidth) <= 1, `${at}: the room's words never scroll the panel sideways`);
+				await room.page.locator('[aria-live="polite"]').filter({ hasText: `${FOLDER_PANE_TITLE}: ${words}` }).waitFor();
+				send({ type: "ui_request_closed", id: `named-${at}`, reason: "unanswered" });
 				await panel.waitFor({ state: "detached" });
 				// A Windows path too long for its line breaks after a backslash, never inside a folder's name.
 				if (width === 390) {

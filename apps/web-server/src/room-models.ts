@@ -21,7 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ANTHROPIC_API_KEY_PROVIDER, AuthStorage, getAgentDir, ModelRegistry } from "@exxeta/exxperts-runtime";
-import { getAvailablePersistentAgentAiProfiles, getPersistentAgentAiProfile, isBuiltInPersistentAgentAiProfileId, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, persistentAgentModelLocksEqual, type PersistentAgentAiProfile, type PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
+import { PERSISTENT_AGENT_AI_PROFILES, getAvailablePersistentAgentAiProfiles, getPersistentAgentAiProfile, isBuiltInPersistentAgentAiProfileId, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, persistentAgentModelLocksEqual, type PersistentAgentAiProfile, type PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import { PERSISTENT_AGENT_AI_PROFILE_FILE, readPersistentAgentAiProfileState, readSavedPersistentAgentAiProfileId } from "./persistent-agent-ai-profile-state.js";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
 import { formatTokenLimit } from "./persistent-room-maintenance-settings.js";
@@ -228,6 +228,8 @@ export interface RoomModelProvider {
 	recommended: Record<RoomModelTask, PersistentAgentModelLock | undefined>;
 	/** A built-in provider whose list the release curates: only its recommendation is a real one the pickers may tag. A gateway's or a custom provider's first model is only the first in its list. */
 	curated: boolean;
+	/** Where its models run, as stated on a shared server (its first profile's); absent is Unknown. */
+	runsIn?: PersistentAgentAiProfile["runsIn"];
 }
 
 export interface RoomModelCatalog {
@@ -282,9 +284,13 @@ function pushUnique(list: PersistentAgentModelLock[], lock: PersistentAgentModel
  */
 export function taggedRecommendation(provider: RoomModelProvider, catalog: RoomModelCatalog): Record<RoomModelTask, PersistentAgentModelLock | undefined> {
 	if (provider.curated) return provider.recommended;
-	const signIn = provider.providerId === ANTHROPIC_API_KEY_PROVIDER ? catalog.providers.find((candidate) => candidate.providerId === "anthropic" && candidate.curated) : undefined;
+	if (provider.providerId !== ANTHROPIC_API_KEY_PROVIDER) return { conversation: undefined, memory: undefined };
 	const onKey = (lock: PersistentAgentModelLock | undefined) => lock && { provider: ANTHROPIC_API_KEY_PROVIDER, model: lock.model };
-	return { conversation: onKey(signIn?.recommended.conversation), memory: onKey(signIn?.recommended.memory) };
+	const signIn = catalog.providers.find((candidate) => candidate.providerId === "anthropic" && candidate.curated);
+	if (signIn) return { conversation: onKey(signIn.recommended.conversation), memory: onKey(signIn.recommended.memory) };
+	// A shared server offers no sign-in row: the built-in profile still says which models it recommends.
+	const builtIn = PERSISTENT_AGENT_AI_PROFILES.anthropic.processes;
+	return { conversation: onKey(builtIn.persistentRoom[0]), memory: onKey(builtIn.absorb) };
 }
 
 /** One read of the profiles and the sign-ins, for everything resolved in one request. */
@@ -297,7 +303,7 @@ export function createRoomModelCatalog(options: RoomModelCatalogOptions = {}): R
 	for (const profile of profiles) {
 		let provider = byId.get(profile.providerId);
 		if (!provider) {
-			provider = { providerId: profile.providerId, label: profile.label, ready: hasAuth(profile.providerId), conversation: [], memory: [], recommended: { conversation: undefined, memory: undefined }, curated: isBuiltInPersistentAgentAiProfileId(profile.id) };
+			provider = { providerId: profile.providerId, label: profile.label, ready: hasAuth(profile.providerId), conversation: [], memory: [], recommended: { conversation: undefined, memory: undefined }, curated: isBuiltInPersistentAgentAiProfileId(profile.id), ...(profile.runsIn ? { runsIn: profile.runsIn } : {}) };
 			byId.set(profile.providerId, provider);
 		}
 		for (const lock of profile.processes.persistentRoom) pushUnique(provider.conversation, lock);
@@ -502,7 +508,8 @@ export class RoomModelUnavailableError extends Error {
 	readonly code: "provider_signed_out" | "room_model_unavailable";
 	/** The provider, for the notice's Sign in button; `key` when a key connection has no key saved. */
 	readonly details: { provider: string; key?: "missing" };
-	constructor(message: string, readonly reason: RoomModelUnavailableReason, readonly provider: string) {
+	/** `model`: the refused model's name, as the room's Model picker shows it, so a notice names that model. */
+	constructor(message: string, readonly reason: RoomModelUnavailableReason, readonly provider: string, readonly model?: string) {
 		super(message);
 		this.name = "RoomModelUnavailableError";
 		this.code = reason === "signed-out" ? "provider_signed_out" : "room_model_unavailable";
@@ -520,7 +527,7 @@ export class RoomModelUnavailableError extends Error {
 export function roomModelUnavailableError(resolution: RoomModelResolution, task: RoomModelTask, names: RoomModelNames, of: RoomModelRefusalOf = "room"): RoomModelUnavailableError | null {
 	const chosen = resolution.chosen;
 	if (resolution.effective || !chosen || !resolution.reason) return null;
-	return new RoomModelUnavailableError(roomModelUnavailableSentence(chosen, resolution.reason, task, names, of), resolution.reason, chosen.provider);
+	return new RoomModelUnavailableError(roomModelUnavailableSentence(chosen, resolution.reason, task, names, of), resolution.reason, chosen.provider, names.model(chosen));
 }
 
 export type { RoomModelRefusalOf };

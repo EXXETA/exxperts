@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 import { resolveWebSearchSettings, type WebSearchSettings } from "../../../pi-package/extensions/web-search/index.js";
+import { serverHooks } from "./server-hooks.js";
+import { WEB_PAGES_LINES } from "./web-pages-text.js";
 
 /**
  * The app's own web search, as a setting somebody can see and change.
@@ -60,15 +62,15 @@ function normalizeSearxngBaseUrl(value: unknown): string {
 /**
  * Save what was changed and hand back what the next search will actually do.
  *
- * A patch rather than a whole document, because the pane holds two independent
- * decisions now: which local backend runs, and whether the two subscription
- * profiles are allowed to search on their own side. Flipping the toggle must
- * not restate the backend choice, and picking a backend must not restate the
- * toggle. The saved file is only half the answer whenever an environment
+ * A patch rather than a whole document, because the pane holds independent
+ * decisions: which local backend runs, whether the two subscription profiles
+ * are allowed to search on their own side, and on a shared server whether
+ * rooms open web pages. Flipping a switch must not restate the backend choice,
+ * and picking a backend must not restate a switch. The saved file is only half the answer whenever an environment
  * variable is set, which is why this returns the resolved settings rather than
  * what it wrote.
  */
-export function writeWebSearchSettings(patch: { provider?: unknown; baseUrl?: unknown; providerSearch?: unknown }): WebSearchSettings {
+export function writeWebSearchSettings(patch: { provider?: unknown; baseUrl?: unknown; providerSearch?: unknown; webPages?: unknown }): WebSearchSettings {
 	const current = resolveWebSearchSettings();
 	// A save seeded from a file we could not read would quietly delete whatever
 	// it says. Refuse until somebody repairs it, the same way the gateway store
@@ -112,6 +114,14 @@ export function writeWebSearchSettings(patch: { provider?: unknown; baseUrl?: un
 		nextProviderSearch = patch.providerSearch;
 	}
 
+	let nextWebPages = saved.webPages;
+	if (patch.webPages !== undefined) {
+		if (typeof patch.webPages !== "boolean") throw new WebSearchSettingsError("Web pages must be on or off.");
+		// A server marked as unable to reach public pages keeps them off whatever is stored, so an on saved there could only surprise later.
+		if (patch.webPages && serverHooks().publicPages?.() === "unreachable") throw new WebSearchSettingsError(WEB_PAGES_LINES.unreachable);
+		nextWebPages = patch.webPages;
+	}
+
 	const filePath = productAppStatePath(FILE_NAME);
 	fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
 	const tmpPath = `${filePath}.${process.pid}.tmp`;
@@ -119,6 +129,7 @@ export function writeWebSearchSettings(patch: { provider?: unknown; baseUrl?: un
 		...(chosen ? { provider: chosen } : {}),
 		...(nextBaseUrl ? { baseUrl: nextBaseUrl } : {}),
 		...(nextProviderSearch !== undefined ? { providerSearch: nextProviderSearch } : {}),
+		...(nextWebPages !== undefined ? { webPages: nextWebPages } : {}),
 	};
 	fs.writeFileSync(tmpPath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
 	fs.renameSync(tmpPath, filePath);

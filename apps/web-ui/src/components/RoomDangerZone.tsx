@@ -6,6 +6,7 @@ import { confirmDialog } from "./confirm-dialog";
 import { PaneHeader } from "./pane-header";
 import { shownRoomName } from "../../../web-server/src/room-name";
 import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
+import { useSettingsLookNext } from "../settings-look";
 
 function plural(count: number, noun: string, pluralNoun = `${noun}s`): string {
 	return `${count} ${count === 1 ? noun : pluralNoun}`;
@@ -55,6 +56,8 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 	const roomName = shownRoomName(status.displayName) || status.id;
 	const onThisComputer = showsComputerOnlyControls(useRemoteClientContext());
 	const onThisMachine = onThisComputer ? " on this machine" : "";
+	// The new look gives Delete room the soft red box beside Archive's.
+	const deleteClass = useSettingsLookNext() ? "rs-btn rs-btn-danger rs-btn-danger-soft" : "rs-btn rs-btn-danger";
 
 	useEffect(() => {
 		if (!visible) return;
@@ -134,7 +137,7 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 				<div className="settings-row">
 					<div className="settings-row-main">
 						<span className="settings-row-label">Archive</span>
-						<span className="settings-row-sub">Archive hides the room from Home and pauses its scheduled tasks. Everything stays; restore it from Archived rooms.</span>
+						<span className="settings-row-sub">Archive hides the room from Rooms and pauses its scheduled tasks. Everything stays; restore it from Archived rooms.</span>
 					</div>
 					<button className="rs-btn" disabled={submitting !== null} onClick={() => void submitArchive()}>
 						{submitting === "archive" ? "Archiving…" : "Archive"}
@@ -145,7 +148,7 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 						<span className="settings-row-label">Delete</span>
 						<span className="settings-row-sub">{deleteSentence(counts, onThisComputer, folderLinked)}</span>
 					</div>
-					<button className="rs-btn rs-btn-danger" disabled={submitting !== null} onClick={() => void submitPurge()}>
+					<button className={deleteClass} disabled={submitting !== null} onClick={() => void submitPurge()}>
 						{submitting === "purge" ? "Deleting…" : "Delete room"}
 					</button>
 				</div>

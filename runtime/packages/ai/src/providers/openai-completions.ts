@@ -35,6 +35,7 @@ import { placeCitations, type SentCitation, webLink } from "../utils/citation-of
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { fetchWithBoundedRetryDelay, untilStopped } from "../utils/request-stop.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -95,6 +96,10 @@ type ResolvedOpenAICompletionsCompat = Omit<Required<OpenAICompletionsCompat>, "
 type ChatCompletionInstructionMessageParam = ChatCompletionDeveloperMessageParam | ChatCompletionSystemMessageParam;
 
 type ChatCompletionTextPartWithCacheControl = ChatCompletionContentPartText & {
+	cache_control?: OpenAICompatCacheControl;
+};
+
+type ChatCompletionToolMessageWithCacheControl = ChatCompletionToolMessageParam & {
 	cache_control?: OpenAICompatCacheControl;
 };
 
@@ -160,7 +165,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const compat = getCompat(model);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat, options?.maxRetryDelayMs);
 			let params = buildParams(model, context, options, compat, cacheRetention);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -171,9 +176,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
-			const { data: openaiStream, response } = await client.chat.completions
-				.create(params, requestOptions)
-				.withResponse();
+			const { data: openaiStream, response } = await untilStopped(
+				client.chat.completions.create(params, requestOptions).withResponse(),
+				options?.signal,
+			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -530,6 +536,7 @@ function createClient(
 	optionsHeaders?: Record<string, string>,
 	sessionId?: string,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+	maxRetryDelayMs?: number,
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
@@ -561,6 +568,10 @@ function createClient(
 		Object.assign(headers, optionsHeaders);
 	}
 
+	if (!Object.keys(headers).some((name) => name.toLowerCase() === "user-agent")) {
+		headers["User-Agent"] = exxpertsUserAgent();
+	}
+
 	const defaultHeaders =
 		model.provider === "cloudflare-ai-gateway"
 			? {
@@ -575,7 +586,39 @@ function createClient(
 		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
+		fetch: fetchWithBoundedRetryDelay(maxRetryDelayMs),
 	});
+}
+
+let userAgent: string | undefined;
+
+/**
+ * "exxperts/<version>", so a gateway's admin sees whose request it is. The
+ * version is the product's, from the package.json of the install the started
+ * program is in: this package's own version is not exxperts'. Without one the
+ * name goes alone.
+ */
+function exxpertsUserAgent(): string {
+	userAgent ??= ["exxperts", productVersion()].filter(Boolean).join("/");
+	return userAgent;
+}
+
+function productVersion(): string | undefined {
+	// A static import of node:fs would break a browser build, which has no install to read.
+	const node = typeof process === "undefined" ? undefined : process;
+	const fs = node?.getBuiltinModule?.("node:fs");
+	const path = node?.getBuiltinModule?.("node:path");
+	const started = node?.argv?.[1];
+	if (!fs || !path || !started) return undefined;
+	for (let folder = path.dirname(started); ; folder = path.dirname(folder)) {
+		try {
+			const found = JSON.parse(fs.readFileSync(path.join(folder, "package.json"), "utf8"));
+			if (found.name === "@exxeta/exxperts-app") return found.version;
+		} catch {
+			// No package.json here, or one that can't be read: look further up.
+		}
+		if (folder === path.dirname(folder)) return undefined;
+	}
 }
 
 /**
@@ -661,7 +704,7 @@ function buildParams(
 	}
 
 	if (cacheControl) {
-		applyAnthropicCacheControl(messages, params.tools, cacheControl);
+		applyAnthropicCacheControl(messages, params.tools, cacheControl, model.provider === "openrouter");
 	}
 
 	if (options?.toolChoice) {
@@ -747,10 +790,11 @@ function applyAnthropicCacheControl(
 	messages: ChatCompletionMessageParam[],
 	tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
 	cacheControl: OpenAICompatCacheControl,
+	markOnTextPartsOnly: boolean,
 ): void {
 	addCacheControlToSystemPrompt(messages, cacheControl);
 	addCacheControlToLastTool(tools, cacheControl);
-	addCacheControlToLastConversationMessage(messages, cacheControl);
+	addCacheControlToLastConversationMessage(messages, cacheControl, markOnTextPartsOnly);
 }
 
 function addCacheControlToSystemPrompt(
@@ -765,17 +809,21 @@ function addCacheControlToSystemPrompt(
 	}
 }
 
+/**
+ * Marks the newest message that can carry a mark, so each step of a run of
+ * tool calls reads the whole earlier conversation from the cache. An assistant
+ * message carries it only when the request ends on one; tool results don't then.
+ */
 function addCacheControlToLastConversationMessage(
 	messages: ChatCompletionMessageParam[],
 	cacheControl: OpenAICompatCacheControl,
+	markOnTextPartsOnly: boolean,
 ): void {
+	const otherRole = messages.at(-1)?.role === "assistant" ? "assistant" : "tool";
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
-		if (message.role === "user" || message.role === "assistant") {
-			if (addCacheControlToMessage(message, cacheControl)) {
-				return;
-			}
-		}
+		if (message.role !== "user" && message.role !== otherRole) continue;
+		if (addCacheControlToMessage(message, cacheControl, markOnTextPartsOnly)) return;
 	}
 }
 
@@ -801,23 +849,48 @@ function addCacheControlToInstructionMessage(
 function addCacheControlToMessage(
 	message: ChatCompletionMessageParam,
 	cacheControl: OpenAICompatCacheControl,
+	markOnTextPartsOnly: boolean,
 ): boolean {
+	if (message.role === "tool") {
+		return addCacheControlToToolMessage(message, cacheControl, markOnTextPartsOnly);
+	}
 	if (message.role === "user" || message.role === "assistant") {
 		return addCacheControlToTextContent(message, cacheControl);
 	}
 	return false;
 }
 
+/**
+ * A gateway reads a tool result's mark beside its tool_call_id; OpenRouter's
+ * schema takes a mark only on a text part. A blank result gets none: Anthropic
+ * refuses a mark on blank text.
+ */
+function addCacheControlToToolMessage(
+	message: ChatCompletionToolMessageParam,
+	cacheControl: OpenAICompatCacheControl,
+	markOnTextPartsOnly: boolean,
+): boolean {
+	if (markOnTextPartsOnly) {
+		return addCacheControlToTextContent(message, cacheControl);
+	}
+	if (typeof message.content === "string" && message.content.trim().length === 0) {
+		return false;
+	}
+	(message as ChatCompletionToolMessageWithCacheControl).cache_control = cacheControl;
+	return true;
+}
+
 function addCacheControlToTextContent(
 	message:
 		| ChatCompletionInstructionMessageParam
 		| ChatCompletionAssistantMessageParam
+		| ChatCompletionToolMessageParam
 		| Extract<ChatCompletionMessageParam, { role: "user" }>,
 	cacheControl: OpenAICompatCacheControl,
 ): boolean {
 	const content = message.content;
 	if (typeof content === "string") {
-		if (content.length === 0) {
+		if (content.trim().length === 0) {
 			return false;
 		}
 		message.content = [
@@ -836,7 +909,7 @@ function addCacheControlToTextContent(
 
 	for (let i = content.length - 1; i >= 0; i--) {
 		const part = content[i];
-		if (part?.type === "text") {
+		if (part?.type === "text" && part.text.trim().length > 0) {
 			const textPart = part as ChatCompletionTextPartWithCacheControl;
 			textPart.cache_control = cacheControl;
 			return true;

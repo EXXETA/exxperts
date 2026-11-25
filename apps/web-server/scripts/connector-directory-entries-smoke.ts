@@ -1,9 +1,11 @@
 // The connector directory, driven in the page: its line says each entry
-// names what it needs, the cards that need more than a click say so in a note,
-// adding Atlassian saves the address the catalogue gives and asks for a
-// sign-in, the Google guides shown when a person adds Gmail or Drive read word
-// for word, and Asana's card opens the custom form filled in for an app of the
-// person's own, with the provider's guide one link away. Then a room's
+// names what it needs, it offers only apps added with a click, a sign-in or a
+// key (none that needs the person's own sign-in app or an admin's setup, and
+// a search finds none of those), and adding Atlassian saves the address the
+// catalogue gives and asks for a sign-in. A HubSpot connector already in the
+// connector file keeps its name, icon, description and sign-in state, and now
+// reads as a custom one, since the directory can't add it back: its address
+// shows and can change, and Remove says the address is needed again. Then a room's
 // Connectors pane keeps the way to the Connectors page once nothing is left
 // to enable, except on a remote device, where that page adds nothing. At
 // phone width a row with a button, an expired sign-in's Reconnect, keeps
@@ -11,11 +13,12 @@
 // the connector's entry, and the expired sign-in is a synthetic one in the
 // connector library's own store. Throwaway HOME.
 import fs from "node:fs";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { agentDir, assert, baseUrl, openRoom, requestJson, startRoomStateServer, stopRoomStateServer } from "./room-state-setup.js";
 import { SMOKE_AUTH_TOKEN } from "./smoke-server-process.js";
 import { closeBrowser, closeContext } from "./smoke-close-context.js";
 import { CONNECTOR_WORDS } from "../../web-ui/src/connector-rows.js";
+import { CONNECTOR_ICONS } from "../../web-ui/src/connector-icons.js";
 
 {
 	const executable = typeof chromium?.executablePath === "function" ? chromium.executablePath() : "";
@@ -25,21 +28,9 @@ import { CONNECTOR_WORDS } from "../../web-ui/src/connector-rows.js";
 	}
 }
 
-const googleGuide = (api: string) =>
-	`Create an OAuth client in Google Cloud (redirect URL http://localhost:19876/callback), select “Use this client for an AI-powered agent” on it, and enable the ${api} MCP API in the same project, then paste the client ID and secret here. Google currently gates tool calls behind its Workspace Developer Preview Program.`;
-const ASANA_GUIDE =
-	"Asana has no one-click login here. Go to https://app.asana.com/0/my-apps, create an MCP app, add the redirect URL http://localhost:19876/callback under OAuth, choose your workspaces under Manage distribution, and paste its client ID and secret here.";
-
-// Each card that needs more than a click, by its description, with the note under it.
-const CARD_NOTES: Array<[string, string]> = [
-	["CRM context: contacts, companies, and deals.", "Needs your own HubSpot app; the form walks you through it."],
-	["Coordinate tasks, projects, and goals in Asana.", "Needs your own Asana app; the form walks you through it."],
-	["Search, read, and organize files in your Drive.", "Needs your own Google Cloud app; the form walks you through it. Only accounts in Google's preview program can use it."],
-	["Search threads, draft replies, and manage labels.", "Needs your own Google Cloud app; the form walks you through it. Only accounts in Google's preview program can use it."],
-	["Teams, SharePoint, OneDrive, and Outlook (Work IQ, preview).", "Your organisation's Microsoft 365 admin has to set this up first."],
-];
+// The directory's rows, in order.
+const OFFERED = ["GitHub", "Notion", "Atlassian", "Linear", "Context7", "Hugging Face", "DeepWiki", "Canva", "Sentry", "Stripe", "Cloudflare Docs"];
 const ROOM = "Connector Room";
-const ADD_ELSEWHERE = "Not in this list? Add it on the Connectors page first.";
 
 /** A signed-in page on Home; with `remote`, the page takes itself for a remote device. */
 async function signedIn(browser: Browser, remote = false, phone = false): Promise<Page> {
@@ -65,6 +56,9 @@ let browser: Browser | null = null;
 let failure: unknown;
 try {
 	await startRoomStateServer();
+	// Added from the directory's old HubSpot card, which filled in the custom form with the person's own sign-in app.
+	const hubspot = await requestJson("/api/mcp/servers", { method: "POST", body: JSON.stringify({ name: "HubSpot", url: "https://mcp.hubspot.com", oauth: { clientId: "synthetic-client", clientSecret: "synthetic-secret" } }) });
+	assert(hubspot.status === 200 || hubspot.status === 201, `hubspot should add, got ${hubspot.status} ${JSON.stringify(hubspot.body)}`);
 	// With no room yet the page opens on its first-run guide, over the sidebar.
 	await openRoom(ROOM);
 	browser = await chromium.launch({ headless: true });
@@ -75,70 +69,94 @@ try {
 
 	const directory = page.getByLabel("Connector directory", { exact: true });
 	await directory.getByText("Apps you can add. Each one says what it needs to connect.", { exact: true }).waitFor({ timeout: 15_000 });
-	for (const [description, note] of CARD_NOTES) {
-		const shown = await directory.locator(".connector-dir-row").filter({ hasText: description }).locator(".connector-dir-note").allInnerTexts();
-		assert(shown.length === 1 && shown[0] === note, `the card "${description}" should say ${JSON.stringify(note)}, got ${JSON.stringify(shown)}`);
-	}
-	// A card that takes one click carries no note.
-	const notionNotes = await directory.locator(".connector-dir-row").filter({ hasText: "Search and update pages and databases in your Notion workspace." }).locator(".connector-dir-note").count();
-	assert(notionNotes === 0, `Notion's card should carry no note, got ${notionNotes}`);
+	const rowNames = () => directory.locator(".connector-dir-row .settings-row-label").evaluateAll((els) => els.map((el) => el.firstChild?.textContent ?? ""));
+	const listed = await rowNames();
+	assert(JSON.stringify(listed) === JSON.stringify(OFFERED), `the directory should offer ${JSON.stringify(OFFERED)}, got ${JSON.stringify(listed)}`);
+	assert((await directory.getByText("Needs setup").count()) === 0, "no card should say it needs setup");
+	assert((await directory.locator(".connector-dir-note").count()) === 0, "no card should carry a note");
+	// A search finds none of the apps that left it: the ordinary no-results line.
+	const search = directory.getByLabel("Search connectors", { exact: true });
+	await search.fill("gmail");
+	await directory.getByText(CONNECTOR_WORDS.directoryNoMatch, { exact: true }).waitFor({ timeout: 15_000 });
+	const found = await rowNames();
+	assert(found.length === 0, `searching gmail should find nothing, got ${JSON.stringify(found)}`);
+	await search.fill("");
+	await directory.getByRole("button", { name: "Add Notion", exact: true }).waitFor({ timeout: 15_000 });
 
+	// The HubSpot connector added before keeps its name and icon, waiting for its sign-in, and is now a custom one.
+	const list = page.getByLabel(CONNECTOR_WORDS.listTitle, { exact: true });
+	const hubspotRow = list.locator(".connector-item").filter({ has: page.locator(".connector-item-name-text", { hasText: /^HubSpot$/ }) });
+	await hubspotRow.getByRole("button", { name: CONNECTOR_WORDS.button.connect, exact: true }).waitFor({ timeout: 15_000 });
+	const glyph = await hubspotRow.locator(".connector-avatar path").getAttribute("d");
+	assert(glyph === CONNECTOR_ICONS.hubspot, `the HubSpot connector should keep its icon, got ${glyph?.slice(0, 20)}`);
+	const tags = await hubspotRow.locator(".connector-dir-kind").allInnerTexts();
+	assert(JSON.stringify(tags) === JSON.stringify([CONNECTOR_WORDS.tagCustom]), `the HubSpot connector should be tagged custom, got ${JSON.stringify(tags)}`);
+	assert((await hubspotRow.locator(".connector-item-status").innerText()) === `${CONNECTOR_WORDS.status.notConnected} · ${CONNECTOR_WORDS.roomsInLine(0)}`, "the HubSpot connector should wait for its sign-in, with how many rooms it is on in");
+	// Its own page is HubSpot's, by name and icon (its description stays in the Directory), and shows its address with
+	// Change address, and Remove says the address is needed again.
+	await hubspotRow.locator(".connector-item-hit").click();
+	const hubspotPage = page.locator(".connector-page");
+	await hubspotPage.locator(".connector-page-head h2").getByText("HubSpot", { exact: true }).waitFor({ timeout: 15_000 });
+	const pageGlyph = await hubspotPage.locator(".connector-page-head .connector-avatar path").getAttribute("d");
+	assert(pageGlyph === CONNECTOR_ICONS.hubspot, `the HubSpot connector's page should show its icon, got ${pageGlyph?.slice(0, 20)}`);
+	const address = hubspotPage.locator(".connector-fact").filter({ has: page.locator(".settings-row-label", { hasText: new RegExp(`^${CONNECTOR_WORDS.details.address}$`) }) });
+	await address.getByText("https://mcp.hubspot.com", { exact: true }).waitFor({ timeout: 15_000 });
+	assert((await address.getByRole("button", { name: CONNECTOR_WORDS.button.changeAddress, exact: true }).count()) === 1, "the HubSpot connector's address should offer Change address");
+	await hubspotPage.locator(".connector-remove-group").getByRole("button", { name: CONNECTOR_WORDS.button.remove, exact: true }).click();
+	const dialog = page.locator(".confirm-dialog-backdrop");
+	const ask = [await dialog.locator("h2").innerText(), await dialog.locator("p").innerText()];
+	const expectedAsk = [CONNECTOR_WORDS.removeQuestion("HubSpot"), CONNECTOR_WORDS.removeCustomUnused];
+	assert(JSON.stringify(ask) === JSON.stringify(expectedAsk), `removing HubSpot should ask ${JSON.stringify(expectedAsk)}, got ${JSON.stringify(ask)}`);
+	await dialog.getByRole("button", { name: CONNECTOR_WORDS.button.remove, exact: true }).click();
+	await hubspotPage.waitFor({ state: "detached", timeout: 15_000 });
+	await list.getByText(CONNECTOR_WORDS.noneYet, { exact: false }).waitFor({ timeout: 15_000 });
+	const afterRemove = await requestJson("/api/mcp/status");
+	assert(!afterRemove.body.servers.some((server: { name: string }) => server.name === "hubspot"), "the HubSpot connector should be removed");
+
+	// Add goes on to Atlassian's sign-in at once; the sign-in is answered here, so nothing reaches the service.
+	const signInsAsked: string[] = [];
+	await page.route("**/api/mcp/servers/*/login", (route) => {
+		const method = route.request().method();
+		signInsAsked.push(`${method} ${new URL(route.request().url()).pathname}`);
+		return route.fulfill({ json: method === "POST" ? { started: true } : method === "DELETE" ? { cancelled: true } : { pending: true } });
+	});
 	await page.getByRole("button", { name: "Add Atlassian", exact: true }).click();
-	await page.getByText(CONNECTOR_WORDS.addedFromDirectory("Atlassian"), { exact: true }).waitFor({ timeout: 15_000 });
+	await page.locator(".connector-item").filter({ hasText: "Atlassian" }).locator(".connector-item-status").getByText(`${CONNECTOR_WORDS.status.signingIn} · ${CONNECTOR_WORDS.roomsInLine(0)}`, { exact: true }).waitFor({ timeout: 15_000 });
+	assert(signInsAsked.filter((one) => one === "POST /api/mcp/servers/atlassian/login").length === 1, `adding Atlassian should ask for its sign-in once, got ${JSON.stringify(signInsAsked)}`);
 	await page.getByLabel("Atlassian is added").waitFor({ timeout: 15_000 });
 	const status = await requestJson("/api/mcp/status");
 	const atlassian = status.body.servers.find((server: { name: string }) => server.name === "atlassian");
 	assert(atlassian?.target === "https://mcp.atlassian.com/v2/mcp", `a new Atlassian connector should use the new address, got ${atlassian?.target}`);
 
-	for (const [name, api] of [["Gmail", "Gmail"], ["Google Drive", "Drive"]]) {
-		await page.getByRole("button", { name: CONNECTOR_WORDS.directoryAdd({ name, kind: "oauth-client" }), exact: true }).click();
-		await page.locator(".cli-note").filter({ hasText: googleGuide(api) }).waitFor({ timeout: 15_000 });
-	}
-
-	const asanaCard = page.locator(".connector-dir-row").filter({ hasText: "Coordinate tasks, projects, and goals in Asana." });
-	const asanaKind = await asanaCard.locator(".connector-dir-kind").innerText();
-	assert(asanaKind === CONNECTOR_WORDS.directoryTags["oauth-client"], `Asana's card should say it needs setup, got ${asanaKind}`);
-	await page.getByRole("button", { name: CONNECTOR_WORDS.directoryAdd({ name: "Asana", kind: "oauth-client" }), exact: true }).click({ timeout: 15_000 });
-	const form = page.getByLabel("Custom connector", { exact: true });
-	await form.locator(".cli-note").filter({ hasText: ASANA_GUIDE }).waitFor({ timeout: 15_000 });
-	const asanaName = await form.getByLabel("Name", { exact: true }).inputValue();
-	assert(asanaName === "Asana", `the form should name the connector Asana, got ${asanaName}`);
-	const asanaUrl = await form.getByLabel(CONNECTOR_WORDS.form.address, { exact: true }).inputValue();
-	assert(asanaUrl === "https://mcp.asana.com/v2/mcp", `the form should hold Asana's current address, got ${asanaUrl}`);
-	await form.getByLabel("Client ID", { exact: true }).waitFor({ timeout: 15_000 });
-	const guide = await form.getByRole("link", { name: "Setup guide ↗", exact: true }).getAttribute("href");
-	assert(guide === "https://developers.asana.com/docs/integrating-with-asanas-mcp-server", `Asana's form should link its setup guide, got ${guide}`);
-	// The blank custom form has no provider, so no guide.
-	await page.getByRole("button", { name: "Add a custom connector", exact: true }).click();
-	const blank = page.getByLabel("Custom connector", { exact: true });
+	// The web address form, from the Add connector menu, links no guide.
+	await page.locator(".pane-head-actions").getByRole("button", { name: CONNECTOR_WORDS.addConnector, exact: true }).click();
+	await page.getByRole("menuitem", { name: CONNECTOR_WORDS.addWays.web, exact: true }).click();
+	const blank = page.getByLabel(CONNECTOR_WORDS.form.webTitle, { exact: true });
 	await blank.getByLabel("Name", { exact: true }).waitFor({ timeout: 15_000 });
-	assert((await blank.getByLabel("Name", { exact: true }).inputValue()) === "", "the custom row should open a blank form");
-	assert((await blank.getByRole("link").count()) === 0, "the blank custom form should link no guide");
+	assert((await blank.getByLabel("Name", { exact: true }).inputValue()) === "", "By web address should open a blank form");
+	assert((await blank.getByRole("link").count()) === 0, "the web address form should link no guide");
 	await page.locator(".settings-dialog-close").first().click();
 
-	// Atlassian is added but not on in the room: the picker's last line leads to the Connectors page.
+	// Atlassian is added but not on in the room: its row is there, off, and the pane's lead links to the Connectors page.
 	let pane = await openRoomConnectors(page);
-	await pane.getByRole("button", { name: "Enable connectors", exact: true }).click();
-	const picker = pane.locator(".room-skills-picker");
-	await picker.getByText(ADD_ELSEWHERE, { exact: true }).waitFor({ timeout: 15_000 });
-	await picker.getByRole("button", { name: "Enable", exact: true }).click();
-	await picker.getByText("Every configured connector is already enabled.", { exact: true }).waitFor({ timeout: 15_000 });
-	assert(await picker.getByRole("button", { name: "Open connectors", exact: true }).isVisible(), "with every connector enabled the picker should still lead to the Connectors page");
-	await picker.getByRole("button", { name: "Close connector picker", exact: true }).click();
-	// Nothing is left to enable: the pane's header leads there instead of offering nothing.
-	await pane.getByRole("button", { name: "Open connectors", exact: true }).click();
+	const atlassianRow = (on: Locator) => on.locator(".room-skills-row").filter({ hasText: "Atlassian" });
+	await atlassianRow(pane).locator("input[role=switch]:not(:checked)").waitFor({ timeout: 15_000 });
+	assert(await pane.locator(".pane-lead").getByRole("button", { name: CONNECTOR_WORDS.room.manage, exact: true }).isVisible(), "with a connector off the pane should lead to the Connectors page");
+	await pane.getByRole("switch", { name: "Atlassian", exact: true }).click();
+	await atlassianRow(pane).locator("input[role=switch]:checked:enabled").waitFor({ timeout: 15_000 });
+	// Every connector on, the pane's lead still links there.
+	await pane.locator(".pane-lead").getByRole("button", { name: CONNECTOR_WORDS.room.manage, exact: true }).click();
 	await page.locator(".rs-shell").waitFor({ state: "detached", timeout: 15_000 });
 	await page.getByLabel("Connector directory", { exact: true }).waitFor({ timeout: 15_000 });
 
-	// On a remote device the Connectors page adds nothing, so the pane offers no way there.
+	// On a remote device the Connectors page adds nothing, so the pane offers no way there; its switch still turns a connector off and on.
 	const remote = await signedIn(browser, true);
 	pane = await openRoomConnectors(remote);
-	await pane.locator(".room-skills-row").filter({ hasText: "Atlassian" }).waitFor({ timeout: 15_000 });
-	assert((await pane.getByRole("button", { name: "Open connectors", exact: true }).count()) === 0, "a remote device's pane should not lead to the Connectors page");
-	await pane.getByRole("button", { name: "Remove", exact: true }).click();
-	await pane.getByRole("button", { name: "Enable connectors", exact: true }).click();
-	await pane.locator(".room-skills-picker").getByRole("button", { name: "Enable", exact: true }).waitFor({ timeout: 15_000 });
-	assert((await pane.getByText(ADD_ELSEWHERE, { exact: true }).count()) === 0, "a remote device's picker should not lead to the Connectors page");
+	await atlassianRow(pane).waitFor({ timeout: 15_000 });
+	assert((await pane.getByRole("button", { name: CONNECTOR_WORDS.room.manage, exact: true }).count()) === 0, "a remote device's pane should not lead to the Connectors page");
+	await pane.getByRole("switch", { name: "Atlassian", exact: true }).click();
+	await atlassianRow(pane).locator("input[role=switch]:not(:checked):enabled").waitFor({ timeout: 15_000 });
+	assert((await pane.getByRole("button", { name: CONNECTOR_WORDS.room.manage, exact: true }).count()) === 0, "with a connector off a remote device's pane should still not lead to the Connectors page");
 	await closeContext(remote.context());
 
 	// Notion's sign-in expired with nothing to renew it: its row offers Reconnect.

@@ -12,6 +12,9 @@
 // - the person's own variables still arrive, the tokens of their own tools among
 //   them, and the agent bin stays first on PATH;
 // - long output and a command's timeout read as they always did;
+// - a message with a command in it runs its calls in the model's order, a read
+//   of the file the command makes finding it, beside a Stop, a question and a
+//   failed command; a message of reads only runs them at the same time;
 // - a background run on the same room is offered no bash, a memory worker no tools.
 //
 // The stand-in shells are shell scripts, so this needs a machine that is not Windows.
@@ -69,10 +72,12 @@ function writeShell(file: string, marker: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Synthetic gateway: a conversation's first request runs `nextCall`, or answers
-// at once with none set; the request with the tool's result is answered "done".
+// Synthetic gateway: a conversation's first request makes `nextCalls` in one
+// message, or answers at once with none set; the request with the tools'
+// results is answered "done".
 // ---------------------------------------------------------------------------
-let nextCall: { command: string; timeout?: number } | null = null;
+type Call = { name: string; args: Record<string, unknown> };
+let nextCalls: Call[] | null = null;
 const offeredTools: string[][] = [];
 let finishedTurns = 0;
 
@@ -93,9 +98,9 @@ const gateway = http.createServer((req, res) => {
 		offeredTools.push((parsed?.tools ?? []).map((tool: any) => String(tool?.function?.name)));
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		const base = { id: `cmpl_${offeredTools.length}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: String(parsed?.model ?? "room-model") };
-		if (nextCall && messages.at(-1)?.role !== "tool") {
-			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_bash", type: "function", function: { name: "bash", arguments: "" } }] }, finish_reason: null }] }));
-			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(nextCall) } }] }, finish_reason: null }] }));
+		if (nextCalls && messages.at(-1)?.role !== "tool") {
+			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: nextCalls.map((call, index) => ({ index, id: `call_${index}`, type: "function", function: { name: call.name, arguments: "" } })) }, finish_reason: null }] }));
+			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { tool_calls: nextCalls.map((call, index) => ({ index, function: { arguments: JSON.stringify(call.args) } })) }, finish_reason: null }] }));
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }));
 		} else {
 			finishedTurns += 1;
@@ -181,7 +186,15 @@ async function createBashRoom(server: SmokeServer, folder: string): Promise<stri
 
 const WebSocketImpl: any = (await import("ws")).default;
 
-type Conversation = { run: (call: { command: string; timeout?: number }) => Promise<{ text: string; isError: boolean }>; close: () => void };
+type Result = { text: string; isError: boolean };
+/** A message's calls as the chat received them: each result in the model's order, and each step's start and end as `start call_0`, `end call_0`. */
+type Batch = { results: Result[]; steps: string[] };
+type Conversation = {
+	run: (call: { command: string; timeout?: number }) => Promise<Result>;
+	/** One turn whose single model message makes these calls; `during` runs with the turn's new frames until the turn ends. */
+	batch: (calls: Call[], during?: (frames: any[], send: (frame: unknown) => void) => void) => Promise<Batch>;
+	close: () => void;
+};
 
 /** A new conversation on its own connection, which binds a new session; `run` is one turn, returning the command's result as the chat received it. */
 async function openConversation(server: SmokeServer, agentId: string, conversationId: string): Promise<Conversation> {
@@ -199,20 +212,30 @@ async function openConversation(server: SmokeServer, agentId: string, conversati
 		socket.addEventListener("open", () => resolve());
 		socket.addEventListener("error", () => reject(new Error("websocket failed to connect")));
 	});
-	const run: Conversation["run"] = async (call) => {
+	const send = (frame: unknown) => socket.send(JSON.stringify(frame));
+	const batch: Conversation["batch"] = async (calls, during) => {
 		const firstFrame = frames.length;
 		const before = finishedTurns;
-		nextCall = call;
-		socket.send(JSON.stringify({ type: "prompt", text: "Run a command, please." }));
+		// A stopped turn asks the model nothing more.
+		let stopped = false;
+		const sendDuring = (frame: unknown) => {
+			if ((frame as { type?: string })?.type === "abort") stopped = true;
+			send(frame);
+		};
+		nextCalls = calls;
+		send({ type: "prompt", text: "Run a command, please." });
 		const deadline = Date.now() + 30_000;
 		while (Date.now() < deadline) {
 			const turnFrames = frames.slice(firstFrame);
-			if (finishedTurns > before && turnFrames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
+			during?.(turnFrames, sendDuring);
+			if ((finishedTurns > before || stopped) && turnFrames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
 				await waitForTurnSettled((pathname) => requestJson(server, pathname), agentId, `${conversationId}: the turn has settled`);
-				nextCall = null;
-				const toolResult = turnFrames.find((frame) => frame?.type === "event" && frame?.event?.type === "message_end" && frame?.event?.message?.role === "toolResult")?.event?.message;
-				assert(toolResult, "the chat must receive the command's result");
-				return { text: (toolResult.content ?? []).filter((part: any) => part?.type === "text").map((part: any) => part.text).join("\n"), isError: toolResult.isError === true };
+				nextCalls = null;
+				const events = turnFrames.filter((frame) => frame?.type === "event").map((frame) => frame.event);
+				const results = events.filter((event) => event?.type === "message_end" && event?.message?.role === "toolResult").map((event) => ({ text: (event.message.content ?? []).filter((part: any) => part?.type === "text").map((part: any) => part.text).join("\n"), isError: event.message.isError === true }));
+				assert(results.length === calls.length, `the chat must receive each call's result, got ${results.length} of ${calls.length}`);
+				const steps = events.filter((event) => event?.type === "tool_execution_start" || event?.type === "tool_execution_end").map((event) => `${event.type === "tool_execution_start" ? "start" : "end"} ${event.toolCallId}`);
+				return { results, steps };
 			}
 			const errors = turnFrames.filter((frame) => String(frame?.type ?? "").includes("error"));
 			if (errors.length > 0) throw new Error(`turn errored: ${JSON.stringify(errors[0]).slice(0, 400)}`);
@@ -220,7 +243,8 @@ async function openConversation(server: SmokeServer, agentId: string, conversati
 		}
 		throw new Error(`turn did not complete; frame types: ${frames.slice(firstFrame).map((frame) => frame?.type).join(", ")}`);
 	};
-	return { run, close: () => { try { socket.close(); } catch {} } };
+	const run: Conversation["run"] = async (call) => (await batch([{ name: "bash", args: call }])).results[0];
+	return { run, batch, close: () => { try { socket.close(); } catch {} } };
 }
 
 async function runCommand(server: SmokeServer, agentId: string, conversationId: string, call: { command: string; timeout?: number }): Promise<{ text: string; isError: boolean }> {
@@ -312,7 +336,65 @@ try {
 	assert(Date.now() - startedAt < 25_000, "the timeout must end the command, not wait for it");
 	console.log("ok: long output and a timeout read as before");
 
-	// 5. The person's global settings set both, with the folder's settings still there.
+	// 5. A message with a command in it runs its calls in the model's order; one of reads only runs them at the same time.
+	const ordered = await openConversation(server, room, "conv-order");
+	const read = (file: string): Call => ({ name: "read", args: { path: file } });
+	const command = (line: string): Call => ({ name: "bash", args: { command: line } });
+	const oneAfterAnother = (steps: string[], count: number) => steps.join(", ") === Array.from({ length: count }, (_, at) => `start call_${at}, end call_${at}`).join(", ");
+	const made = await ordered.batch([command("sleep 0.5; printf made-by-command > made.txt"), read("made.txt")]);
+	assert(!made.results[1].isError && made.results[1].text.includes("made-by-command"), `a read beside the command that makes its file must find it, got ${JSON.stringify(made.results[1])}`);
+	assert(oneAfterAnother(made.steps, 2), `a message with a command runs its calls one after another, got ${made.steps.join(", ")}`);
+	console.log("ok: a read beside the command that makes its file finds it, the calls one after another");
+
+	fs.writeFileSync(path.join(folder, "first.txt"), "first file");
+	fs.writeFileSync(path.join(folder, "second.txt"), "second file");
+	const reads = await ordered.batch([read("first.txt"), read("second.txt")]);
+	assert(reads.results[0].text.includes("first file") && reads.results[1].text.includes("second file"), `both reads, got ${JSON.stringify(reads.results)}`);
+	assert(reads.steps.slice(0, 2).join(", ") === "start call_0, start call_1", `a message of reads only starts them together, got ${reads.steps.join(", ")}`);
+	console.log("ok: a message of reads only runs them at the same time");
+
+	const wrote = await ordered.batch([{ name: "write", args: { path: "written.txt", content: "made-by-write" } }, read("written.txt")]);
+	assert(!wrote.results[1].isError && wrote.results[1].text.includes("made-by-write"), `a read beside the write that makes its file must find it, got ${JSON.stringify(wrote.results[1])}`);
+	fs.writeFileSync(path.join(folder, "edited.txt"), "before the edit");
+	const edited = await ordered.batch([{ name: "edit", args: { path: "edited.txt", edits: [{ oldText: "before the edit", newText: "after the edit" }] } }, read("edited.txt")]);
+	assert(!edited.results[1].isError && edited.results[1].text.includes("after the edit"), `a read beside the edit of its file must see the edit, got ${JSON.stringify(edited.results[1])}`);
+	console.log("ok: a read beside a write or an edit of its file sees the change");
+
+	const failed = await ordered.batch([command("exit 3"), read("first.txt")]);
+	assert(failed.results[0].isError && failed.results[1].text.includes("first file") && oneAfterAnother(failed.steps, 2), `a failed command, then the read: ${JSON.stringify(failed)}`);
+	console.log("ok: the calls after a failed command still run");
+
+	let stopSent = false;
+	const stoppedAt = Date.now();
+	const cut = await ordered.batch([command("sleep 30"), command("printf after-stop > after-stop.txt"), read("first.txt")], (frames, send) => {
+		if (stopSent || !frames.some((frame) => frame?.type === "event" && frame?.event?.type === "tool_execution_start" && frame.event.toolCallId === "call_0")) return;
+		stopSent = true;
+		send({ type: "abort", shown: 0 });
+	});
+	assert(Date.now() - stoppedAt < 20_000 && cut.results[0].isError, `Stop ends the running command, got ${JSON.stringify(cut.results[0])}`);
+	assert(cut.results.slice(1).every((result) => result.isError && result.text.includes("the turn was stopped before it ran")), `the calls after a Stop don't start, and their steps say so, got ${JSON.stringify(cut.results)}`);
+	assert(!fs.existsSync(path.join(folder, "after-stop.txt")), "a command after the Stop ran");
+	console.log("ok: Stop in a message whose calls run in order: the calls after it don't start");
+	ordered.close();
+
+	const settingsUrl = `${server.baseUrl}/api/persistent-agents/${encodeURIComponent(room)}/bash-settings`;
+	assert((await putRunWithoutAsking(settingsUrl, false)).status === 200, "commands ask first");
+	const { ANSWER_FLOOR_MS } = await import("../src/room-box/card-text.js");
+	const asking = await openConversation(server, room, "conv-ask");
+	let readBeforeAnswer: boolean | undefined;
+	const asked = await asking.batch([command("printf asked-first > asked.txt"), read("asked.txt")], (frames, send) => {
+		const card = frames.find((frame) => frame?.type === "ui_request" && frame.kind === "run");
+		if (!card || readBeforeAnswer !== undefined) return;
+		readBeforeAnswer = frames.some((frame) => frame?.type === "event" && frame?.event?.type === "tool_execution_start" && frame.event.toolCallId === "call_1");
+		setTimeout(() => send({ type: "ui_response", id: card.id, value: true }), ANSWER_FLOOR_MS + 50);
+	});
+	asking.close();
+	assert(readBeforeAnswer === false, `the question shows and the read behind it waits, got ${readBeforeAnswer === undefined ? "no question" : "the read started"}`);
+	assert(asked.results[1].text.includes("asked-first"), `the read after a yes finds the file, got ${JSON.stringify(asked.results)}`);
+	assert((await putRunWithoutAsking(settingsUrl, true)).status === 200, "commands run without asking again");
+	console.log("ok: a command that asks first: the question shows and the calls behind it wait");
+
+	// 6. The person's global settings set both, with the folder's settings still there.
 	const globalShellRan = path.join(tempRoot, "global-shell-ran");
 	const globalShell = path.join(tempRoot, "global-shell.sh");
 	writeShell(globalShell, globalShellRan);
@@ -327,7 +409,7 @@ try {
 	const { agentDir, agentsRoot, home } = server;
 	server = undefined;
 
-	// 6. A background run on the same room, Bash on, is offered no bash.
+	// 7. A background run on the same room, Bash on, is offered no bash.
 	delete process.env.EXXPERTS_DATA_DIR;
 	delete process.env.EXXPERTS_STATE_HOME;
 	Object.assign(process.env, { HOME: home, USERPROFILE: home, EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot, EXXETA_HOME: repoRoot });
@@ -338,7 +420,7 @@ try {
 	assert(backgroundTools.includes("read") && !backgroundTools.includes("bash"), `a background run has its file tools and no bash, got ${JSON.stringify(backgroundTools)}`);
 	console.log("ok: a background run is offered no bash");
 
-	// 7. Nor is a memory worker offered any tool. Specialist templates can't grant bash: specialist-runtime-smoke holds that.
+	// 8. Nor is a memory worker offered any tool. Specialist templates can't grant bash: specialist-runtime-smoke holds that.
 	const { AuthStorage, ModelRegistry } = await import("@exxeta/exxperts-runtime");
 	const { runIsolatedPersistentAgentWorker } = await import("../src/persistent-agent-worker-runtime.js");
 	const workerRegistry = ModelRegistry.create(AuthStorage.create(path.join(agentDir, "auth.json")), path.join(agentDir, "models.json"));
@@ -356,7 +438,18 @@ try {
 	assert(offeredTools.length > workerRan && offeredTools[workerRan].length === 0, `a worker has no tools, got ${JSON.stringify(offeredTools[workerRan])}`);
 	console.log("ok: a memory worker is offered no tools");
 
-	// 8. A folder's shell path can't hide the Windows no-shell line.
+	// 9. The command tool runs its message's calls in order wherever it is offered: plain, in the Mac's box and in the Windows box.
+	// Section 5 runs the plain one live, room-box-live-files-smoke the Mac's; no Windows box starts on this machine, so a stand-in holds its place.
+	const { createRoomCommandTools } = await import("../src/room-command-tool.js");
+	const standIn = (kind?: "windows") => ({ kind, operations: () => ({ exec: async () => ({ exitCode: 0 }) }), privateTemp: async () => tempRoot, readsSpills: () => false, noteSpill: () => {} });
+	const offered = { plain: createRoomCommandTools(folder), mac: createRoomCommandTools(folder, { box: standIn(), outside: { questions: { watcher: () => "none" } as any, setOffered: () => {} } }), windows: createRoomCommandTools(folder, { box: standIn("windows"), outside: { questions: { watcher: () => "none" } as any, setOffered: () => {} } }) };
+	for (const [where, commands] of Object.entries(offered)) {
+		const modes = commands.tools.map((tool) => `${tool.name} ${tool.executionMode}`);
+		assert(modes.includes("bash sequential") && modes.every((mode) => mode.endsWith(" sequential")), `${where}: every command tool runs its message's calls in order, got ${modes.join(", ")}`);
+	}
+	console.log("ok: the command tool runs its message's calls in order, plain, in the Mac's box and in the Windows box");
+
+	// 10. A folder's shell path can't hide the Windows no-shell line.
 	const programFiles = path.join(tempRoot, "program-files");
 	fs.mkdirSync(programFiles);
 	windowsServer = await startServer("windows", gatewayPort, { EXXPERTS_TEST_INTROSPECTION: "1", EXXPERTS_TEST_SHELL_PLATFORM: "win32", ProgramFiles: programFiles });

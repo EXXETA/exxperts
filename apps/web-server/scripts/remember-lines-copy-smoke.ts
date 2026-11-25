@@ -200,8 +200,16 @@ try {
 		assert(client.recentSessionsHeadsUp(20, "Atlas") === "Atlas now holds 20 conversations, as many as it can. Memorize them to start a new conversation.", "the line at 20");
 	});
 
+	check("the full room's way on is one sentence, from the server and in the page's own line", () => {
+		const socket = fs.readFileSync(path.join(process.cwd(), "apps", "web-server", "src", "room-socket.ts"), "utf8");
+		const wayOn = (source: string, from: string) => /Memorize them from [^`"]*/.exec(source.slice(source.indexOf(from), source.indexOf(from) + 1200))?.[0];
+		const sentence = "Memorize them from Maintain on its card in Rooms to start a new conversation.";
+		assert(wayOn(socket, "const roomFull =") === sentence, `the server says ${wayOn(socket, "const roomFull =")}`);
+		assert(wayOn(app, 'msg.code === "room_full"') === sentence, `the page says ${wayOn(app, 'msg.code === "room_full"')}`);
+	});
+
 	check("a result handed over but not yet sent is not promised to carry over", () => {
-		assert(!pageText.includes("carry into the fresh conversation"), "no promise a full room or Return Home would break");
+		assert(!pageText.includes("carry into the fresh conversation"), "no promise a full room or Back to rooms would break");
 		assert(dialog.includes("A transferred consult hasn't entered memory yet. Send a message before you save, so it is part of this conversation.") && dialog.includes("A transferred task result hasn't entered memory yet. Send a message before you save, so it is part of this conversation."), "what to do to keep it");
 	});
 

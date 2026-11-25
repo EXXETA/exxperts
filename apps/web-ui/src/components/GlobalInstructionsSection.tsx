@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../api";
 import type { GlobalInstructionsResponse } from "../types";
 import { ROOM_INSTRUCTIONS_MAX_CHARS } from "../../../web-server/src/persistent-room-instructions-text";
-import { EMPTY_INSTRUCTIONS_BOX, GLOBAL_INSTRUCTIONS_PLACEHOLDER, instructionsClearLink, measureInstructionsDraft, readInstructionsReply, reduceInstructionsBox, instructionsSaveFoot, useSavedAtLabel, type InstructionsBoxState } from "./instructions-pane-shared";
+import { instructionsQuietButton, EMPTY_INSTRUCTIONS_BOX, GLOBAL_INSTRUCTIONS_PLACEHOLDER, instructionsClearLink, measureInstructionsDraft, readInstructionsReply, reduceInstructionsBox, instructionsSaveFoot, useSavedAtLabel, type InstructionsBoxState } from "./instructions-pane-shared";
 import { globalSavedLineAfter } from "../room-instructions-outcome";
 import { PaneHeader } from "./pane-header";
+import { useSettingsLookNext } from "../settings-look";
 import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
-import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
+import { SHARED_SERVER_ADMIN_LINE, sharedServerRole, useRemoteClientContext } from "../remote-client-context";
 
 async function fetchGlobalInstructions(): Promise<GlobalInstructionsResponse> {
 	const response = await apiFetch("/api/settings/instructions");
@@ -42,9 +43,11 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 	const [saving, setSaving] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	// On a shared server the text reaches everyone's rooms, so only its admin
-	// changes it: the pane shows it read-only, with one line.
-	const readOnly = useRemoteClientContext().sharedServer;
+	// On a shared server the text reaches every room in the company, so only its
+	// admin changes it, told so in the pane's line: anyone else sees it
+	// read-only, with one line.
+	const role = sharedServerRole(useRemoteClientContext());
+	const readOnly = role === "member";
 
 	useEffect(() => {
 		let cancelled = false;
@@ -77,6 +80,21 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 	const savedAt = useSavedAtLabel(loaded?.instructions.updatedAt);
 	const foot = instructionsSaveFoot({ loaded: loaded !== null, dirty, unreadable: !!unreadable, savedAt });
 	const clearLink = instructionsClearLink(box, saving);
+	// The new look puts Clear on the line under the box, with Save and Discard.
+	const lookNext = useSettingsLookNext();
+	const quietInLook = instructionsQuietButton(lookNext);
+	const clearButton = clearLink && (
+		<button className={quietInLook} type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
+	);
+	const stateLine = foot.line && <span className="room-instructions-state">{foot.line}</span>;
+	const discardButton = foot.discard && <button className={quietInLook} type="button" disabled={saving} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "reload", value: stored })); setMessage(null); setError(null); }}>Discard</button>;
+	const saveButton = foot.save && <button className="rs-btn rs-btn-primary" type="button" disabled={!canSave} onClick={() => void submit(measured)}>{saving ? "Saving…" : "Save"}</button>;
+
+	// A read that takes the admin's role away puts the box back to what is saved:
+	// a draft there could no longer be saved, nor asked about on leaving.
+	useEffect(() => {
+		if (readOnly) setBox((state) => reduceInstructionsBox(state, { type: "reload", value: stored }));
+	}, [readOnly]);
 
 	useEffect(() => {
 		onDirtyChange?.(dirty);
@@ -109,7 +127,7 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 		<section className="ai-setup-section room-instructions-section" aria-label="Global instructions">
 			<PaneHeader
 				title="Instructions"
-				line="Standing guidance for every room that has not switched them off: how to answer, what to prefer, what to avoid. Changes apply from the next message."
+				line={`Standing guidance for every room${role === "admin" ? " in your company" : ""} that has not switched them off: how to answer, what to prefer, what to avoid. Changes apply from the next message.`}
 			/>
 			{loadError && (
 				<div className="workspaces-error">
@@ -121,13 +139,7 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 				<div className="workspaces-error">The global instructions cannot be read right now ({unreadable}). New conversations start without them; a conversation that is already open keeps the text it started with.</div>
 			)}
 			{/* Clear hangs in the box's top right corner from a row with no height, so the box never moves. */}
-			{!readOnly && (
-				<div className="room-instructions-box-head">
-					{clearLink && (
-						<button className="rs-btn" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
-					)}
-				</div>
-			)}
+			{!readOnly && !lookNext && <div className="room-instructions-box-head">{clearButton}</div>}
 			<textarea
 				className="launcher-path-input room-instructions-textarea"
 				value={draft}
@@ -142,9 +154,7 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 			<div className="room-instructions-foot">
 				<span id="global-instructions-count" className={over > 0 ? "room-instructions-count over" : "room-instructions-count"} aria-live="polite"><span aria-hidden="true">{counter}</span><span className="sr-only">{counterSpoken}</span></span>
 				{readOnly ? <p className="cli-note">{SHARED_SERVER_ADMIN_LINE}{foot.line ? ` ${foot.line}.` : ""}</p> : <div className="rs-pane-actions">
-					{foot.line && <span className="room-instructions-state">{foot.line}</span>}
-					{foot.discard && <button className="rs-btn" type="button" disabled={saving} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "reload", value: stored })); setMessage(null); setError(null); }}>Discard</button>}
-					{foot.save && <button className="rs-btn rs-btn-primary" type="button" disabled={!canSave} onClick={() => void submit(measured)}>{saving ? "Saving…" : "Save"}</button>}
+					{lookNext ? <>{saveButton}{discardButton}{clearButton}{stateLine}</> : <>{stateLine}{discardButton}{saveButton}</>}
 				</div>}
 			</div>
 			{controlsLine && <p id="global-instructions-controls" className="room-instructions-controls">{controlsLine}</p>}

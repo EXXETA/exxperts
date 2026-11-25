@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch, fetchJson } from "../api";
 import { chooseSystemFolder } from "../persistent-room-workspace-api";
+import { useSettingsLookNext } from "../settings-look";
 
 /**
  * Data profiles: which ~/.exxperts state tree this computer runs: rooms,
@@ -37,7 +38,37 @@ type Armed = { kind: "switch" | "delete"; name: string | null } | null;
 /** Terminal restart states: a profile switch, or a move of the whole data home. */
 type Restarting = { kind: "switch"; name: string | null; signInPath: string | null } | { kind: "home"; dir: string; signInPath: string | null };
 
+/**
+ * A path in two parts for the new look's middle cut: the head, which gives
+ * way with "…", and the last two parts, kept whole. Either separator counts.
+ */
+function pathEnds(dir: string): [string, string] {
+	const marks = [...dir.matchAll(/[\\/](?=[^\\/])/g)].map((match) => match.index);
+	const at = marks.length >= 2 ? marks[marks.length - 2] : 0;
+	return [dir.slice(0, at), dir.slice(at)];
+}
+
+/**
+ * The data folder's path: whole as text in the old look; in the new, cut in
+ * the middle on screen and whole to a screen reader and in a selection. The
+ * two halves draw their words from `data-text`, so the only words to select
+ * and copy are the whole path.
+ */
+function DataFolderPath({ dir }: { dir: string }) {
+	const lookNext = useSettingsLookNext();
+	if (!lookNext) return <code className="settings-chip" title={dir}>{dir}</code>;
+	const [head, tail] = pathEnds(dir);
+	return (
+		<code className="settings-chip" title={dir}>
+			<span className="sr-only">{dir}</span>
+			<span className="state-profile-path-head" aria-hidden="true" data-text={head} />
+			<span className="state-profile-path-tail" aria-hidden="true" data-text={tail} />
+		</code>
+	);
+}
+
 export function StateProfileSection() {
+	const lookNext = useSettingsLookNext();
 	const [payload, setPayload] = useState<StateProfilePayload | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -283,13 +314,28 @@ export function StateProfileSection() {
 	}
 
 	if (loadError || !payload) {
+		const failed = loadError ?? "Could not read the profiles.";
+		// The new look's message carries its one button at its end, as the small kind.
+		if (lookNext) {
+			return (
+				<section className="ai-setup-section state-profiles" aria-label="Profiles">
+					<div className="workspaces-error archived-rooms-note" role="alert">
+						{failed}
+						<button className="rs-btn rs-btn-sm" type="button" onClick={() => void load()}>Try again</button>
+					</div>
+				</section>
+			);
+		}
 		return (
 			<section className="ai-setup-section state-profiles" aria-label="Profiles">
-				<div className="workspaces-error archived-rooms-note" role="alert">{loadError ?? "Could not read the profiles."}</div>
+				<div className="workspaces-error archived-rooms-note" role="alert">{failed}</div>
 				<p><button className="rs-btn" type="button" onClick={() => void load()}>Try again</button></p>
 			</section>
 		);
 	}
+
+	// The new look says it under the field, the old one under the row's words.
+	const createErrorLine = createError && <span className="settings-row-sub workspaces-error" role="alert">{createError}</span>;
 
 	return (
 		<>
@@ -362,11 +408,11 @@ export function StateProfileSection() {
 							</div>
 						);
 					})}
-					<div className="settings-row">
+					<div className="settings-row state-profile-new">
 						<div className="settings-row-main">
 							<span className="settings-row-label">New profile</span>
 							<span className="settings-row-sub">Adds an empty profile, like a fresh install, to the list above. The loaded profile stays loaded until you switch.</span>
-							{createError && <span className="settings-row-sub workspaces-error" role="alert">{createError}</span>}
+							{!lookNext && createErrorLine}
 						</div>
 						<div className="settings-row-value">
 							<input
@@ -374,6 +420,7 @@ export function StateProfileSection() {
 								type="text"
 								value={draft}
 								placeholder="Profile name"
+								aria-invalid={lookNext && createError ? true : undefined}
 								disabled={creating}
 								onChange={(e) => { setDraft(e.target.value); setCreateError(null); }}
 								onKeyDown={(e) => { if (e.key === "Enter") void create(); }}
@@ -383,6 +430,7 @@ export function StateProfileSection() {
 							<button className="rs-btn" type="button" disabled={creating} onClick={() => void create()}>
 								{creating ? "Creating…" : "Create profile"}
 							</button>
+							{lookNext && createErrorLine}
 						</div>
 					</div>
 				</div>
@@ -394,7 +442,7 @@ export function StateProfileSection() {
 					<div className="settings-rows">
 						<div className="settings-row">
 							<div className="settings-row-main">
-								<span className="settings-row-label"><code className="settings-chip" title={payload.home.dir}>{payload.home.dir}</code></span>
+								<span className="settings-row-label"><DataFolderPath dir={payload.home.dir} /></span>
 								<span className="settings-row-sub">
 									{payload.home.source === "default"
 										? "All profiles live here. They can move anywhere, for example a folder synced by OneDrive or Dropbox, to use the same setup on more than one computer."

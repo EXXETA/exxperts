@@ -34,7 +34,7 @@ export function windowsPowerShell(systemRoot: string): string {
 }
 
 /**
- * The wrapper every command runs in: it takes the model's text from
+ * The wrapper every command in the box runs in: it takes the model's text from
  * `EXXPERTS_COMMAND` (box-request.ts), so the text never meets a quoting layer,
  * and drops the variable before the text runs. The last statement decides
  * whether it worked, as on a Mac: one that worked gives 0, even after a program
@@ -76,8 +76,43 @@ exit 1
 `;
 
 /**
- * The fixed line every command runs as. It carries only our wrapper, never the
- * model's text, so no Windows quoting touches what the model wrote, and a
+ * The box's wrapper for a command that runs without protection, where Node
+ * quotes the start's arguments: one line with no double quote, which Node only
+ * puts in quotes. It leaves out the two lines that are the box's own, the
+ * turn's temp and its proxy: without a box the person's temp and their
+ * computer's own proxy settings stay.
+ */
+export const PLAIN_COMMAND_WRAPPER = COMMAND_WRAPPER.trimEnd().split("\n").filter((line) => !/EXXPERTS_TEMP|HTTPS_PROXY/.test(line)).join("; ").replace('"`n"', "[char]10");
+
+/**
+ * The arguments before that wrapper, which comes last. `-Command`, not
+ * `-EncodedCommand`: with that one PowerShell writes its errors as CLIXML, and
+ * nothing here turns them into text.
+ */
+export const PLAIN_POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-OutputFormat", "Text", "-Command"];
+
+// Windows caps one environment variable at 32,767 characters, its name counted as for the box's commands (box-request.ts).
+const COMMAND_NAME = "EXXPERTS_COMMAND";
+const VARIABLE_LIMIT = 32_767;
+
+/**
+ * The environment a command without protection is started with: the given one,
+ * with the model's text in `EXXPERTS_COMMAND`, no module path (a server started
+ * from PowerShell 7 hands down one that hides Windows' own commands; 5.1 builds
+ * its own), and Python's output in UTF-8 unless the person chose. Windows names
+ * ignore case. Nothing when the text is longer than one variable may be.
+ */
+export function plainPowerShellEnvironment(text: string, environment: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv | undefined {
+	if (COMMAND_NAME.length + 1 + text.length > VARIABLE_LIMIT) return undefined;
+	const replaced = new Set([COMMAND_NAME, "PSMODULEPATH"]);
+	const kept = Object.entries(environment).filter(([name]) => !replaced.has(name.toUpperCase()));
+	const python = kept.some(([name]) => name.toUpperCase() === "PYTHONUTF8") ? {} : { PYTHONUTF8: "1" };
+	return { ...Object.fromEntries(kept), ...python, [COMMAND_NAME]: text };
+}
+
+/**
+ * The fixed line every command in the box runs as. It carries only our wrapper,
+ * never the model's text, so no Windows quoting touches what the model wrote, and a
  * policy of signed scripts only doesn't stop it, as it would `-File`. Output
  * is text by `-OutputFormat Text`, but PowerShell's own errors still come as
  * `#< CLIXML` records: the box's process turns them into text

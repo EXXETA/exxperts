@@ -4,7 +4,7 @@ import { CreateRoomPanel } from "./create-room-panel";
 import { Help, useFirstRunGuide } from "./Help";
 import { CloseIcon, PlusIcon } from "./icons";
 import { useEscapeKey } from "./use-escape-key";
-import { PersistentAgentCard, noModelSentence } from "./launcher-room-card";
+import { PersistentAgentCard, connectCardHeading, noModelSentence } from "./launcher-room-card";
 import { ROOM_SORT_MIN_ROOMS, RoomSortControl, ROOM_ARRANGE_HINT_ID } from "./RoomSortControl";
 import type { HomeRoomOrderView } from "../home-room-order";
 import type { HomeRoomOrderFailedSave } from "../use-home-room-order";
@@ -69,7 +69,7 @@ function useOneColumn(gridRef: React.RefObject<HTMLElement | null>, arranging: b
 	return oneColumn;
 }
 
-export function Landing({ roomOrder, roomOrderFailedSave, onChooseRoomOrder, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, serviceBack }: { roomOrder: HomeRoomOrderView; roomOrderFailedSave: HomeRoomOrderFailedSave | null; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; /** Counts the page's reconnects after an outage. */ serviceBack: number }) {
+export function Landing({ roomOrder, roomOrderFailedSave, onChooseRoomOrder, onOpenSettings, onOpenSkillsLibrary, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, homeStatusLine, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, serviceBack }: { roomOrder: HomeRoomOrderView; roomOrderFailedSave: HomeRoomOrderFailedSave | null; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; onOpenSettings: (section?: SettingsSection) => void; /** Opens Settings, Skills, at a skill's page when given its name. */ onOpenSkillsLibrary: (skillName?: string) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; homeStatusLine?: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; /** Counts the page's reconnects after an outage. */ serviceBack: number }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -387,7 +387,7 @@ export function Landing({ roomOrder, roomOrderFailedSave, onChooseRoomOrder, onO
 				</div>
 				{emptyHome === "connect-first" && (
 					<div className="home-connect-card">
-						<h2>Connect an AI to get started</h2>
+						<h2>{connectCardHeading(aiSetupRole)}</h2>
 						<p>{connectLine}</p>
 						{aiSetupRole !== "member" && <button type="button" className={`rs-btn${aiSetupReadOnly ? "" : " rs-btn-primary"} landing-action`} onClick={() => onOpenSettings("ai-setup")}>{aiSetupReadOnly ? "See AI setup" : "Connect AI"}</button>}
 					</div>
@@ -401,6 +401,7 @@ export function Landing({ roomOrder, roomOrderFailedSave, onChooseRoomOrder, onO
 					? <div className="home-resume-status" role="status">{persistentResumeError}</div>
 					: <div className="home-resume-error" role="alert">{persistentResumeError}</div>
 				)}
+				{homeStatusLine && <div className="home-resume-status" role="status">{homeStatusLine}</div>}
 			</section>
 			<section ref={gridRef} className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}${arranging ? " is-arranging" : ""}${arranging && oneColumn ? " is-one-column" : ""}`} aria-label="Rooms">
 				{(arrangedStatuses ?? orderedRoomStatuses).map((status, index, list) => {
@@ -459,7 +460,7 @@ export function Landing({ roomOrder, roomOrderFailedSave, onChooseRoomOrder, onO
 				</div>
 			)}
 			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} initialPane={settingsRoomPane} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={() => onOpenSettings("skills")} onOpenConnectors={() => onOpenSettings("connectors")} />
+				<RoomSettingsModal status={settingsRoom} initialPane={settingsRoomPane} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={onOpenSkillsLibrary} onOpenConnectors={() => onOpenSettings("connectors")} />
 			)}
 		</div>
 	);
@@ -519,7 +520,7 @@ function ArchivedRoomsSection({ activeRoomCount, serviceBack, onRestored }: { ac
 		try {
 			const response = await restorePersistentRoom(room.id);
 			setRooms((rows) => (rows ?? []).filter((row) => row.id !== room.id));
-			const parts = [`${name} is back on Home.`];
+			const parts = [`${name} is back in Rooms.`];
 			if (response.enabledSchedules > 0) parts.push(`Its ${response.enabledSchedules} scheduled task${response.enabledSchedules === 1 ? "" : "s"} resume${response.enabledSchedules === 1 ? "s" : ""} at the usual time${response.enabledSchedules === 1 ? "" : "s"}.`);
 			if (response.missedOnceSchedules > 0) parts.push(`${response.missedOnceSchedules} one-time task${response.missedOnceSchedules === 1 ? "" : "s"} missed ${response.missedOnceSchedules === 1 ? "its" : "their"} time while archived and need${response.missedOnceSchedules === 1 ? "s" : ""} a new one.`);
 			if (response.scheduleNotice) parts.push(response.scheduleNotice);
@@ -602,7 +603,7 @@ function ArchivedRoomsSection({ activeRoomCount, serviceBack, onRestored }: { ac
 							</div>
 							<div className="archived-room-actions">
 								{armedId === room.id && <button type="button" className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" disabled={busy?.id === room.id} onClick={() => setArmedId(null)} title="Cancel: keep this room archived">Keep it</button>}
-								<button type="button" className="rs-btn" disabled={busy?.id === room.id} title="Bring this room back to Home" onClick={() => void restoreRoom(room)}>
+								<button type="button" className="rs-btn" disabled={busy?.id === room.id} title="Bring this room back to Rooms" onClick={() => void restoreRoom(room)}>
 									{busy?.id === room.id && busy.action === "restore" ? "Restoring…" : "Restore"}
 								</button>
 								<button type="button" className="rs-btn rs-btn-danger" disabled={busy?.id === room.id} title="Erase this room and its files from this machine" onClick={() => void deleteForever(room)}>

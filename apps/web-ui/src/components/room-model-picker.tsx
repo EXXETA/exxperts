@@ -2,8 +2,8 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { createPortal } from "react-dom";
 import { distinctModelNames, modelDisplayName } from "../model-names";
 import { fetchKeyRefusals, type KeyRefusal } from "../room-models-api";
-import type { RoomModelLock, RoomModelProviderView, RoomModelTask, WebChatModelOption } from "../types";
-import { sharedServerRole, useRemoteClientContext } from "../remote-client-context";
+import type { ModelsRunIn, RoomModelLock, RoomModelProviderView, RoomModelTask, WebChatModelOption } from "../types";
+import { MODELS_RUN_IN_LABEL, MODELS_RUN_IN_LIST_LINE, sharedServerRole, useRemoteClientContext } from "../remote-client-context";
 
 // The model picker of a room's Model pane and of the defaults for new rooms;
 // the message box's model control lists the same groups. One list grouped by provider, only providers that are signed in
@@ -37,8 +37,8 @@ export type RoomModelPickerProps = {
 	unpickableLine?: string;
 	/** Providers whose models show muted with a mark ("Key refused") and stay pickable, keyed by provider id. */
 	providerMarks?: Map<string, string>;
-	/** A room's row: "Default (<name>)" first in the list, which clears the room's own pick; its reason when it cannot be picked, its mark when its provider has one. */
-	defaultChoice?: { name: string; reason?: string; mark?: string; onPick: () => void };
+	/** A room's row: "Default (<name>)" first in the list, which clears the room's own pick; its reason when it cannot be picked, its mark when its provider has one, and its provider's label for where its models run. */
+	defaultChoice?: { name: string; provider: string; reason?: string; mark?: string; onPick: () => void };
 	/** Opens the list each time it changes (a "Choose another" beside the row). */
 	openRequest?: number;
 	/** Told each time the list opens (the caller reads the refusals again). */
@@ -51,6 +51,23 @@ export function contextWindowShort(tokens: number | undefined): string | null {
 	if (!tokens || tokens <= 0) return null;
 	if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`;
 	return `${Math.round(tokens / 1000)}K`;
+}
+
+/**
+ * Where a provider's models run, beside each of its models in every model menu
+ * and beside it in AI setup: only a shared server answers it, so the desktop
+ * shows nothing. The short label is for the eye; its sentence is the tooltip
+ * and what a screen reader hears.
+ */
+export function ModelsRunInLabel({ runsIn }: { runsIn: ModelsRunIn | undefined }) {
+	if (!runsIn) return null;
+	const words = MODELS_RUN_IN_LABEL[runsIn];
+	return (
+		<span className={`models-run-in models-run-in-${runsIn}`} title={words.line}>
+			<span aria-hidden="true">{words.short}</span>
+			<span className="sr-only">{words.line}</span>
+		</span>
+	);
 }
 
 /** The tick on the chosen model, in every model menu. */
@@ -87,6 +104,11 @@ export function noModelsLine(aiSetupRole: ReturnType<typeof sharedServerRole>): 
 	return aiSetupRole === "member" ? "No models yet. Ask your admin to add one in Settings, AI setup." : aiSetupRole === "admin" ? "No models yet. Add an API key or a gateway in Settings, AI setup." : "Sign in to an AI provider in Settings, AI setup, to choose a model.";
 }
 
+/** The line above a model list whose models carry where they run: a member's only, since the admin made the statement. */
+export function modelsRunInListLine(aiSetupRole: ReturnType<typeof sharedServerRole>, groups: readonly { provider: Pick<RoomModelProviderView, "runsIn"> }[]): string | null {
+	return aiSetupRole === "member" && groups.some(({ provider }) => provider.runsIn) ? MODELS_RUN_IN_LIST_LINE : null;
+}
+
 export function RoomModelPicker({ providers, task, value, inherited = false, disabled = false, ariaLabel, unpickable, unpickableLine, providerMarks, defaultChoice, openRequest, onOpen, onPick }: RoomModelPickerProps) {
 	const [open, setOpen] = useState(false);
 	const [position, setPosition] = useState<{ top?: number; bottom?: number; right: number; room: number } | null>(null);
@@ -98,6 +120,7 @@ export function RoomModelPicker({ providers, task, value, inherited = false, dis
 	const aiSetupRole = sharedServerRole(useRemoteClientContext());
 	const emptyLine = noModelsLine(aiSetupRole);
 	const groups = offeredModelGroups(providers, task);
+	const runsInLine = modelsRunInListLine(aiSetupRole, groups);
 	const showProvider = groups.length > 1;
 	const valueProvider = value ? providers.find((provider) => provider.id === value.provider) : undefined;
 	const valueOption = value && valueProvider ? valueProvider[task].find((option) => option.model === value.model) ?? valueProvider.conversation.find((option) => option.model === value.model) : undefined;
@@ -212,6 +235,7 @@ export function RoomModelPicker({ providers, task, value, inherited = false, dis
 					<div className="room-model-sheet-backdrop" aria-hidden="true" onClick={() => close(false)} />
 					<div className="room-model-menu" ref={menuRef} role="listbox" id={listId} aria-label={ariaLabel} onKeyDown={onMenuKeyDown} style={position ? { top: position.top, bottom: position.bottom, right: position.right, "--room-model-menu-room": `${position.room}px` } as React.CSSProperties : { visibility: "hidden" }}>
 						{groups.length === 0 && <p className="room-model-menu-empty">{emptyLine}</p>}
+						{runsInLine && <p className="room-model-menu-kicker models-run-in-note">{runsInLine}</p>}
 						{defaultChoice && (
 							<div className="room-model-menu-group">
 								<button
@@ -228,7 +252,12 @@ export function RoomModelPicker({ providers, task, value, inherited = false, dis
 								>
 									<span className="room-model-option-check">{inherited && <ModelCheckIcon />}</span>
 									<span className="room-model-option-main">
-										<span className="room-model-option-name">{`Default (${defaultChoice.name})`}</span>
+										<span className="room-model-option-head">
+											<span className="models-run-in-title">
+												<span className="room-model-option-name">{`Default (${defaultChoice.name})`}</span>
+												<ModelsRunInLabel runsIn={groups.find(({ provider }) => provider.id === defaultChoice.provider)?.provider.runsIn} />
+											</span>
+										</span>
 										{(defaultChoice.reason ?? defaultChoice.mark) && <span className="room-model-option-reason">{defaultChoice.reason ?? defaultChoice.mark}</span>}
 									</span>
 								</button>
@@ -259,8 +288,11 @@ export function RoomModelPicker({ providers, task, value, inherited = false, dis
 											<span className="room-model-option-check">{selected && !inherited && <ModelCheckIcon />}</span>
 											<span className="room-model-option-main">
 												<span className="room-model-option-head">
-													<span className="room-model-option-name">{name}</span>
-													{option.recommended && <span className="room-model-option-tag">Recommended</span>}
+													<span className="models-run-in-title">
+														<span className="room-model-option-name">{name}</span>
+														{option.recommended && <span className="room-model-option-tag">Recommended</span>}
+														<ModelsRunInLabel runsIn={provider.runsIn} />
+													</span>
 													{/* A figure for the eye on the name's line: the row's accessible name stays the model's. */}
 													{context && <span className="room-model-option-context" aria-hidden="true">{context}</span>}
 												</span>

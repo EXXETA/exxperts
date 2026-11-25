@@ -17,10 +17,12 @@
 //  ASK   - a tool runs by itself only when the connection that will run it
 //          marks it read-only, or it is a resource read; anything else stops
 //          on the card, on every call path, counted at a real connector;
-//  ROOM  - Allow for this room: offered and kept only for a web connector's
-//          tool the live connection lists and doesn't mark destructive, only
-//          from the computer, pinned to the address, dropped by every change
-//          that takes it back, and never on a shared server.
+//  KEPT  - Always allow on the question: offered for any tool of a connector
+//          still where the session connected it, kept app-wide with the
+//          connector's pin only from the computer; an old room yes kept from
+//          before still counts for a web connector's tool in its room until
+//          a change takes it back; neither on a shared server. The choices'
+//          own rows are in connector-tool-choice-smoke.ts.
 //
 // Offline, isolated HOME + agent dir + agents root - set BEFORE any import
 // that reads them.
@@ -97,6 +99,74 @@ function signInConnector(): { server: http.Server; hits: () => number; url: () =
 	return { server, hits: () => count, url: () => `${origin()}/mcp` };
 }
 const signInRecorder = signInConnector();
+
+// A connector's way in, one per path, for a call's failures: /key/mcp answers
+// only to the key "right-key", any other gets a 401; /plain/mcp turns every
+// connection down with a 401; /account/mcp signs in through its own service
+// (the discovery and registration the adapter does are answered here) and
+// answers the token "good", turns "forbidden" down with a 403 and any other
+// with a 401. Its tools: write_file, marked read-only, which wants a path, and
+// delete_file, unmarked. Counts each tool call that reaches it, by name.
+function accessConnector(): { server: http.Server; url: (path: string) => string; called: string[]; registered: string[] } {
+	const called: string[] = [];
+	/** Each registration of a client at the service, as a sign-in's start makes one. */
+	const registered: string[] = [];
+	const origin = () => `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const json = (res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => res.writeHead(status, { "content-type": "application/json", ...headers }).end(JSON.stringify(body));
+	const tools = [
+		{ name: "write_file", title: "Write File", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, annotations: { readOnlyHint: true } },
+		{ name: "delete_file", inputSchema: { type: "object" } },
+	];
+	const mcp = (res: http.ServerResponse, message: any) => {
+		if (message.id === undefined) return void res.writeHead(202).end();
+		const reply = (body: Record<string, unknown>) => json(res, 200, { jsonrpc: "2.0", id: message.id, ...body });
+		if (message.method === "initialize") return reply({ result: { protocolVersion: message.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "smoke-access", version: "1.0.0" } } });
+		if (message.method === "tools/list") return reply({ result: { tools } });
+		if (message.method === "tools/call") {
+			called.push(String(message.params?.name));
+			if (message.params?.name === "write_file" && typeof message.params?.arguments?.path !== "string") return reply({ error: { code: -32602, message: "Input validation error: path is required" } });
+			return reply({ result: { content: [{ type: "text", text: `ran ${message.params?.name}` }] } });
+		}
+		return reply({ result: {} });
+	};
+	const server = http.createServer((req, res) => {
+		const url = new URL(req.url ?? "/", origin());
+		let raw = "";
+		req.on("data", (chunk) => { raw += chunk; });
+		req.on("end", () => {
+			const bearer = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""))?.[1] ?? String(req.headers["x-api-key"] ?? "");
+			const answer = () => (req.method === "POST" ? mcp(res, JSON.parse(raw)) : void res.writeHead(405).end());
+			if (url.pathname === "/key/mcp") return bearer === "right-key" ? answer() : json(res, 401, { error: "unauthorized" });
+			if (url.pathname === "/plain/mcp") return json(res, 401, { error: "unauthorized" });
+			// Connects and lists its tools with the key or sign-in it is given, then answers each call as its path says: the service's 401, 403 or 500, or its own answer naming a 403.
+			const onCall = /^\/call-(401|403|500|says)\/mcp$/.exec(url.pathname)?.[1];
+			if (onCall) {
+				if (bearer !== "good" && bearer !== "right-key") return json(res, 401, { error: "unauthorized" });
+				const message = req.method === "POST" ? JSON.parse(raw) : {};
+				if (message.method !== "tools/call") return answer();
+				called.push(String(message.params?.name));
+				if (onCall === "says") return json(res, 200, { jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: "Error POSTing to endpoint: 403 Forbidden" }] } });
+				return json(res, Number(onCall), { error: "refused by the service" });
+			}
+			if (url.pathname === "/account/mcp") {
+				if (bearer === "good") return answer();
+				if (bearer === "forbidden") return json(res, 403, { error: "forbidden" });
+				return json(res, 401, { error: "unauthorized" }, { "www-authenticate": `Bearer resource_metadata="${origin()}/.well-known/oauth-protected-resource/account/mcp"` });
+			}
+			if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) return json(res, 200, { resource: `${origin()}/account/mcp`, authorization_servers: [origin()], bearer_methods_supported: ["header"] });
+			if (url.pathname.startsWith("/.well-known/oauth-authorization-server") || url.pathname.startsWith("/.well-known/openid-configuration")) {
+				return json(res, 200, { issuer: origin(), authorization_endpoint: `${origin()}/authorize`, token_endpoint: `${origin()}/token`, registration_endpoint: `${origin()}/register`, response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"] });
+			}
+			if (req.method === "POST" && url.pathname === "/register") {
+				registered.push(url.pathname);
+				return json(res, 201, { client_id: "smoke-access-client", token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], redirect_uris: [] });
+			}
+			json(res, 404, { error: "not_found" });
+		});
+	});
+	return { server, url: (at) => `${origin()}${at}`, called, registered };
+}
+const accessToy = accessConnector();
 
 const askConnector = markedConnector();
 
@@ -241,10 +311,29 @@ try {
 
 	const { createRoomScopedMcpExtension } = await import("../../../pi-package/extensions/mcp/index.js");
 
+	// ── A shared server's room start on a warm cache reaches no connector ─────
+	// alpha's saved entry has no instructions: on a shared server neither the
+	// room's warm-up nor the session's start and end reach it; the room's first
+	// bind below, without the switch, is this row's control and reaches it.
+	process.env.EXXPERTS_SHARED_SERVER = "1";
+	try {
+		const piShared = makeFakePi();
+		await createRoomScopedMcpExtension(roomId)(piShared);
+		await startSession(piShared);
+		await shutdownSession(piShared);
+		assert(alphaRecorder.hits() === 0 && betaRecorder.hits() === 0, `a shared server's room start on a warm cache must reach no connector, got alpha ${alphaRecorder.hits()} and beta ${betaRecorder.hits()}`);
+	} finally {
+		delete process.env.EXXPERTS_SHARED_SERVER;
+	}
+
 	// ── The room-scoped session (the web door's exact assembly) ──────────────
 	const pi = makeFakePi();
 	await createRoomScopedMcpExtension(roomId)(pi);
 	await startSession(pi);
+	// The room's warm-up reached the room's connector once, as its saved entry has no instructions yet; never the other.
+	const alphaHitsAtStart = alphaRecorder.hits();
+	assert(alphaHitsAtStart > 0, "the room's warm-up must reach the room's connector whose saved entry has no instructions (the control of the shared server's row above)");
+	assert(betaRecorder.hits() === 0, "the room's warm-up never reaches a connector the room hasn't on");
 
 	// The registration above ran the marker-guarded migration on the default
 	// root: the legacy room now holds the full connector list.
@@ -285,7 +374,7 @@ try {
 	assert(!ok.isError, "a list that worked carries no error flag");
 
 	// CALL: nothing above ever touched either server.
-	assert(alphaRecorder.hits() === 0 && betaRecorder.hits() === 0, "read-only modes must not open connections");
+	assert(alphaRecorder.hits() === alphaHitsAtStart && betaRecorder.hits() === 0, `read-only modes must not open connections, got ${alphaRecorder.hits() - alphaHitsAtStart} and ${betaRecorder.hits()}`);
 
 	// CALL: ungranted traffic is refused BEFORE the adapter runs.
 	for (const params of [
@@ -305,7 +394,7 @@ try {
 	// the connection - the recorder answers 500, so the call fails HONESTLY
 	// with the granted server's name on it).
 	const alphaCall = await callMcp(pi, { tool: "alpha_search_docs", args: JSON.stringify({ query: "q" }) });
-	assert(alphaRecorder.hits() > 0, "a granted call must reach the granted server");
+	assert(alphaRecorder.hits() > alphaHitsAtStart, "a granted call must reach the granted server");
 	assert(String(alphaCall.details.server ?? "") === "alpha" || alphaCall.text.includes("alpha"), `the granted call's outcome should name the granted server, got: ${alphaCall.text}`);
 	assert(betaRecorder.hits() === 0, "granted traffic must not touch other servers");
 
@@ -464,13 +553,15 @@ try {
 	await createRoomScopedMcpExtension(fooOwnerRoomId)(piOwner);
 	await startSession(piOwner);
 	assert(piOwner.tools.has("foo_bar_baz") && piOwner.tools.has("foo_only_tool"), "granted direct tools must register");
+	// The room's warm-up reached foo once at the start, as its saved entry has no instructions yet.
+	const fooHitsAtStart = fooRecorder.hits();
 	writePersistentRoomMcpSettings(fooOwnerRoomId, []);
 	const revokedDirect = await piOwner.tools.get("foo_bar_baz").execute("smoke-direct", {}, undefined, undefined, fakeCtx);
 	assert(revokedDirect?.details?.error === "connector_not_enabled", "a revoked direct tool must refuse on the very next call");
-	assert(fooRecorder.hits() === 0, "a revoked direct tool must not touch its server");
+	assert(fooRecorder.hits() === fooHitsAtStart, "a revoked direct tool must not touch its server");
 	writePersistentRoomMcpSettings(fooOwnerRoomId, ["foo"]);
 	await piOwner.tools.get("foo_bar_baz").execute("smoke-direct", {}, undefined, undefined, fakeCtx);
-	assert(fooRecorder.hits() > 0, "a granted direct tool's connection must reach its real server");
+	assert(fooRecorder.hits() > fooHitsAtStart, "a granted direct tool's connection must reach its real server");
 	await shutdownSession(piOwner);
 
 	// toolPrefix "none": direct tools keep working for granted connectors (the
@@ -554,15 +645,22 @@ try {
 	type Answer = boolean | "once" | "room" | "decline";
 	type Asked = { title: string; card: any; answer: (value: Answer, answeredBy?: "computer" | "phone") => void; refuse: (message: string) => void };
 	const valueOf = (value: Answer) => (value === true ? "once" : value === false ? "decline" : value);
-	function person(from: "computer" | "phone" = "computer", clock: { now?: () => number } = {}): { ctx: unknown; asked: Asked[]; closed: Array<{ frame: any; allowedThen: unknown }>; again: () => number; ui: any } {
+	// The Always allows kept app-wide for a connector, by tool, as the file holds them now.
+	const choicesStore = await import("../src/connector-tool-choices.js");
+	const choicesOf = (connector: string) => {
+		const read = choicesStore.readConnectorToolChoices();
+		return read.readable ? choicesStore.connectorChoicesIn(read, connector) : "unreadable";
+	};
+	const noChoices = () => fs.rmSync(path.join(agentDir, "mcp-tool-choices.json"), { force: true });
+	function person(from: "computer" | "phone" = "computer", clock: { now?: () => number } = {}): { ctx: unknown; asked: Asked[]; closed: Array<{ frame: any; allowedThen: unknown; choicesThen: unknown }>; again: () => number; ui: any } {
 		const asked: Asked[] = [];
-		const closed: Array<{ frame: any; allowedThen: unknown }> = [];
+		const closed: Array<{ frame: any; allowedThen: unknown; choicesThen: unknown }> = [];
 		let again = 0;
 		let at = 0;
 		const ui = createWebUiContext((frame: any) => {
 			if (frame.type === "ui_request" && frame.kind === "connector" && frame.again) again += 1;
 			else if (frame.type === "ui_request" && frame.kind === "connector") asked.push({ title: frame.title, card: frame, answer: (value, answeredBy = from) => ui.resolveResponse(frame.id, valueOf(value), answeredBy), refuse: (words) => ui.declineOpenQuestions(words) });
-			if (frame.type === "ui_request_closed") closed.push({ frame, allowedThen: readPersistentRoomMcpSettings(askRoomId).allowedTools.asana ?? [] });
+			if (frame.type === "ui_request_closed") closed.push({ frame, allowedThen: readPersistentRoomMcpSettings(askRoomId).allowedTools.asana ?? [], choicesThen: choicesOf("asana") });
 		}, undefined, from, { now: clock.now ?? (() => (at += 60_000)) });
 		return { ctx: { ...fakeCtx, ui }, asked, closed, again: () => again, ui };
 	}
@@ -745,11 +843,17 @@ try {
 	const shownCard = carded.asked[0].card;
 	assert(shownCard.connector === "Asana" && shownCard.sent === String.raw`{"project":"Q3[U+200B][U+202E][U+0085][U+E0041]","note":"a\nb"}` && shownCard.cut === 0, `the card's fields, got ${JSON.stringify(shownCard)}`);
 	const longCard = person();
-	const long = call(piAsk, longCard.ctx, { tool: "asana_delete_project", args: JSON.stringify({ text: "x".repeat(5000) }) });
+	const long = call(piAsk, longCard.ctx, { tool: "asana_delete_project", args: JSON.stringify({ text: "x".repeat(25_000) }) });
 	await askedYet(longCard.asked, 1, "cut");
 	longCard.asked[0].answer(false);
 	await long;
-	assert(longCard.asked[0].card.sent.length === 1200 && longCard.asked[0].card.cut === 3811, `a long call is cut, and says by how much, got ${longCard.asked[0].card.sent.length} / ${longCard.asked[0].card.cut}`);
+	assert(longCard.asked[0].card.sent.length === 20_000 && longCard.asked[0].card.cut === 5011, `a long call is cut at 20,000 characters, and says by how much, got ${longCard.asked[0].card.sent.length} / ${longCard.asked[0].card.cut}`);
+	const wholeCard = person();
+	const whole = call(piAsk, wholeCard.ctx, { tool: "asana_delete_project", args: JSON.stringify({ text: "x".repeat(15_000) }) });
+	await askedYet(wholeCard.asked, 1, "whole");
+	wholeCard.asked[0].answer(false);
+	await whole;
+	assert(wholeCard.asked[0].card.sent.length === 15_011 && wholeCard.asked[0].card.cut === 0, `15,000 characters show whole, got ${wholeCard.asked[0].card.sent.length} / ${wholeCard.asked[0].card.cut}`);
 	const shortCard = person();
 	const short = call(piAsk, shortCard.ctx, { tool: "asana_delete_project" });
 	await askedYet(shortCard.asked, 1, "nothing sent");
@@ -827,7 +931,7 @@ try {
 	await shutdownSession(piTextMark);
 	askConnector.tools = textMarkTools;
 
-	// ── Allow for this room ──────────────────────────────────────────────────
+	// ── Always allow on the question, and an old room yes ────────────────────
 	const settingsStore = await import("../src/persistent-room-mcp-settings.js");
 	const { changeMcpServerAddress } = await import("../src/mcp-admin.js");
 	const { declinedQuestionNoteText } = await import("../src/thread-items-by-id.js");
@@ -844,61 +948,54 @@ try {
 	await createRoomScopedMcpExtension(askRoomId)(piAllow);
 	await startSession(piAllow);
 	askConnector.called.length = 0;
-	/** Asks for delete_project at the computer and answers Allow for this room once the floor has passed: the yes it stores. */
-	const allowForRoom = async (roomId = askRoomId, pi = piAllow) => {
-		const at = person();
-		const asking = call(pi, at.ctx, { tool: "asana_delete_project", server: "asana" });
-		await askedYet(at.asked, 1, "allow for this room");
-		at.asked[0].answer("room");
-		assert(textOf(await asking) === "ran delete_project", "Allow for this room runs the call it answered");
-		return at;
-	};
+	/** An old room yes for delete_project, kept from before Always allow: seeded in the room's file, as no question writes one now. */
+	const allowForRoom = (roomId = askRoomId) => assert(settingsStore.allowPersistentRoomMcpTool(roomId, "asana", "delete_project", settingsStore.connectorAddressPin(askConnector.webUrl())), "the old room yes is seeded");
 
-	// At the computer a web connector's unmarked tool offers Allow for this room; one it marks destructive doesn't, and a room sent anyway counts this time.
+	// At the computer a web connector's unmarked tool offers Always allow, and so does one it marks destructive.
 	const offered = person();
 	const offeredCall = call(piAllow, offered.ctx, { tool: "asana_delete_project", server: "asana" });
 	await askedYet(offered.asked, 1, "offered");
-	assert(offered.asked[0].card.lasting === true, `an unmarked tool of a web connector offers the room yes, got ${JSON.stringify(offered.asked[0].card)}`);
+	assert(offered.asked[0].card.lasting === true, `an unmarked tool of a web connector offers Always allow, got ${JSON.stringify(offered.asked[0].card)}`);
 	offered.asked[0].answer(false);
 	await offeredCall;
 	const destructive = person();
 	const destructiveCall = call(piAllow, destructive.ctx, { tool: "asana_drop_board", server: "asana" });
 	await askedYet(destructive.asked, 1, "destructive");
-	assert(destructive.asked[0].card.lasting === false, "a tool marked destructive offers no room yes");
-	destructive.asked[0].answer("room");
-	assert(textOf(await destructiveCall) === "ran drop_board" && destructive.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0, `a room yes sent anyway for a destructive tool counts this time and stores nothing, got ${JSON.stringify(destructive.closed)}`);
+	assert(destructive.asked[0].card.lasting === true, "a tool marked destructive offers Always allow too");
+	destructive.asked[0].answer(false);
+	assert((await destructiveCall).details.error === "connector_call_declined" && JSON.stringify(choicesOf("asana")) === "{}", `declined, nothing is kept, got ${JSON.stringify(choicesOf("asana"))}`);
 
 	// A full phone sees two answers, and its room yes counts this time.
 	const phone = person("phone");
 	const phoneCall = call(piAllow, phone.ctx, { tool: "asana_delete_project", server: "asana" });
 	await askedYet(phone.asked, 1, "phone");
-	assert(phone.asked[0].card.lasting === false, "a phone is never offered the room yes");
+	assert(phone.asked[0].card.lasting === false, "a phone is never offered Always allow");
 	phone.asked[0].answer("room");
-	assert(textOf(await phoneCall) === "ran delete_project" && phone.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0, `a phone's room yes runs once and stores nothing, got ${JSON.stringify(phone.closed)}`);
+	assert(textOf(await phoneCall) === "ran delete_project" && phone.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0 && JSON.stringify(choicesOf("asana")) === "{}", `a phone's Always allow runs once and stores nothing, got ${JSON.stringify(phone.closed)}`);
 
-	// A room yes within the floor is asked again and stores nothing; after it, it is stored before the question says answered.
+	// Always allow within the floor is asked again and stores nothing; after it, it is kept app-wide before the question says answered, and no room yes is written.
 	let stillAt = 0;
 	const quick = person("computer", { now: () => stillAt });
 	const quickCall = call(piAllow, quick.ctx, { tool: "asana_delete_project", server: "asana" });
 	await askedYet(quick.asked, 1, "floor");
 	quick.asked[0].answer("room");
-	assert(quick.again() === 1 && quick.closed.length === 0 && allowedIn(askRoomId).length === 0, `a room yes too soon is asked again, got ${quick.again()} again, ${JSON.stringify(quick.closed)}`);
+	assert(quick.again() === 1 && quick.closed.length === 0 && JSON.stringify(choicesOf("asana")) === "{}", `Always allow too soon is asked again, got ${quick.again()} again, ${JSON.stringify(quick.closed)}`);
 	stillAt = 60_000;
 	quick.asked[0].answer("room");
-	assert(textOf(await quickCall) === "ran delete_project", "the room yes runs the call");
-	assert(quick.closed[0].frame.taken === "room" && JSON.stringify(quick.closed[0].allowedThen) === JSON.stringify([{ tool: "delete_project", addressPin: settingsStore.connectorAddressPin(askConnector.webUrl()) }]), `stored with the address's pin before the question said answered, got ${JSON.stringify(quick.closed)}`);
-	assert(!fs.readFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), "utf-8").includes(askConnector.webUrl()), "the room's file never holds the address itself");
+	assert(textOf(await quickCall) === "ran delete_project", "Always allow runs the call");
+	assert(quick.closed[0].frame.taken === "room" && JSON.stringify(quick.closed[0].choicesThen) === JSON.stringify({ delete_project: { choice: "allow", where: choicesStore.connectorPin(askServers.asana) } }) && JSON.stringify(quick.closed[0].allowedThen) === "[]", `kept app-wide with the connector's pin before the question said answered, and no room yes, got ${JSON.stringify(quick.closed)}`);
+	assert(!fs.readFileSync(path.join(agentDir, "mcp-tool-choices.json"), "utf-8").includes(askConnector.webUrl()), "the choices file never holds the address itself");
 	quick.ui.detach("The user left the room.");
 	quick.ui.attach("computer");
-	assert((quick.closed.length as number) === 2 && quick.closed[1].frame.id === quick.closed[0].frame.id && quick.closed[1].frame.taken === "room", `a device that comes back is told the room yes again, got ${JSON.stringify(quick.closed.map((entry) => entry.frame))}`);
+	assert((quick.closed.length as number) === 2 && quick.closed[1].frame.id === quick.closed[0].frame.id && quick.closed[1].frame.taken === "room", `a device that comes back is told Always allow again, got ${JSON.stringify(quick.closed.map((entry) => entry.frame))}`);
 
-	// The stored yes runs that tool with no question, at the computer and with nobody there; other tools, rooms and addresses still ask.
+	// Always allow runs that tool with no question, at the computer, with nobody there and in another room where the connector is on; other tools and addresses still ask.
 	const noQuestion = nobodyAsked();
-	assert(textOf(await call(piAllow, noQuestion.ctx, { tool: "asana_delete_project", server: "asana" })) === "ran delete_project" && noQuestion.asked.length === 0, "a stored yes runs with no question");
+	assert(textOf(await call(piAllow, noQuestion.ctx, { tool: "asana_delete_project", server: "asana" })) === "ran delete_project" && noQuestion.asked.length === 0, "Always allow runs with no question");
 	const awayNotes: Array<{ title: string; lasting?: boolean }> = [];
 	const away = createWebUiContext(() => {}, (question: { title: string; lasting?: boolean }) => awayNotes.push(question));
 	away.detach("The user left the room.");
-	assert(textOf(await call(piAllow, { ...fakeCtx, ui: away }, { tool: "asana_delete_project", server: "asana" })) === "ran delete_project" && awayNotes.length === 0, "a stored yes runs with nobody there");
+	assert(textOf(await call(piAllow, { ...fakeCtx, ui: away }, { tool: "asana_delete_project", server: "asana" })) === "ran delete_project" && awayNotes.length === 0, "Always allow runs with nobody there");
 	const otherTool = person();
 	const otherCall = call(piAllow, otherTool.ctx, { tool: "asana_create_note", server: "asana" });
 	await askedYet(otherTool.asked, 1, "another tool");
@@ -906,11 +1003,8 @@ try {
 	assert((await otherCall).details.error === "connector_call_declined", "another tool of the connector still asks");
 	const otherRoomId = "mcp-scope-smoke-ask-room-2";
 	writePersistentRoomMcpSettings(otherRoomId, ["asana"]);
-	const otherRoom = person();
-	const otherRoomCall = gateCall(otherRoomId, otherRoom.ctx, "asana", "delete_project");
-	await askedYet(otherRoom.asked, 1, "another room");
-	otherRoom.asked[0].answer(false);
-	assert((await otherRoomCall).details.error === "connector_call_declined", "the same tool in another room still asks");
+	const otherRoom = nobodyAsked();
+	assert(textOf(await gateCall(otherRoomId, otherRoom.ctx, "asana", "delete_project")) === "ran" && otherRoom.asked.length === 0, "Always allow runs the same tool in another room where the connector is on");
 	const movedUrl = askConnector.webUrl("/mcp-moved");
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { url: movedUrl } } }, null, 2));
 	const moved = person();
@@ -920,11 +1014,11 @@ try {
 	assert((await movedCall).details.error === "connector_call_declined", "the same tool at another address still asks");
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
 
-	// Nobody there: the note names Allow for this room only where it would be offered.
+	// Nobody there: the note names Always allow wherever it would be offered, for a destructive tool too.
 	await call(piAllow, { ...fakeCtx, ui: away }, { tool: "asana_create_note", server: "asana" });
 	await call(piAllow, { ...fakeCtx, ui: away }, { tool: "asana_drop_board", server: "asana" });
-	assert(JSON.stringify(awayNotes) === JSON.stringify([{ kind: "connector", title: "Use Create note in Asana?", lasting: true }, { kind: "connector", title: "Use Drop board in Asana?", lasting: false }]), `the away notes, got ${JSON.stringify(awayNotes)}`);
-	assert(declinedQuestionNoteText("Use Create note in Asana?", true) === "Create note in Asana wasn't used because nobody was there to allow it. To let this room use it when you're away, choose Allow for this room at your computer the next time it asks.", "the note names the way on where it was offered");
+	assert(JSON.stringify(awayNotes) === JSON.stringify([{ kind: "connector", title: "Use Create note in Asana?", lasting: true }, { kind: "connector", title: "Use Drop board in Asana?", lasting: true }]), `the away notes, got ${JSON.stringify(awayNotes)}`);
+	assert(declinedQuestionNoteText("Use Create note in Asana?", true) === "Create note in Asana wasn't used because nobody was there to allow it. To let it run when you're away, set it to Always allow on its connector's page in Settings, Connectors.", "the note names the way on where it was offered");
 	assert(declinedQuestionNoteText("Use Drop board in Asana?", false) === "Drop board in Asana wasn't used because nobody was there to allow it.", "and only there");
 
 	// Each change that takes it back drops it, and the tool asks again.
@@ -937,6 +1031,9 @@ try {
 		again.asked[0].answer(false);
 		assert((await asking).details.error === "connector_call_declined", `${label}: the tool asks again`);
 	};
+	// From here an old room yes, with nothing chosen for the tool.
+	noChoices();
+	await allowForRoom();
 	writePersistentRoomMcpSettings(askRoomId, []);
 	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
 	assert(allowedIn(askRoomId).length === 0, "switched off for the room, the yes is dropped");
@@ -951,7 +1048,7 @@ try {
 	const excludedYes = person();
 	const excludedCall = gateCall(askRoomId, excludedYes.ctx, "asana", "delete_project");
 	await askedYet(excludedYes.asked, 1, "excluded");
-	assert(excludedYes.asked[0].card.lasting === false, "an excluded tool offers no room yes");
+	assert(excludedYes.asked[0].card.lasting === false, "an excluded tool offers no Always allow");
 	excludedYes.asked[0].answer("room");
 	assert((await excludedCall).details.error === "connector_tool_withdrawn", "a stored yes for an excluded tool lets nothing run");
 	assert(allowedIn(askRoomId).length === 0, `excluded, the yes is dropped, got ${JSON.stringify(allowedIn(askRoomId))}`);
@@ -965,11 +1062,13 @@ try {
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
 	await asksAgain("excluded, read, then included again");
 	await allowForRoom();
+	// Beside the two rows below: with an ordinary live tool, the seeded yes runs with no question.
+	const seededHere = person();
+	assert(textOf(await gateCall(askRoomId, seededHere.ctx, "asana", "delete_project")) === "ran" && seededHere.asked.length === 0, "the seeded yes, with a live tool marked nothing, runs with no question");
 	for (const [label, liveTool] of [["marked destructive later", { annotations: { destructiveHint: true } }], ["not listed by the live connection", undefined]] as const) {
 		const later = person();
 		const laterCall = gateCall(askRoomId, later.ctx, "asana", "delete_project", { liveTool });
 		await askedYet(later.asked, 1, label);
-		assert(later.asked[0].card.lasting === false, `${label}: no room yes offered`);
 		later.asked[0].answer(false);
 		assert((await laterCall).details.error === "connector_call_declined", `${label}: the stored yes isn't read, and it asks`);
 	}
@@ -992,7 +1091,7 @@ try {
 	await askedYet(late.asked, 1, "switched off while it waited");
 	writePersistentRoomMcpSettings(askRoomId, []);
 	late.asked[0].answer("room");
-	assert((await lateCall).details.error === "connector_not_enabled" && late.closed[0].frame.taken === "once" && readPersistentRoomMcpSettings(askRoomId).allowedTools.asana === undefined, `switched off while it waited: nothing stored, refused, got ${JSON.stringify(late.closed)}`);
+	assert((await lateCall).details.error === "connector_not_enabled" && late.closed[0].frame.taken === "once" && readPersistentRoomMcpSettings(askRoomId).allowedTools.asana === undefined && JSON.stringify(choicesOf("asana")) === "{}", `switched off while it waited: nothing stored, refused, got ${JSON.stringify(late.closed)}`);
 	writePersistentRoomMcpSettings(askRoomId, ["asana"]);
 
 	// Moved to another address while it waited: nothing stored, and refused as withdrawn, whichever yes was given.
@@ -1003,18 +1102,18 @@ try {
 		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { url: movedUrl } } }, null, 2));
 		movedLate.asked[0].answer(yes);
 		const movedLateResult = await movedLateCall;
-		assert(movedLateResult.details.error === "connector_moved" && movedLate.closed[0].frame.taken === "once" && readPersistentRoomMcpSettings(askRoomId).allowedTools.asana === undefined, `moved while it waited (${yes}): nothing stored, refused, got ${JSON.stringify(movedLateResult)} ${JSON.stringify(movedLate.closed)}`);
+		assert(movedLateResult.details.error === "connector_moved" && movedLate.closed[0].frame.taken === "once" && readPersistentRoomMcpSettings(askRoomId).allowedTools.asana === undefined && JSON.stringify(choicesOf("asana")) === "{}", `moved while it waited (${yes}): nothing stored, refused, got ${JSON.stringify(movedLateResult)} ${JSON.stringify(movedLate.closed)}`);
 		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
 	}
-	assert(callsOf("delete_project") === 9, `only the answered and allowed calls reached the connector, got ${callsOf("delete_project")}`);
+	assert(callsOf("delete_project") === 4, `only the answered and allowed calls reached the connector, got ${callsOf("delete_project")}`);
 	await shutdownSession(piAllow);
 
 	// An open room keeps the connection it made: the adapter connects, and
 	// reconnects, from the settings it read when the session started. Moved in
-	// the app while the room is open, the connector asks with two answers, a
-	// room yes counts this time, and a yes kept for the new address isn't read,
-	// until a session that starts after the move: it reaches the new address,
-	// honours that yes and offers three answers.
+	// the app while the room is open, the connector asks with two answers,
+	// Always allow counts this time, and a room yes kept for the new address
+	// isn't read, until a session that starts after the move: it reaches the
+	// new address, honours that yes and offers three answers.
 	const reachedLast = () => askConnector.calledAt[askConnector.calledAt.length - 1];
 	for (const [label, from, to] of [
 		["from this computer's address to a web name", askConnector.url(), askConnector.webUrl()],
@@ -1034,9 +1133,9 @@ try {
 		const after = person();
 		const afterCall = call(piOpen, after.ctx, { tool: "asana_delete_project", server: "asana" });
 		await askedYet(after.asked, 1, `${label}: after the move`);
-		assert(after.asked[0].card.lasting === false, `${label}: the open room offers no room yes after the move`);
+		assert(after.asked[0].card.lasting === false, `${label}: the open room offers no Always allow after the move`);
 		after.asked[0].answer("room");
-		assert(textOf(await afterCall) === "ran delete_project" && after.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0, `${label}: a room yes counts this time and stores nothing, got ${JSON.stringify(after.closed)} ${JSON.stringify(allowedIn(askRoomId))}`);
+		assert(textOf(await afterCall) === "ran delete_project" && after.closed[0].frame.taken === "once" && allowedIn(askRoomId).length === 0 && JSON.stringify(choicesOf("asana")) === "{}", `${label}: Always allow counts this time and stores nothing, got ${JSON.stringify(after.closed)} ${JSON.stringify(allowedIn(askRoomId))}`);
 		assert(reachedLast() === from, `${label}: the open room's call still reaches ${from}, got ${reachedLast()}`);
 		settingsStore.allowPersistentRoomMcpTool(askRoomId, "asana", "delete_project", settingsStore.connectorAddressPin(to));
 		const byHand = person();
@@ -1054,41 +1153,41 @@ try {
 		const offeredAgain = person();
 		const offeredAgainCall = call(piReopened, offeredAgain.ctx, { tool: "asana_delete_project", server: "asana" });
 		await askedYet(offeredAgain.asked, 1, `${label}: opened again`);
-		assert(offeredAgain.asked[0].card.lasting === true, `${label}: opened again, the room offers Allow for this room`);
+		assert(offeredAgain.asked[0].card.lasting === true, `${label}: opened again, the room offers Always allow`);
 		offeredAgain.asked[0].answer("room");
-		assert(textOf(await offeredAgainCall) === "ran delete_project" && offeredAgain.closed[0].frame.taken === "room" && allowedIn(askRoomId).length === 1, `${label}: opened again, a room yes is kept, got ${JSON.stringify(offeredAgain.closed)}`);
+		assert(textOf(await offeredAgainCall) === "ran delete_project" && offeredAgain.closed[0].frame.taken === "room" && JSON.stringify(Object.keys(choicesOf("asana"))) === JSON.stringify(["delete_project"]) && allowedIn(askRoomId).length === 0, `${label}: opened again, Always allow is kept app-wide, got ${JSON.stringify(offeredAgain.closed)}`);
 		await shutdownSession(piReopened);
+		noChoices();
 		writePersistentRoomMcpSettings(askRoomId, []);
 		writePersistentRoomMcpSettings(askRoomId, ["asana"]);
 	}
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(askConfig, null, 2));
 	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify(askCacheEntry(savedAskTools), null, 2));
 
-	// A yes written by hand for a connector that is a program on this computer lets nothing run, and it offers none.
+	// A room yes written by hand for a connector that is a program on this computer lets nothing run; the question offers Always allow.
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { ...askServers, local: { command: "node", args: ["-e", ""] } } }, null, 2));
 	fs.writeFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), JSON.stringify({ schemaVersion: 1, grantedConnectors: ["asana", "local"], allowedTools: { local: [{ tool: "write_file", addressPin: settingsStore.connectorAddressPin("node") }] }, updatedAt: "" }));
 	const local = person();
 	const localCall = gateCall(askRoomId, local.ctx, "local", "write_file");
 	await askedYet(local.asked, 1, "a local program");
-	assert(local.asked[0].card.lasting === false, "a local program's tool offers no room yes");
-	local.asked[0].answer("room");
-	assert(textOf(await localCall) === "ran" && local.closed[0].frame.taken === "once", "a local program's room yes counts this time");
+	assert(local.asked[0].card.lasting === true, "a local program's tool offers Always allow");
+	local.asked[0].answer(false);
+	assert((await localCall).details.error === "connector_call_declined", "a local program's tool asks");
 	const localAgain = person();
 	const localAgainCall = gateCall(askRoomId, localAgain.ctx, "local", "write_file");
 	await askedYet(localAgain.asked, 1, "a local program, a yes by hand");
 	localAgain.asked[0].answer(false);
 	assert((await localAgainCall).details.error === "connector_call_declined", "a yes written by hand for a local program's tool lets nothing run");
-	// An entry that names a command and a web address too is a program the adapter starts: two answers, and a yes written by hand for its address lets nothing run.
+	// An entry that names a command and a web address too is a program the adapter starts: a room yes written by hand for its address lets nothing run.
 	fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { command: "node", args: ["-e", ""], url: askConnector.webUrl() } } }, null, 2));
 	fs.writeFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), JSON.stringify({ schemaVersion: 1, grantedConnectors: ["asana"], allowedTools: { asana: [{ tool: "delete_project", addressPin: settingsStore.connectorAddressPin(askConnector.webUrl()) }] }, updatedAt: "" }));
 	const commandAndUrl = person();
 	const commandAndUrlCall = gateCall(askRoomId, commandAndUrl.ctx, "asana", "delete_project");
 	await askedYet(commandAndUrl.asked, 1, "a command with a web address");
-	assert(commandAndUrl.asked[0].card.lasting === false, "a command with a web address offers no room yes");
 	commandAndUrl.asked[0].answer(false);
 	assert((await commandAndUrlCall).details.error === "connector_call_declined", "a yes written by hand for a command with a web address lets nothing run");
 
-	// A connector at this computer's own address is a program here too, in any spelling: two answers, a room yes counts this time, and a yes written by hand still asks.
+	// A connector at this computer's own address is a program here too, in any spelling: a room yes written by hand still asks.
 	const writeAsanaAt = (url: string, allowed: unknown[] = []) => {
 		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { asana: { url } } }, null, 2));
 		fs.writeFileSync(settingsStore.persistentRoomMcpSettingsPath(askRoomId), JSON.stringify({ schemaVersion: 1, grantedConnectors: ["asana"], allowedTools: allowed.length ? { asana: allowed } : {}, updatedAt: "" }));
@@ -1100,9 +1199,8 @@ try {
 		const here = person();
 		const hereCall = gateCall(askRoomId, here.ctx, "asana", "delete_project");
 		await askedYet(here.asked, 1, `this computer at ${url}`);
-		assert(here.asked[0].card.lasting === false, `${url}: no room yes offered`);
-		here.asked[0].answer("room");
-		assert(textOf(await hereCall) === "ran" && here.closed[0].frame.taken === "once", `${url}: a yes by hand still asks, and a room yes counts this time, got ${JSON.stringify(here.closed)}`);
+		here.asked[0].answer(false);
+		assert((await hereCall).details.error === "connector_call_declined", `${url}: a yes by hand still asks, got ${JSON.stringify(here.closed)}`);
 	}
 	// Another computer, on the person's network or the company's, is a web connector.
 	for (const url of ["http://10.1.2.3/mcp", "http://192.168.1.5:8080/mcp", "http://projects.corp.internal/mcp", `http://${ownName}.example.test/mcp`, "http://localhost.localdomain.example.test/mcp"]) {
@@ -1110,7 +1208,7 @@ try {
 		const there = person();
 		const thereCall = gateCall(askRoomId, there.ctx, "asana", "delete_project");
 		await askedYet(there.asked, 1, `another computer at ${url}`);
-		assert(there.asked[0].card.lasting === true, `${url}: Allow for this room offered`);
+		assert(there.asked[0].card.lasting === true, `${url}: Always allow offered`);
 		there.asked[0].answer(false);
 		assert((await thereCall).details.error === "connector_call_declined", `${url}: declined`);
 	}
@@ -1127,7 +1225,7 @@ try {
 	for (const [file, anchor] of [
 		["proxy-modes.ts", "const refused = await beforeConnectorCall({"],
 		["direct-tools.ts", "const refused = await beforeConnectorCall({"],
-		["index.ts", "executeCall(state, params.tool, parsedArgs, params.server, getPiTools, beforeConnectorCall)"],
+		["index.ts", "executeCall(state, params.tool, parsedArgs, params.server, getPiTools, beforeConnectorCall, _signal)"],
 	]) {
 		const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-mcp-scope-patch-"));
 		const scratch = path.join(scratchRoot, "node_modules", "pi-mcp-adapter");
@@ -1151,6 +1249,359 @@ try {
 		specialistRefused = /forbidden/.test((error as Error).message);
 	}
 	assert(specialistRefused, "a specialist template granting the mcp tool must be rejected as forbidden");
+
+	// ── A failed call says why, by the connector as the person knows it ──────
+	// Each failure through the real adapter at a real connector, beside a call
+	// that works: the result carries the connector's shown name, its key, what
+	// the call used and why it failed, and the step is named before the call
+	// ends; the model gets the module's words where the transport's would
+	// mislead it, and keeps the adapter's own where they help it try again.
+	await new Promise<void>((resolve) => accessToy.server.listen(0, "127.0.0.1", resolve));
+	const { connectorFailureLine, connectorFailureModelWords } = await import("../src/connector-call-failures.js");
+	// Every failure's sentences, letter for letter: the person's line at the computer, over remote access and on a shared
+	// server, then the model's words at the computer and on a shared server. The four about a key end on opening the room
+	// again, since an open room goes on with the key it opened with (the row further down); a shared server's say nothing of it.
+	const sentences: ReadonlyArray<readonly [Parameters<typeof connectorFailureLine>[0], string | null, string | null, string | null, string | null, string | null]> = [
+		["cant-connect", "Toy web couldn't be reached. See why on its page in Settings, Connectors.", "Toy web couldn't be reached. See why on the computer itself, in Settings, Connectors.", "Toy web couldn't be reached. Your admin can check it.", "Toy web (toy-web) couldn't be reached, so the call didn't run. Tell the person; they can see why on its page in Settings, Connectors.", "Toy web (toy-web) couldn't be reached, so the call didn't run. Tell the person; the admin of this server can check it."],
+		["needs-sign-in", "Toy web needs you to sign in. Sign in on its page in Settings, Connectors.", "Toy web needs you to sign in. Sign in on the computer itself, in Settings, Connectors.", "Toy web needs a sign-in: tell your admin.", "Toy web (toy-web) needs a sign-in before this room can use it. Tell the person; the sign-in happens outside this conversation.", "Toy web (toy-web) needs a sign-in before this room can use it. Tell the person; the sign-in happens outside this conversation."],
+		["needs-sign-in-or-key", "Toy web needs a sign-in or a key. Set it up on its page in Settings, Connectors, then open the room again.", "Toy web needs a sign-in or a key. Set it up on the computer itself, in Settings, Connectors, then open the room again.", "Toy web needs a sign-in or a key: tell your admin.", "Toy web (toy-web) needs a sign-in or a key before this room can use it, so the call didn't run. Tell the person; they can set one up on its page in Settings, Connectors, and the room must be opened again after that.", "Toy web (toy-web) needs a sign-in or a key before this room can use it, so the call didn't run. Tell the person; the admin of this server can check it."],
+		["not-allowed", "Toy web didn't allow this. If it needs a sign-in or a key, set it up on its page in Settings, Connectors, then open the room again.", "Toy web didn't allow this. If it needs a sign-in or a key, set it up on the computer itself, in Settings, Connectors, then open the room again.", "Toy web didn't allow this. Your admin can check it.", "Toy web (toy-web) didn't allow this call, so it didn't run. Tell the person; if it needs a sign-in or a key, they can set it up on its page in Settings, Connectors, and the room must be opened again after that. Don't try the same call again unless the person changes its sign-in or key.", "Toy web (toy-web) didn't allow this call, so it didn't run. Tell the person; the admin of this server can check it. Don't try the same call again unless the person changes its sign-in or key."],
+		["sign-in-expired", "Toy web's sign-in no longer works. Reconnect on its page in Settings, Connectors.", "Toy web's sign-in no longer works. Reconnect on the computer itself, in Settings, Connectors.", "Toy web's sign-in no longer works. Your admin can check it.", "Toy web (toy-web)'s sign-in has expired or was withdrawn, so the call didn't run. Tell the person; they can reconnect it on its page in Settings, Connectors.", "Toy web (toy-web)'s sign-in has expired or was withdrawn, so the call didn't run. Tell the person; the admin of this server can check it."],
+		["key-refused", "Toy web turned down its key. Change the key on its page in Settings, Connectors, then open the room again.", "Toy web turned down its key. Change the key on the computer itself, in Settings, Connectors, then open the room again.", "Toy web turned down its key. Your admin can check it.", "Toy web (toy-web) turned down its key, so the call didn't run. Tell the person; the key can be changed on its page in Settings, Connectors, and the room must be opened again after that.", "Toy web (toy-web) turned down its key, so the call didn't run. Tell the person; the admin of this server can check it."],
+		["key-not-allowed", "Toy web didn't allow this with its key. If you have a key that's allowed to, change it on its page in Settings, Connectors, then open the room again.", "Toy web didn't allow this with its key. If you have a key that's allowed to, change it on the computer itself, in Settings, Connectors, then open the room again.", "Toy web didn't allow this with its key. Your admin can check it.", "Toy web (toy-web) didn't allow this call with its key, so it didn't run. Tell the person; a key that is allowed to do this can be set on its page in Settings, Connectors, and the room must be opened again after that. Don't try the same call again unless the person changes its sign-in or key.", "Toy web (toy-web) didn't allow this call with its key, so it didn't run. Tell the person; the admin of this server can check it. Don't try the same call again unless the person changes its sign-in or key."],
+		["no-permission", "Toy web says your account can't do this. Ask for access there, or sign in with another account on its page in Settings, Connectors.", "Toy web says your account can't do this. Ask for access there, or sign in with another account on the computer itself, in Settings, Connectors.", "Toy web says your account can't do this. Your admin can check it.", "Toy web (toy-web) says the signed-in account isn't allowed to do this, so the call didn't run. Tell the person; they can ask for access there, or sign in with another account. Don't try the same call again unless the person changes its sign-in or key.", "Toy web (toy-web) says the signed-in account isn't allowed to do this, so the call didn't run. Tell the person; the admin of this server can check it. Don't try the same call again unless the person changes its sign-in or key."],
+		["refused", "Toy web turned the connection down.", "Toy web turned the connection down.", "Toy web turned the connection down.", "Toy web (toy-web) turned the connection down, so the call didn't run. Tell the person; nothing in this app can change that.", "Toy web (toy-web) turned the connection down, so the call didn't run. Tell the person; nothing in this app can change that."],
+		["no-such-tool", "Toy web has no tool by that name.", "Toy web has no tool by that name.", "Toy web has no tool by that name.", null, null],
+		["removed", "Toy web was removed, so the assistant can't use it.", "Toy web was removed, so the assistant can't use it.", "Toy web was removed, so the assistant can't use it.", "Toy web (toy-web) was removed from the connectors, so no room can use it. It can only be added again in Settings, Connectors.", "Toy web (toy-web) was removed from the connectors, so no room can use it. Only the admin of this server can add it again."],
+		["bad-input", "Toy web couldn't take what the assistant sent.", "Toy web couldn't take what the assistant sent.", "Toy web couldn't take what the assistant sent.", null, null],
+		["connector-error", null, null, null, null, null],
+		["model-declined", "You said no, so Toy web didn't get to use this room's model.", "You said no, so Toy web didn't get to use this room's model.", "You said no, so Toy web didn't get to use this room's model.", "The person said no to Toy web (toy-web) using this room's model, so the call didn't finish. Don't try it again unless the person asks.", "The person said no to Toy web (toy-web) using this room's model, so the call didn't finish. Don't try it again unless the person asks."],
+	];
+	const changed = sentences.flatMap(([failure, ...expected]) => {
+		const line = (seenFrom: "computer" | "remote" | "shared") => connectorFailureLine(failure, "Toy web", seenFrom)?.line ?? null;
+		const got = [line("computer"), line("remote"), line("shared"), connectorFailureModelWords(failure, "Toy web (toy-web)", false), connectorFailureModelWords(failure, "Toy web (toy-web)", true)];
+		return got.flatMap((text, index) => (text === expected[index] ? [] : [`${failure}: expected ${JSON.stringify(expected[index])}, got ${JSON.stringify(text)}`]));
+	});
+	assert(changed.length === 0, `every failure's sentences, letter for letter:\n${changed.join("\n")}`);
+	// On a shared server only its admin sets connectors up: what the model is told sends the person nowhere else, for every failure; here, the account's own ways stay.
+	for (const failure of ["cant-connect", "needs-sign-in", "needs-sign-in-or-key", "not-allowed", "sign-in-expired", "key-refused", "key-not-allowed", "no-permission", "refused", "removed", "model-declined"] as const) {
+		const shared = connectorFailureModelWords(failure, "Toy web (toy-web)", true) ?? "";
+		assert(shared && !/Settings|another account|ask for access|its page/.test(shared), `${failure}: on a shared server the model sends the person nowhere they can't go, got ${shared}`);
+	}
+	assert(connectorFailureModelWords("no-permission", "Toy web (toy-web)", false)?.includes("they can ask for access there, or sign in with another account."), "at the computer, a refused account keeps its own ways on");
+	// A 403 is the service's answer to who asked: the model is told not to try the same call again, for each of the three; a 401 isn't.
+	for (const failure of ["not-allowed", "key-not-allowed", "no-permission"] as const) assert(/Don't try the same call again/.test(connectorFailureModelWords(failure, "Toy web (toy-web)", false) ?? ""), `${failure}: the model is told not to try the same call again`);
+	for (const failure of ["needs-sign-in-or-key", "key-refused", "sign-in-expired"] as const) assert(!/Don't try the same call again/.test(connectorFailureModelWords(failure, "Toy web (toy-web)", false) ?? ""), `${failure}: a 401 leaves trying again to the model`);
+	const { CONNECTOR_CALL_END_RESULTS } = await import("../src/connector-call-ends.js");
+	const { endConnectorQuestions } = await import("../../../pi-package/extensions/mcp/room-scope.js");
+	const shut = http.createServer();
+	await new Promise<void>((resolve) => shut.listen(0, "127.0.0.1", resolve));
+	const shutPort = (shut.address() as AddressInfo).port;
+	await new Promise<void>((resolve) => shut.close(() => resolve()));
+	const failServers: Record<string, Record<string, unknown>> = {
+		"toy-down": { url: `http://127.0.0.1:${shutPort}/mcp`, displayName: "Toy down" },
+		"toy-key": { url: accessToy.url("/key/mcp"), auth: "bearer", bearerToken: "wrong-key", displayName: "Toy key" },
+		"toy-header": { url: accessToy.url("/key/mcp"), auth: false, headers: { "X-Api-Key": "wrong-key" }, displayName: "Toy header" },
+		"toy-closed": { url: accessToy.url("/plain/mcp"), auth: false, displayName: "Toy closed" },
+		"toy-fresh": { url: accessToy.url("/account/mcp"), displayName: "Toy fresh" },
+		"toy-expired": { url: accessToy.url("/account/mcp"), displayName: "Toy expired" },
+		"toy-account": { url: accessToy.url("/account/mcp"), displayName: "Toy account" },
+		"toy-good": { url: accessToy.url("/account/mcp"), displayName: "Toy good" },
+		"scratch-files": { url: accessToy.url("/key/mcp"), auth: "bearer", bearerToken: "right-key", displayName: "Scratch files" },
+		"toy-gone": { url: accessToy.url("/key/mcp"), auth: "bearer", bearerToken: "right-key", displayName: "Toy space" },
+		"toy-new": { url: `http://127.0.0.1:${shutPort}/mcp`, displayName: "Toy new" },
+		"toy-live": { url: accessToy.url("/key/mcp"), auth: "bearer", bearerToken: "right-key", displayName: "Toy live" },
+		"toy-hidden": { url: accessToy.url("/key/mcp"), displayName: "Board minutes" },
+		"toy-call-403": { url: accessToy.url("/call-403/mcp"), displayName: "Toy call 403" },
+		"toy-call-401": { url: accessToy.url("/call-401/mcp"), auth: "bearer", bearerToken: "right-key", displayName: "Toy call 401" },
+		"toy-call-500": { url: accessToy.url("/call-500/mcp"), auth: "bearer", bearerToken: "right-key", displayName: "Toy call 500" },
+		"toy-call-says": { url: accessToy.url("/call-says/mcp"), auth: "bearer", bearerToken: "right-key", displayName: "Toy call says" },
+	};
+	const failConfig = (without: string[] = []) => fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: Object.fromEntries(Object.entries(failServers).filter(([name]) => !without.includes(name))) }, null, 2));
+	failConfig();
+	const accessTools = [{ name: "write_file", title: "Write File", description: "Write a file" }, { name: "delete_file", description: "Delete a file" }];
+	fs.writeFileSync(path.join(agentDir, "mcp-cache.json"), JSON.stringify({ version: 1, servers: Object.fromEntries(Object.entries(failServers).filter(([name]) => name !== "toy-new" && name !== "toy-live").map(([name, definition]) => [name, { configHash: cacheMod.computeServerHash(definition), cachedAt: Date.now(), resources: [], tools: accessTools }])) }, null, 2));
+	// Sign-ins stored as a finished sign-in leaves them: one the service now turns down, one it no longer lets do this, one that works.
+	const authStore = await import("pi-mcp-adapter/mcp-auth.ts" as string);
+	const storedSignIn = (server: string, accessToken: string, extra: Record<string, unknown> = {}) => authStore.saveAuthEntry(server, { tokens: { accessToken, ...extra }, clientInfo: { clientId: "smoke-access-client" } }, failServers[server].url);
+	storedSignIn("toy-expired", "withdrawn", { expiresAt: Math.floor(Date.now() / 1000) - 60 });
+	storedSignIn("toy-account", "forbidden");
+	storedSignIn("toy-good", "good");
+	storedSignIn("toy-call-403", "good");
+	const failRoomId = "mcp-scope-smoke-failure-room";
+	writePersistentRoomMcpSettings(failRoomId, Object.keys(failServers).filter((name) => name !== "toy-hidden" && name !== "toy-live"));
+	const piFail = makeFakePi();
+	await createRoomScopedMcpExtension(failRoomId)(piFail);
+	await startSession(piFail);
+	// A call as the room makes it, with the updates its step gets while it runs.
+	const placedCall = async (tool: any, params: Record<string, unknown>, ctx: unknown = nobodyAsked().ctx) => {
+		const updates: any[] = [];
+		const result = await tool.execute("smoke-placed", params, undefined, (update: any) => updates.push(update), ctx);
+		return { result, details: result?.details ?? {}, text: textOf(result), first: updates[0]?.details, uses: updates.map((update) => update?.details?.use).filter(Boolean), told: updates.map((update) => update?.details) };
+	};
+	const viaMcp = (params: Record<string, unknown>, ctx?: unknown) => placedCall(piFail.tools.get("mcp"), params, ctx);
+	const placedAs = (outcome: Awaited<ReturnType<typeof placedCall>>, server: string, shown: string, use: string) => outcome.details.connector === shown && outcome.details.connectorId === server && outcome.details.use === use;
+	const namedFirst = (outcome: Awaited<ReturnType<typeof placedCall>>, server: string, shown: string, use: string) => outcome.first?.connector === shown && outcome.first?.connectorId === server && outcome.first?.use === use;
+
+	// A connector this room never had reads word for word as a key that doesn't exist: no name, nothing else.
+	for (const [label, params] of [["a call", (server: string) => ({ tool: `${server.replace(/-/g, "_")}_write_file`, server })], ["a connect", (server: string) => ({ connect: server })]] as const) {
+		const kept = await viaMcp(params("toy-hidden"));
+		const missing = await viaMcp(params("toy-nothere"));
+		assert(kept.text === missing.text.replaceAll("toy-nothere", "toy-hidden") && !kept.text.includes("Board minutes") && JSON.stringify(kept.details) === JSON.stringify(missing.details).replaceAll("toy-nothere", "toy-hidden"), `${label}: a connector kept from the room reads as one that doesn't exist, got ${JSON.stringify([kept.text, kept.details, missing.text, missing.details])}`);
+	}
+	// Nor after the calls that name a connector without using it: a UI messages call naming it and a tool of it, a sign-in started or finished with `connect`. What the model gets, the updates the room's watchers get, and a refusal after it read as for a key that doesn't exist.
+	const asHidden = (outcome: Awaited<ReturnType<typeof placedCall>>) => JSON.stringify([outcome.text, outcome.details, outcome.told]).replaceAll("toy-nothere", "toy-hidden").replaceAll("toy_nothere", "toy_hidden");
+	for (const [label, params] of [
+		["a UI messages call", (server: string) => ({ action: "ui-messages", server, tool: `${server.replace(/-/g, "_")}_write_file` })],
+		["a sign-in started with connect", (server: string) => ({ action: "auth-start", connect: server })],
+		["a sign-in finished with connect", (server: string) => ({ action: "auth-complete", connect: server })],
+	] as const) {
+		const kept = await viaMcp(params("toy-hidden"));
+		const missing = await viaMcp(params("toy-nothere"));
+		assert(asHidden(kept) === asHidden(missing) && !asHidden(kept).includes("Board minutes"), `${label}: a connector kept from the room reads as one that doesn't exist, got ${JSON.stringify([asHidden(kept), asHidden(missing)])}`);
+		const keptAfter = await viaMcp({ tool: "toy_hidden_write_file", server: "toy-hidden" });
+		const missingAfter = await viaMcp({ tool: "toy_nothere_write_file", server: "toy-nothere" });
+		assert(asHidden(keptAfter) === asHidden(missingAfter) && !asHidden(keptAfter).includes("Board minutes"), `${label}: a refusal after it reads as for a key that doesn't exist, got ${JSON.stringify([asHidden(keptAfter), asHidden(missingAfter)])}`);
+	}
+	// Beside it, a UI messages call naming a connector the room has keeps its names.
+	const ownMessages = await viaMcp({ action: "ui-messages", server: "toy-good", tool: "toy_good_write_file" });
+	assert(placedAs(ownMessages, "toy-good", "Toy good", "Write File in Toy good") && namedFirst(ownMessages, "toy-good", "Toy good", "Write File in Toy good"), `a connector the room has is named, got ${JSON.stringify({ details: ownMessages.details, first: ownMessages.first })}`);
+
+	// What works, beside each failure: a key the connector takes, and a stored sign-in it takes.
+	for (const server of ["scratch-files", "toy-good"]) {
+		const shown = String(failServers[server].displayName);
+		const worked = await viaMcp({ tool: `${server}_write_file`, server, args: JSON.stringify({ path: "a.txt" }) });
+		assert(worked.text === "ran write_file" && worked.result.isError !== true && !("failure" in worked.details), `${server}: a call that works carries no failure, got ${worked.text} ${JSON.stringify(worked.details)}`);
+		assert(placedAs(worked, server, shown, `Write File in ${shown}`) && namedFirst(worked, server, shown, `Write File in ${shown}`), `${server}: a call that works is named as the person knows it, from its first update, got ${JSON.stringify({ details: worked.details, first: worked.first })}`);
+	}
+	// Beside the connector kept from the room: one the room had on, then taken off its list, keeps its shown name.
+	writePersistentRoomMcpSettings(failRoomId, Object.keys(failServers).filter((name) => name !== "toy-hidden" && name !== "toy-live" && name !== "scratch-files"));
+	const switchedOff = await viaMcp({ tool: "scratch_files_write_file", server: "scratch-files", args: JSON.stringify({ path: "a.txt" }) });
+	writePersistentRoomMcpSettings(failRoomId, Object.keys(failServers).filter((name) => name !== "toy-hidden" && name !== "toy-live"));
+	assert(switchedOff.details.error === "connector_not_enabled" && switchedOff.text.startsWith("Connector \"Scratch files (scratch-files)\" is not enabled for this room.") && switchedOff.details.connector === "Scratch files", `a connector the room had on is named when it's off, to the model and on its step, got ${switchedOff.text} ${JSON.stringify(switchedOff.details)}`);
+	for (const [label, server, failure] of [
+		["a connector that can't be reached", "toy-down", "cant-connect"],
+		["a key turned down", "toy-key", "key-refused"],
+		["a key header turned down, as the connector form keeps one", "toy-header", "key-refused"],
+		["a connection turned down, with no sign-in to try", "toy-closed", "refused"],
+		["a sign-in never made", "toy-fresh", "needs-sign-in"],
+		["a stored sign-in the service turns down", "toy-expired", "sign-in-expired"],
+		["a working sign-in the service won't let do this", "toy-account", "no-permission"],
+	] as const) {
+		const shown = String(failServers[server].displayName);
+		const failed = await viaMcp({ tool: `${server}_write_file`, server, args: JSON.stringify({ path: "a.txt" }) });
+		assert(failed.result.isError === true && failed.details.failure === failure && placedAs(failed, server, shown, `Write File in ${shown}`), `${label}: reads ${failure} by its shown name, got ${JSON.stringify(failed.details)} ${failed.text}`);
+		assert(failed.text === connectorFailureModelWords(failure, `${shown} (${server})`, false), `${label}: the model gets the module's words, got ${failed.text}`);
+		assert(namedFirst(failed, server, shown, `Write File in ${shown}`), `${label}: the step is named while the call runs, got ${JSON.stringify(failed.first)}`);
+	}
+	// An open room goes on with the key it opened with after another is saved; a room opened after that sends the new one.
+	// The four sentences that say to open the room again (above) go when this row turns.
+	{
+		const callKey = (pi: FakePi) => placedCall(pi.tools.get("mcp"), { tool: "toy_key_write_file", server: "toy-key", args: JSON.stringify({ path: "a.txt" }) });
+		const openRoom = async () => {
+			const pi = makeFakePi();
+			await createRoomScopedMcpExtension(failRoomId)(pi);
+			await startSession(pi);
+			return pi;
+		};
+		const piOpen = await openRoom();
+		// As Settings saves a key: it also closes the connector's open connections and drops its saved tool list.
+		await changeMcpServerAddress("toy-key", { url: String(failServers["toy-key"].url), key: "right-key" });
+		const stillOld = await callKey(piOpen);
+		const opened = await callKey(await openRoom());
+		assert(stillOld.details.failure === "key-refused" && opened.text === "ran write_file", `the open room keeps its key and the one opened after sends the new one, got ${JSON.stringify([stillOld.text, stillOld.details.failure])} and ${JSON.stringify([opened.text, opened.details.failure])}`);
+		failConfig();
+	}
+	// A connector that connects and lists its tools, then refuses the call itself: the service's 403 and 401 read as the
+	// account's and the key's own lines, with their ways on; a 500, or the connector's own answer naming a 403, stays its error.
+	for (const [label, server, failure] of [
+		["a call the service refuses with 403, after a sign-in", "toy-call-403", "no-permission"],
+		["a call the service refuses with 401, with a key", "toy-call-401", "key-refused"],
+		["a call the service fails with 500", "toy-call-500", "connector-error"],
+		["a connector's own answer naming a 403", "toy-call-says", "connector-error"],
+	] as const) {
+		const shown = String(failServers[server].displayName);
+		const calledBefore = accessToy.called.length;
+		const failed = await viaMcp({ tool: `${server.replace(/-/g, "_")}_write_file`, server, args: JSON.stringify({ path: "a.txt" }) });
+		assert(accessToy.called.length === calledBefore + 1 && failed.result.isError === true && failed.details.failure === failure, `${label}: the call reached the service and reads ${failure}, got ${JSON.stringify(failed.details)} ${failed.text}`);
+		const line = connectorFailureLine(failure, shown, "computer");
+		assert(failure === "connector-error" ? line === null : line?.opensSettings === true && line.line.startsWith(shown), `${label}: the step's line and its way on, got ${JSON.stringify(line)}`);
+	}
+	// A connection with no stored sign-in registers nothing at the service: not the room's start with its warm-up, which
+	// reached Toy fresh as its saved entry has no instructions, nor its call above, nor a check; a check reads it as
+	// needing a sign-in. Connect on its page is what registers.
+	{
+		const registrations = () => accessToy.registered.length;
+		assert(registrations() === 0, `a room's start, its warm-up and its call registered nothing, got ${registrations()}`);
+		const { testMcpServer, startMcpServerLogin, getMcpServerLoginState, cancelMcpServerLogin } = await import("../src/mcp-admin.js");
+		const checked = await testMcpServer("toy-fresh");
+		assert(checked.needsAuth === true && registrations() === 0, `a check reads a sign-in needed and registers nothing, got ${JSON.stringify(checked)}, ${registrations()} registered`);
+		if (process.platform !== "win32") {
+			// Connect on the page: the browser it opens is a stand-in that only notes it was asked.
+			const browserDir = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-mcp-scope-browser-"));
+			const opened = path.join(browserDir, "opened");
+			for (const name of ["open", "xdg-open"]) fs.writeFileSync(path.join(browserDir, name), `#!/bin/sh\necho opened >> "${opened}"\n`, { mode: 0o755 });
+			const pathBefore = process.env.PATH;
+			process.env.PATH = `${browserDir}${path.delimiter}${pathBefore ?? ""}`;
+			process.env.BROWSER = path.join(browserDir, "open");
+			// The adapter prints the sign-in's address, with its one-time values: kept out of the smoke's output.
+			const logBefore = console.log;
+			console.log = (...parts: unknown[]) => { if (!parts.some((part) => String(part).includes("/authorize?"))) logBefore(...parts); };
+			try {
+				await startMcpServerLogin("toy-fresh");
+				const until = Date.now() + 10_000;
+				while (!fs.existsSync(opened) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 25));
+				assert(fs.existsSync(opened) && registrations() === 1 && getMcpServerLoginState("toy-fresh").pending, `Connect registers once and waits for the sign-in, got ${registrations()} registered, ${JSON.stringify(getMcpServerLoginState("toy-fresh"))}`);
+				// A conversation starting and ending leaves that sign-in waiting.
+				const piPassing = makeFakePi();
+				await createRoomScopedMcpExtension(failRoomId)(piPassing);
+				await startSession(piPassing);
+				await shutdownSession(piPassing);
+				await new Promise((resolve) => setTimeout(resolve, 200));
+				assert(getMcpServerLoginState("toy-fresh").pending, `a conversation's start and end leave the page's sign-in waiting, got ${JSON.stringify(getMcpServerLoginState("toy-fresh"))}`);
+				assert((await cancelMcpServerLogin("toy-fresh")).cancelled, "the waiting sign-in is cancelled");
+			} finally {
+				console.log = logBefore;
+				process.env.PATH = pathBefore;
+				delete process.env.BROWSER;
+				fs.rmSync(browserDir, { recursive: true, force: true });
+			}
+		}
+	}
+	// A connector with no saved tool list yet, which never connected: the tool is named from the call's own name.
+	const neverConnected = await viaMcp({ tool: "toy_new_write_file", server: "toy-new", args: "{}" });
+	assert(neverConnected.details.failure === "cant-connect" && placedAs(neverConnected, "toy-new", "Toy new", "Write file in Toy new") && namedFirst(neverConnected, "toy-new", "Toy new", "Write file in Toy new"), `a tool no list names yet is named from its call, got ${JSON.stringify({ details: neverConnected.details, first: neverConnected.first })}`);
+	// A tool no list names yet, on a connector that works and that the room turns on after its conversation began, so no
+	// warm-up has read it: named from its call at first, then by the connector's own title once the call reaches it.
+	writePersistentRoomMcpSettings(failRoomId, Object.keys(failServers).filter((name) => name !== "toy-hidden"));
+	const firstLive = await viaMcp({ tool: "toy_live_write_file", server: "toy-live", args: JSON.stringify({ path: "a.txt" }) });
+	assert(firstLive.text === "ran write_file" && JSON.stringify(firstLive.uses) === JSON.stringify(["Write file in Toy live", "Write File in Toy live"]) && firstLive.details.use === "Write File in Toy live", `the step takes the live title while it runs, got ${JSON.stringify({ uses: firstLive.uses, details: firstLive.details })}`);
+	const againLive = await viaMcp({ tool: "toy_live_write_file", server: "toy-live", args: JSON.stringify({ path: "a.txt" }) });
+	assert(JSON.stringify(againLive.uses) === JSON.stringify(["Write File in Toy live"]), `a known title is told once, got ${JSON.stringify(againLive.uses)}`);
+	assert(!accessToy.called.some((name) => name !== "write_file"), `no failure ran anything else, got ${accessToy.called.join(",")}`);
+	// A room that asks nothing shows no card before a connector's tool runs: its step still names the tool in the card's words, not by its raw name, from its first update.
+	const asksNothingRoomId = "mcp-scope-smoke-asks-nothing-room";
+	writePersistentRoomMcpSettings(asksNothingRoomId, ["toy-good"]);
+	for (const asksNothing of [false, true]) {
+		const pi = makeFakePi();
+		await createRoomScopedMcpExtension(asksNothingRoomId, { asksNothing: () => asksNothing })(pi);
+		await startSession(pi);
+		const watched = nobodyAsked();
+		const outcome = await placedCall(pi.tools.get("mcp"), { tool: "toy_good_delete_file", server: "toy-good", args: "{}" }, watched.ctx);
+		const ran = outcome.text === "ran delete_file";
+		assert(asksNothing ? watched.asked.length === 0 && ran : watched.asked.length === 1 && !ran, `${asksNothing ? "asking nothing" : "on Ask"}: ${watched.asked.length} card(s), got ${outcome.text}`);
+		assert(placedAs(outcome, "toy-good", "Toy good", "Delete file in Toy good") && namedFirst(outcome, "toy-good", "Toy good", "Delete file in Toy good"), `${asksNothing ? "asking nothing" : "on Ask"}: the step is named in the card's words, got ${JSON.stringify({ details: outcome.details, first: outcome.first })}`);
+	}
+	// The rows below count delete_file as never reached: this one call was the room's own.
+	accessToy.called.splice(accessToy.called.indexOf("delete_file"), 1);
+
+	// The adapter's words stay where they help the model try again.
+	const badInput = await viaMcp({ tool: "scratch-files_write_file", server: "scratch-files", args: "{}" });
+	assert(badInput.details.failure === "bad-input" && placedAs(badInput, "scratch-files", "Scratch files", "Write File in Scratch files") && badInput.text.includes("path is required"), `input the tool can't take reads bad-input, the model keeps the connector's words, got ${JSON.stringify(badInput.details)} ${badInput.text}`);
+	const noTool = await viaMcp({ tool: "scratch-files_rename_file", server: "scratch-files" });
+	assert(noTool.details.failure === "no-such-tool" && noTool.details.connector === "Scratch files" && noTool.text.includes("has: scratch_files_write_file"), `a tool the connector doesn't have reads no-such-tool, and the model keeps the list of what it has, got ${JSON.stringify(noTool.details)} ${noTool.text}`);
+	const nobodys = await viaMcp({ tool: "launch_rocket" });
+	assert(nobodys.details.failure === "no-such-tool" && !("connector" in nobodys.details) && /search/.test(nobodys.text), `a tool no connector of the room ever had reads no-such-tool, got ${JSON.stringify(nobodys.details)} ${nobodys.text}`);
+
+	// The room's own words to the model, and the names it is given, are the person's with the keys beside them.
+	const failDescription = String(piFail.tools.get("mcp").description);
+	assert(failDescription.includes(`scratch-files is "Scratch files"`) && failDescription.includes(`toy-gone is "Toy space"`), `the description names each connector as the person knows it, got ${failDescription.slice(-400)}`);
+	const titledList = await callMcp(piFail, { server: "scratch-files" });
+	assert(titledList.text.includes("scratch_files_write_file (Write File)") && !titledList.text.includes("scratch_files_delete_file ("), `a list gives a tool's title where it has one, got ${titledList.text}`);
+	const titledSearch = await callMcp(piFail, { search: "write_file", server: "scratch-files" });
+	assert(titledSearch.text.includes("scratch_files_write_file (Write File)"), `a search gives a tool's title, got ${titledSearch.text}`);
+	choicesStore.setConnectorToolChoices("scratch-files", { write_file: { choice: "blocked" } });
+	const blockedWords = await viaMcp({ tool: "scratch-files_write_file", server: "scratch-files", args: JSON.stringify({ path: "a.txt" }) });
+	assert(blockedWords.text.startsWith("Write File (write_file) in Scratch files (scratch-files) is blocked") && !("failure" in blockedWords.details), `a blocked tool is named as the person knows it, got ${blockedWords.text}`);
+	noChoices();
+
+	// A call one of ours ended keeps its end, and no failure.
+	const ending = await roomScopedMcpToolRegistration(failRoomId, { name: "mcp", asksBeforeConnectorCalls: true, execute: async () => ({ content: [{ type: "text", text: "aborted" }], details: { mode: "call", error: "stopped", server: "scratch-files" }, isError: true }) });
+	const ended = await placedCall(ending, { tool: "scratch-files_write_file", server: "scratch-files" });
+	assert(ended.details.error === "stopped" && !("failure" in ended.details) && ended.details.connector === "Scratch files" && ended.text === CONNECTOR_CALL_END_RESULTS.stopped, `a call our side ended keeps its end and no failure, got ${JSON.stringify(ended.details)} ${ended.text}`);
+
+	// A refusal is read from the way to the connector failing, never from what the connector itself answered.
+	const refusalWords = "Server returned 401 after trying: requires OAuth authentication";
+	for (const [error, expected] of [["tool_error", "connector-error"], ["call_failed", "sign-in-expired"]] as const) {
+		const answering = await roomScopedMcpToolRegistration(failRoomId, { name: "mcp", asksBeforeConnectorCalls: true, execute: async () => ({ content: [{ type: "text", text: refusalWords }], details: { mode: "call", error, server: "toy-good" }, isError: true }) });
+		const read = await placedCall(answering, { tool: "toy_good_write_file", server: "toy-good" });
+		assert(read.details.failure === expected, `${error} with a refusal's words reads ${expected}, got ${JSON.stringify(read.details)}`);
+	}
+
+	// A back-off says only that a connect failed moments ago, in any of the room's conversations, at times after the
+	// adapter dropped why: it reads as the connector's last known failure, until a call works or its settings change.
+	type ProxyAnswer = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown>; isError?: boolean };
+	const answers: ProxyAnswer[] = [];
+	const signInAsked: ProxyAnswer = { content: [{ type: "text", text: "Connector \"toy-new\" needs a sign-in before this room can use it." }], details: { mode: "call", error: "auth_required", server: "toy-new" }, isError: true };
+	const backingOff: ProxyAnswer = { content: [{ type: "text", text: "Server \"toy-new\" not available (last failed 0s ago)" }], details: { mode: "call", error: "server_backoff", server: "toy-new" }, isError: true };
+	const worked: ProxyAnswer = { content: [{ type: "text", text: "ran write_file" }], details: { mode: "call", server: "toy-new" } };
+	const answering = await roomScopedMcpToolRegistration(failRoomId, { name: "mcp", asksBeforeConnectorCalls: true, execute: async () => answers.shift()! });
+	const readAfter = async (...given: ProxyAnswer[]) => {
+		answers.push(...given);
+		const reads: unknown[] = [];
+		for (const _ of given) reads.push((await placedCall(answering, { tool: "toy_new_write_file", server: "toy-new" })).details.failure ?? null);
+		return reads;
+	};
+	assert(JSON.stringify(await readAfter(signInAsked, backingOff, backingOff)) === JSON.stringify(["needs-sign-in", "needs-sign-in", "needs-sign-in"]), "a back-off after a sign-in reads as that sign-in");
+	assert(JSON.stringify(await readAfter(signInAsked, worked, backingOff)) === JSON.stringify(["needs-sign-in", null, "cant-connect"]), "after a call that worked, a back-off reads as couldn't be reached");
+	await readAfter(signInAsked);
+	failServers["toy-new"] = { ...failServers["toy-new"], url: `${failServers["toy-new"].url}?moved` };
+	failConfig();
+	const afterChange = await readAfter(backingOff);
+	failServers["toy-new"] = { ...failServers["toy-new"], url: String(failServers["toy-new"].url).replace("?moved", "") };
+	failConfig();
+	assert(JSON.stringify(afterChange) === JSON.stringify(["cant-connect"]), `after its settings changed, a back-off reads as couldn't be reached, got ${JSON.stringify(afterChange)}`);
+
+	// A question whose wait is ended for its connector closes its card; with the connector gone, the call reads removed and sent nothing.
+	const askingFirst = person();
+	const askingCall = viaMcp({ tool: "scratch-files_delete_file", server: "scratch-files", args: "{}" }, askingFirst.ctx);
+	await askedYet(askingFirst.asked, 1, "a wait ended");
+	assert(askingFirst.asked[0].card.toolCallId === "smoke-placed", `the question carries its call's id, got ${JSON.stringify(askingFirst.asked[0].card)}`);
+	assert(endConnectorQuestions("toy-key") === 0 && askingFirst.asked.length === 1 && askingFirst.closed.every((one) => one.frame.id !== askingFirst.asked[0].card.id), "ending another connector's waits leaves this question open");
+	failConfig(["scratch-files"]);
+	assert(endConnectorQuestions("scratch-files") === 1, "the connector's wait is ended");
+	const endedWait = await askingCall;
+	assert(endedWait.details.failure === "removed" && endedWait.details.connector === "Scratch files" && askingFirst.closed.length === 1 && !accessToy.called.includes("delete_file"), `an ended wait closes its card and reads removed, nothing sent, got ${JSON.stringify(endedWait.details)} ${askingFirst.closed.length}`);
+	assert(endedWait.text === connectorFailureModelWords("removed", "Scratch files (scratch-files)", false) && !endedWait.text.includes("not enabled"), `the model reads it was removed, got ${endedWait.text}`);
+	failConfig();
+
+	// A connector removed after the conversation began reads removed, by server and by its tool's name alone; the model never reads "not enabled".
+	failConfig(["toy-gone"]);
+	const callsBefore = accessToy.called.length;
+	for (const [label, params] of [
+		["named by server", { tool: "toy-gone_write_file", server: "toy-gone", args: JSON.stringify({ path: "a.txt" }) }],
+		["by its tool's name alone", { tool: "toy-gone_write_file", args: JSON.stringify({ path: "a.txt" }) }],
+	] as const) {
+		const gone = await viaMcp(params);
+		assert(gone.details.failure === "removed" && placedAs(gone, "toy-gone", "Toy space", "Write File in Toy space"), `${label}: a removed connector reads removed by its shown name, got ${JSON.stringify(gone.details)}`);
+		assert(gone.text === connectorFailureModelWords("removed", "Toy space (toy-gone)", false) && !gone.text.includes("not enabled"), `${label}: the model reads it was removed, got ${gone.text}`);
+	}
+	assert(accessToy.called.length === callsBefore, "a removed connector is never reached");
+	failConfig();
+	await shutdownSession(piFail);
+
+	// Through a direct tool: the same names from the first update, the same failure, the same ended wait.
+	process.env.MCP_DIRECT_TOOLS = "scratch-files,toy-down,toy-call-403";
+	const piFailDirect = makeFakePi();
+	await createRoomScopedMcpExtension(failRoomId)(piFailDirect);
+	await startSession(piFailDirect);
+	const directWorked = await placedCall(piFailDirect.tools.get("scratch_files_write_file"), { path: "a.txt" });
+	assert(directWorked.text === "ran write_file" && placedAs(directWorked, "scratch-files", "Scratch files", "Write File in Scratch files") && namedFirst(directWorked, "scratch-files", "Scratch files", "Write File in Scratch files"), `direct: a call that works is named as the person knows it, got ${JSON.stringify({ details: directWorked.details, first: directWorked.first })}`);
+	const directDown = await placedCall(piFailDirect.tools.get("toy_down_write_file"), { path: "a.txt" });
+	assert(directDown.details.failure === "cant-connect" && placedAs(directDown, "toy-down", "Toy down", "Write File in Toy down") && directDown.text === connectorFailureModelWords("cant-connect", "Toy down (toy-down)", false), `direct: a connector that can't be reached reads as through the mcp tool, got ${JSON.stringify(directDown.details)} ${directDown.text}`);
+	const directRefused = await placedCall(piFailDirect.tools.get("toy_call_403_write_file"), { path: "a.txt" });
+	assert(directRefused.details.failure === "no-permission", `direct: a call the service refuses with 403 reads as through the mcp tool, got ${JSON.stringify(directRefused.details)} ${directRefused.text}`);
+	const directQuestion = person();
+	const directQuestionCall = placedCall(piFailDirect.tools.get("scratch_files_delete_file"), {}, directQuestion.ctx);
+	await askedYet(directQuestion.asked, 1, "direct: a wait ended");
+	assert(directQuestion.asked[0].card.toolCallId === "smoke-placed", "direct: the question carries its call's id");
+	failConfig(["scratch-files"]);
+	assert(endConnectorQuestions("scratch-files") === 1, "direct: the connector's wait is ended");
+	const directEnded = await directQuestionCall;
+	assert(directEnded.details.failure === "removed" && directEnded.details.connector === "Scratch files" && directQuestion.closed.length === 1 && !accessToy.called.includes("delete_file"), `direct: an ended wait closes its card and reads removed, got ${JSON.stringify(directEnded.details)}`);
+	failConfig();
+	await shutdownSession(piFailDirect);
+	delete process.env.MCP_DIRECT_TOOLS;
 
 	// ── Room settings, Connectors, and a shared server ───────────────────────
 	// The pane's answer lists each allowed tool by its words and keeps the pin on the server; Remove counts from the next call.
@@ -1198,13 +1649,34 @@ try {
 	const sharedAsks = person();
 	const sharedCall = gateCall(paneRoom, sharedAsks.ctx, "asana", "createTask");
 	await askedYet(sharedAsks.asked, 1, "a shared server");
-	assert(sharedAsks.asked[0].card.lasting === false, "a shared server offers no room yes");
+	assert(sharedAsks.asked[0].card.lasting === false, "a shared server offers no Always allow");
 	sharedAsks.asked[0].answer("room");
 	assert((await sharedCall).content[0].text === "ran" && sharedAsks.closed[0].frame.taken === "once", "on a shared server a stored yes isn't read, and a room yes counts this time");
 	const sharedList = await pane("GET");
 	assert(sharedList.status === 200 && !("allowedTools" in sharedList.body), `a shared server lists no allowed tools, got ${JSON.stringify(sharedList.body)}`);
 	const sharedForget = await pane("PUT", { action: "forget-tool", name: "asana", tool: "createTask" });
 	assert(sharedForget.status === 400 && fs.readFileSync(sharedFile, "utf-8") === sharedBytes, `a shared server refuses Remove and writes nothing, got ${sharedForget.status}`);
+
+	// A shared server known by its hooks alone, without the switch, reaches no connector at a room's start on a warm cache
+	// either: gamma, saved without instructions and never tried before, is not reached (its control is the switch's row's).
+	assert(process.env.EXXPERTS_SHARED_SERVER === undefined, "the hooks' row runs without the switch");
+	const gammaRecorder = recorder();
+	await new Promise<void>((resolve) => gammaRecorder.server.listen(0, "127.0.0.1", resolve));
+	try {
+		const gamma = { url: gammaRecorder.url() };
+		fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { ...askServers, gamma } }, null, 2));
+		const warm = cacheMod.loadMetadataCache() ?? { version: 1, servers: {} };
+		cacheMod.saveMetadataCache({ ...warm, servers: { ...warm.servers, gamma: { configHash: cacheMod.computeServerHash(gamma), cachedAt: Date.now(), resources: [], tools: [{ name: "lookup", description: "Looks up" }] } } });
+		const hooksRoom = "mcp-scope-hooks-room";
+		writePersistentRoomMcpSettings(hooksRoom, ["gamma"]);
+		const piHooks = makeFakePi();
+		await createRoomScopedMcpExtension(hooksRoom)(piHooks);
+		await startSession(piHooks);
+		await shutdownSession(piHooks);
+		assert(gammaRecorder.hits() === 0, `a shared server known by its hooks must reach no connector at a room's start on a warm cache, got ${gammaRecorder.hits()}`);
+	} finally {
+		gammaRecorder.server.close();
+	}
 
 	fs.rmSync(tempHome, { recursive: true, force: true });
 	fs.rmSync(tempAgentsRoot, { recursive: true, force: true });
@@ -1219,5 +1691,6 @@ try {
 	fooRecorder.server.close();
 	fooBarRecorder.server.close();
 	signInRecorder.server.close();
+	accessToy.server.close();
 	askConnector.server.close();
 }

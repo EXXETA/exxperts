@@ -88,6 +88,23 @@ const SYSTEM_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\power
 async function main(): Promise<void> {
 	// Windows PowerShell is found under Windows' own folder, as Windows names it.
 	process.env.SystemRoot = "C:\\Windows";
+	// zenity opens its window on a display; the rows below the no-display rows have one.
+	delete process.env.DISPLAY;
+	delete process.env.WAYLAND_DISPLAY;
+	// Linux with no display: zenity, present, would exit 1 with nothing printed,
+	// which reads as a cancel. The chooser answers unavailable without starting it.
+	const headlessStarts: string[] = [];
+	const headlessZenity: LocalFolderPickerRunner = async () => {
+		headlessStarts.push("zenity");
+		throw Object.assign(new Error("Command failed: zenity"), { code: 1, stdout: "", stderr: "" });
+	};
+	const headless = await chooseLocalFolder({ platform: "linux", runner: headlessZenity });
+	assert(!headless.ok && headless.supported === false && headless.code === "folder_chooser_unavailable" && headlessStarts.length === 0, `no display: unavailable at once, zenity never started, got ${JSON.stringify(headless)} after ${headlessStarts.length} start(s)`);
+	process.env.WAYLAND_DISPLAY = "wayland-0";
+	const onWayland = await chooseLocalFolder({ platform: "linux", runner: headlessZenity });
+	assert(onWayland.ok && onWayland.cancelled === true && headlessStarts.join() === "zenity", `a Wayland display alone: zenity runs as before, got ${JSON.stringify(onWayland)}`);
+	delete process.env.WAYLAND_DISPLAY;
+	process.env.DISPLAY = ":0";
 	const unsupported = await chooseMacosFolder({ platform: "linux" });
 	assert(!unsupported.ok, "non-macOS platform should be unsupported");
 	assert(unsupported.supported === false, "unsupported platform should report supported=false");

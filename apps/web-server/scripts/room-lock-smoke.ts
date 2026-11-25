@@ -14,7 +14,7 @@ import os, { hostname } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { AGENT, answerIsHeld, AT_ONCE_MS, EDITIONS, endChild, exited, firstTurnProblems, lanes, pool, preload, readJsonAnswer, releaseAnswer, roomProblems, roomUrl, runRestartParts, runStep, sendTurn, startServer, tempRoot, templateCopy, THREAD, traceSave, waitReady, wanted, webServerDir, type Child, type Run, type Save, type TraceStep } from "./kill-at-write-harness.js";
-import { freePort, SMOKE_AUTH_HEADERS } from "./smoke-server-process.js";
+import { keptPort, SMOKE_AUTH_HEADERS } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 
 if (os.platform() === "win32") {
@@ -503,7 +503,7 @@ async function onDataFolder(edition: Edition, env: Record<string, string>, work:
 	const home = path.join(folder, "home");
 	const rowPreload = path.join(folder, "server-row-preload.mjs");
 	fs.writeFileSync(rowPreload, SERVER_ROW_PRELOAD);
-	const port = await freePort();
+	const port = await keptPort();
 	const run: Run = { home, base: `http://127.0.0.1:${port}` };
 	const children: Child[] = [];
 	const startOn = async (at: Run, atPort: number) => {
@@ -518,7 +518,7 @@ async function onDataFolder(edition: Edition, env: Record<string, string>, work:
 			folder,
 			start: () => startOn(run, port),
 			startBeside: async () => {
-				const besidePort = await freePort();
+				const besidePort = await keptPort();
 				const beside: Run = { home, base: `http://127.0.0.1:${besidePort}` };
 				await startOn(beside, besidePort);
 				return beside;

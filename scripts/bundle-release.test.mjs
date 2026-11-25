@@ -10,7 +10,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
-import { findPrunedTypeScriptImports, pruneNodeModules } from "./bundle-release-prune.mjs";
+import { ARCHIVE_TARGET_DROP, dropTargetPackages, findPrunedTypeScriptImports, pruneNodeModules } from "./bundle-release-prune.mjs";
+import { BUNDLE_ASSETS, EXTERNAL_PACKAGES, FILE_PACKAGES, LICENCES_FILE } from "./bundle-server.mjs";
 import "./bundle-document-tools.test.mjs";
 
 const tempDirs = [];
@@ -22,6 +23,7 @@ function makeTree(files) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-prune-test-"));
 	tempDirs.push(dir);
 	for (const [rel, content] of Object.entries(files)) {
+		if (content === null) continue;
 		const full = path.join(dir, ...rel.split("/"));
 		fs.mkdirSync(path.dirname(full), { recursive: true });
 		fs.writeFileSync(full, content);
@@ -126,4 +128,81 @@ test("the static gate passes when TypeScript imports point into protected packag
 	});
 	const result = pruneNodeModules(dir);
 	assert.deepEqual(findPrunedTypeScriptImports(dir, result.removed), []);
+});
+
+// A staged app/ tree as the archive carries it before the drop: the bundled
+// server and the packages it loads as files, which the app depends on,
+// fastify with semver, and Microsoft's sandbox kit with its own koffi,
+// koffi's platform package for the target, node-pty and node-addon-api.
+const manifest = (name, extra = {}) => JSON.stringify({ name, version: "1.0.0", ...extra });
+const KOFFI_PLATFORM = { "darwin-arm64": "koffi-darwin-arm64", "linux-x64": "koffi-linux-x64", "win-x64": "koffi-win32-x64" };
+function archiveApp(target, overrides = {}) {
+	const shipped = [...EXTERNAL_PACKAGES.filter((entry) => entry.ships), ...FILE_PACKAGES].map(({ name }) => name);
+	const kit = "node_modules/@microsoft/mxc-sdk";
+	return makeTree({
+		"package.json": manifest("@exxeta/exxperts-app", { dependencies: Object.fromEntries([...shipped, "fastify"].map((name) => [name, "1.0.0"])) }),
+		...Object.fromEntries(shipped.map((name) => [`node_modules/${name}/package.json`, manifest(name)])),
+		...Object.fromEntries(["server.mjs", LICENCES_FILE, ...BUNDLE_ASSETS.map((asset) => asset.file)].map((file) => [`apps/web-server/dist/${file}`, "x"])),
+		"node_modules/fastify/package.json": manifest("fastify", { dependencies: { semver: "7.0.0" } }),
+		"node_modules/semver/package.json": manifest("semver"),
+		[`${kit}/package.json`]: manifest("@microsoft/mxc-sdk", { dependencies: { koffi: "3.0.0", "node-pty": "1.0.0", semver: "7.0.0" } }),
+		[`${kit}/dist/v1/index.js`]: "x",
+		[`${kit}/node_modules/koffi/package.json`]: manifest("koffi", { optionalDependencies: { "@koromix/koffi-darwin-arm64": "3.0.0", "@koromix/koffi-linux-x64": "3.0.0", "@koromix/koffi-win32-x64": "3.0.0" } }),
+		[`node_modules/@koromix/${KOFFI_PLATFORM[target]}/package.json`]: manifest(`@koromix/${KOFFI_PLATFORM[target]}`),
+		"node_modules/node-pty/package.json": manifest("node-pty", { dependencies: { "node-addon-api": "7.0.0" } }),
+		"node_modules/node-addon-api/package.json": manifest("node-addon-api"),
+		...overrides,
+	});
+}
+
+function listFiles(dir, rel = "") {
+	return fs.readdirSync(path.join(dir, rel), { withFileTypes: true }).flatMap((entry) => {
+		const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+		return entry.isDirectory() ? [`${childRel}/`, ...listFiles(dir, childRel)] : [childRel];
+	});
+}
+
+for (const [target, koffiPlatform] of [["darwin-arm64", "@koromix/koffi-darwin-arm64"], ["linux-x64", "@koromix/koffi-linux-x64"]]) {
+	test(`the ${target} archive leaves out the sandbox kit, node-pty and what only they need, each with its reason, and keeps semver for fastify`, () => {
+		const dir = archiveApp(target);
+		const before = listFiles(dir);
+		const leftOut = dropTargetPackages(dir, target);
+		assert.deepEqual(leftOut.map((entry) => entry.name).sort(), ["@microsoft/mxc-sdk", koffiPlatform, "node-addon-api", "node-pty"].sort());
+		for (const entry of leftOut) assert.ok(entry.reason, `${entry.name} has no reason`);
+		const gone = before.filter((file) => !listFiles(dir).includes(file));
+		assert.ok(gone.every((file) => /^node_modules\/(@microsoft\/|@koromix\/|node-pty\/|node-addon-api\/)/.test(file)), gone.join("\n"));
+		for (const rel of ["node_modules/@microsoft", "node_modules/@koromix", "node_modules/node-pty", "node_modules/node-addon-api"]) assert.ok(!has(dir, rel), `${rel} was kept`);
+		for (const rel of ["node_modules/semver/package.json", "node_modules/fastify/package.json", "node_modules/jszip/package.json", "apps/web-server/dist/box-worker-windows.mjs"]) assert.ok(has(dir, rel), `${rel} was removed`);
+	});
+
+	test(`the ${target} archive fails, removing nothing, when a kept package still needs a listed one`, () => {
+		const dir = archiveApp(target, { "node_modules/fastify/package.json": manifest("fastify", { dependencies: { semver: "7.0.0", "node-pty": "1.0.0" } }) });
+		const before = listFiles(dir);
+		assert.throws(() => dropTargetPackages(dir, target), new RegExp(`node_modules/node-pty stays in the ${target} archive although ARCHIVE_TARGET_DROP leaves it out`));
+		assert.deepEqual(listFiles(dir), before);
+	});
+
+	test(`the ${target} archive fails, removing nothing, when the drop would leave out a package the list does not name`, () => {
+		const dir = archiveApp(target, {
+			"node_modules/@microsoft/mxc-sdk/package.json": manifest("@microsoft/mxc-sdk", { dependencies: { koffi: "3.0.0", "node-pty": "1.0.0", "only-for-the-kit": "1.0.0" } }),
+			"node_modules/only-for-the-kit/package.json": manifest("only-for-the-kit"),
+		});
+		const before = listFiles(dir);
+		assert.throws(() => dropTargetPackages(dir, target), new RegExp(`the ${target} archive would leave out only-for-the-kit, which ARCHIVE_TARGET_DROP does not list`));
+		assert.deepEqual(listFiles(dir), before);
+	});
+
+	test(`the ${target} archive fails when it lacks a package the app or the bundled server needs`, () => {
+		assert.throws(() => dropTargetPackages(archiveApp(target, { "node_modules/jszip/package.json": null }), target), /jszip is missing/);
+		assert.throws(() => dropTargetPackages(archiveApp(target, { "node_modules/semver/package.json": null }), target), /semver \(needed by fastify\) is missing/);
+		assert.throws(() => dropTargetPackages(archiveApp(target, { "apps/web-server/dist/box-worker-windows.mjs": null }), target), /box-worker-windows\.mjs is missing/);
+	});
+}
+
+test("the win-x64 archive keeps every package it has, the sandbox kit's included", () => {
+	const dir = archiveApp("win-x64");
+	const before = listFiles(dir);
+	assert.deepEqual(dropTargetPackages(dir, "win-x64"), []);
+	assert.deepEqual(listFiles(dir), before);
+	assert.deepEqual(ARCHIVE_TARGET_DROP.filter((entry) => entry.target === "win-x64"), []);
 });

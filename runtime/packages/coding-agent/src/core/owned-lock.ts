@@ -34,14 +34,32 @@ const RUN = randomUUID();
 /** `note` is the lock's second name while it lands, so a clearer can remove what a kill left. */
 type LockOwner = { pid: number; host: string; run: string; note: string };
 
-/** The lock's owner, or nothing when it names none: a folder left by an older version, or a lock already gone. */
+/**
+ * The note's name, built by `newNote` alone. It holds no separator and no dot,
+ * so it names a file beside the lock and nowhere else. A writer outside this
+ * shape fails safe, its dead locks waiting for the stale rule, and
+ * restart-lock-rows-smoke.ts fails on that wait.
+ */
+const NOTE_SHAPE = /^tmp-\d+-\d+-[a-z0-9]{0,6}$/;
+
+function newNote(): string {
+	return `tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * The lock's owner, or nothing when it names none: a folder left by an older
+ * version, a lock already gone, or a note `newNote` never makes, since a room
+ * can carry a lock file someone else wrote. A lock with no owner waits for the
+ * stale rule, which removes the lock alone.
+ */
 function readOwner(lockPath: string): LockOwner | undefined {
 	try {
 		const owner = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as Partial<LockOwner>;
 		return typeof owner.pid === "number" &&
 			typeof owner.host === "string" &&
 			typeof owner.run === "string" &&
-			typeof owner.note === "string"
+			typeof owner.note === "string" &&
+			NOTE_SHAPE.test(owner.note)
 			? (owner as LockOwner)
 			: undefined;
 	} catch {
@@ -92,7 +110,7 @@ function clearDeadOwner(lockPath: string): boolean {
 }
 
 function landLock(lockPath: string): void {
-	const name = `tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+	const name = newNote();
 	const note = notePath(lockPath, name);
 	const owner: LockOwner = { pid: process.pid, host: hostname(), run: RUN, note: name };
 	fs.writeFileSync(note, JSON.stringify(owner), { mode: 0o600 });

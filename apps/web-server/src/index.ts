@@ -54,6 +54,7 @@ import { readOpenAiCompatibleGateways, findOpenAiCompatibleGateway } from "./ope
 import { readGatewayProviderBaseUrl } from "./openai-compatible-gateway-catalog.js";
 import { normalizeGatewayBaseUrl, discoverGatewayModels } from "./openai-compatible-gateway-detect.js";
 import { type GatewayDeclarationsRefreshLoopHandle, resolveGatewayDeclarationsRefreshOptionsFromEnv, startGatewayDeclarationsRefreshLoop } from "./openai-compatible-gateway-refresh.js";
+import { startSkillAutoUpdates } from "./skill-updates.js";
 import { readWebSearchSettings } from "./web-search-settings.js";
 import { startPersistentRoomSchedulePreflightLoop, resolvePersistentRoomSchedulePreflightLoopOptionsFromEnv } from "./persistent-room-schedule-preflight-loop.js";
 import { startScheduledPromptBackgroundExecutionLoop, resolveScheduledPromptBackgroundExecutionLoopOptionsFromEnv } from "./scheduled-prompt-background-execution-loop.js";
@@ -65,10 +66,14 @@ import { importHistoricalSessionUsage } from "./usage-import.js";
 import { updateSearxngOnBoot } from "./searxng-setup.js";
 import { isSharedServer, serverHooks } from "./server-hooks.js";
 import { installServerStop } from "./server-stop.js";
+import { adoptStoredValues } from "./stored-values.js";
 
 // A gateway key the server's start provides reaches every key reader from memory, before any boot step reads one.
 const startGateway = serverHooks().startGateway?.();
 if (startGateway) AuthStorage.setProcessKey(startGateway.providerId, startGateway.key);
+// Stored keys and connector values open and seal with the start's key, before any boot step reads one.
+const storedValues = serverHooks().storedValues?.();
+if (storedValues) adoptStoredValues(storedValues, AuthStorage.setStoredTextCodec);
 
 ensureProductAppUserDirs();
 
@@ -222,6 +227,8 @@ let schedulerExecutionLoopHandle: ReturnType<typeof startScheduledPromptBackgrou
 
 let gatewayDeclarationsRefreshHandle: GatewayDeclarationsRefreshLoopHandle | null = null;
 
+let skillAutoUpdatesHandle: ReturnType<typeof startSkillAutoUpdates> | null = null;
+
 // The loops that start work, stopped at the server's close and at the start of a server stop.
 const stopBackgroundLoops = (): void => {
 	schedulerExecutionLoopHandle?.stop();
@@ -230,6 +237,8 @@ const stopBackgroundLoops = (): void => {
 	schedulerPreflightLoopHandle = null;
 	gatewayDeclarationsRefreshHandle?.stop();
 	gatewayDeclarationsRefreshHandle = null;
+	skillAutoUpdatesHandle?.stop();
+	skillAutoUpdatesHandle = null;
 };
 
 app.addHook("onClose", async () => stopBackgroundLoops());
@@ -310,6 +319,10 @@ app.listen({ port: PORT, host: "127.0.0.1" })
 			save: (gateway) => saveGatewayEverywhere(gateway, "", false),
 			logger: app.log,
 		}, gatewayDeclarationsRefreshOptions);
+		// Skills' repositories are asked for new versions a few minutes from now and
+		// once a day, and only a skill whose Update automatically is on takes one by
+		// itself (never on a shared server).
+		skillAutoUpdatesHandle = startSkillAutoUpdates({ logger: { info: (line) => app.log.info(line), warn: (line) => app.log.warn(line) } });
 		// The graceful stop on SIGTERM and SIGINT (server-stop.ts). The scheduler's
 		// loops are kept here, so a tick still running is seen after their handles clear.
 		const schedulerLoopsForStop = [schedulerPreflightLoopHandle, schedulerExecutionLoopHandle].filter((loop) => loop !== null);

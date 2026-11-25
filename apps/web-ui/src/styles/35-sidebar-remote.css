@@ -552,12 +552,12 @@ html.desktop-app-mac.sidebar-collapsed .workbench.artifact-pane-maximized .artif
 		min-width: 0;
 		max-width: 60%;
 	}
-	/* With Sign out and its scope line, the footer takes a row of its own under
-	   the bar: its lines get the whole width, and the tabs keep theirs. */
-	.product-sidebar.with-sign-out {
+	/* With the person's name, and Sign out with its scope line, the footer takes a
+	   row of its own under the bar: its lines get the whole width, and the tabs keep theirs. */
+	.product-sidebar.with-person-row {
 		flex-wrap: wrap;
 	}
-	.product-sidebar.with-sign-out .product-sidebar-footer {
+	.product-sidebar.with-person-row .product-sidebar-footer {
 		flex: 1 0 100%;
 		max-width: none;
 		margin-left: 0;

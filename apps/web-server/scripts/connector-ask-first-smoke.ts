@@ -3,10 +3,10 @@
 // connector that counts what reaches it. Allow reaches it once; Deny, Stop,
 // leaving and a scheduled run reach it zero times. A room on Auto still gets
 // the card, a full phone's answer counts, and a view-only phone taking over
-// refuses with the note until the computer is back. Allow for this room, in a
-// room of its own, runs that tool with no question from then on: live, after
-// the person left and in a scheduled run, until Remove in Room settings takes
-// it back. Each refusal sits beside a row that runs. The gate's own rows are in
+// refuses with the note until the computer is back. Always allow, in a room of
+// its own, runs that tool with no question from then on: live, after the person
+// left and in a scheduled run, until Ask first on the connector's page takes it
+// back. Each refusal sits beside a row that runs. The gate's own rows are in
 // persistent-room-mcp-scope-smoke.ts.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -42,7 +42,7 @@ const appRoot = path.join(home, ".exxperts", "app");
 const agentsRoot = path.join(appRoot, "personalized-agents");
 const MODEL = { provider: "openai-compatible", model: "room-model" };
 const ASK_TITLE = "Use Delete project in Asana?";
-// The note names Allow for this room, which this question offers; the step's row says its first sentence.
+// The note names Always allow, which this question offers; the step's row says its first sentence.
 const AWAY_NOTE = declinedQuestionNoteText(ASK_TITLE, true);
 const AWAY_ROW = declinedQuestionNoteText(ASK_TITLE);
 const waitUntil = waitEvery(25, 30_000);
@@ -57,6 +57,7 @@ const deleteProject: Call = { tool: "asana_delete_project", args: JSON.stringify
 const listProjects: Call = { tool: "asana_list_projects", args: "{}" };
 const createNote: Call = { tool: "asana_create_note", args: JSON.stringify({ text: "hello" }) };
 const dropBoard: Call = { tool: "asana_drop_board", args: "{}" };
+const renameNote: Call = { tool: "asana_rename_note", args: JSON.stringify({ name: "Q4" }) };
 const sseChunk = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`;
 const gateway = http.createServer((req, res) => {
 	let body = "";
@@ -91,7 +92,7 @@ const gateway = http.createServer((req, res) => {
 });
 
 const connector = markedConnector();
-connector.tools = [{ name: "list_projects", annotations: { readOnlyHint: true } }, { name: "delete_project" }, { name: "create_note" }, { name: "drop_board", annotations: { destructiveHint: true } }];
+connector.tools = [{ name: "list_projects", annotations: { readOnlyHint: true } }, { name: "delete_project" }, { name: "create_note" }, { name: "drop_board", annotations: { destructiveHint: true } }, { name: "rename_note", annotations: { destructiveHint: false } }];
 const callsOf = (name: string) => connector.called.filter((called) => called === name).length;
 const AWAY_SILENCE_MS = 5_000;
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -213,7 +214,7 @@ try {
 		window.prompt("Tidy up Asana.");
 		const card = await window.card();
 		assert(card.title === ASK_TITLE, `the card's title, got ${card.title}`);
-		assert(card.connector === "Asana" && card.sent === `{"project":"Q3"}` && card.cut === 0 && card.lasting === true, `the card's fields, with Allow for this room at the computer, got ${JSON.stringify(card)}`);
+		assert(card.connector === "Asana" && card.sent === `{"project":"Q3"}` && card.cut === 0 && card.lasting === true, `the card's fields, with Always allow at the computer, got ${JSON.stringify(card)}`);
 		assert(callsOf("list_projects") === 1 && window.cards().length === 1, `the marked tool ran with no card of its own, got ${JSON.stringify(connector.called)}, ${window.cards().length} cards`);
 		assert(callsOf("delete_project") === 0, "the unmarked tool waits on its card");
 		window.answer(card.id, true);
@@ -316,12 +317,43 @@ try {
 		assert(JSON.stringify([first.title, second.title].sort()) === JSON.stringify(["Use Create note in Asana?", ASK_TITLE]), `each call asks by its own name, got ${first.title}, ${second.title}`);
 		const noteCard = [first, second].find((card) => card.title !== ASK_TITLE);
 		const deleteCard = [first, second].find((card) => card.title === ASK_TITLE);
+		// Each question names its own call, so the page puts it on that call's step.
+		assert(deleteCard.toolCallId === "call_0_0" && noteCard.toolCallId === "call_0_1", `each question carries its own call's id, got ${deleteCard.toolCallId}, ${noteCard.toolCallId}`);
 		window.answer(noteCard.id, true);
 		window.answer(deleteCard.id, false);
 		await window.ended();
 		assert(JSON.stringify(connector.called) === JSON.stringify(["create_note"]), `only the allowed tool reached the connector, got ${JSON.stringify(connector.called)}`);
 		window.ws.close();
 		console.log("ok 6 two calls at once: each answer reaches its own tool");
+	}
+
+	// --- 16. The question's first line goes by the connector's own marks, as the server sends them and the page reads them:
+	// a read-only tool set to Ask first, one marked as not destructive, and one with no marks.
+	{
+		const setChoice = async (choice: string | null) => {
+			const set = await json("/api/mcp/servers/asana/tools", { method: "PUT", body: JSON.stringify({ tools: { list_projects: choice } }) });
+			assert(set.status === 200, `the choice for list_projects was set to ${choice}, got ${set.status} ${JSON.stringify(set.body)}`);
+		};
+		await setChoice("ask");
+		const window = await openConversation("conv-marks");
+		script = [{ calls: [listProjects] }, { calls: [renameNote] }, { calls: [deleteProject] }];
+		window.prompt("Look at the projects, rename the note, delete Q3.");
+		const readOnlyCard = await window.card(1);
+		window.answer(readOnlyCard.id, true);
+		const softCard = await window.card(2);
+		window.answer(softCard.id, true);
+		const unmarkedCard = await window.card(3);
+		window.answer(unmarkedCard.id, false);
+		await window.ended();
+		window.ws.close();
+		await setChoice(null);
+		const { roomAskFields }: any = await import(new URL("../../web-ui/src/components/box-ask-rows.tsx", import.meta.url).href);
+		const marks = (card: any) => JSON.stringify({ frame: { readOnly: card.readOnly, destructive: card.destructive }, page: { readOnly: roomAskFields(card).readOnly, destructive: roomAskFields(card).destructive } });
+		assert(marks(readOnlyCard) === JSON.stringify({ frame: { readOnly: true }, page: { readOnly: true } }), `a read-only tool's question says so, got ${marks(readOnlyCard)}`);
+		assert(marks(softCard) === JSON.stringify({ frame: { destructive: false }, page: { destructive: false } }), `a tool marked as not destructive says so, got ${marks(softCard)}`);
+		assert(marks(unmarkedCard) === JSON.stringify({ frame: {}, page: {} }), `a tool with no marks claims none, got ${marks(unmarkedCard)}`);
+		assert(JSON.stringify(connector.called) === JSON.stringify(["list_projects", "rename_note"]), `the marks change no answer: the two yeses ran, the no reached nothing, got ${JSON.stringify(connector.called)}`);
+		console.log("ok 16 the question carries the connector's own marks to the page: read-only, not destructive, or none");
 	}
 
 	// --- 7. A full phone's answer counts.
@@ -390,7 +422,7 @@ try {
 		console.log("ok 8 the computer, a view-only phone, the computer: refused with the note, then a new request asks");
 	}
 
-	// --- 10 to 13. Allow for this room, in a room of its own.
+	// --- 10 to 13. Always allow, in a room of its own.
 	await waitForTurnSettled(json, room, "the view-only turn has settled");
 	const firstRoom = room;
 	const madeAllowed = await json("/api/persistent-agents", { method: "POST", body: JSON.stringify({ displayName: "Allowed Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
@@ -400,33 +432,34 @@ try {
 	assert(madeAllowed.status === 201 && room && (await json(connectorsPath, { method: "PUT", body: JSON.stringify({ action: "grant", name: "asana" }) })).status === 200, "the second room has the connector");
 	assert((await json("/api/remote/rooms/exposure", { method: "POST", body: JSON.stringify({ id: room, exposed: true }) })).status === 200, "the second room is on the phones");
 	const allowedTools = async () => JSON.stringify((await json(connectorsPath)).body?.allowedTools ?? null);
-	const ALLOWED_DELETE = JSON.stringify({ asana: [{ tool: "delete_project", shown: "Delete project" }] });
+	const choices = async () => JSON.stringify(((await json("/api/mcp/status")).body?.servers as Array<{ name: string; choices?: unknown }> | undefined)?.find((one) => one.name === "asana")?.choices ?? null);
+	const ALWAYS_DELETE = JSON.stringify({ delete_project: "allow" });
 	const takenFor = (window: RoomWindow, id: string) => window.seen((frame) => frame.type === "ui_request_closed" && frame.id === id && frame.reason === "answered", "the question said what it took");
 	{
 		const window = await openConversation("conv-allow-phone", fullPhone.cookie);
 		script = [{ calls: [deleteProject] }];
 		window.prompt("Delete the Q3 project.");
 		const card = await window.card();
-		assert(card.lasting === false, "a phone is never offered Allow for this room");
+		assert(card.lasting === false, "a phone is never offered Always allow");
 		window.answer(card.id, "room");
-		assert((await takenFor(window, card.id)).taken === "once", "a phone's Allow for this room counts this time");
+		assert((await takenFor(window, card.id)).taken === "once", "a phone's Always allow counts this time");
 		await window.ended();
-		assert(callsOf("delete_project") === 1 && (await allowedTools()) === "{}", `it ran once and stored nothing, got ${JSON.stringify(connector.called)}, ${await allowedTools()}`);
+		assert(callsOf("delete_project") === 1 && (await allowedTools()) === "{}" && (await choices()) === "{}", `it ran once and stored nothing, got ${JSON.stringify(connector.called)}, ${await allowedTools()}, ${await choices()}`);
 		window.ws.close();
-		console.log("ok 10 a full phone sees two answers, and Allow for this room sent from it counts this time");
+		console.log("ok 10 a full phone sees two answers, and Always allow sent from it counts this time");
 	}
 	{
 		const window = await openConversation("conv-allow-room");
 		script = [{ calls: [deleteProject] }];
 		window.prompt("Delete the Q3 project.");
 		const card = await window.card();
-		assert(card.lasting === true, "the computer is offered Allow for this room");
+		assert(card.lasting === true, "the computer is offered Always allow");
 		window.answer(card.id, "room");
-		assert((await takenFor(window, card.id)).taken === "room", "the question says the yes is kept for the room");
+		assert((await takenFor(window, card.id)).taken === "room", "the question says the yes is kept");
 		await window.ended();
-		assert(callsOf("delete_project") === 1 && (await allowedTools()) === ALLOWED_DELETE, `it ran, and Room settings lists it, got ${JSON.stringify(connector.called)}, ${await allowedTools()}`);
+		assert(callsOf("delete_project") === 1 && (await choices()) === ALWAYS_DELETE && (await allowedTools()) === "{}", `it ran, and the connector's page shows Always allow, with nothing in Room settings, got ${JSON.stringify(connector.called)}, ${await choices()}, ${await allowedTools()}`);
 		window.ws.close();
-		console.log("ok 11 the computer's Allow for this room runs the call and is listed in Room settings");
+		console.log("ok 11 the computer's Always allow runs the call and shows on the connector's page");
 	}
 	{
 		const window = await openConversation("conv-allowed");
@@ -445,9 +478,9 @@ try {
 		await waitForTurnSettled(json, room, "the turn after the person left landed");
 		const leftItems = await threadItems(conversation);
 		const notes = notesOf(leftItems);
-		// The server saved this answer, as nobody was there: the step that ran on the room's yes keeps the person's words for its row.
+		// The server saved this answer, as nobody was there: the step that ran on Always allow keeps the person's words for its row.
 		const ranStep = deleteStepOf(leftItems);
-		assert(ranStep && !ranStep.isError && ranStep.details?.use === "Delete project in Asana", `the step that ran on the room's yes keeps the person's words, got ${JSON.stringify(ranStep)}`);
+		assert(ranStep && !ranStep.isError && ranStep.details?.use === "Delete project in Asana", `the step that ran on Always allow keeps the person's words, got ${JSON.stringify(ranStep)}`);
 		assert(callsOf("delete_project") === 1 && callsOf("create_note") === 0, `after the person left the allowed tool ran and the other didn't, got ${JSON.stringify(connector.called)}`);
 		assert(JSON.stringify(notes) === JSON.stringify([declinedQuestionNoteText("Use Create note in Asana?", true)]), `one note, for the tool not allowed, naming the way on, got ${JSON.stringify(notes)}`);
 		console.log("ok 12 the allowed tool runs with no question, live and after the person left; another tool asks");
@@ -457,21 +490,21 @@ try {
 		script = [{ calls: [deleteProject] }, {
 			calls: [deleteProject],
 			before: async () => {
-				const removed = await json(connectorsPath, { method: "PUT", body: JSON.stringify({ action: "forget-tool", name: "asana", tool: "delete_project" }) });
-				assert(removed.status === 200 && JSON.stringify(removed.body?.allowedTools) === "{}", `Remove in Room settings, got ${removed.status} ${JSON.stringify(removed.body)}`);
+				const askFirst = await json("/api/mcp/servers/asana/tools", { method: "PUT", body: JSON.stringify({ tools: { delete_project: "ask" } }) });
+				assert(askFirst.status === 200 && JSON.stringify(askFirst.body?.choices) === JSON.stringify({ delete_project: "ask" }), `Ask first on the connector's page, got ${askFirst.status} ${JSON.stringify(askFirst.body)}`);
 			},
 		}];
 		window.prompt("Delete Q3 twice.");
 		const card = await window.card();
-		assert(card.title === ASK_TITLE && callsOf("delete_project") === 1, `the first call ran with no question, the second asks after Remove, got ${JSON.stringify(connector.called)}`);
+		assert(card.title === ASK_TITLE && callsOf("delete_project") === 1, `the first call ran with no question, the second asks after Ask first, got ${JSON.stringify(connector.called)}`);
 		window.answer(card.id, "room");
 		await window.ended();
-		assert(callsOf("delete_project") === 2 && (await allowedTools()) === ALLOWED_DELETE && window.cards().length === 1, `allowed for the room again, got ${JSON.stringify(connector.called)}, ${await allowedTools()}`);
+		assert(callsOf("delete_project") === 2 && (await choices()) === ALWAYS_DELETE && window.cards().length === 1, `always allowed again, got ${JSON.stringify(connector.called)}, ${await choices()}`);
 		window.ws.close();
-		console.log("ok 13 Remove counts from the next call, within a running answer too");
+		console.log("ok 13 Ask first counts from the next call, within a running answer too");
 	}
 	{
-		// --- 15. The yes kept for the room changes no away limit: after the person left, the limit still ends a silent answer;
+		// --- 15. Always allow changes no away limit: after the person left, the limit still ends a silent answer;
 		// with only a view-only phone watching a room on Ask, the limits stand down for it as for any answer.
 		const activeTurn = async () => (await json(`/api/persistent-agents/${encodeURIComponent(room)}/status`)).body?.activeThread;
 		const left = await openConversation("conv-allowed-away");
@@ -506,7 +539,7 @@ try {
 		await waitForTurnSettled(json, room, "the answer the view-only phone watched landed", AWAY_SILENCE_MS * 6);
 		assert(callsOf("delete_project") === 1 && stillGoing && (await activeTurn())?.activeTurn?.lastTerminalReason !== "failed", `with a view-only phone watching, the allowed tool ran and the answer went on past the away limit, got ${JSON.stringify(connector.called)}, going ${stillGoing}, ${JSON.stringify((await activeTurn())?.activeTurn)}`);
 		phone?.ws.close();
-		console.log("ok 15 the yes kept for the room changes no away limit: after the person left one still ends the answer, and a view-only phone stands them down as for any answer");
+		console.log("ok 15 Always allow changes no away limit: after the person left one still ends the answer, and a view-only phone stands them down as for any answer");
 	}
 	await waitForTurnSettled(json, room, "the last live turn has settled");
 	const allowedRoom = room;
@@ -514,12 +547,32 @@ try {
 	await stopSmokeServer(serverProcess);
 	serverProcess = undefined;
 
-	// --- 9. A scheduled run: the marked tool runs, the unmarked one is refused with the note.
+	// The scheduled runs.
 	Object.assign(process.env, { HOME: home, USERPROFILE: home, EXXPERTS_CODING_AGENT_DIR: agentDir, EXXETA_PERSISTENT_AGENTS_ROOT: agentsRoot, EXXETA_HOME: repoRoot });
 	// The scheduled runs go on in this process, which reaches the connector's web name as the server did.
 	await connector.proxyHere();
 	const background = await import("../src/persistent-room-background-execution.js");
 	const { getPersistentAgentThread } = await import("../src/persistent-agents.js");
+
+	// --- 14. A scheduled run while Delete project is set to Always allow: it runs; Create note and Drop board, which the
+	// connector marks destructive, are refused with a note that names the way on.
+	connector.called.length = 0;
+	script = [{ calls: [deleteProject] }, { calls: [createNote] }, { calls: [dropBoard] }];
+	await background.executePersistentRoomBackgroundPrompt({
+		roomId: allowedRoom,
+		target: { kind: "fresh-thread", model: MODEL },
+		prompt: "Tidy up Asana.",
+		executionId: "connector-allowed-scheduled",
+		cwd: tempRoot,
+		agentDir,
+	} as any);
+	assert(JSON.stringify(connector.called) === JSON.stringify(["delete_project"]), `a scheduled run uses the allowed tool alone, got ${JSON.stringify(connector.called)}`);
+	const allowedRun = notesOf(getPersistentAgentThread(allowedRoom, background.scheduledPromptBackgroundThreadId("connector-allowed-scheduled"))?.items ?? []);
+	assert(JSON.stringify(allowedRun) === JSON.stringify([declinedQuestionNoteText("Use Create note in Asana?", true), declinedQuestionNoteText("Use Drop board in Asana?", true)]), `the notes, got ${JSON.stringify(allowedRun)}`);
+	console.log("ok 14 a scheduled run uses the tool set to Always allow, and its notes name the way on");
+
+	// --- 9. A scheduled run with nothing chosen for the tool: the marked tool runs, the unmarked one is refused with the note.
+	(await import("../src/connector-tool-choices.js")).setConnectorToolChoices("asana", { delete_project: null });
 	connector.called.length = 0;
 	script = [{ calls: [listProjects] }, { calls: [deleteProject] }];
 	await background.executePersistentRoomBackgroundPrompt({
@@ -536,22 +589,6 @@ try {
 	readsNotRun(deleteStepOf(scheduled), AWAY_ROW, "a scheduled run");
 	console.log("ok 9 a scheduled run reads, refuses the rest, and leaves the note");
 
-	// --- 14. A scheduled run in the room that allowed Delete project: it runs; Create note is refused with a note that names the way
-	// on, and Drop board, which the connector marks destructive, with a note that doesn't.
-	connector.called.length = 0;
-	script = [{ calls: [deleteProject] }, { calls: [createNote] }, { calls: [dropBoard] }];
-	await background.executePersistentRoomBackgroundPrompt({
-		roomId: allowedRoom,
-		target: { kind: "fresh-thread", model: MODEL },
-		prompt: "Tidy up Asana.",
-		executionId: "connector-allowed-scheduled",
-		cwd: tempRoot,
-		agentDir,
-	} as any);
-	assert(JSON.stringify(connector.called) === JSON.stringify(["delete_project"]), `a scheduled run uses the allowed tool alone, got ${JSON.stringify(connector.called)}`);
-	const allowedRun = notesOf(getPersistentAgentThread(allowedRoom, background.scheduledPromptBackgroundThreadId("connector-allowed-scheduled"))?.items ?? []);
-	assert(JSON.stringify(allowedRun) === JSON.stringify([declinedQuestionNoteText("Use Create note in Asana?", true), declinedQuestionNoteText("Use Drop board in Asana?")]), `the notes, got ${JSON.stringify(allowedRun)}`);
-	console.log("ok 14 a scheduled run uses the allowed tool, and its notes name the way on only where it is offered");
 	console.log("connector-ask-first-smoke: OK");
 } catch (error) {
 	console.error(serverOutput.join("").slice(-4000));

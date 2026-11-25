@@ -1,11 +1,25 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../api";
 import { pollWhileShown } from "../visible-poll";
-import { knownRemoteClientContext, refreshRemoteClientContext, useRemoteClientContext } from "../remote-client-context";
+import { knownRemoteClientContext, refreshRemoteClientContext, sharedServerRole, useRemoteClientContext } from "../remote-client-context";
 import { agentLabel } from "../types";
 import { CloseIcon } from "./icons";
 import { GATEWAY_PROVIDER_ID_PREFIX, canonicalModelName, formatModelWithProvider, modelDisplayName } from "../model-names";
-import { allInput, cacheWords } from "../usage-words";
+import {
+	COMPANY_USAGE_CSV_HOVER,
+	COMPANY_USAGE_EMPTY,
+	COMPANY_USAGE_LINE,
+	COMPANY_USAGE_TITLE,
+	SHARED_USAGE_EMPTY,
+	SHARED_USAGE_FOOTER,
+	SHARED_USAGE_MODELS_HINT,
+	SHARED_USAGE_ROOMS_HINT,
+	SHARED_USAGE_UNAVAILABLE_ROOM,
+	SHARED_USAGE_UNREADABLE,
+	WALLET_UNREADABLE,
+	allInput,
+	cacheWords,
+} from "../usage-words";
 
 // The Wallet never blends real and estimated dollars: the server splits every
 // aggregate by source (billed API spend, plan-covered subscription usage,
@@ -181,12 +195,14 @@ const PROVIDER_SHORT: Record<string, string> = {
 	openrouter: "OpenRouter",
 };
 
-function modelCell(row: UsageRow): string {
+type ModelFields = Pick<UsageRow, "model" | "modelLabel" | "modelName" | "provider">;
+
+function modelCell(row: ModelFields): string {
 	return row.modelName || modelDisplayName(row) || "?";
 }
 
 /** Same cell, with the provider added: the table shows names, hover disambiguates. */
-function modelCellTitle(row: UsageRow): string | undefined {
+function modelCellTitle(row: ModelFields): string | undefined {
 	const full = formatModelWithProvider(row.modelName || modelDisplayName(row), canonicalModelName(row).provider);
 	return full && full !== modelCell(row) ? full : undefined;
 }
@@ -221,12 +237,14 @@ function DashboardLine({ text }: { text: string }) {
 
 const CONTEXT_RETRY_MS = 5000;
 
-// A shared server keeps the usage log closed: no row says whose it is. The
-// page must not ask for it there, so nothing reads usage until the server has
-// said which kind it is. useRemoteClientContext says "this computer" before
-// that and after a failed read, so only an answer opens the Wallet.
+// A shared server gives each person their own usage and its admin the
+// company's totals, never the Wallet's whole log. The page must not ask for the
+// Wallet's read there, so nothing reads usage until the server has said which
+// kind it is. useRemoteClientContext says "this computer" before that and
+// after a failed read, so only an answer opens either page.
 export function Dashboard() {
-	const { sharedServer } = useRemoteClientContext();
+	const context = useRemoteClientContext();
+	const { sharedServer } = context;
 	const [contextKnown, setContextKnown] = useState(() => knownRemoteClientContext()?.sharedServer === true);
 	useEffect(() => {
 		if (contextKnown) return;
@@ -243,12 +261,16 @@ export function Dashboard() {
 		return () => { alive = false; clearTimeout(retry); };
 	}, [contextKnown]);
 	if (!contextKnown) return <DashboardLine text="Loading…" />;
-	if (sharedServer) return <DashboardLine text="The Wallet isn't available on this server yet." />;
+	if (sharedServer) return <SharedUsage admin={sharedServerRole(context) === "admin"} />;
 	return <Wallet />;
 }
 
+// What the last answer about usage was. A server that could not give it is
+// said plainly, never shown as an empty Wallet; no answer at all keeps the last.
+type WalletAnswer = { kind: "waiting" } | { kind: "shown"; data: UsagePayload } | { kind: "unreadable" };
+
 function Wallet() {
-	const [data, setData] = useState<UsagePayload | null>(null);
+	const [answer, setAnswer] = useState<WalletAnswer>({ kind: "waiting" });
 	const [recentOpen, setRecentOpen] = useState(false);
 	const [removedOpen, setRemovedOpen] = useState(false);
 	const [retiredOpen, setRetiredOpen] = useState(false);
@@ -269,15 +291,17 @@ function Wallet() {
 			const seq = ++requestSeq;
 			// Only an OK answer is usage: a refusal's body would break the page.
 			apiFetch(`/api/usage?range=${range}&model=${encodeURIComponent(model)}&agent=${encodeURIComponent(agent)}`)
-				.then((r) => (r.ok ? r.json() : null))
-				.then((d) => { if (d && !cancelled && seq === requestSeq) setData(d); })
+				.then(async (r): Promise<WalletAnswer> => (r.ok ? { kind: "shown", data: await r.json() } : { kind: "unreadable" }))
+				.then((next) => { if (!cancelled && seq === requestSeq) setAnswer(next); })
 				.catch(() => {});
 		};
 		const stop = pollWhileShown(load, 5000);
 		return () => { cancelled = true; stop(); };
 	}, [range, model, agent]);
 
-	if (!data) return <DashboardLine text="Loading…" />;
+	if (answer.kind === "waiting") return <DashboardLine text="Loading…" />;
+	if (answer.kind === "unreadable") return <DashboardLine text={WALLET_UNREADABLE} />;
+	const data = answer.data;
 
 	const t = data.totals;
 	const est = totalCost(t.cost);
@@ -322,7 +346,7 @@ function Wallet() {
 		key: a.agent,
 		name: nameOf(a.agent),
 		tag: a.agent === "hivemind:memory" ? "memory chat" : a.retired ? "retired" : undefined,
-		cost: a.cost,
+		share: a.cost,
 		detail: `${fmtPriced(a, false)}, ${turnsNote(a.turns)}`,
 		subDetail: a.agent === "hivemind:memory" ? pricingNote(a) : [backgroundKindsNote(a.kinds), pricingNote(a)].filter(Boolean).join("; ") || undefined,
 	});
@@ -471,7 +495,7 @@ function Wallet() {
 						fold={retiredRooms.length > 0 ? {
 							label: `Retired rooms (${retiredRooms.length})`,
 							detail: `${fmtPriced(retiredSum, false)}, ${turnsNote(retiredSum.turns)}`,
-							cost: retiredSum.cost,
+							share: retiredSum.cost,
 							rows: retiredRooms.map(roomRow),
 							open: retiredOpen,
 							onToggle: () => setRetiredOpen((v) => !v),
@@ -489,7 +513,7 @@ function Wallet() {
 						rows={data.byModel.map((m) => ({
 							key: m.id,
 							name: m.label,
-							cost: m.cost,
+							share: m.cost,
 							detail: `${fmtPriced(m, false)}, ${turnsNote(m.turns)}`,
 							subDetail: pricingNote(m),
 						}))}
@@ -642,7 +666,8 @@ interface BarListRow {
 	key: string;
 	name: string;
 	tag?: string;
-	cost: number;
+	/** What the bar's share counts: money on the Wallet, tokens on a shared server. */
+	share: number;
 	detail: string;
 	subDetail?: string;
 }
@@ -651,7 +676,7 @@ interface BarListRow {
 interface BarListFold {
 	label: string;
 	detail: string;
-	cost: number;
+	share: number;
 	rows: BarListRow[];
 	open: boolean;
 	onToggle: () => void;
@@ -683,7 +708,7 @@ function BarList({
 	const foldSelected = fold != null && fold.rows.some((r) => r.key === selected);
 	const foldOpen = fold != null && (fold.open || foldSelected);
 	const renderRow = (r: BarListRow, folded = false) => {
-		const sharePct = pct(r.cost);
+		const sharePct = pct(r.share);
 		const isSelected = selected === r.key;
 		return (
 			<div key={r.key} className={folded ? "bar-fold-row" : undefined}>
@@ -725,8 +750,8 @@ function BarList({
 							<span className="fold-caret" aria-hidden="true">{foldOpen ? "▾" : "▸"}</span>
 							{fold.label}
 						</div>
-						<div className="bar-track"><div className="bar-fill" style={{ width: `${pct(fold.cost)}%` }} /></div>
-						<div className="pct">{pct(fold.cost).toFixed(1)}%</div>
+						<div className="bar-track"><div className="bar-fill" style={{ width: `${pct(fold.share)}%` }} /></div>
+						<div className="pct">{pct(fold.share).toFixed(1)}%</div>
 						<div className="num">{fold.detail}</div>
 					</button>
 					{foldOpen && fold.rows.map((r) => renderRow(r, true))}
@@ -903,5 +928,445 @@ function RhythmHeatmap({ weekHour, totalTurns }: { weekHour: number[][]; totalTu
 				</span>
 			</div>
 		</div>
+	);
+}
+
+// --- On a shared server: turns and tokens, no money ---------------------------
+// Every token count here is all of it: input with the prompt cache, plus output.
+
+interface TokenTotals {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	turns: number;
+	activeDays: number;
+}
+
+interface TokenBucket {
+	label: string;
+	ts?: number;
+	turns: number;
+	tokens: number;
+}
+
+interface TokenModel {
+	id: string;
+	label: string;
+	rawIds: number;
+	turns: number;
+	tokens: number;
+}
+
+/** One turn of the person's own, as `/api/usage/mine` gives it: no money, no person. */
+interface OwnTurn extends ModelFields {
+	ts: number;
+	agent: string;
+	kind?: string;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
+interface OwnUsagePayload {
+	range: Range;
+	model: string;
+	models: { id: string; label: string; turns: number; rawIds: number }[];
+	agent: string;
+	/** The names of the person's rooms that still exist, archived ones included; a room with none is deleted. */
+	agentNames: Record<string, string>;
+	totals: TokenTotals;
+	previous: { turns: number; tokens: number } | null;
+	byAgent: { agent: string; retired: boolean; turns: number; tokens: number; kinds: Record<string, { turns: number }> }[];
+	byModel: TokenModel[];
+	series: { kind: "hourly" | "daily"; buckets: TokenBucket[] };
+	weekHour: number[][];
+	/** The newest turns after the filters, and how many there are in all. */
+	recent: { rows: OwnTurn[]; total: number };
+}
+
+interface CompanyUsagePayload {
+	range: CompanyRange;
+	model: string;
+	models: { id: string; label: string; turns: number; rawIds: number }[];
+	totals: TokenTotals;
+	byModel: TokenModel[];
+	series: { kind: "daily"; buckets: TokenBucket[] };
+}
+
+type CompanyRange = "7d" | "30d" | "all";
+const COMPANY_RANGES: { id: CompanyRange; label: string }[] = RANGES.filter((r): r is { id: CompanyRange; label: string } => r.id !== "24h");
+
+/**
+ * What a part's last answer was. A refusal is apart from a failure: the
+ * company's routes refuse anyone who is no longer the admin, and that part
+ * then goes and asks no more.
+ */
+type PartAnswer<T> = { kind: "waiting" } | { kind: "shown"; data: T } | { kind: "failed" } | { kind: "refused" };
+
+/**
+ * Asks now and each time the tab is shown again, never on a timer: on a shared
+ * server a read of the usage log costs everyone, so it runs only when someone
+ * looks. A hidden tab asks nothing.
+ */
+function askWhenShown(ask: () => void): () => void {
+	const onShow = () => {
+		if (!document.hidden) ask();
+	};
+	onShow();
+	document.addEventListener("visibilitychange", onShow);
+	return () => document.removeEventListener("visibilitychange", onShow);
+}
+
+function useUsageAnswer<T>(url: string): { answer: PartAnswer<T>; askAgain: () => void } {
+	const [answer, setAnswer] = useState<PartAnswer<T>>({ kind: "waiting" });
+	const [asked, setAsked] = useState(0);
+	useEffect(() => {
+		let cancelled = false;
+		let refused = false;
+		let requestSeq = 0;
+		const stop = askWhenShown(() => {
+			if (refused) return;
+			// A slow older answer must not overwrite a newer one.
+			const seq = ++requestSeq;
+			apiFetch(url)
+				.then(async (r): Promise<PartAnswer<T>> => (r.ok ? { kind: "shown", data: await r.json() } : r.status === 403 ? { kind: "refused" } : { kind: "failed" }))
+				.catch((): PartAnswer<T> => ({ kind: "failed" }))
+				.then((next) => {
+					if (cancelled || seq !== requestSeq) return;
+					if (next.kind === "refused") refused = true;
+					setAnswer(next);
+				});
+		});
+		return () => { cancelled = true; stop(); };
+	}, [url, asked]);
+	const askAgain = () => {
+		setAnswer({ kind: "waiting" });
+		setAsked((n) => n + 1);
+	};
+	return { answer, askAgain };
+}
+
+/** In place of a part whose usage the server could not give, with the one way on. */
+function UsageUnreadable({ onTryAgain }: { onTryAgain: () => void }) {
+	return (
+		<div className="sub usage-unreadable">
+			<span>{SHARED_USAGE_UNREADABLE}</span> <button type="button" className="rs-btn rs-btn-sm" onClick={onTryAgain}>Try again</button>
+		</div>
+	);
+}
+
+function RangeToggle<R extends string>({ ranges, value, onChange }: { ranges: { id: R; label: string }[]; value: R; onChange: (range: R) => void }) {
+	return (
+		<div className="range-toggle" role="group" aria-label="Time range">
+			{ranges.map((r) => (
+				<button key={r.id} type="button" className={value === r.id ? "active" : ""} aria-pressed={value === r.id} onClick={() => onChange(r.id)}>
+					{r.label}
+				</button>
+			))}
+		</div>
+	);
+}
+
+function ModelSelect({ models, value, onChange }: { models: { id: string; label: string }[]; value: string; onChange: (model: string) => void }) {
+	if (models.length <= 1) return null;
+	return (
+		<select className="model-select" aria-label="Model" value={value} onChange={(e) => onChange(e.target.value)}>
+			<option value="all">All models</option>
+			{models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+		</select>
+	);
+}
+
+function rangeTitle(range: Range): string {
+	return range === "24h" ? "Last 24 hours" : range === "7d" ? "Last 7 days" : range === "30d" ? "Last 30 days" : "All time";
+}
+
+/** Turns, all input and output: the three counts a shared server shows. */
+function TokenKpis({ totals, previous }: { totals: TokenTotals; previous?: { turns: number } | null }) {
+	const input = allInput(totals);
+	const turnsDelta = previous ? totals.turns - previous.turns : 0;
+	return (
+		<div className="kpis">
+			<div className="kpi">
+				<div className="label">Turns</div>
+				<div className="value">{totals.turns.toLocaleString()}</div>
+				<div className="hint">
+					{totals.activeDays} active day{totals.activeDays === 1 ? "" : "s"}
+					{previous && turnsDelta !== 0 ? ` (${turnsDelta > 0 ? "+" : ""}${turnsDelta} vs prior)` : ""}
+				</div>
+			</div>
+			<div className="kpi">
+				<div className="label">Tokens in</div>
+				<div className="value">{fmtTok(input)}</div>
+				<div className="hint">{input > 0 ? ((totals.cacheRead / input) * 100).toFixed(0) : 0}% of input read from cache</div>
+			</div>
+			<div className="kpi">
+				<div className="label">Tokens out</div>
+				<div className="value">{fmtTok(totals.output)}</div>
+			</div>
+		</div>
+	);
+}
+
+/** The activity chart in its tokens form; a shared server has no money to split by. */
+function TokenChart({ buckets, unit }: { buckets: TokenBucket[]; unit: string }) {
+	return <StackedChart buckets={buckets.map((b) => ({ ...b, billed: 0, plan: 0, unattributed: 0 }))} metric="tokens" unit={unit} />;
+}
+
+function tokensDetail(tokens: number, turns: number): string {
+	return `${fmtTok(tokens)} tokens, ${turnsNote(turns)}`;
+}
+
+/** "incl. upkeep over 6 runs" under a room with background kinds, without money. */
+function backgroundKindsTurns(kinds: Record<string, { turns: number }>): string | undefined {
+	const parts: string[] = [];
+	for (const [kind, words] of Object.entries(BACKGROUND_KIND_WORDS)) {
+		const turns = kinds[kind]?.turns ?? 0;
+		if (turns > 0) parts.push(`${words} over ${turns} run${turns === 1 ? "" : "s"}`);
+	}
+	return parts.length ? `incl. ${parts.join(", ")}` : undefined;
+}
+
+/** The person's own usage, then, for the admin, the company's totals below it. */
+function SharedUsage({ admin }: { admin: boolean }) {
+	return (
+		<div className="dashboard">
+			<OwnUsage />
+			{admin && <CompanyUsage />}
+			{/* What the admin sees, said to the people it is about; the admin's own part shows it. */}
+			{!admin && <div className="dash-footer shared-usage-footer">{SHARED_USAGE_FOOTER}</div>}
+		</div>
+	);
+}
+
+function OwnUsage() {
+	const [range, setRange] = useState<Range>("all");
+	const [model, setModel] = useState("all");
+	const [agent, setAgent] = useState("all");
+	const [recentOpen, setRecentOpen] = useState(false);
+	const [earlierOpen, setEarlierOpen] = useState(false);
+	const [agentsExpanded, setAgentsExpanded] = useState(false);
+	const [modelsExpanded, setModelsExpanded] = useState(false);
+	const { answer, askAgain } = useUsageAnswer<OwnUsagePayload>(`/api/usage/mine?range=${range}&model=${encodeURIComponent(model)}&agent=${encodeURIComponent(agent)}`);
+
+	if (answer.kind === "waiting") return <div className="sub">Loading…</div>;
+	if (answer.kind === "refused") return <div className="sub">{SHARED_USAGE_UNREADABLE}</div>;
+	if (answer.kind === "failed") return <UsageUnreadable onTryAgain={askAgain} />;
+	const data = answer.data;
+	if (data.recent.total === 0 && data.model === "all" && data.agent === "all") return <div className="sub">{SHARED_USAGE_EMPTY}</div>;
+
+	const t = data.totals;
+	const unit = data.series.kind === "hourly" ? "hour" : "day";
+	const allTokens = allInput(t) + t.output;
+	// A room with no name is gone, or its record can't be read: it is never shown by its id.
+	const nameOf = (id: string): string => (id === "hivemind:memory" ? KIND_LABELS.hivemind : data.agentNames[id] ?? SHARED_USAGE_UNAVAILABLE_ROOM);
+	const isActiveRoom = (a: OwnUsagePayload["byAgent"][number]): boolean => !a.retired || a.agent === "hivemind:memory";
+	const activeRooms = data.byAgent.filter(isActiveRoom);
+	const earlierRooms = data.byAgent.filter((a) => !isActiveRoom(a));
+	const earlierTokens = earlierRooms.reduce((sum, a) => sum + a.tokens, 0);
+	const earlierTurns = earlierRooms.reduce((sum, a) => sum + a.turns, 0);
+	const roomRow = (a: OwnUsagePayload["byAgent"][number]): BarListRow => ({
+		key: a.agent,
+		name: nameOf(a.agent),
+		tag: a.agent === "hivemind:memory" ? "memory chat" : a.retired && data.agentNames[a.agent] ? "archived" : undefined,
+		share: a.tokens,
+		detail: tokensDetail(a.tokens, a.turns),
+		subDetail: a.agent === "hivemind:memory" ? undefined : backgroundKindsTurns(a.kinds),
+	});
+	const shown = data.recent.rows.length;
+
+	return (
+		<>
+			<section className="dash-section">
+				<div className="dash-section-head">
+					<div className="dash-section-label">Overview</div>
+					<div className="dash-toggles">
+						<ModelSelect models={data.models} value={model} onChange={setModel} />
+						<RangeToggle ranges={RANGES} value={range} onChange={setRange} />
+					</div>
+				</div>
+				<TokenKpis totals={t} previous={data.previous} />
+			</section>
+
+			<section className="dash-section">
+				<div className="dash-section-label">Activity</div>
+				<div className="chart-grid">
+					<div className="chart-block">
+						<div className="chart-head">
+							<h2>{rangeTitle(range)}</h2>
+							<div className="sub">{unit === "hour" ? "Tokens per hour." : "Tokens per day."}</div>
+						</div>
+						<TokenChart buckets={data.series.buckets} unit={unit} />
+					</div>
+					<div className="chart-block">
+						<div className="chart-head">
+							<h2>Rhythm</h2>
+							<div className="sub">Turns by weekday and hour, local time.</div>
+						</div>
+						<RhythmHeatmap weekHour={data.weekHour} totalTurns={t.turns} />
+					</div>
+				</div>
+			</section>
+
+			<section className="dash-section">
+				<div className="dash-section-label">Rooms</div>
+				<div className="chart-block">
+					<div className="sub bar-list-sub">{SHARED_USAGE_ROOMS_HINT}</div>
+					<BarList
+						rows={activeRooms.map(roomRow)}
+						shareBase={allTokens}
+						selected={agent}
+						onSelect={(key) => setAgent(agent === key ? "all" : key)}
+						expanded={agentsExpanded}
+						onToggleExpanded={() => setAgentsExpanded((v) => !v)}
+						collapseNoun="rooms"
+						fold={earlierRooms.length > 0 ? {
+							label: `Earlier rooms (${earlierRooms.length})`,
+							detail: tokensDetail(earlierTokens, earlierTurns),
+							share: earlierTokens,
+							rows: earlierRooms.map(roomRow),
+							open: earlierOpen,
+							onToggle: () => setEarlierOpen((v) => !v),
+						} : undefined}
+					/>
+				</div>
+			</section>
+
+			<section className="dash-section">
+				<div className="dash-section-label">Models</div>
+				<div className="chart-block">
+					<div className="sub bar-list-sub">{SHARED_USAGE_MODELS_HINT}</div>
+					<BarList
+						rows={data.byModel.map((m) => ({ key: m.id, name: m.label, share: m.tokens, detail: tokensDetail(m.tokens, m.turns) }))}
+						shareBase={allTokens}
+						selected={model}
+						onSelect={(key) => setModel(model === key ? "all" : key)}
+						expanded={modelsExpanded}
+						onToggleExpanded={() => setModelsExpanded((v) => !v)}
+						collapseNoun="models"
+					/>
+				</div>
+			</section>
+
+			<section className="recent-block" data-open={recentOpen ? "true" : "false"}>
+				<button type="button" className="recent-summary" aria-expanded={recentOpen} aria-controls="recent-turns-body" onClick={() => setRecentOpen((v) => !v)}>
+					<span className="recent-title">Recent turns</span>
+					{agent !== "all" && (
+						<span
+							className="recent-filter"
+							role="button"
+							tabIndex={0}
+							title="Clear this filter"
+							onClick={(e) => { e.stopPropagation(); setAgent("all"); }}
+							onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setAgent("all"); } }}
+						>
+							{nameOf(agent)} <CloseIcon size={12} />
+						</span>
+					)}
+					<span className="recent-meta">{shown < data.recent.total ? `Newest ${shown} of ${data.recent.total.toLocaleString()}` : turnsNote(data.recent.total)}</span>
+					<span className="recent-toggle" aria-hidden="true">{recentOpen ? "–" : "+"}</span>
+				</button>
+				{recentOpen && (
+					<div id="recent-turns-body" className="recent-body recent-tokens">
+						<table role="table">
+							<thead role="rowgroup">
+								<tr role="row">
+									<th role="columnheader">When</th>
+									<th role="columnheader">Room</th>
+									<th role="columnheader">Model</th>
+									<th role="columnheader">Kind</th>
+									<th role="columnheader">↑ In</th>
+									<th role="columnheader">↓ Out</th>
+								</tr>
+							</thead>
+							<tbody role="rowgroup">
+								{data.recent.rows.map((r, i) => (
+									<tr key={i} role="row">
+										<td role="cell">{fmtAgo(r.ts)}</td>
+										<td role="cell" className="first">{nameOf(r.agent)}</td>
+										<td role="cell" title={modelCellTitle(r)}>{modelCell(r)}</td>
+										<td role="cell"><span className="kind-chip">{KIND_LABELS[r.kind ?? "chat"] ?? r.kind}</span></td>
+										<td role="cell">{fmtTok(allInput(r))}{cacheWords(r, fmtTok) && <span className="recent-cache-note">({cacheWords(r, fmtTok)})</span>}</td>
+										<td role="cell">{fmtTok(r.output)}</td>
+									</tr>
+								))}
+								{shown === 0 && (
+									<tr role="row">
+										<td role="cell" colSpan={6}>{agent !== "all" ? "No turns for this room." : "No turns yet."}</td>
+									</tr>
+								)}
+							</tbody>
+						</table>
+					</div>
+				)}
+			</section>
+		</>
+	);
+}
+
+/** The admin's part: everyone's usage together, by day and by model, up to yesterday. */
+function CompanyUsage() {
+	const [range, setRange] = useState<CompanyRange>("all");
+	const [model, setModel] = useState("all");
+	const [modelsExpanded, setModelsExpanded] = useState(false);
+	const { answer, askAgain } = useUsageAnswer<CompanyUsagePayload>(`/api/usage?range=${range}&model=${encodeURIComponent(model)}`);
+	// No longer the admin: the part goes, and its routes are asked no more.
+	if (answer.kind === "refused") return null;
+	const data = answer.kind === "shown" ? answer.data : null;
+	const allTokens = data ? allInput(data.totals) + data.totals.output : 0;
+	// Only the whole log can say there is none: a row with no model counts in the turns but not in the models.
+	const noUsage = data !== null && data.range === "all" && data.models.length === 0 && data.totals.turns === 0;
+
+	return (
+		<section className="dash-section company-usage">
+			<div className="dash-section-head">
+				<div>
+					<h2 className="company-usage-title">{COMPANY_USAGE_TITLE}</h2>
+					<div className="sub">{COMPANY_USAGE_LINE}</div>
+				</div>
+				{data && !noUsage && (
+					<div className="dash-toggles">
+						<ModelSelect models={data.models} value={model} onChange={setModel} />
+						<RangeToggle ranges={COMPANY_RANGES} value={range} onChange={setRange} />
+						<a className="rs-btn rs-btn-sm export-btn" href="/api/usage/export.csv" download title={COMPANY_USAGE_CSV_HOVER}>
+							<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 1.5v6m0 0L3.5 5M6 7.5 8.5 5M1.5 9.5v1h9v-1" /></svg>
+							CSV
+						</a>
+					</div>
+				)}
+			</div>
+			{answer.kind === "waiting" && <div className="sub">Loading…</div>}
+			{answer.kind === "failed" && <UsageUnreadable onTryAgain={askAgain} />}
+			{noUsage && <div className="sub">{COMPANY_USAGE_EMPTY}</div>}
+			{data && !noUsage && (
+				<>
+					<TokenKpis totals={data.totals} />
+					<div className="chart-block">
+						<div className="chart-head">
+							<h2>{rangeTitle(range)}</h2>
+							<div className="sub">Tokens per day.</div>
+						</div>
+						<TokenChart buckets={data.series.buckets} unit="day" />
+					</div>
+					<div className="chart-block">
+						<div className="chart-head">
+							<h2>Models</h2>
+							<div className="sub">One entry per model. Select a model to scope this part.</div>
+						</div>
+						<BarList
+							rows={data.byModel.map((m) => ({ key: m.id, name: m.label, share: m.tokens, detail: tokensDetail(m.tokens, m.turns) }))}
+							shareBase={allTokens}
+							selected={model}
+							onSelect={(key) => setModel(model === key ? "all" : key)}
+							expanded={modelsExpanded}
+							onToggleExpanded={() => setModelsExpanded((v) => !v)}
+							collapseNoun="models"
+						/>
+					</div>
+				</>
+			)}
+		</section>
 	);
 }

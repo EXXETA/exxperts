@@ -359,7 +359,7 @@ try {
 			const page = await openHome(ctx);
 			await enterFromCard(page, "Waiting Room");
 			await askAndGetAnswer(page);
-			await page.getByText("Home", { exact: true }).first().click();
+			await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 			await onHome(page);
 			await ctx.close();
 		});
@@ -393,7 +393,7 @@ try {
 			await backToRooms(page);
 			await enterFromCard(page, "Own Room");
 			await askAndGetAnswer(page);
-			await page.getByText("Home", { exact: true }).first().click();
+			await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 			await onHome(page);
 			await ctx.close();
 		});

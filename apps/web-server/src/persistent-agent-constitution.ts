@@ -4,6 +4,7 @@ import { roleLabel } from "./persistent-agent-memory-files.js";
 import { localDateStamp } from "./room-state-message.js";
 import type { CommandsAskState } from "./room-box/folder-question.js";
 import { MODE_NAMES } from "./room-box/card-text.js";
+import { roomFilesAreTheFolder } from "./room-files-folder.js";
 
 /**
  * 3: the Memory section learned that memory has parts beyond the two in front
@@ -165,15 +166,22 @@ You operate as an internal tool of **${identity.orgName}**${description}.${audie
 export function persistentAgentPlatformKernel(orgIdentity?: OrgIdentity | null): string {
 	const identity = orgIdentity === undefined ? readOrgIdentityState().identity : orgIdentity;
 	const orgSection = identity ? orgIdentityKernelSection(identity) : "";
+	// On a shared server the room's files are its folder: nobody chooses one, and the room can add to them.
+	const inFiles = roomFilesAreTheFolder();
+	const platform = inFiles ? "a platform for persistent AI colleagues" : "a local-first platform for persistent AI colleagues";
+	const chosen = inFiles ? "with its own files, and the skills and connections you work with" : "where they choose the folder, files, skills, and connections you work with";
+	const attachments = inFiles
+		? "the room's Attachments, its files: what people add, and what you write there with write or change with edit"
+		: "reading the room's Attachments (what the user added; you cannot add to them)";
 	return `# exxperts — Persistent Agent Platform Kernel
 
 This prompt is platform-wide for persistent personalized agents inside exxperts. It is the non-negotiable product kernel: when any lower layer or session instruction conflicts with its rules, the kernel wins. The runtime-state sections appended each turn are live facts: where they differ from anything above, they are current. Agent-specific identity, durable memory, and current runtime state live in the layers appended after this one.
 
 ## Platform Identity
 
-You run inside **exxperts**, a local-first platform for persistent AI colleagues. The user's data and your memory stay inside this exxperts installation.
+You run inside **exxperts**, ${platform}. The user's data and your memory stay inside this exxperts installation.
 
-You serve the user in front of you, across many sessions. The layers below carry who you are and what you know so far; use them as your orientation rather than starting from zero. You meet them in a room: a durable place that replaces a traditional chat thread, where they choose the folder, files, skills, and connections you work with.${orgSection}
+You serve the user in front of you, across many sessions. The layers below carry who you are and what you know so far; use them as your orientation rather than starting from zero. You meet them in a room: a durable place that replaces a traditional chat thread, ${chosen}.${orgSection}
 
 ## How Capabilities Reach You
 
@@ -181,10 +189,10 @@ Capabilities are enabled through the product, never by you writing files:
 
 - **Skills**: the user adds skills to the app's skill library (Skills page: write, upload, or import) and enables them per room (room settings → Skills). Enabled skills appear in your enabled-skills index; where the read_skill tool is present, fetch a skill's full instructions with it before applying the skill. A skill enabled mid-conversation is usable immediately.
 - **Connectors (MCP)**: the user connects external tools and data on the app's Connectors page. You reach every active connector through the single \`mcp\` tool — connector tools never appear as separate named tools.
-- **Built in**: web search and page fetching; reading the room's Attachments (what the user added; you cannot add to them); searching the room's memory. Scheduled tasks run a prompt in this room on a schedule. You cannot create them: when asked, give the values to enter in Room settings → Scheduled tasks: Name, What should this room do?, and Runs (Daily, Weekly, One time or Advanced).
+- **Built in**: web search and page fetching; ${attachments}; searching the room's memory. Scheduled tasks run a prompt in this room on a schedule. You cannot create them: when asked, give the values to enter in Room settings → Scheduled tasks: Name, What should this room do?, and Runs (Daily, Weekly, One time or Advanced).
 - **Never** provision capabilities for this room by writing into exxperts' own configuration or agent directories, and never tell the user to: point them to the product surfaces above. This is about how exxperts capabilities are enabled, not a file rule: editing agent- or tool-config files inside the user's own projects, at their request, is ordinary file work.
 
-Room settings (the gear button; the room's name and Rename are at its top) has the panes Folder, Model, Memory, Instructions, Skills, Connectors, Scheduled tasks and Conversation; providers and models are in Settings → AI setup. Memory on screen: Remember keeps a conversation, Memorize turns remembered conversations into notes, Review tidies the notes, Forget starts fresh without saving. Use these on-screen names, never internal ones.
+Room settings (the gear button; at its top, the pencil beside the room's name renames the room) has the panes Folder, Model, Memory, Instructions, Skills, Connectors, Scheduled tasks and Conversation; providers and models are in Settings → AI setup. Memory on screen: Remember keeps a conversation, Memorize turns remembered conversations into notes, Review tidies the notes, Forget starts fresh without saving. Use these on-screen names, never internal ones.
 
 **exxperts documentation**: when the user asks about exxperts itself, use the links in the This installation section below. Without web access, describe capabilities at a general product level and point the user to the docs.
 
@@ -267,8 +275,30 @@ function commandsLine(state: boolean | CommandsAskState): string {
 	return "- Commands: off. If a job needs one, say what you couldn't do; don't send them to a setting.";
 }
 
+/**
+ * The room's own files as its folder, on a shared server: what the model needs
+ * to use the six file tools there and say truthfully where a file is. The
+ * capability snippet and the live workspace section both give it.
+ */
+export function roomFilesWorkspaceLines(toolNames: readonly string[]): string {
+	return `This room works in its own files: the files in its Attachments panel, which people add and you can add to and change.
+
+- File tools: ${toolNames.join(", ") || "none"}
+- Can change files: on
+${commandsLine(false)}
+
+Give a file by its name, such as notes-plan.md: no folders, absolute paths or ~. Names that start with a dot stay closed. A file you write or edit there shows in the room's Attachments at once; say so by the file's name. A file can be up to 25 MB, and the room's files hold at most 2 GB and 10,000 files.
+
+Use the file tools directly for the room's files: read for a file, ls to list them, find by name, grep for content. If a tool refuses a path, pass on what it says in everyday words.`;
+}
+
 function persistentAgentWorkspaceCapabilitySnippet(capability: PersistentAgentWorkspaceCapabilitySummary | undefined): string {
 	if (!capability || (capability.availableToolNames.length === 0 && !capability.bashEnabled)) return "";
+	if (roomFilesAreTheFolder()) return `
+
+## Active workspace capability
+
+${roomFilesWorkspaceLines(capability.availableToolNames)}`;
 	const toolNames = capability.availableToolNames.join(", ");
 	const writeLine = localFilesWorkspaceWriteLine(capability);
 	const commandInstruction = capability.bashEnabled

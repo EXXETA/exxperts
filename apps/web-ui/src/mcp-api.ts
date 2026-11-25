@@ -1,6 +1,7 @@
 import { apiFetch } from "./api";
 import { CONNECTOR_REQUEST_LINES } from "../../web-server/src/connector-form";
 import type { ConnectorKey } from "../../web-server/src/connector-form";
+import type { ConnectorToolChoice } from "../../web-server/src/room-approval-titles";
 export interface McpConnectorAuthStatus {
 	mode: "oauth" | "bearer" | "none";
 	// Entry explicitly configures OAuth (custom client) — a login is expected
@@ -12,12 +13,44 @@ export interface McpConnectorAuthStatus {
 }
 
 export interface McpConnectorToolsStatus {
+	/** Its tools a room offers, those switched off by hand left out. */
 	count: number;
+	/** Its documents a room offers; none when its documents are off. */
+	documents: number;
 	names: string[];
 	/** A tool's own title, by its name, when the connector gave one. */
 	titles: Record<string, string>;
+	/** The line a tool's connector gives it, by its name. */
+	descriptions: Record<string, string>;
+	/** The tools the connector marks read-only, by the rule the room's gate uses. */
+	readOnly: string[];
+	/** What a room can call to read each of its resources, by the adapter's own name. */
+	resources?: string[];
+	/** The tools its entry switches off by hand. */
+	excluded?: string[];
 	cachedAt: number;
 }
+
+/** A runtime a connector program comes with: Node.js (npx, npm, node) or uv (uvx, uv). */
+export type ConnectorRuntime = "node" | "uv";
+
+/**
+ * Why a connector program didn't start (the server's ProgramStartFailure in
+ * mcp-status.ts): "not-found" its program isn't on the computer;
+ * "runtime-missing" it comes with a runtime that isn't there either;
+ * "python-is-python3" its command names Python by one name and the computer
+ * has it only by the other, `found`; "stopped" it ended before it answered;
+ * "too-slow" it didn't answer in time; "not-a-connector" it wrote something
+ * that isn't the connector protocol.
+ */
+export type ProgramStartFailure =
+	| { cause: "not-found"; program: string }
+	| { cause: "runtime-missing"; runtime: ConnectorRuntime }
+	| { cause: "python-is-python3"; found: "python" | "python3" }
+	| { cause: "stopped" | "too-slow" | "not-a-connector" };
+
+/** Why nothing a connector could use answered a web connector's check: nothing listening, its name not found, an ordinary web page, or a certificate this computer doesn't trust. */
+export type ConnectorReach = "nothing-there" | "name-not-found" | "web-page" | "untrusted-certificate";
 
 /** What the last connection check found. */
 export interface McpConnectorCheck {
@@ -25,10 +58,14 @@ export interface McpConnectorCheck {
 	ok: boolean;
 	needsAuth?: boolean;
 	httpStatus?: number;
+	/** Why nothing answered, when the check could tell. */
+	reach?: ConnectorReach;
 	/** The server's own words, for Technical details. */
 	error?: string;
 	/** A Test on this page found the program can't start; the server keeps no check of it. */
 	startRefused?: ConnectorStartRefusal;
+	/** Why a program didn't start, when the check could tell. */
+	programFailure?: ProgramStartFailure;
 }
 
 /** The room that can change files where a connector program runs from, so the program doesn't start. */
@@ -47,6 +84,8 @@ export interface McpConnectorStatus {
 	name: string;
 	transport: "http" | "stdio";
 	target: string;
+	/** On a shared server only: its address and key were lost with the storage key, so both are given again. */
+	addressNeeded?: true;
 	/** importFile: the other tool's own file an imported connector is read from; Remove cannot remove it here. */
 	source: { path: string; kind: string; importKind?: string; importFile?: string } | null;
 	auth: McpConnectorAuthStatus;
@@ -66,6 +105,14 @@ export interface McpConnectorStatus {
 	lastCheck: McpConnectorCheck | null;
 	/** A program that would not start now, because this room can change files where it runs from. */
 	startRefused?: ConnectorStartRefusal;
+	/** A program that fetches what it runs at its first start, so its first check can take minutes. */
+	downloadsAtFirstStart?: true;
+	/** The connector as this answer saw it: a save of Always allow names it. */
+	identity?: string;
+	/** What the person chose for its tools, by each tool's own name; a tool with nothing chosen isn't here. */
+	choices?: Record<string, ConnectorToolChoice>;
+	/** Its choices couldn't be read, so every tool asks first: a newer version of exxperts wrote them, or they can't be read at all. */
+	choicesUnreadable?: "newer" | "cannot-read";
 }
 
 export interface McpConfigSourceStatus {
@@ -114,8 +161,10 @@ export function fetchMcpConnectorsStatus(): Promise<McpConnectorsStatusResponse>
 export interface AddMcpServerRequest {
 	name: string;
 	url?: string;
-	command?: string;
-	args?: string[];
+	/** A program and its arguments as one line, as pasted; the server reads it. */
+	commandLine?: string;
+	/** Settings a program needs, by name. */
+	env?: Record<string, string>;
 	bearerToken?: string;
 	oauth?: { clientId: string; clientSecret?: string; scope?: string };
 	/** Extra headers sent with every request, such as a key in a header of its own. */
@@ -142,12 +191,26 @@ export function changeMcpServerAddress(name: string, request: { url: string; key
 	}, CONNECTOR_REQUEST_LINES.saveFailed);
 }
 
+/** Reset choices: the choices that can't be read are set aside, and every tool of every connector goes back to its default. */
+export function resetMcpToolChoices(): Promise<{ reset: true }> {
+	return fetchJson("/api/mcp/tool-choices/reset", { method: "POST" }, CONNECTOR_REQUEST_LINES.choicesResetFailed);
+}
+
+/** Sets one tool's choice, or clears it (null); `identity` is the connector as the page showed it. The connector's choices after. */
+export function setMcpServerToolChoice(name: string, tool: string, choice: ConnectorToolChoice | null, identity: string | undefined): Promise<{ name: string; choices: Record<string, ConnectorToolChoice> }> {
+	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/tools`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ tools: { [tool]: choice }, identity }),
+	}, CONNECTOR_REQUEST_LINES.saveFailed);
+}
+
 export function startMcpServerLogin(name: string): Promise<{ started: boolean; pending?: boolean }> {
 	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/login`, { method: "POST" }, CONNECTOR_REQUEST_LINES.signInStartFailed);
 }
 
-/** Why a sign-in failed: only "busy", "too-slow" and "other" may get past it on a second try. */
-export type McpLoginFailure = "needs-own-app" | "refused" | "busy" | "no-sign-in" | "too-slow" | "other";
+/** Why a sign-in failed: only "declined" (the person's own No), "busy", "too-slow" and "other" may get past it on a second try. */
+export type McpLoginFailure = "needs-own-app" | "refused" | "declined" | "busy" | "no-sign-in" | "too-slow" | "other";
 
 export function fetchMcpServerLoginState(name: string): Promise<{ pending: boolean; cause?: McpLoginFailure; detail?: string }> {
 	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/login`, undefined, CONNECTOR_REQUEST_LINES.signInCheckFailed);
@@ -169,12 +232,17 @@ export interface McpServerTestResult {
 	error?: string;
 	/** The status the address answered with, when the test learned it. */
 	httpStatus?: number;
+	/** Why nothing answered, when the test could tell. */
+	reach?: ConnectorReach;
 	/** The connector changed while it was checked: the result is not about it any more. */
 	superseded?: true;
 	/** The program did not start, because this room can change files where it runs from. */
 	startRefused?: ConnectorStartRefusal;
+	/** Why a program didn't start, when the check could tell. */
+	programFailure?: ProgramStartFailure;
 }
 
-export function testMcpServer(name: string): Promise<McpServerTestResult> {
-	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/test`, { method: "POST" }, "Failed to test the connector.");
+/** signal: stops the check; the server then stops the program and keeps nothing of it. */
+export function testMcpServer(name: string, signal?: AbortSignal): Promise<McpServerTestResult> {
+	return fetchJson(`/api/mcp/servers/${encodeURIComponent(name)}/test`, { method: "POST", signal }, "Failed to test the connector.");
 }

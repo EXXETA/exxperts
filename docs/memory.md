@@ -266,9 +266,9 @@ One refusal can meet you at the door: a room whose memory and setup no
 longer fit the usable window of its model refuses to start a
 conversation rather than failing on the first reply. Memory is
 unchanged and nothing is sent to the model. The way out is spelled out
-in the message: from Home open Maintain and run **Memorize** if most of
-the memory is recent conversations, or **Review** if most of it is
-long-term notes; or pick a model that can read more at once in Room
+in the message: open Maintain on its card in Rooms and run **Memorize**
+if most of the memory is recent conversations, or **Review** if most of
+it is long-term notes; or pick a model that can read more at once in Room
 settings, Model. Then open the room again. A conversation that already has
 messages keeps the memory it started with, so a smaller memory reaches
 only the next one: to continue with it, pick a model that can read more

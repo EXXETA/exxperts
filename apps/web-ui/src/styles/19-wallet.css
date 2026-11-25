@@ -264,6 +264,16 @@
 	font-size: 12px;
 	text-align: center;
 }
+/* A shared server's admin: everyone's usage is a part of its own under the admin's. */
+.company-usage {
+	border-top: 1px solid var(--border);
+	padding-top: 24px;
+	margin-top: 12px;
+}
+/* Under the page's own title (24px on a phone) and over the part's chart titles (18px). */
+.dashboard h2.company-usage-title { font-size: 22px; margin: 0 0 2px; }
+/* On a shared server the footer says who else sees a member's usage, so it reads at the hints' strength. */
+.dash-footer.shared-usage-footer { color: var(--muted); }
 
 
 /* Wallet on a phone: every list is a stack of short cards, so nothing is
@@ -280,6 +290,8 @@
 	.bar-row:not(.bar-row-static) .name { overflow-wrap: anywhere; }
 	.bar-row:not(.bar-row-static) .num { grid-column: 1 / -1; text-align: left; white-space: normal; }
 	.bar-subdetail { padding-left: 6px; }
+	/* A finger needs a taller target than the desktop's 22px: every range switch, in both editions. */
+	.range-toggle button { min-height: 36px; }
 	/* Recent turns: each turn a card, the room and its value first, the rest
 	   on the line under them. The headers are hidden from sight only, so a
 	   screen reader still reads them (the table's roles in Dashboard.tsx keep
@@ -326,6 +338,12 @@
 	.recent-body table td:nth-child(n+6):nth-child(-n+7) { order: 5; }
 	.recent-body table td:nth-child(6)::before { content: "↑ "; }
 	.recent-body table td:nth-child(7)::before { content: "↓ "; }
+	/* A shared server's turns have no source and no value: six columns, the room
+	   alone on the first line, tokens in and out on the last. */
+	.recent-body.recent-tokens table td:nth-child(n+3):nth-child(-n+4) { order: 3; }
+	.recent-body.recent-tokens table td:nth-child(n+5):nth-child(-n+6) { order: 5; }
+	.recent-body.recent-tokens table td:nth-child(5)::before { content: "↑ "; }
+	.recent-body.recent-tokens table td:nth-child(6)::before { content: "↓ "; }
 	.recent-body .recent-cache-note { display: inline; margin-left: 4px; }
 	.recent-body table td[colspan] { order: 0; flex-basis: 100%; }
 }

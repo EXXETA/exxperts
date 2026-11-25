@@ -756,7 +756,10 @@ export const READ_AS_SYNCHRONOUS: Readonly<Record<string, string>> = {
 	"persistent-agent-forget.ts:stop": "A running Remember's stop, set in room-remember-routes.ts: cancelRememberJob marks the job and aborts its controller, and the job ends on its own later.",
 	"persistent-agent-remember-save.ts:stop": "The same stop as Forget's.",
 	"persistent-agent-threads.ts:createRuntime": "An option; the two a save passes are arrows in its own body, read with the save, and each only builds a record.",
+	"persistent-agent-threads.ts:pendingTransfersChanged": "The room host's, set in room-socket.ts on a shared server only: it sends one frame to each of the room's open pages and writes nothing.",
+	"persistent-agent-threads.ts:pointerMoved": "The room host's, set in room-socket.ts on a shared server only: it takes the host off the map of hosts at once and, on purpose, leaves the rest until the save has returned, so the move is written whole first. Then it reads the old conversation, sends one frame and closes the pages' connections, or, with an answer running, ends the host when that answer ends; nothing it leaves for later writes in the room's folder, and the host ends on the pages' own close events, as when its last page leaves.",
 	"persistent-room-workspace-policy.ts:ignoresStoredWorkspaceSettings": "A server hook slot typed to give a boolean; its one filling answers at once.",
+	"room-files-folder.ts:roomFilesAreTheFolder": "A server hook slot typed to give a boolean; its one filling answers at once.",
 	"session-manager.ts:has": "The has of the Map of a session's entries, behind a narrow parameter type.",
 	"session-manager.ts:uuidv7": "The uuid package's id maker, which returns a string.",
 };

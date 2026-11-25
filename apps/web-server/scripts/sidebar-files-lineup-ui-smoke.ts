@@ -1,12 +1,13 @@
-// The room's sidebar: "Attachments" is one row under Home, in the page against
-// a real server. On a wide screen, in the browser and in the mac app's look,
-// light and dark: the wordmark, Home and the entry's word start on
-// --sidebar-text-left, the entry reads as Home reads, its count sits at the
-// right in plain muted digits, and no per-file list is left. A room with no
-// files shows the entry without a number. Rows step 36px in the browser and
-// 32px in the mac app, in the room and on Home, and the logo is 22 in both.
-// At phone width the entry sits under Home in the drawer. Offline: a synthetic
-// model. Throwaway HOME.
+// The room's sidebar: its first entry says "Rooms", as the first page's does,
+// and opens that page, light and dark; "Attachments" is one row under it, in
+// the page against a real server. On a wide screen, in the browser and in the
+// mac app's look, light and dark: the wordmark, Rooms and the entry's word
+// start on --sidebar-text-left, the entry reads as Rooms reads, its count sits
+// at the right in plain muted digits, and no per-file list is left. A room with
+// no files shows the entry without a number. Rows step 36px in the browser and
+// 32px in the mac app, in the room and on the first page, and the logo is 22 in
+// both. At phone width the entry sits under Rooms in the drawer. Offline: a
+// synthetic model. Throwaway HOME.
 import fs from "node:fs";
 import { chromium, type Page } from "playwright";
 import { assert, baseUrl, openRoom, requestJson, startRoomStateServer, stopRoomStateServer, waitUntil } from "./room-state-setup.js";
@@ -46,7 +47,7 @@ interface Sidebar {
 // wraps those in a helper the page does not have.
 async function sidebar(page: Page): Promise<Sidebar> {
 	return page.evaluate(() => {
-		const home = [...document.querySelectorAll(".sidebar-primary-nav .list-btn")].find((button) => (button.textContent ?? "").trim() === "Home")!;
+		const home = document.querySelector(".sidebar-home-btn")!;
 		const entry = document.querySelector(".attachments-entry")!;
 		const [homeWord, entryWord] = [home, entry.firstElementChild!].map((element) => {
 			const range = document.createRange();
@@ -112,13 +113,13 @@ try {
 	const enter = (room: string) => page.locator(".persistent-agent-card").filter({ hasText: room }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 	const macLook = (on: boolean) => page.evaluate((mac) => document.documentElement.classList.toggle("desktop-app-mac", mac), on);
 
-	// Home's list takes the same step before any room opens.
+	// The first page's list takes the same step before any room opens.
 	for (const mac of [false, true]) {
 		await macLook(mac);
 		const tops = await page.evaluate(() => [...document.querySelectorAll(".product-nav .list-btn")].map((row) => row.getBoundingClientRect().top));
 		const steps = tops.slice(1).map((top, index) => top - tops[index]!);
 		const step = STEP[mac ? "mac" : "browser"];
-		check(steps.length >= 2 && steps.every((each) => near(each, step)), `Home's rows in the ${mac ? "mac app" : "browser"} step ${JSON.stringify(steps)}, not ${step}`);
+		check(steps.length >= 2 && steps.every((each) => near(each, step)), `the first page's rows in the ${mac ? "mac app" : "browser"} step ${JSON.stringify(steps)}, not ${step}`);
 	}
 	await macLook(false);
 
@@ -139,16 +140,29 @@ try {
 			check(at.edge === (mac ? 27 : 41), `${look}: the sidebar's text edge is ${at.edge}`);
 			check(near(at.logoLeft, at.edge), `${look}: the wordmark starts at ${at.logoLeft}, the edge is ${at.edge}`);
 			check(near(at.logoHeight, LOGO_HEIGHT), `${look}: the logo is ${at.logoHeight} high, not ${LOGO_HEIGHT}`);
-			check(near(at.homeWord, at.edge), `${look}: Home starts at ${at.homeWord}, the edge is ${at.edge}`);
+			check(near(at.homeWord, at.edge), `${look}: Rooms starts at ${at.homeWord}, the edge is ${at.edge}`);
 			check(near(at.entryWord, at.edge), `${look}: the entry's word starts at ${at.entryWord}, the edge is ${at.edge}`);
-			check(near(at.entryBox.left, at.homeBox.left) && near(at.entryBox.right, at.homeBox.right), `${look}: the entry's box runs ${at.entryBox.left} to ${at.entryBox.right}, Home's ${at.homeBox.left} to ${at.homeBox.right}`);
-			check(near(at.entryBox.top - at.homeBox.top, STEP[mac ? "mac" : "browser"]), `${look}: the entry sits ${at.entryBox.top - at.homeBox.top}px under Home, the list's step is ${STEP[mac ? "mac" : "browser"]}`);
-			check(JSON.stringify(at.entry) === JSON.stringify(at.home), `${look}: the entry reads ${JSON.stringify(at.entry)}, Home ${JSON.stringify(at.home)}`);
+			check(near(at.entryBox.left, at.homeBox.left) && near(at.entryBox.right, at.homeBox.right), `${look}: the entry's box runs ${at.entryBox.left} to ${at.entryBox.right}, Rooms' ${at.homeBox.left} to ${at.homeBox.right}`);
+			check(near(at.entryBox.top - at.homeBox.top, STEP[mac ? "mac" : "browser"]), `${look}: the entry sits ${at.entryBox.top - at.homeBox.top}px under Rooms, the list's step is ${STEP[mac ? "mac" : "browser"]}`);
+			check(JSON.stringify(at.entry) === JSON.stringify(at.home), `${look}: the entry reads ${JSON.stringify(at.entry)}, Rooms ${JSON.stringify(at.home)}`);
 			check(at.count?.text === String(FILES.length) && at.count.color === at.muted && at.count.background === "rgba(0, 0, 0, 0)" && at.entryBox.right - at.count.right <= 14, `${look}: the count is ${JSON.stringify(at.count)}, plain muted digits at the right, the muted colour ${at.muted}`);
 			check(at.fileRows === 0, `${look}: ${at.fileRows} per-file rows are left in the sidebar`);
 		}
 	}
 	await macLook(false);
+
+	// The way back to the rooms has one name: the same word in a room and on the page it opens.
+	for (const scheme of ["light", "dark"] as const) {
+		await page.emulateMedia({ colorScheme: scheme });
+		const inRoom = (await page.locator(".sidebar-primary-nav .list-btn").first().innerText()).trim();
+		check(inRoom === "Rooms", `1280 wide, ${scheme}: in a room the sidebar's first entry says ${JSON.stringify(inRoom)}, not "Rooms"`);
+		await page.locator(".sidebar-primary-nav .list-btn").first().click();
+		await page.locator(".home-page .persistent-agent-card").filter({ hasText: ROOM }).waitFor({ timeout: 15_000 });
+		const onPage = (await page.locator(".product-nav .list-btn.active").innerText()).trim();
+		check(onPage === "Rooms", `1280 wide, ${scheme}: the page it opens is ${JSON.stringify(onPage)} in its own sidebar, not "Rooms"`);
+		await enter(ROOM);
+		await waitUntil(async () => (await page.locator(".attachments-entry-count").count()) === 1, "back in the room, the entry counts its files", 15_000);
+	}
 	await page.emulateMedia({ colorScheme: "light" });
 
 	const entry = page.locator(".attachments-entry");
@@ -169,15 +183,16 @@ try {
 	await waitUntil(async () => near((await sidebar(page)).homeBox.left, 12), "the phone's drawer has opened", 5_000);
 	const phone = await sidebar(page);
 	// The drawer's rows are tap-sized, so the gap is what carries over.
-	check(near(phone.entryBox.left, phone.homeBox.left) && near(phone.entryBox.top - phone.homeBox.bottom, 4), `at phone width the entry starts at ${phone.entryBox.left}, ${phone.entryBox.top - phone.homeBox.bottom}px under Home`);
+	check(near(phone.entryBox.left, phone.homeBox.left) && near(phone.entryBox.top - phone.homeBox.bottom, 4), `at phone width the entry starts at ${phone.entryBox.left}, ${phone.entryBox.top - phone.homeBox.bottom}px under Rooms`);
 	check(phone.count?.text === String(FILES.length), `at phone width the count reads ${JSON.stringify(phone.count)}`);
 	check(phone.fileRows === 0, `at phone width ${phone.fileRows} per-file rows are left in the drawer`);
 
 	assert(failures.length === 0, `the sidebar's Attachments entry:\n  ${failures.join("\n  ")}`);
-	console.log("  ok at 1280 wide, browser and mac look, light and dark: the wordmark, Home and the entry start on the sidebar's text edge, the entry reads as Home reads, the count is plain muted digits at the right, and no per-file row is left");
-	console.log(`  ok rows step ${STEP.browser}px in the browser and ${STEP.mac}px in the mac app, in a room and on Home, and the logo is ${LOGO_HEIGHT} in both`);
+	console.log("  ok at 1280 wide, browser and mac look, light and dark: the wordmark, Rooms and the entry start on the sidebar's text edge, the entry reads as Rooms reads, the count is plain muted digits at the right, and no per-file row is left");
+	console.log(`  ok rows step ${STEP.browser}px in the browser and ${STEP.mac}px in the mac app, in a room and on the first page, and the logo is ${LOGO_HEIGHT} in both`);
+	console.log("  ok at 1280 wide, light and dark: in a room the sidebar's first entry says Rooms and opens the page whose own sidebar says Rooms");
 	console.log("  ok a room with no files shows the entry with no number; Enter and Space work it from the keyboard");
-	console.log("  ok at phone width the entry sits under Home in the drawer");
+	console.log("  ok at phone width the entry sits under Rooms in the drawer");
 	console.log(`sidebar-files-lineup-ui-smoke: ${passes} checks passed`);
 } catch (caught) {
 	error = caught;

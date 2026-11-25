@@ -18,8 +18,7 @@
  * Pure: no file and no clock is read here.
  */
 import { normaliseAssistantText } from "../../web-ui/src/assistant-stream.js";
-import { SITE_ALLOW_ROOM } from "./room-box/card-text.js";
-import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE, connectorApprovalSubject, handOffApprovalSubject } from "./room-approval-titles.js";
+import { CONNECTOR_CHOICE_WORDS, PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE, connectorApprovalSubject, handOffApprovalSubject } from "./room-approval-titles.js";
 
 export type ThreadItem = Record<string, unknown>;
 
@@ -108,6 +107,98 @@ export function readShownPrompt(raw: unknown): ShownPrompt | undefined {
 			: []
 	));
 	return { text, files };
+}
+
+/**
+ * Who sent a person's message on a shared server, as the server stamps it on
+ * the message when it lands: our person and space ids, never a name, so a
+ * rename shows everywhere. Only the server writes it; a page's save never does.
+ */
+export type MessageAuthor = { readonly person: string; readonly space: string };
+
+/**
+ * Who sent it, as one page is shown it in place of the stored author: the
+ * reader, a person by the name they have now, a person whose sign-in gives no
+ * name, or one the server no longer knows.
+ */
+export type MessageSender = { readonly is: "you" } | { readonly is: "named"; readonly name: string } | { readonly is: "unnamed" } | { readonly is: "left" };
+
+/** A stored author, read leniently: anything that is not two ids is none. */
+export function readMessageAuthor(raw: unknown): MessageAuthor | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const { person, space } = raw as { person?: unknown; space?: unknown };
+	return typeof person === "string" && person && typeof space === "string" && space ? { person, space } : undefined;
+}
+
+function readMessageSender(raw: unknown): MessageSender | undefined {
+	const sender = raw as { is?: unknown; name?: unknown } | null;
+	if (sender?.is === "you" || sender?.is === "unnamed" || sender?.is === "left") return { is: sender.is };
+	return sender?.is === "named" && typeof sender.name === "string" && sender.name ? { is: "named", name: sender.name } : undefined;
+}
+
+/** A frame's senders by message id; a malformed entry is dropped alone. */
+export function readMessageSenders(raw: unknown): Map<string, MessageSender> {
+	const senders = new Map<string, MessageSender>();
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return senders;
+	for (const [id, value] of Object.entries(raw)) {
+		const sender = readMessageSender(value);
+		if (sender && ITEM_ID.test(id)) senders.set(id, sender);
+	}
+	return senders;
+}
+
+/** The item without the fields only the server writes about who sent it: what a page's save may hold of it. */
+function withoutSenderFields(item: ThreadItem): ThreadItem {
+	if (!("author" in item) && !("sender" in item)) return item;
+	const { author: _author, sender: _sender, ...rest } = item;
+	return rest;
+}
+
+/** The stored author's field, to spread onto a user item, or nothing. */
+const authorField = (item: ThreadItem | undefined): { author?: MessageAuthor } => {
+	const author = item?.kind === "user" ? readMessageAuthor(item.author) : undefined;
+	return author ? { author } : {};
+};
+
+/**
+ * A landed person's message under a copy a page saved: the page's copy with
+ * the landed mark. Where the server knows who sent it, its words and files
+ * are the server's too, so no save puts other words under someone's name.
+ */
+function keptMessage(saved: ThreadItem, server: ThreadItem): ThreadItem {
+	return { ...(authorField(server).author ? inServerWords(saved, server) : saved), landed: true };
+}
+
+/** A copy of a person's message with the words, files and author the server holds for it. */
+function inServerWords(saved: ThreadItem, server: ThreadItem): ThreadItem {
+	const { attachments: _attachments, ...rest } = saved;
+	return { ...rest, kind: "user", text: server.text, ...(server.attachments !== undefined ? { attachments: server.attachments } : {}), ...authorField(server) };
+}
+
+/**
+ * The conversation with a running answer's question and the messages it took
+ * as the server holds them (`running`, each with who sent it), over the copies
+ * pages saved under their ids before they land: a page that joins mid-answer
+ * is never handed other words under someone's name. Messages without an
+ * author (the desktop's) leave the items as they are.
+ */
+export function withRunningMessages(items: readonly unknown[], running: readonly ThreadItem[]): unknown[] {
+	const byId = new Map(running.filter((item) => item.kind === "user" && authorField(item).author).map((item) => [idOf(item), item]));
+	if (!byId.size) return [...items];
+	return items.map((item) => {
+		const own = byId.get(idOf(item));
+		return own && item && typeof item === "object" ? inServerWords(item as ThreadItem, own) : item;
+	});
+}
+
+/** The conversation as one page is shown it: each person's message names its sender for that page, and no stored author leaves the server. */
+export function itemsAsShown(items: readonly unknown[], senderOf: (author: MessageAuthor) => MessageSender): unknown[] {
+	return items.map((item) => {
+		if (!item || typeof item !== "object" || !("author" in item)) return item;
+		const author = readMessageAuthor((item as ThreadItem).author);
+		const shown = withoutSenderFields(item as ThreadItem);
+		return author && shown.kind === "user" ? { ...shown, sender: senderOf(author) } : shown;
+	});
 }
 
 /** The most ids one save may name as removed on purpose. */
@@ -207,15 +298,15 @@ function insertNear(items: ThreadItem[], item: ThreadItem, afterId: string | und
 /**
  * The note a connector call nobody could approve leaves, by what its card
  * asked to use ("Delete project in Asana"). `wayOn`: the question offered
- * Allow for this room, so the note names it; the page's row for that step
- * says the first sentence alone.
+ * Always allow, so the note names where to set it; the page's row for that
+ * step says the first sentence alone.
  */
 export function connectorAwayNote(use: string, wayOn = false): string {
 	const note = `${use} wasn't used because nobody was there to allow it.`;
-	return wayOn ? `${note} To let this room use it when you're away, choose ${SITE_ALLOW_ROOM} at your computer the next time it asks.` : note;
+	return wayOn ? `${note} To let it run when you're away, set it to ${CONNECTOR_CHOICE_WORDS.allow} on its connector's page in Settings, Connectors.` : note;
 }
 
-/** The note a declined question leaves in the conversation; one note per wording. `wayOn`: a connector question that offered Allow for this room. */
+/** The note a declined question leaves in the conversation; one note per wording. `wayOn`: a connector question that offered Always allow. */
 export function declinedQuestionNoteText(question: string, wayOn = false): string {
 	const title = String(question ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
 	if (title === PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE) return "While you were away, the room asked to run a command. It did not run, because nobody was there to approve it.";
@@ -297,8 +388,8 @@ function firstItemPlace(items: ThreadItem[], place: TurnPlace): { afterId?: stri
  * A keyed turn's landing, by id: each of the turn's items, in its order,
  * replaces the file's copy (the server's fields by the pick rule) or is
  * inserted after the turn's item before it; the first one, when the file
- * holds nothing of the turn before it, goes where `place` says. A question
- * the page saved is only stamped. An id the conversation removed on purpose,
+ * holds nothing of the turn before it, goes where `place` says. A person's
+ * message the page saved is only stamped, as keptMessage keeps it. An id the conversation removed on purpose,
  * and a part cut to nothing, go from the file. Nothing else is removed.
  */
 export function landTurnItems(file: readonly unknown[], turn: readonly ThreadItem[], place: TurnPlace, removed: ReadonlySet<string>): ThreadItem[] {
@@ -314,7 +405,8 @@ export function landTurnItems(file: readonly unknown[], turn: readonly ThreadIte
 		}
 		const landed = { ...own, landed: true };
 		if (at >= 0) {
-			items[at] = own.kind === "user" ? { ...items[at], landed: true } : withServerFields(landed, items[at], true);
+			// A person's message the page saved first takes the server's author, the only one there is (keptMessage).
+			items[at] = own.kind === "user" ? keptMessage(items[at]!, own) : withServerFields(landed, items[at], true);
 		} else if (previous !== undefined) {
 			insertNear(items, landed, previous, undefined);
 		} else {
@@ -327,22 +419,52 @@ export function landTurnItems(file: readonly unknown[], turn: readonly ThreadIte
 }
 
 /**
+ * The messages a killed turn had taken, from its running-turn record (each
+ * `steered`): a copy a page saved is stamped where it stands (keptMessage);
+ * one no page saved goes after the turn's last item so far, where it came,
+ * since the record holds no answer parts to place it among. An id the
+ * conversation removed on purpose stays out.
+ */
+export function landTakenMessages(file: readonly ThreadItem[], taken: readonly ThreadItem[], key: string, removed: ReadonlySet<string>): ThreadItem[] {
+	const items = [...file];
+	const takenIds = new Set(taken.map(idOf));
+	for (const own of taken) {
+		const id = idOf(own);
+		if (!id || removed.has(id)) continue;
+		const at = items.findIndex((item) => idOf(item) === id);
+		if (at >= 0) {
+			items[at] = keptMessage(items[at]!, own);
+			continue;
+		}
+		let last = -1;
+		items.forEach((item, index) => { if (ofTurn(item, key) || takenIds.has(idOf(item))) last = index; });
+		items.splice(last < 0 ? items.length : last + 1, 0, { ...own, landed: true });
+	}
+	return items;
+}
+
+/**
  * A page save merged with the file by id. Every id the save names as
  * removed, or the conversation removed on purpose lately, goes first. The
  * page's list and order stand; an item the file holds landed takes the
  * server's fields; a landed item the save lacks comes back after the file's
  * item before it. `pageStopCounts(key)`: whether a stop count from the page
- * may shorten that turn's parts.
+ * may shorten that turn's parts. `keepEveryItem`: every item the save lacks
+ * comes back, landed or not, as on a shared server, where another page's save
+ * is as much the record as this one's. Who sent a message is the file's
+ * alone: what a save says of it is dropped, and the file's author stays,
+ * with the words and files it was sent with.
  */
-export function mergeSaveById(file: readonly unknown[], save: readonly unknown[], removed: ReadonlySet<string>, pageStopCounts: (key: string) => boolean): ThreadItem[] {
+export function mergeSaveById(file: readonly unknown[], save: readonly unknown[], removed: ReadonlySet<string>, pageStopCounts: (key: string) => boolean, keepEveryItem = false): ThreadItem[] {
 	const fileItems = file.filter((item): item is ThreadItem => !!item && typeof item === "object") as ThreadItem[];
 	const landedById = new Map(fileItems.filter(isLanded).map((item) => [idOf(item), item]));
 	const result: ThreadItem[] = save
 		.filter((item): item is ThreadItem => !!item && typeof item === "object" && !removed.has(idOf(item)))
+		.map(withoutSenderFields)
 		.map((item) => {
 			const landed = landedById.get(idOf(item));
 			if (landed) {
-				if (landed.kind === "user") return { ...item, landed: true };
+				if (landed.kind === "user") return keptMessage(item, landed);
 				const key = keyOfId(idOf(item));
 				return withServerFields(landed, item, key !== undefined && pageStopCounts(key));
 			}
@@ -355,7 +477,7 @@ export function mergeSaveById(file: readonly unknown[], save: readonly unknown[]
 	fileItems.forEach((item, index) => {
 		const id = idOf(item);
 		if (present.has(id)) { lastPlaced = id; return; }
-		if (!isLanded(item) || removed.has(id)) return;
+		if ((!keepEveryItem && !isLanded(item)) || removed.has(id)) return;
 		const before = lastPlaced === undefined ? fileItems.slice(index + 1).map(idOf).find((later) => present.has(later)) : undefined;
 		insertNear(result, item, lastPlaced, before);
 		present.add(id);

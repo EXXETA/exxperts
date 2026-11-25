@@ -14,6 +14,13 @@ export const SMOKE_AUTH_TOKEN = "exxperts-smoke-pinned-auth-token";
 export const SMOKE_SERVER_AUTH_ENV = { EXXPERTS_AUTH_TOKEN: SMOKE_AUTH_TOKEN } as const;
 export const SMOKE_AUTH_HEADERS = { "X-Exxperts-Auth": SMOKE_AUTH_TOKEN } as const;
 
+// A launcher's output with every sign-in token replaced, for a failure
+// message: the launcher prints the sign-in link at every start, and a
+// smoke's output lands in logs.
+export function withoutSignInTokens(text: string): string {
+	return text.replace(/token=[^\s"'&]+/g, "token=<token>");
+}
+
 // The environment for a launcher or server a smoke starts against a temp home.
 // A temp HOME alone is not enough: the launchers resolve the exxperts data
 // folder from EXXPERTS_DATA_DIR and EXXPERTS_STATE_HOME ahead of the home, so
@@ -84,6 +91,38 @@ export async function freePort(): Promise<number> {
 		return port;
 	}
 	throw new Error(`freePort found no port free on 127.0.0.1 and ::1 in 20 tries${lastError ? ` (last error: ${lastError})` : ""}`);
+}
+
+// A port for a server a smoke ends and starts again on the same address. The
+// system hands a port nobody listens on to the next process that asks for any
+// port, so a neighbour's fake can be answering there by the time the second
+// server binds. These ports lie below the range the system hands out (from
+// 32768 on Linux, 49152 on a Mac), in blocks: a smoke has a block to itself
+// while it listens on the block's first port, until it ends.
+const BLOCKS_FROM = 20_000;
+const BLOCKS_TO = 30_000;
+const BLOCK_SIZE = 500;
+let block: Promise<{ next: number; end: number }> | undefined;
+async function claimBlock(): Promise<{ next: number; end: number }> {
+	for (let first = BLOCKS_FROM; first < BLOCKS_TO; first += BLOCK_SIZE) {
+		const claim = net.createServer().unref();
+		const claimed = await new Promise<boolean>((resolve) => {
+			claim.once("error", () => resolve(false));
+			claim.listen(first, "127.0.0.1", () => resolve(true));
+		});
+		if (claimed) return { next: first + 1, end: first + BLOCK_SIZE };
+	}
+	throw new Error(`no block of ports is free between ${BLOCKS_FROM} and ${BLOCKS_TO}`);
+}
+export async function keptPort(): Promise<number> {
+	const mine = await (block ??= claimBlock());
+	while (mine.next < mine.end) {
+		const port = mine.next++;
+		if ((await probePort(port, "127.0.0.1")) !== port) continue;
+		console.error(`smoke port ${port}`);
+		return port;
+	}
+	throw new Error(`keptPort has given out every port of its block, up to ${mine.end}`);
 }
 
 // init.headers is deliberately narrowed to a plain object: a Headers instance
@@ -229,11 +268,11 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 // not the server's: on Linux, sh (dash) runs tsx as a child instead of
 // exec'ing it, so npx dies by the SIGTERM at once while the server is still
 // running its graceful stop.
-function treeEnded(server: ChildProcessWithoutNullStreams & { pid: number }): boolean {
+export function treeEnded(server: ChildProcessWithoutNullStreams): boolean {
 	if (server.exitCode == null && server.signalCode == null) return false;
 	if (process.platform === "win32") return true;
 	try {
-		process.kill(-server.pid, 0);
+		process.kill(-server.pid!, 0);
 		return false;
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code !== "EPERM";

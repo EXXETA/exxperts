@@ -579,13 +579,15 @@ try {
 		// Thinking after a step: a row of the work card.
 		await scene("card", async () => {
 			await ask("Please run a step, then think about it.");
-			const rowHead = page.locator('.wk-card .wk-row[data-s="running"] button.wk-open').last();
+			// A running command's row opens too: the thinking row is the one with the arrow.
+			const liveThought = '.wk-card .wk-row[data-s="running"] button.wk-open:has(.wk-caret)';
+			const rowHead = page.locator(liveThought).last();
 			await waitUntil(async () => (await runOnce.count()) > 0 || (await rowHead.count()) > 0, "the step asks or the thinking starts", 15_000);
 			if (await runOnce.count()) await runOnce.click();
 			await rowHead.waitFor({ timeout: 15_000 });
 			// A while of thinking, its words arriving all along: none of them may show.
 			await page.waitForTimeout(1200);
-			expect(await seen('.wk-card .wk-row[data-s="running"] button.wk-open'), "work card: the live row's \"Thinking\" can be seen");
+			expect(await seen(liveThought), "work card: the live row's \"Thinking\" can be seen");
 			const card = await textOf(".wk-card");
 			expect(card.includes("Thinking") && !card.includes(PIECE_WORD), `work card: the thinking row shows "Thinking" and none of its words (got ${JSON.stringify(card.slice(0, 120))})`);
 			await rowHead.click();
@@ -600,7 +602,7 @@ try {
 			const shown = await page.locator(".wk-card").last().getAttribute("data-open");
 			expect(shown === "1" && (await page.locator(".wk-card .wk-out-thought").last().isVisible()), `work card: the answer does not fold the card over the open thought (card open: ${shown})`);
 			// Away and back: the room is drawn anew from the saved conversation, which keeps no thinking, as after a reload.
-			await page.getByText("Home", { exact: true }).first().click();
+			await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 			await page.locator(".persistent-agent-card").filter({ hasText: "Thinking Room" }).waitFor({ timeout: 10_000 });
 			await enterRoom(page);
 			await page.locator(".wk-card").last().waitFor({ timeout: 10_000 });

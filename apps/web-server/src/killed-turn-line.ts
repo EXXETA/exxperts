@@ -6,7 +6,9 @@
 // the room runs first, lands the question as a clean stop does (a saved copy
 // is only stamped) and STOP_CUT_ANSWER_SENTENCE after the turn's last item,
 // under the id a clean stop's landing gives it, and then removes the file, so
-// the line lands once and never on a later turn.
+// the line lands once and never on a later turn. On a shared server the file
+// also holds each message the answer took, with who sent it, which lands the
+// same way (thread-items-by-id.ts `landTakenMessages`).
 //
 // The line is marked landed, so a save from a window that still holds the
 // copy it had before the kill keeps it. A part of the answer the page saved is
@@ -24,20 +26,24 @@
 
 import { persistentAgentActiveTurnKey, persistentAgentActiveTurns } from "./persistent-agent-store.js";
 import { getPersistentAgentThread, writePersistentAgentThread } from "./persistent-agent-threads.js";
-import { failureLineId, landTurnItems, ofTurn, partialLineId, type ThreadItem } from "./thread-items-by-id.js";
+import { failureLineId, landTakenMessages, landTurnItems, ofTurn, partialLineId, type ThreadItem } from "./thread-items-by-id.js";
 import { dropRunningTurn, readRunningTurn, readTurnItemsMemory, runningTurnConversations, type RunningTurn } from "./turn-pieces-store.js";
 import { STOP_CUT_ANSWER_SENTENCE } from "./turn-ended-by.js";
 
 /** The conversation's items with the killed turn's question and the clean stop's line after the turn's last item, or null when its line is there already. */
 function withStopLine(file: readonly ThreadItem[], turn: RunningTurn, recentKeys: readonly string[], removed: ReadonlySet<string>): ThreadItem[] | null {
 	const { key } = turn;
-	const items = turn.own.length ? landTurnItems(file, turn.own, { key, continued: turn.continued, startAnchorId: turn.startAnchorId, recentKeys }, removed) : [...file];
+	// The messages the answer took (on a shared server, with who sent them) land apart: they came after answer parts the record does not hold.
+	const first = turn.own.filter((item) => item.steered !== true);
+	const taken = turn.own.filter((item) => item.steered === true);
+	const takenIds = new Set(taken.map((item) => item.id));
+	const items = landTakenMessages(first.length ? landTurnItems(file, first, { key, continued: turn.continued, startAnchorId: turn.startAnchorId, recentKeys }, removed) : [...file], taken, key, removed);
 	const answered = items.some((item) => item.kind === "assistant" && ofTurn(item, key) && String(item.text ?? "").trim());
 	const id = answered ? partialLineId(key) : failureLineId(key);
 	if (items.some((item) => item.id === id)) return null;
 	// After the turn's last item; a Try again the page saved nothing of goes after the item it continues.
 	let at = -1;
-	items.forEach((item, index) => { if (ofTurn(item, key)) at = index; });
+	items.forEach((item, index) => { if (ofTurn(item, key) || takenIds.has(item.id)) at = index; });
 	if (at < 0 && turn.startAnchorId) at = items.findIndex((item) => item.id === turn.startAnchorId);
 	if (at < 0) at = items.length - 1;
 	return [...items.slice(0, at + 1), { kind: "system", id, text: STOP_CUT_ANSWER_SENTENCE, level: "error", landed: true }, ...items.slice(at + 1)];

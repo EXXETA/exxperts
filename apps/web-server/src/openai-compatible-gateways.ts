@@ -44,8 +44,9 @@ import { serverHooks } from "./server-hooks.js";
  * The provider id of the gateway the server's start provides (server-hooks.ts,
  * startGateway), or undefined: always on the desktop. While there is one, its
  * key lives only in the runtime's memory and its address is the start's, so AI
- * setup refuses a save of it that carries a key, a new label or a new address,
- * its delete, and a key save for its provider; a save of its models passes.
+ * setup refuses a save of it that carries a key, a new label, a new address or
+ * a new place its models run, its delete, and a key save for its provider; a
+ * save of its models passes.
  */
 export function startGatewayProviderId(): string | undefined {
 	return serverHooks().startGateway?.()?.providerId;
@@ -53,6 +54,39 @@ export function startGatewayProviderId(): string | undefined {
 
 /** The sentence each of those refusals answers. */
 export const START_GATEWAY_REFUSAL = "This gateway is set by your organisation's install, so it can't be changed here.";
+
+/**
+ * Where a gateway's or a key's models run, as a shared server's admin states it
+ * (the install states it for its own gateway). Stored only on a shared server;
+ * absent means Unknown, and answers say "unknown" for it.
+ */
+export type ModelsRunIn = "eu" | "outside-eu";
+export type ModelsRunInAnswer = ModelsRunIn | "unknown";
+
+/** A stored value: either place, or absent for anything else. */
+export function storedModelsRunIn(value: unknown): ModelsRunIn | undefined {
+	return value === "eu" || value === "outside-eu" ? value : undefined;
+}
+
+/**
+ * A save's `runsIn`: absent keeps what is stored, "unknown" clears it, either
+ * place sets it; anything else refuses the save with `MODELS_RUN_IN_REFUSAL`.
+ */
+export function savedModelsRunIn(value: unknown): { ok: true; runsIn: ModelsRunIn | null | undefined } | { ok: false } {
+	if (value === undefined) return { ok: true, runsIn: undefined };
+	if (value === "unknown") return { ok: true, runsIn: null };
+	const runsIn = storedModelsRunIn(value);
+	return runsIn ? { ok: true, runsIn } : { ok: false };
+}
+
+export const MODELS_RUN_IN_REFUSAL = 'runsIn must be "eu", "outside-eu" or "unknown"';
+
+/** A record with `runsIn` set as a save asked: kept when absent, removed for Unknown. */
+export function withModelsRunIn<T extends { runsIn?: ModelsRunIn }>(record: T, runsIn: ModelsRunIn | null | undefined): T {
+	if (runsIn === undefined) return record;
+	const { runsIn: _previous, ...rest } = record;
+	return (runsIn === null ? rest : { ...rest, runsIn }) as T;
+}
 
 export const OPENAI_COMPATIBLE_AI_PROFILE_ID = "openai-compatible";
 export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
@@ -285,6 +319,8 @@ export type OpenAiCompatibleGateway = {
 	 * registering exactly as they did.
 	 */
 	maintenanceModelDetected?: GatewayModelDetected;
+	/** Where its models run, as its admin or the install states it; absent is Unknown. */
+	runsIn?: ModelsRunIn;
 };
 
 export type OpenAiCompatibleGatewaysReadResult = {
@@ -503,6 +539,7 @@ function parseGatewayEntry(raw: unknown, index: number): { gateway?: OpenAiCompa
 	const { models, error } = parseRoomModels(raw.roomModels);
 	if (error) return { error: `gateways[${index}] ${error}` };
 	const maintenanceModelDetected = isObject(raw.maintenanceModelDetected) ? parseGatewayDetectedSnapshot(raw.maintenanceModelDetected) : undefined;
+	const runsIn = storedModelsRunIn(raw.runsIn);
 	return {
 		gateway: {
 			id,
@@ -512,6 +549,7 @@ function parseGatewayEntry(raw: unknown, index: number): { gateway?: OpenAiCompa
 			roomModels: models,
 			maintenanceModel,
 			...(maintenanceModelDetected && Object.keys(maintenanceModelDetected).length > 0 ? { maintenanceModelDetected } : {}),
+			...(runsIn ? { runsIn } : {}),
 		},
 	};
 }
@@ -561,7 +599,8 @@ export function readOpenAiCompatibleGateways(paths: GatewayFilePaths = {}): Open
 	// The legacy file is the first gateway's own voice: the terminal wizard
 	// still writes it, and the app writes it too on every save of that gateway.
 	// So where it exists it decides, and the store entry beneath it survives
-	// only as the source of the base URL, which the wizard's shape cannot carry.
+	// only as the source of the base URL and of where its models run, which the
+	// wizard's shape cannot carry.
 	const legacy = readLegacyGateway(legacyPolicyPath);
 	const defaultIndex = result.gateways.findIndex((gateway) => gateway.id === OPENAI_COMPATIBLE_AI_PROFILE_ID);
 	if (legacy.gateway) {
@@ -569,6 +608,7 @@ export function readOpenAiCompatibleGateways(paths: GatewayFilePaths = {}): Open
 		const merged: OpenAiCompatibleGateway = { ...legacy.gateway };
 		const baseUrl = legacy.gateway.baseUrl ?? storedDefault?.baseUrl;
 		if (baseUrl) merged.baseUrl = baseUrl;
+		if (storedDefault?.runsIn) merged.runsIn = storedDefault.runsIn;
 		if (defaultIndex >= 0) result.gateways[defaultIndex] = merged;
 		else result.gateways.unshift(merged);
 	} else if (legacy.error) {

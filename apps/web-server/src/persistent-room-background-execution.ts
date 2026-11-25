@@ -32,9 +32,14 @@ import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-
 import { createTurnStepLog, landedTextAfter } from "./persistent-room-turn-steps.js";
 import { readPersistentRoomInstructionsNow } from "./persistent-room-instructions.js";
 import { nextRoomStateMessage } from "./room-state-message.js";
+import { READ_SKILL_TOOL_NAME } from "./persistent-room-skill-tool.js";
 import {
 	getPersistentRoomToolPolicy,
+	PERSISTENT_ROOM_ASK_FOR_COMMANDS_TOOL_NAME,
+	PERSISTENT_ROOM_ASK_FOR_FOLDER_TOOL_NAME,
+	PERSISTENT_ROOM_BASH_TOOL_NAME,
 	PERSISTENT_ROOM_MEMORY_TOOL_NAMES,
+	PERSISTENT_ROOM_OUTSIDE_TOOL_NAME,
 	PERSISTENT_ROOM_SHELF_TOOL_NAMES,
 } from "./persistent-room-tool-policy.js";
 import {
@@ -49,6 +54,8 @@ import contentPolicyExt from "../../../pi-package/extensions/content-policy/inde
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
 import artifactsExt from "../../../pi-package/extensions/artifacts/index.js";
 import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp/index.js";
+import { endCutSession, endRoomSession, endUnderWay } from "./room-session-end.js";
+import { createStopLimit, TurnEndForced } from "./turn-forced-end.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import { createNativeProviderSearchExtension, resolveNativeProviderSearchDecision, shouldRegisterClientWebSearch } from "../../../pi-package/extensions/web-search/native-provider-search.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
@@ -64,7 +71,7 @@ import { SERVER_STOPPED_REASON, STOP_SCHEDULED_RUN_SENTENCE, answerAlreadyEnded,
 import { callCacheRetention } from "./memory-call-cache.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
 import { serverHooks } from "./server-hooks.js";
-import { answerlessCallMovedNothing, modelCallMetadata, type UsageCall } from "./usage-log.js";
+import { answerlessCallMovedNothing, appendUsage, modelCallMetadata, resolveUsageAuthType, type UsageCall } from "./usage-log.js";
 import { settleConversationEffortChoice } from "./persistent-room-effort-settings.js";
 import { settleRoom } from "./room-settle.js";
 import { RoomBox } from "./room-box/box-session.js";
@@ -153,15 +160,22 @@ function safeExecutionId(value: unknown): string {
 }
 
 const SCHEDULED_USER_ITEM_PREFIX = "scheduled-user-";
+// A page's own keys start `i_` (apps/web-ui/src/room-thread-items.ts), so none starts like this.
+const SCHEDULED_ANSWER_KEY_PREFIX = "sched_";
 
 export function scheduledPromptBackgroundUserItemId(executionId: string): string {
 	return `${SCHEDULED_USER_ITEM_PREFIX}${safeExecutionId(executionId)}`;
 }
 
-/** Whether a conversation's last message on the person's side is a scheduled run's prompt: sent by the app, never handed to the person. */
+/** Whether a conversation's last message on the person's side is a scheduled run's prompt: sent by the app, never handed to the person. A run on its own names it `scheduled-user-<run>`, one through the room's live session by its key. */
 export function lastUserItemIsScheduledPrompt(items: ReadonlyArray<unknown> | undefined): boolean {
 	const lastUser = [...(items ?? [])].reverse().find((item) => (item as { kind?: unknown } | null)?.kind === "user") as { id?: unknown } | undefined;
-	return typeof lastUser?.id === "string" && lastUser.id.startsWith(SCHEDULED_USER_ITEM_PREFIX);
+	return typeof lastUser?.id === "string" && (lastUser.id.startsWith(SCHEDULED_USER_ITEM_PREFIX) || lastUser.id.startsWith(SCHEDULED_ANSWER_KEY_PREFIX));
+}
+
+/** The key of a scheduled answer run through the room's live session: its question's id, and its parts' `<key>-a<n>` (thread-items-by-id.ts). */
+export function scheduledAnswerKey(executionId: string): string {
+	return `${SCHEDULED_ANSWER_KEY_PREFIX}${safeExecutionId(executionId).replace(/[^A-Za-z0-9_]/g, "_")}`.slice(0, 80);
 }
 
 export function scheduledPromptBackgroundAssistantItemId(executionId: string): string {
@@ -204,6 +218,23 @@ function textFromMessageParts(content: unknown): string {
 		.trim();
 }
 
+/** A scheduled answer's spend so far with one more assistant message's added: multi-message turns account fully. */
+export function addMessageUsage(sum: PersistentRoomBackgroundExecutionResult["usage"], message: any): PersistentRoomBackgroundExecutionResult["usage"] {
+	const messageUsage = usageFromMessage(message);
+	if (!messageUsage) return sum;
+	return sum
+		? {
+			input: (sum.input ?? 0) + (messageUsage.input ?? 0),
+			output: (sum.output ?? 0) + (messageUsage.output ?? 0),
+			cacheRead: (sum.cacheRead ?? 0) + (messageUsage.cacheRead ?? 0),
+			cacheWrite: (sum.cacheWrite ?? 0) + (messageUsage.cacheWrite ?? 0),
+			totalTokens: (sum.totalTokens ?? 0) + (messageUsage.totalTokens ?? 0),
+			cost: (sum.cost ?? 0) + (messageUsage.cost ?? 0),
+			calls: [...(sum.calls ?? []), ...(messageUsage.calls ?? [])],
+		}
+		: messageUsage;
+}
+
 function usageFromMessage(message: any): PersistentRoomBackgroundExecutionResult["usage"] | undefined {
 	const usage = message.usage;
 	if (!usage) return undefined;
@@ -229,8 +260,11 @@ export interface HeadlessUiAutoDeclinedQuestion {
 	lasting?: boolean;
 }
 
+/** What a scheduled run's question is answered with when nobody answers it: words for the model. */
+export const SCHEDULED_QUESTION_DECLINED = "scheduled background room work cannot answer interactive UI requests.";
+
 export function createHeadlessUiContext(
-	rejectMessage = "scheduled background room work cannot answer interactive UI requests.",
+	rejectMessage = SCHEDULED_QUESTION_DECLINED,
 	onAutoDecline?: (question: HeadlessUiAutoDeclinedQuestion) => void,
 ): ExtensionUIContext {
 	// Every dialog kind takes the question title first. Report it before the
@@ -469,10 +503,20 @@ export function persistentRoomBackgroundSessionToolNames(allowedToolNames: reado
 }
 
 /**
+ * A scheduled answer's tools out of a live session's: a scheduled run's own,
+ * the file tools and research, never a command, a question for a person at the
+ * computer, or a tool a scheduled run never has (the shelf, memory, skills).
+ */
+export function scheduledAnswerToolNames(activeToolNames: readonly string[]): string[] {
+	const notScheduled = new Set<string>([PERSISTENT_ROOM_BASH_TOOL_NAME, PERSISTENT_ROOM_OUTSIDE_TOOL_NAME, PERSISTENT_ROOM_ASK_FOR_FOLDER_TOOL_NAME, PERSISTENT_ROOM_ASK_FOR_COMMANDS_TOOL_NAME, READ_SKILL_TOOL_NAME]);
+	return persistentRoomBackgroundSessionToolNames(activeToolNames).filter((toolName) => !notScheduled.has(toolName));
+}
+
+/**
  * The room-state message a live turn sends (room-state-message.ts), with what
  * a background run can use: who the room is, the instructions in force and
- * its workspace, which never has bash here. It has no skills or Attachments tools,
- * so their parts are left out; the next live turn's copy differs and is sent
+ * its workspace, which never has bash here. It has no skills, read_file or
+ * search_file, so their parts are left out; the next live turn's copy differs and is sent
  * whole. The run's copy is saved to the thread, so a live turn after it reads
  * the latest state from the session as it does after its own turns.
  */
@@ -657,15 +701,37 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 	let releaseStopWork: (() => void) | undefined;
 	// A resumed conversation ends on the last turn's answer, which must not count as this turn's.
 	let answeredThisTurn = false;
+	const stopLimit = createStopLimit();
+	// Set when a stop the turn ignored ended it by force: its session went at once (endCutSession).
+	let cut = false;
 	const endTurn = (reason: Error) => {
 		// An answer that already ended is left to finish while the runtime's post-turn work runs: the run completed.
 		if (endedBy || (answeredThisTurn && answerAlreadyEnded(session.agent.state.messages))) return;
 		endedBy = reason;
+		stopLimit.stopBegan();
 		// The compaction a resumed conversation may run before the prompt is cut too.
 		session.abortCompaction();
 		void Promise.resolve((session as any)?.abort?.()).catch(() => {});
 	};
 	const endBySignal = () => endTurn(input.signal!.reason);
+	/** Ends the turn by force: what it was writing is kept as a cut run keeps it, and its session goes. */
+	const cutTurn = () => {
+		cut = true;
+		console.warn(`scheduled execution ${executionId} did not stop in time; ended by force`);
+		const writing = session.agent.state.streamingMessage;
+		if (writing?.role === "assistant") {
+			steps.note({ ...writing, stopReason: "aborted" });
+			({ text: assistantText, retryFrom } = landedTextAfter({ text: assistantText, retryFrom }, textFromMessageParts(writing.content), false));
+		}
+		endCutSession(session as any, {
+			// What it spent after its run's row was written gets a row of its own.
+			answered: (message: any) => {
+				const late = answerlessCallMovedNothing(message) ? undefined : addMessageUsage(undefined, message);
+				if (late) appendUsage({ ts: Date.now(), agent: prepared.roomId, persona: "business", model: prepared.modelLock.model, provider: prepared.modelLock.provider, authType: resolveUsageAuthType(prepared.modelLock.provider, true), kind: "scheduled", input: late.input ?? 0, output: late.output ?? 0, cacheRead: late.cacheRead ?? 0, cacheWrite: late.cacheWrite ?? 0, cost: late.cost ?? 0, ...(late.calls ? { calls: late.calls } : {}) }, (message) => console.warn(message));
+			},
+			ended: () => void box?.endTurn().catch(() => {}),
+		});
+	};
 	const reportCut = () => input.onCut?.({ model: cloneModelLock(prepared.modelLock), usage });
 	// A tool the cut cannot reach can hold the turn past the stop's ceiling, and the catch below then never runs.
 	process.once("exit", reportCut);
@@ -693,29 +759,20 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 			if (event.message.stopReason === "error") providerRefusal = String(event.message.errorMessage ?? "");
 			const text = textFromMessageParts(event.message.content);
 			({ text: assistantText, retryFrom } = landedTextAfter({ text: assistantText, retryFrom }, text, event.message.stopReason === "error" && session.retriesAfter(event.message)));
-			const messageUsage = usageFromMessage(event.message);
-			// Sum across assistant messages so multi-message turns account fully.
-			if (messageUsage) {
-				usage = usage
-					? {
-						input: (usage.input ?? 0) + (messageUsage.input ?? 0),
-						output: (usage.output ?? 0) + (messageUsage.output ?? 0),
-						cacheRead: (usage.cacheRead ?? 0) + (messageUsage.cacheRead ?? 0),
-						cacheWrite: (usage.cacheWrite ?? 0) + (messageUsage.cacheWrite ?? 0),
-						totalTokens: (usage.totalTokens ?? 0) + (messageUsage.totalTokens ?? 0),
-						cost: (usage.cost ?? 0) + (messageUsage.cost ?? 0),
-						calls: [...(usage.calls ?? []), ...(messageUsage.calls ?? [])],
-					}
-					: messageUsage;
-			}
+			usage = addMessageUsage(usage, event.message);
 		});
+		// The conversation's last session may still be ending (its window just closed), and its end closes what the model's
+		// provider keeps under the conversation's id, which this run's session shares: the run asks the model after it.
+		const earlierEnd = endUnderWay(session.sessionId);
+		if (earlierEnd) await earlierEnd;
 		const promptText = prepared.promptPrefix ? [prepared.promptPrefix, "", prompt].join("\n") : prompt;
-		if (!endedBy) await session.prompt(promptText, serverHooks().promptOptions?.());
+		if (!endedBy) await stopLimit.race(session.prompt(promptText, serverHooks().promptOptions?.()));
 		if (endedBy) throw endedBy;
 		if (!assistantText.trim() && modelNotOnAccount(providerRefusal)) throw new ScheduledModelNotOnAccountError(modelLock);
 		if (!assistantText.trim()) throw new Error("scheduled persistent-room execution produced no assistant text");
 		terminalReason = "completed";
 	} catch (error) {
+		if (error instanceof TurnEndForced) cutTurn();
 		if (userItemPersisted) {
 			try {
 				const current = getPersistentAgentThread(prepared.roomId, prepared.threadId) ?? thread;
@@ -743,7 +800,8 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		if (activeTurnId) {
 			try { finishPersistentAgentTurn(prepared.roomId, prepared.threadId, { turnId: activeTurnId, terminalReason }); } catch {}
 		}
-		try { (session as any)?.dispose?.(); } catch {}
+		stopLimit.turnEnded();
+		if (!cut) await endRoomSession(session as any);
 		// Its file programs are stopped at once; its private temp empties after.
 		await box?.endTurn().catch(() => {});
 	}

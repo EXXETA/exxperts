@@ -65,6 +65,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/auth/login/cancel": "local",
 	"POST /api/auth/logout": "local",
 	"POST /api/auth/api-key": "local",
+	"DELETE /api/auth/api-key/:provider": "local",
 
 	// AI profiles and gateways: configuration stays local, but switching
 	// among already-configured profiles is room use, not configuration.
@@ -99,6 +100,8 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/mcp/servers": "local",
 	"DELETE /api/mcp/servers/:name": "local",
 	"PUT /api/mcp/servers/:name/address": "local",
+	"PUT /api/mcp/servers/:name/tools": "local",
+	"POST /api/mcp/tool-choices/reset": "local",
 	"GET /api/mcp/servers/:name/login": "local",
 	"POST /api/mcp/servers/:name/login": "local",
 	"DELETE /api/mcp/servers/:name/login": "local",
@@ -283,6 +286,10 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/skills/repo/candidate": "local",
 	"POST /api/skills/repo/import": "local",
 	"POST /api/skills/repo/scan": "local",
+	"POST /api/skills/updates/check": "local",
+	"POST /api/skills/:id/update": "local",
+	"PUT /api/skills/:id/auto-update": "local",
+	"POST /api/skills/updates/seen": "local",
 
 	// Knowledge (notes-vault bridge): reading is fine; connecting folders,
 	// editing vault files, and reindexing touch the host filesystem.
@@ -300,6 +307,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 
 	// Usage reporting.
 	"GET /api/usage": "read",
+	"GET /api/usage/mine": "read",
 	"GET /api/usage/export.csv": "read",
 
 	// Host-side settings and resources.

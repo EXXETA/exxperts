@@ -2,6 +2,8 @@ import type { RememberRead } from "./remember-read";
 import type { CredentialKey } from "../../web-server/src/model-not-offered";
 import type { FolderPanelPress, SuggestedFolder } from "../../web-server/src/room-box/card-text";
 import type { FailureCause, FailureLineParts, GatewayFind, QuotaWay, Unreached } from "./turn-failure-line";
+import type { MessageSender } from "../../web-server/src/thread-items-by-id";
+import type { ConnectorFormField } from "../../web-server/src/connector-form-ask";
 
 /**
  * Display label for an agent id in usage/history views. Rooms are labelled by
@@ -109,6 +111,9 @@ export type RoomModelsView = Record<RoomModelTask, RoomModelRowView>;
 /** The defaults for new rooms: the same two rows. */
 export type AiDefaultsView = RoomModelsView;
 
+/** Where a gateway's or a key's models run, as a shared server's admin (or its install) states it. */
+export type ModelsRunIn = "eu" | "outside-eu" | "unknown";
+
 export interface RoomModelProviderView {
 	id: string;
 	label: string;
@@ -116,6 +121,8 @@ export interface RoomModelProviderView {
 	ready: boolean;
 	conversation: WebChatModelOption[];
 	memory: WebChatModelOption[];
+	/** On a shared server only. */
+	runsIn?: ModelsRunIn;
 }
 
 export interface PersistentRoomPathHashView {
@@ -206,6 +213,9 @@ export interface PersistentAgentAiProfileStatus {
 		/** The service refused the saved key at the last call, or refused it as made outside a workspace; or the last call found the sign-in gone. */
 		keyRefused?: "refused" | "no-workspace" | "signed-out";
 	};
+	/** On a shared server only: where its models run, and whether the install set it up (it offers no Remove). */
+	runsIn?: ModelsRunIn;
+	setByInstall?: boolean;
 	requiredModels: Array<{
 		provider: string;
 		model: string;
@@ -249,6 +259,8 @@ export interface LoginProviderCatalogEntry {
 	authTypes: Array<"oauth" | "api_key">;
 	configured: boolean;
 	profileId: string | null;
+	/** A saved key under a built-in profile this server does not offer: it can only be removed. */
+	removeOnly?: boolean;
 }
 
 export interface ProviderModelCatalog {
@@ -1540,7 +1552,8 @@ type ChatItemOfKind =
 	// `ts` (epoch ms) is when the item was born; absent on items written before
 	// the field existed, which then show no date/time on hover.
 	// `steered`: the room took it while it answered (its id is the queued message's, steer-route.ts bubbleIdOf), so it is part of that answer's turn.
-	| { kind: "user"; id: string; text: string; ts?: number; attachments?: { name: string; bytes: number; extension: string }[]; steered?: true }
+	// `sender`: on a shared server, who sent it as this page is shown it; only the server sets it, and a save never writes it.
+	| { kind: "user"; id: string; text: string; ts?: number; attachments?: { name: string; bytes: number; extension: string }[]; steered?: true; sender?: MessageSender }
 	// `stoppedAt`: a Stop kept this many characters of the answer's words; the rest of its text is the Stop note.
 	| { kind: "assistant"; id: string; text: string; ts?: number; streaming?: boolean; stoppedAt?: number }
 	// The model thinking before it answers: drawn only, never saved. `ms` once it has ended; its words live in thinking-text-store.ts.
@@ -1561,12 +1574,14 @@ type ChatItemOfKind =
 			startedAt?: number;
 			/** When it ended, by the same clock, so the row shows its own time: drawn only, never saved. */
 			endedAt?: number;
+			/** The call's id, which a connector's question names, so the question sits on this step. */
+			callId?: string;
 	  }
 	| {
 			kind: "approval";
 			id: string;            // chat item id
 			requestId: string;     // server-side ui_request id
-			uiKind: "confirm" | "select" | "input" | "site" | "outside" | "run" | "folder" | "commands" | "connector";
+			uiKind: "confirm" | "select" | "input" | "site" | "outside" | "run" | "folder" | "commands" | "connector" | "form";
 			title: string;
 			/** A folder card: the access it asks for, whether the room has a folder of its own, whether Choose a folder… still works, and the line a refused pick left. */
 			access?: "read" | "write";
@@ -1582,6 +1597,13 @@ type ChatItemOfKind =
 			connector?: string;
 			sent?: string;
 			cut?: number;
+			/** A connector card: the connector marks the tool read-only (no risk line), or as not destructive (`destructive: false`, the softer line); and the call that asks, whose step the card belongs to. */
+			readOnly?: true;
+			destructive?: false;
+			toolCallId?: string;
+			/** A connector's form (also `connector`, its message in `message`, and `toolCallId`): its fields, and the server's line under each field whose value didn't fit, drawn only. */
+			fields?: ConnectorFormField[];
+			fieldLines?: Record<string, string>;
 			address?: string;
 			/** The run-outside and run questions: the command and the model's reason, hidden characters already written out. */
 			command?: string;
@@ -1593,8 +1615,8 @@ type ChatItemOfKind =
 			options?: string[];
 			placeholder?: string;
 			done?: string;         // set after user answers; we keep card visible
-			/** The question ended with nobody there to answer it: shown resolved, never sent. */
-			unanswered?: boolean;
+			/** The question ended with nobody there to answer it: shown resolved, never sent. "withdrawn": a connector's form its connector stopped waiting for. */
+			unanswered?: boolean | "withdrawn";
 			/** Stop answered the question for the person: shown resolved, and its step says it was not done. */
 			stopped?: true;
 			/** When it was asked, by this page's clock: a message the person started typing after this declines it (question-keys.ts). Drawn only. */
@@ -1603,10 +1625,14 @@ type ChatItemOfKind =
 			shownAt?: number;
 			/** A folder card the server is working on a press for (its window open, or a folder being looked at): which press. Drawn only. */
 			choosing?: FolderPanelPress | null;
-			/** A folder card's folder, as the server shows it: its real name and path, and whether one click may give it. Drawn only. */
+			/** A folder card's folder, as the server shows it: its real name and path, whether one click may give it and the file the room named in it; or only the room's own words for a place. Drawn only. */
 			suggested?: SuggestedFolder;
 			/** A site or commands card whose yes couldn't be saved: the line it shows with its buttons back. Drawn only. */
 			failure?: string;
+			/** A shared room's question in another person's answer: this page shows it waiting for them (`name`, null when unknown), with no answers, and `refused` once an answer from here was refused. Drawn only, never saved. */
+			waitingFor?: { name: string | null; refused?: true };
+			/** A shared room's question in a person's answer: that person (`name`, null when unknown), saved so the card says who answered it, and `here` on that person's own page, drawn only. */
+			askedBy?: { name: string | null; here?: true };
 	  }
 	// `details`: a failed turn's line keeps the provider's own sentence, keys masked, behind Details.
 	// `returnedId`: the line of a message handed back to the box, by the step back's id.

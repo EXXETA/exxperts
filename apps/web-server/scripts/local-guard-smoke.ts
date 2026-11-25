@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import http from "node:http";
@@ -20,7 +21,8 @@ import { fileURLToPath } from "node:url";
 // tokenless browser navigation gets the sign-in hint page instead of JSON.
 //
 // And HEAD /ws has no route: a plain 404, nothing logged as an error. The
-// request log never shows the sign-in token, however the address spells it.
+// request log never shows the sign-in token, the pairing code or the pairing
+// request's id, however the address spells them.
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -266,6 +268,8 @@ try {
 	const hintPage = await requestWithHeaders("/", { Accept: "text/html" });
 	assert(hintPage.status === 401, `tokenless GET /: expected 401, got ${hintPage.status}`);
 	assert(String(hintPage.headers["content-type"]).includes("text/html"), `tokenless GET /: expected an HTML page, got ${hintPage.headers["content-type"]}`);
+	const hintWords = "<h1>This browser isn't signed in to exxperts</h1>\n<p>In the desktop app, choose Open in Browser. If you started exxperts in a terminal, open the sign-in link it printed there.</p>\n<p>After that, this browser stays signed in.</p>\n";
+	assert(hintPage.body.includes(`<main>\n${hintWords}</main>`), `tokenless GET /: expected the sign-in hint's words, got ${withoutSmokeToken(hintPage.body)}`);
 
 	// 10. WS upgrades: a tokenless upgrade is refused at the guard; one with
 	//     the auth header is not (it may still fail later for app reasons, so
@@ -309,15 +313,17 @@ try {
 		`HEAD /ws: expected a plain 404 with no error logged, got ${headWs.status} with ${headWsErrors.length} error line(s)${headWsErrors.map((line) => `: ${line.err?.message ?? line.msg}`).join("")}`,
 	);
 
-	// 13. The request log never shows the sign-in token. The server reads a
-	//     query parameter by its decoded name, so "%74oken" signs in just as
-	//     "token" does. Every spelling it reads as the token is logged as
-	//     [redacted] up to the next "&" (a "#" belongs to the value), and every
-	//     other parameter is logged as sent. Fastify's own line for an unknown
-	//     route, which prints the raw address, is redacted the same way.
+	// 13. The request log never shows the sign-in token, the pairing code or
+	//     the pairing request's id. The server reads a query parameter by its
+	//     decoded name, so "%74oken" signs in just as "token" does. Every
+	//     spelling it reads as one of them is logged as [redacted] up to the
+	//     next "&" (a "#" belongs to the value), and every other parameter is
+	//     logged as sent. Fastify's own line for an unknown route, which prints
+	//     the raw address, is redacted the same way.
 	const authHeader = { "X-Exxperts-Auth": SMOKE_AUTH_TOKEN };
+	const pairingValue = randomUUID();
 	const absolute = `http://127.0.0.1:${port}`;
-	const tokenLogProbes: Array<{ label: string; path: string; headers?: Record<string, string>; status: number; logged: string; notFound?: string }> = [
+	const tokenLogProbes: Array<{ label: string; path: string; headers?: Record<string, string>; status: number; logged: string; notFound?: string; secret?: string }> = [
 		{ label: "the plain name", path: `/auth/session?token=${SMOKE_AUTH_TOKEN}`, status: 302, logged: "/auth/session?token=[redacted]" },
 		{ label: "an encoded name", path: `/auth/session?%74oken=${SMOKE_AUTH_TOKEN}`, status: 302, logged: "/auth/session?%74oken=[redacted]" },
 		{
@@ -335,25 +341,63 @@ try {
 			logged: "/auth/session/?keep=1&%74oken=[redacted]",
 			notFound: "Route GET:/auth/session/?keep=1&%74oken=[redacted] not found",
 		},
+		// A phone's pairing code, and the pairing request's id, whose first
+		// poll after the approval collects the new device's key: hidden the
+		// same way. From loopback both routes answer not found, so their
+		// "not found" line is checked too.
+		{ label: "the pairing code", path: `/remote/enroll?code=${pairingValue}`, headers: authHeader, status: 404, logged: "/remote/enroll?code=[redacted]", notFound: "Route GET:/remote/enroll?code=[redacted] not found", secret: pairingValue },
+		{ label: "the pairing request's id", path: `/remote/enroll/status?requestId=${pairingValue}`, headers: authHeader, status: 404, logged: "/remote/enroll/status?requestId=[redacted]", notFound: "Route GET:/remote/enroll/status?requestId=[redacted] not found", secret: pairingValue },
+		{ label: "an encoded pairing code", path: `/remote/enroll?%63ode=${pairingValue}`, headers: authHeader, status: 404, logged: "/remote/enroll?%63ode=[redacted]", secret: pairingValue },
+		{ label: "an encoded pairing request's id", path: `/remote/enroll/status?request%49d=${pairingValue}`, headers: authHeader, status: 404, logged: "/remote/enroll/status?request%49d=[redacted]", secret: pairingValue },
+		{
+			label: "repeated pairing names among other parameters",
+			path: `/remote/enroll/status?keep=1&requestId=${pairingValue}&%72equestId=${pairingValue}&code=${pairingValue}#x&next=%2F`,
+			headers: authHeader,
+			status: 404,
+			logged: "/remote/enroll/status?keep=1&requestId=[redacted]&%72equestId=[redacted]&code=[redacted]&next=%2F",
+			secret: pairingValue,
+		},
 	];
 	const tokenLogFailures: string[] = [];
 	for (const probe of tokenLogProbes) {
+		const secret = probe.secret ?? SMOKE_AUTH_TOKEN;
+		const shown = (text: string) => withoutSmokeToken(text).split(secret).join("<the value>");
 		const from = serverOutput.length;
 		const res = await requestWithHeaders(probe.path, probe.headers ?? {});
-		const lines = await logOfNextRequest(from, "/auth/session");
-		const loggedUrl = withoutSmokeToken(String(lines.find((line) => line.msg === "incoming request")?.req?.url ?? ""));
-		const inClear = lines.filter((line) => JSON.stringify(line).includes(SMOKE_AUTH_TOKEN));
+		const lines = await logOfNextRequest(from, new URL(probe.path, absolute).pathname);
+		const loggedUrl = shown(String(lines.find((line) => line.msg === "incoming request")?.req?.url ?? ""));
+		const inClear = lines.filter((line) => JSON.stringify(line).includes(secret));
 		if (res.status !== probe.status) tokenLogFailures.push(`${probe.label}: expected ${probe.status}, got ${res.status}`);
 		else if (res.status === 302 && !String(res.headers["set-cookie"] ?? "").includes("exxperts_auth=")) tokenLogFailures.push(`${probe.label}: signed in without the session cookie`);
 		if (inClear.length > 0) {
-			const where = inClear.map((line) => withoutSmokeToken(line.msg === "incoming request" ? `incoming request ${line.req?.url}` : String(line.msg)));
-			tokenLogFailures.push(`${probe.label}: the token is in clear in ${inClear.length} log line(s): ${where.join(" | ")}`);
+			const where = inClear.map((line) => shown(line.msg === "incoming request" ? `incoming request ${line.req?.url}` : String(line.msg)));
+			tokenLogFailures.push(`${probe.label}: the value is in clear in ${inClear.length} log line(s): ${where.join(" | ")}`);
 		} else if (loggedUrl !== probe.logged) {
 			tokenLogFailures.push(`${probe.label}: expected the address logged as ${probe.logged}, got ${loggedUrl}`);
 		}
 		if (probe.notFound && !lines.some((line) => line.msg === probe.notFound)) tokenLogFailures.push(`${probe.label}: expected the line "${probe.notFound}"`);
 	}
-	assert(tokenLogFailures.length === 0, `the sign-in token in the request log:\n  ${tokenLogFailures.join("\n  ")}`);
+
+	// 13b. The desktop logs at warn by default. Asked off the tunnel, the two
+	//      pairing routes answer the framework's not found, and nothing about
+	//      that request is written at warn or above: the framework's own
+	//      warning on a second reply printed the raw address, value included.
+	//      The request's info lines, read in the same place, show the log was
+	//      read. The answer is the framework's not found, unchanged.
+	const warnFailures: string[] = [];
+	for (const pairingPath of [`/remote/enroll?code=${pairingValue}`, `/remote/enroll/status?requestId=${pairingValue}`]) {
+		const shown = (text: string) => text.split(pairingValue).join("<the value>");
+		const from = serverOutput.length;
+		const res = await requestWithHeaders(pairingPath, authHeader);
+		const lines = await logOfNextRequest(from, new URL(pairingPath, absolute).pathname);
+		const atWarn = lines.filter((line) => Number(line.level) >= 40);
+		const expectedBody = JSON.stringify({ message: `Route GET:${pairingPath} not found`, error: "Not Found", statusCode: 404 });
+		if (res.status !== 404 || res.body !== expectedBody) warnFailures.push(`${shown(pairingPath)}: expected 404 ${shown(expectedBody)}, got ${res.status} ${shown(res.body)}`);
+		if (atWarn.length > 0) warnFailures.push(`${shown(pairingPath)}: ${atWarn.length} line(s) at warn or above: ${atWarn.map((line) => shown(String(line.msg))).join(" | ")}`);
+		if (lines.some((line) => JSON.stringify(line).includes(pairingValue))) warnFailures.push(`${shown(pairingPath)}: the value is in a log line`);
+	}
+	const logFailures = [...tokenLogFailures, ...warnFailures.map((failure) => `at the desktop's log level, ${failure}`)];
+	assert(logFailures.length === 0, `the sign-in token and the pairing values in the request log:\n  ${logFailures.join("\n  ")}`);
 
 	// 14. An upgrade request to a route without a socket handler: the
 	//     websocket plugin completes the handshake, closes the socket and logs

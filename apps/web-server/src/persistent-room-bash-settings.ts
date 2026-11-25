@@ -143,8 +143,13 @@ export function readPersistentRoomBashSettings(agentIdRaw: string, options: Pers
 	return readPersistentRoomBashSettingsIn(agentIdRaw, persistentRoomProtection(agentIdRaw, options), options, now);
 }
 
-/** The same read in a given protection, so a computer this one isn't can be judged as the real one is. */
+/**
+ * The same read in a given protection, so a computer this one isn't can be
+ * judged as the real one is. A shared server reads no stored setting, so there
+ * every room answers as one with none, and the file is left as it was.
+ */
 export function readPersistentRoomBashSettingsIn(agentIdRaw: string, protection: PersistentRoomProtection, options: PersistentRoomBashSettingsStorageOptions = {}, now = new Date()): PersistentRoomBashSettings {
+	if (isSharedServer()) return { schemaVersion: 1, autoApprove: false, updatedAt: "" };
 	const settingsPath = persistentRoomBashSettingsPath(agentIdRaw, options);
 	const stored = storedRunWithoutAsking(settingsPath);
 	const kept = settledFor(stored, protection, commandsOnOf(agentIdRaw, options));

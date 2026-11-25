@@ -271,7 +271,7 @@ try {
 		await pageTurnEnded();
 		summaryBusy = false;
 		const busyLines = (await errorTexts()).slice(before);
-		assert(busyLines.length === 1 && /^Claude Haiku 5\.5 is still busy after several tries\. (?:Your message is still above\. )?Try again in a minute\.$/.test(busyLines[0] ?? ""), `a summary call refused for a rate limit says the model is busy, got ${JSON.stringify(busyLines)}`);
+		assert(busyLines.length === 1 && /^Claude Haiku 5\.5 is still busy after several tries\. (?:Your message is still above\. )?Try again later\.$/.test(busyLines[0] ?? ""), `a summary call refused for a rate limit says the model is busy, got ${JSON.stringify(busyLines)}`);
 		assert((await newest.locator(".failure-cause").innerText()).trim() === `${MODEL_NAME} is still busy after several tries.` && (await newest.locator(".failure-details-toggle").count()) === 1, `the busy line is a usual failure row: its cause first, with Details, got ${JSON.stringify(await newest.innerText())}`);
 		await composer.fill("");
 		console.log("  ok  a summary call refused for a rate limit ends in the busy line, a usual failure row, never the line about shortening");

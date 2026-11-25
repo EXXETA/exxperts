@@ -5,7 +5,7 @@
 // Back during a Memorize or Review discussion, by the mac app's arrow too, asks Leave, Keep discussing
 // stays, Leave goes, and the discussion is back on the next open; the
 // Memorize card's block for notes the one-time sort placed, with Move, and the
-// same open-conversation line on its saved screen; Return Home from an
+// same open-conversation line on its saved screen; Back to rooms from an
 // ordinary saved Remember writes nothing into the conversation it closed; and
 // the Memory page shows a saved page in plain words, and a page that holds
 // only its date by its dated title; a Review whose every tidy call failed says
@@ -472,7 +472,7 @@ try {
 		if (await page.locator('[aria-label="Memory maintenance chooser"]').count()) await page.goBack();
 		await card("Saved Room").waitFor({ timeout: 10_000 });
 
-		// 5. Return Home from an ordinary saved Remember: Home, and nothing is written into the conversation the save closed.
+		// 5. Back to rooms from an ordinary saved Remember: the rooms, and nothing is written into the conversation the save closed.
 		await card("Saved Room").getByRole("button", { name: /^(Enter|Resume)$/ }).click();
 		const composer = page.locator("textarea").first();
 		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15_000 });
@@ -494,14 +494,14 @@ try {
 		const toClosed: string[] = [];
 		page.on("request", (request) => { if (request.method() !== "GET" && request.url().includes(encodeURIComponent(closedId))) toClosed.push(`${request.method()} ${request.url()}`); });
 		page.on("websocket", (socket) => socket.on("framesent", (frame) => { if (String(frame.payload).includes('"prompt"')) toClosed.push(`ws ${String(frame.payload).slice(0, 80)}`); }));
-		await dialog.getByRole("button", { name: "Return Home" }).click();
+		await dialog.getByRole("button", { name: "Back to rooms" }).click();
 		await card("Saved Room").waitFor({ timeout: 10_000 });
 		await page.waitForTimeout(2_000);
 		const after = closedFiles();
 		assert(await page.locator(".system-line.error").count() === 0, "no red line on the way Home");
 		assert(toClosed.length === 0, `nothing is sent to the closed conversation, got ${toClosed.join(" | ")}`);
-		assert([...before].every(([file, sum]) => after.get(file) === sum) && after.size === before.size, "the closed conversation's files are unchanged after Return Home");
-		console.log("  ok  Return Home from the ordinary saved page goes Home and leaves the closed conversation as it was");
+		assert([...before].every(([file, sum]) => after.get(file) === sum) && after.size === before.size, "the closed conversation's files are unchanged after Back to rooms");
+		console.log("  ok  Back to rooms from the ordinary saved page goes to the rooms and leaves the closed conversation as it was");
 
 		// 6. The Memory page: the saved page in plain words, and the page that holds only its date by its dated title.
 		await page.evaluate(() => { window.location.hash = "#/memory"; });

@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useId, useRef, useState } from "react";
 import { fetchPersistentRoomBackgroundRuns } from "../persistent-room-background-runs-api";
-import { formatFriendlyRunReason, recentRunReason, runShownStatus } from "../scheduled-run-reason";
+import { formatFriendlyRunReason, recentRunReason, runShownStatus, type RunShownStatus } from "../scheduled-run-reason";
 import { fmtMemoryMoment } from "../memory-surface-copy";
 import { useRemoteClientContext } from "../remote-client-context";
 import {
@@ -43,6 +43,8 @@ import type {
 	PersistentRoomSchedulesResponse,
 } from "../types";
 import { PaneHeader } from "./pane-header";
+import { useSettingsLookNext } from "../settings-look";
+import { useNeededFields } from "./settings-dialog";
 
 const PROMPT_PREVIEW_LIMIT = 220;
 // Monday-first display order over cron day numbers (0 = Sunday).
@@ -113,11 +115,12 @@ function shortId(value: string | undefined): string {
 	return value.length <= 10 ? value : value.slice(0, 8);
 }
 
-function formatRunStatus(status: PersistentRoomBackgroundRunView["status"]): string {
+export function formatRunStatus(status: RunShownStatus): string {
 	switch (status) {
 		case "queued": return "Queued";
 		case "running": return "Running";
 		case "deferred": return "Waiting";
+		case "paused": return "Paused";
 		case "blocked": return "Blocked";
 		case "succeeded": return "Completed";
 		case "failed": return "Failed";
@@ -133,6 +136,12 @@ function formatRunScheduleLabel(run: PersistentRoomBackgroundRunView, jobsById: 
 	const job = jobsById.get(scheduleId);
 	if (job) return job.name || `Task ${shortId(job.id)}`;
 	return `Deleted task ${shortId(scheduleId)}`;
+}
+
+/** Whether a run's task runs again at a next time: not a one-time task's, nor a deleted task's, whose kind is gone. */
+function runRepeats(run: PersistentRoomBackgroundRunView, jobsById: Map<string, PersistentRoomScheduleJob>): boolean {
+	const job = run.source.scheduleId ? jobsById.get(run.source.scheduleId) : undefined;
+	return job !== undefined && job.type !== "once";
 }
 
 function isScheduledRun(run: PersistentRoomBackgroundRunView): boolean {
@@ -176,7 +185,7 @@ export function findRelevantRunForJob(job: PersistentRoomScheduleJob, latestBySc
 
 function deriveOneTimeState(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): { label: string; tone: "default" | "disabled" | "success" | "warning" | "danger" } {
 	if (latestRun) {
-		switch (runShownStatus(latestRun)) {
+		switch (runShownStatus(latestRun, false)) {
 			case "queued": return { label: "Queued", tone: "warning" };
 			case "running": return { label: "Running", tone: "warning" };
 			case "deferred": return { label: "Waiting", tone: "default" };
@@ -194,7 +203,7 @@ function deriveOneTimeState(job: PersistentRoomScheduleJob, latestRun: Persisten
 	return { label: job.enabled ? "Scheduled once" : "Disabled", tone: job.enabled ? "success" : "disabled" };
 }
 
-function deriveScheduleState(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): { label: string; tone: "default" | "disabled" | "success" | "warning" | "danger" } {
+export function deriveScheduleState(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): { label: string; tone: "default" | "disabled" | "success" | "warning" | "danger" } {
 	if (job.type === "once") return deriveOneTimeState(job, latestRun);
 	return { label: job.enabled ? "Enabled" : "Disabled", tone: job.enabled ? "success" : "disabled" };
 }
@@ -247,12 +256,12 @@ function hasDraftBuildError<T extends object>(value: T | { error: string }): val
 	return "error" in value;
 }
 
-function ScheduleSummary({ latestRun, nextDueAt, summary, enabledCount }: { latestRun: PersistentRoomBackgroundRunView | null; nextDueAt: string | null; summary: PersistentRoomScheduleSummary; enabledCount: number }) {
+function ScheduleSummary({ latestRun, jobsById, nextDueAt, summary, enabledCount }: { latestRun: PersistentRoomBackgroundRunView | null; jobsById: Map<string, PersistentRoomScheduleJob>; nextDueAt: string | null; summary: PersistentRoomScheduleSummary; enabledCount: number }) {
 	if (summary.totalCount === 0) return null;
 	const facts = [
 		`${pluralize(summary.totalCount, "task")} · ${enabledCount} enabled`,
 		nextDueAt ? `next due ${formatTimestamp(nextDueAt)}` : null,
-		latestRun ? `last run: ${formatRunStatus(runShownStatus(latestRun))}` : null,
+		latestRun ? `last run: ${formatRunStatus(runShownStatus(latestRun, runRepeats(latestRun, jobsById)))}` : null,
 	].filter(Boolean);
 	return (
 		<div className="room-schedules-summary" aria-label="Scheduled tasks summary">
@@ -271,7 +280,7 @@ function ScheduleForm({
 	onCancel,
 	onSave,
 }: {
-	/** Set when the pane header carries Save and Cancel; the form then has none of its own. */
+	/** Set on the form that makes a task: the settings look puts its buttons under its fields, the old look in the pane header. */
 	formId?: string;
 	allowAutoType: boolean;
 	serverZone: string | null;
@@ -283,6 +292,13 @@ function ScheduleForm({
 }) {
 	const [draft, setDraft] = useState(initialDraft);
 	const [validationError, setValidationError] = useState<string | null>(null);
+	// The settings look checks the two fields itself: their mark, not the browser's own warning.
+	const lookNext = useSettingsLookNext();
+	const needed = useNeededFields();
+	const nameNeeded = needed.field("name", draft.name);
+	const promptNeeded = needed.field("prompt", draft.prompt);
+	const nameRef = useRef<HTMLInputElement | null>(null);
+	const promptRef = useRef<HTMLTextAreaElement | null>(null);
 	const summary = formatScheduleRecurrenceDraftSummary(draft.recurrence);
 	const displayedError = validationError || error;
 
@@ -293,6 +309,7 @@ function ScheduleForm({
 
 	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (lookNext && !needed.filled([[draft.name, nameRef.current], [draft.prompt, promptRef.current]])) return;
 		const nextValidationError = validateScheduleRecurrenceDraft(draft.recurrence, { allowAutoType });
 		if (nextValidationError) {
 			setValidationError(nextValidationError);
@@ -302,22 +319,27 @@ function ScheduleForm({
 	}
 
 	return (
-		<form id={formId} className="room-schedules-form" onSubmit={handleSubmit}>
+		<form id={formId} className="room-schedules-form" noValidate={lookNext} onSubmit={handleSubmit}>
 			<label className="settings-field">
 				<span>Name</span>
 				<input
+					ref={nameRef}
 					className="launcher-path-input"
+					{...nameNeeded.props}
 					value={draft.name}
 					onChange={(event) => updateDraft((current) => ({ ...current, name: event.target.value }))}
 					placeholder="Daily market brief"
 					required
 					disabled={saving}
 				/>
+				{nameNeeded.line}
 			</label>
 			<label className="settings-field">
 				<span>What should this room do?</span>
 				<textarea
+					ref={promptRef}
 					className="launcher-path-input"
+					{...promptNeeded.props}
 					value={draft.prompt}
 					onChange={(event) => updateDraft((current) => ({ ...current, prompt: event.target.value }))}
 					placeholder="Summarize new files in the workspace since yesterday and flag anything that needs my attention."
@@ -326,6 +348,7 @@ function ScheduleForm({
 					maxLength={20000}
 					disabled={saving}
 				/>
+				{promptNeeded.line}
 			</label>
 			<div className="settings-rows">
 				<ScheduleRecurrenceEditor
@@ -353,7 +376,12 @@ function ScheduleForm({
 				<p className="settings-help" aria-live="polite">{summary ?? "Choose when this saved task should run."}</p>
 			)}
 			{displayedError && <p className="workspaces-error">{displayedError}</p>}
-			{!formId && (
+			{lookNext ? (
+				<div className="settings-form-foot">
+					<button className="rs-btn rs-btn-primary" type="submit" disabled={saving}>{saving ? "Saving…" : formId ? "Save task" : "Save"}</button>
+					<button className="rs-btn rs-btn-quiet" type="button" onClick={onCancel} disabled={saving}>Cancel</button>
+				</div>
+			) : !formId && (
 				<div className="settings-form-foot">
 					<button className="rs-btn" type="button" onClick={onCancel} disabled={saving}>Cancel</button>
 					<button className="rs-btn rs-btn-primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save"}</button>
@@ -573,6 +601,7 @@ function RecentScheduledRunsSection({
 	response: PersistentRoomBackgroundRunsResponse | null;
 	schedules: PersistentRoomScheduleJob[];
 }) {
+	const lookNext = useSettingsLookNext();
 	const jobsById = new Map(schedules.map((job) => [job.id, job]));
 	const allScheduledRuns = recentScheduledRuns(response);
 	const scheduledRuns = allScheduledRuns.slice(0, RECENT_RUN_DISPLAY_LIMIT);
@@ -595,11 +624,13 @@ function RecentScheduledRunsSection({
 			{!loading && !error && scheduledRuns.length > 0 && (
 				<div className="room-schedules-run-list">
 					{scheduledRuns.map((run) => {
-						const reason = recentRunReason(run);
+						const repeating = runRepeats(run, jobsById);
+						const reason = recentRunReason(run, repeating);
 						return (
 							<article className="room-schedules-run" key={run.runId}>
 								<div className="room-schedules-run-primary">
-									<span className={`room-schedules-run-status status-${runShownStatus(run)}`}>{formatRunStatus(runShownStatus(run))}</span>
+									{lookNext && <span className={`room-schedules-run-dot status-${runShownStatus(run, repeating)}`} aria-hidden="true" />}
+									<span className={`room-schedules-run-status status-${runShownStatus(run, repeating)}`}>{formatRunStatus(runShownStatus(run, repeating))}</span>
 									<strong>{formatRunScheduleLabel(run, jobsById)}</strong>
 									<span>{formatRunTiming(run)}</span>
 								</div>
@@ -657,14 +688,26 @@ function ScheduleJobCard({
 	const actionDisabled = disabled || Boolean(mutation);
 	const rowState = deriveScheduleState(job, latestRun);
 	const rowStateClass = rowState.tone === "default" ? "room-schedules-record-state" : `room-schedules-record-state ${rowState.tone}`;
-	const latestAttempt = latestRun ? `${formatRunStatus(runShownStatus(latestRun))} at ${formatTimestamp(getRunEventTimestamp(latestRun))}` : null;
-	const latestReason = latestRun ? formatFriendlyRunReason(latestRun) : null;
+	const repeating = job.type !== "once";
+	const latestAttempt = latestRun ? `${formatRunStatus(runShownStatus(latestRun, repeating))} at ${formatTimestamp(getRunEventTimestamp(latestRun))}` : null;
+	const latestReason = latestRun ? formatFriendlyRunReason(latestRun, repeating) : null;
 	const nextDueAt = shownNextDueAt(job, latestRun);
+	// The new look: the state's colour on a dot beside its words, Enabled as a switch at the row's end, Edit boxed, Delete in soft red.
+	const lookNext = useSettingsLookNext();
+	const nameId = useId();
+	const deleteClass = lookNext ? "rs-btn rs-btn-danger rs-btn-danger-soft rs-btn-sm rs-quiet" : "rs-btn rs-btn-danger rs-btn-sm rs-quiet";
+	// Beside Delete's soft red box, Edit is a box too.
+	const editClass = lookNext ? "rs-btn rs-btn-sm rs-quiet" : "rs-btn rs-btn-quiet rs-btn-sm rs-quiet";
+	const toggleTitle = job.enabled ? "Pause this task; it stays in the list" : "Turn this task back on";
 	return (
 		<article className="room-schedules-job">
 			<div className="room-schedules-job-head">
-				<strong>{job.name || job.id}</strong>
+				<strong id={lookNext ? nameId : undefined}>{job.name || job.id}</strong>
+				{lookNext && <span className={rowState.tone === "default" ? "room-schedules-state-dot" : `room-schedules-state-dot ${rowState.tone}`} aria-hidden="true" />}
 				<span className={rowStateClass}>{rowState.label}</span>
+				{/* Marked as the look's own, for the check that the kept class names stay on the same elements.
+				    Gone while the task's form is open, as Disable and Enable are: the form's Save would put the old value back. */}
+				{lookNext && !editing && <input className="workspaces-tool-switch room-schedules-enabled" data-look-only="" type="checkbox" role="switch" aria-label="Enabled" aria-describedby={nameId} title={toggleTitle} checked={toggling ? !job.enabled : job.enabled} disabled={actionDisabled} onChange={() => void onToggleEnabled()} />}
 			</div>
 			{hasFriendlyWhen && <p className="room-schedules-when-summary"><span>When:</span> {whenSummary}</p>}
 			<div className="room-schedules-job-meta">
@@ -691,16 +734,16 @@ function ScheduleJobCard({
 					<p className="room-schedules-prompt"><span>Prompt preview:</span> {promptPreview || "No prompt text recorded."}</p>
 					{error && <p className="workspaces-error">{error}</p>}
 					<div className="room-schedules-job-actions">
-						<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" onClick={onEdit} disabled={actionDisabled}>Edit</button>
-						<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this task; it stays in the list" : "Turn this task back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
-						<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" onClick={onRequestDelete} disabled={actionDisabled}>Delete</button>
+						<button className={editClass} type="button" onClick={onEdit} disabled={actionDisabled}>Edit</button>
+						{!lookNext && <button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={toggleTitle}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>}
+						<button className={deleteClass} type="button" onClick={onRequestDelete} disabled={actionDisabled}>Delete</button>
 					</div>
 					{confirmingDelete && (
 						<div className="room-schedules-delete-confirm">
 							<p>Delete this task? Its past runs stay in Recent runs.</p>
 							<div className="room-schedules-job-actions">
 								<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" type="button" onClick={onCancelDelete} disabled={deleting}>Cancel</button>
-								<button className="rs-btn rs-btn-danger rs-btn-sm rs-quiet" type="button" onClick={onConfirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
+								<button className={deleteClass} type="button" onClick={onConfirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
 							</div>
 						</div>
 					)}
@@ -732,10 +775,12 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 	const creating = mutation?.kind === "create";
 	const latestBySchedule = latestRunsBySchedule(runsResponse);
 	const latestScheduledRun = recentScheduledRuns(runsResponse)[0] ?? null;
+	const jobsById = new Map((response?.jobs ?? []).map((job) => [job.id, job]));
 	const derivedNextDueAt = response && runsResponse ? deriveNextDueAt(response.jobs, latestBySchedule) : summary.nextRunAt;
 	const scheduleRows = (response?.jobs ?? []).map((job) => ({ job, latestRun: findRelevantRunForJob(job, latestBySchedule) }));
 	const activeScheduleRows = scheduleRows.filter(({ job, latestRun }) => !isCompletedSuccessfulOneTimeSchedule(job, latestRun));
 	const completedOneTimeRows = scheduleRows.filter(({ job, latestRun }) => isCompletedSuccessfulOneTimeSchedule(job, latestRun));
+	const lookNext = useSettingsLookNext();
 
 	useEffect(() => {
 		let cancelled = false;
@@ -862,14 +907,14 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 			<PaneHeader
 				title="Scheduled tasks"
 				line="Prompts this room runs on its own."
-				actions={createOpen ? (
+				actions={createOpen ? !lookNext && (
 					<>
 						<button className="rs-btn" type="button" disabled={creating} onClick={() => { setCreateOpen(false); setCreateError(null); }}>Cancel</button>
 						<button className="rs-btn rs-btn-primary" type="submit" form="schedule-create-form" disabled={creating}>{creating ? "Saving…" : "Save task"}</button>
 					</>
 				) : canLoadSchedules && !loading && !error && (
 					<button
-						className="rs-btn"
+						className={lookNext ? "rs-btn rs-btn-sm" : "rs-btn"}
 						type="button"
 						onClick={() => {
 							setCreateOpen(true);
@@ -886,7 +931,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 				)}
 			/>
 			{/* A completed one-time task has nothing left to run, so it does not count as enabled. */}
-			<ScheduleSummary latestRun={latestScheduledRun} nextDueAt={derivedNextDueAt} summary={summary} enabledCount={activeScheduleRows.filter(({ job }) => job.enabled).length} />
+			<ScheduleSummary latestRun={latestScheduledRun} jobsById={jobsById} nextDueAt={derivedNextDueAt} summary={summary} enabledCount={activeScheduleRows.filter(({ job }) => job.enabled).length} />
 			{message && <p className="workspaces-success">{message}</p>}
 			{loading && <p className="settings-empty">Loading scheduled tasks…</p>}
 			{error && <div className="workspaces-error">Could not load scheduled tasks: {error}</div>}

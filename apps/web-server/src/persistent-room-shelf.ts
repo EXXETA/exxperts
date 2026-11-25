@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
+import { roomFilesAreTheFolder } from "./room-files-folder.js";
 import { listTaskLedgerRecords, rewriteTaskLedgerRecord } from "./persistent-room-task-ledger.js";
 
 /**
@@ -693,10 +694,12 @@ export function buildShelfManifestSection(roomIdRaw: string, options: Persistent
 	if (!complete) return null;
 	if (entries.length === 0) return "";
 	const made = roomMadeShelfFilenames(roomIdRaw, options);
+	// Where the room writes its own files too, a file with no record may be the room's: it says who only when it knows.
+	const added = roomFilesAreTheFolder() ? "added" : "added by you";
 	const shown = entries.slice(0, MANIFEST_MAX_LINES);
 	const lines = shown.map((entry) => {
 		const madeAt = made.get(entry.name);
-		const origin = madeAt ? `made by the room, ${manifestDate(Date.parse(madeAt) || entry.mtimeMs)}` : `added by you, ${manifestDate(entry.mtimeMs)}`;
+		const origin = madeAt ? `made by the room, ${manifestDate(Date.parse(madeAt) || entry.mtimeMs)}` : `${added}, ${manifestDate(entry.mtimeMs)}`;
 		return `- ${entry.name} · ${manifestSize(entry.bytes)} · ${origin}`;
 	});
 	const overflow = entries.length - shown.length;

@@ -123,6 +123,8 @@ function absorbUnavailableCopy(availability: AbsorbAvailability): { heading: str
 const REMEMBER_OTHER_CONVERSATION_OPEN = "Remember stopped because another conversation is open now. Open Remember again.";
 /** A window still on a conversation the room moved on from (draft). */
 const ROOM_MOVED_ON_SENTENCE = "This room went on in another window. Reload to continue there.";
+// A room another page archived or deleted, said on Home to every other page that had it open.
+const roomGoneOnAnotherPage = (roomName: string, how: "archived" | "deleted"): string => `${roomName} was ${how} on another page.`;
 function formatRememberError(message: string): string {
 	// Remember's own refusals are already written for the person: pass them through.
 	if (isPlainRememberSentence(message)) return message;
@@ -178,4 +180,4 @@ function formatReviewApprovalError(message: string, code?: string): string {
 	return "These changes could not be saved. The memory is unchanged and this tidy is still here.";
 }
 
-export { REMEMBER_OTHER_CONVERSATION_OPEN, ROOM_MOVED_ON_SENTENCE, ROOM_TURN_WAIT_LINE, absorbUnavailableCopy, formatAbsorbWorkflowError, formatMaintenanceDraftError, formatRememberError, formatReviewApprovalError, formatReviewWorkflowError, roomFilledBy };
+export { REMEMBER_OTHER_CONVERSATION_OPEN, ROOM_MOVED_ON_SENTENCE, ROOM_TURN_WAIT_LINE, roomGoneOnAnotherPage, absorbUnavailableCopy, formatAbsorbWorkflowError, formatMaintenanceDraftError, formatRememberError, formatReviewApprovalError, formatReviewWorkflowError, roomFilledBy };

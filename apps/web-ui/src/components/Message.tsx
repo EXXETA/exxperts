@@ -1,5 +1,6 @@
 import { memo, useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
 import type { ChatItem } from "../types";
+import type { MessageSender } from "../../../web-server/src/thread-items-by-id";
 import { copyAnswer } from "../answer-copy";
 import { formatAbsoluteTime, formatRelativeTime } from "../message-time";
 import { CopyButton } from "./CopyButton";
@@ -8,10 +9,10 @@ import { ImageActions } from "./ImageActions";
 import { MarkdownRenderer, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
 import { MEMORY_RECALL_STEP, memoryRecallDisplayText } from "../memory-recall-display";
-import { answerStopNote, failureButtons, failureLineParts, failureLineWords, isStopLine, withoutSendAgain } from "../turn-failure-line";
+import { answerStopNote, failureButtons, failureLineForMember, failureLineParts, failureLineWords, isStopLine, withoutSendAgain } from "../turn-failure-line";
 import { commandAborted, commandDeclined, isCommandStep, lastName, missingToolName, nobodyToApprove, readableToolName, stepOutcome, stoppedBeforeAnswer, stoppedBeforeAsking } from "../step-lines";
 import { SPECIALIST_TEMPLATE_LABELS } from "../../../web-server/src/specialist-template-labels";
-import { useRemoteClientContext } from "../remote-client-context";
+import { sharedServerRole, useRemoteClientContext } from "../remote-client-context";
 import { WAITING_CAPTION, type QueuedBubble } from "../outgoing-messages";
 import { askingWords } from "../mention-popover";
 import { isMacPlatform } from "../platform";
@@ -45,24 +46,46 @@ export function domainOf(url: string): string {
 }
 
 /**
+ * A connector tool in the person's words: the tool's own name, else the
+ * call's name without its connector's prefix ("asana_delete_project" from
+ * asana reads "Delete project"). Null where the call names no connector,
+ * as a name the room doesn't know may carry anything.
+ */
+export function connectorToolWords(args: any, details: any): string | null {
+	if (typeof details?.tool === "string" && details.tool) return readableToolName(details.tool);
+	const called = typeof args?.tool === "string" ? args.tool : "";
+	if (!called) return null;
+	// One of the room's own tools, called through the connector tool by mistake.
+	if (details?.error === "native_tool") return readableToolName(called);
+	const known = typeof details?.server === "string" && details.server ? details.server : typeof args?.server === "string" ? args.server : "";
+	if (!known) return null;
+	const prefix = `${known.replace(/-/g, "_")}_`;
+	const rest = called.replace(/-/g, "_").startsWith(prefix) ? called.slice(prefix.length) : called;
+	return rest ? readableToolName(rest) : null;
+}
+
+/**
  * The `mcp` proxy tool routes every connector interaction through one tool,
  * so the raw call reads as "mcp {json}". Surface what actually happened
  * instead: which remote tool, connect, search, or auth step.
  */
 export function mcpChipView(args: any, details: any): { name: string; summary: string } {
 	const a = args && typeof args === "object" ? args : {};
+	// A connector by the name the person knows (mcp/room-scope.ts), never its key; one the step doesn't name is "a connector".
+	const named = typeof details?.connector === "string" && details.connector ? String(details.connector).slice(0, 160) : "";
+	const connector = named || "a connector";
 	if (a.tool) {
-		// The connector's name, never the call's raw arguments.
-		const server = typeof a.server === "string" && a.server ? a.server : typeof details?.server === "string" ? details.server : "";
-		return { name: `🔌 ${String(a.tool)}`, summary: server.slice(0, 160) };
+		// What the call used in the person's words, never the call's raw arguments or the tool's internal name.
+		const use = typeof details?.use === "string" && details.use ? details.use : "";
+		if (use) return { name: `🔌 ${use}`, summary: "" };
+		const words = connectorToolWords(a, details);
+		return words ? { name: `🔌 ${words}`, summary: named } : { name: "🔌 Connector tool", summary: named };
 	}
-	if (a.action === "auth-start" || a.action === "auth-complete") {
-		return { name: "🔌 Connector login", summary: String(a.server ?? "") };
-	}
-	if (a.connect) return { name: "🔌 Connect", summary: String(a.connect) };
-	if (a.search || a.regex) return { name: "🔌 Search connector tools", summary: String(a.search ?? a.regex ?? "") };
-	if (a.describe) return { name: "🔌 Describe tool", summary: String(a.describe) };
-	if (a.server) return { name: "🔌 List connector tools", summary: String(a.server) };
+	if (a.action === "auth-start" || a.action === "auth-complete") return { name: "🔌 Connector login", summary: connector };
+	if (a.connect) return { name: "🔌 Connect", summary: connector };
+	if (a.search || a.regex) return { name: "🔌 Search connector tools", summary: `“${String(a.search ?? a.regex ?? "").slice(0, 80)}”${named ? ` in ${named}` : ""}` };
+	if (a.describe) return { name: "🔌 Describe tool", summary: typeof details?.about === "string" && details.about ? details.about : "" };
+	if (a.server) return { name: "🔌 List connector tools", summary: connector };
 	return { name: "🔌 Connector status", summary: "" };
 }
 
@@ -514,7 +537,8 @@ function stateLabel(item: ToolChatItem, summary: string): { name: string; summar
 	if (item.name === "mcp") {
 		const args = item.args && typeof item.args === "object" ? item.args : {};
 		const error = String(item.details?.error ?? "");
-		const connector = String(item.details?.server || args.server || args.connect || summary).slice(0, 160);
+		// By the name the person knows, as mcpChipView does; never the connector's key.
+		const connector = typeof item.details?.connector === "string" && item.details.connector ? String(item.details.connector).slice(0, 160) : "a connector";
 		if (error === "auth_required") return { name: "🔌 Needs sign-in", summary: connector };
 		if (CONNECTION_FAILURES.has(error)) return { name: "🔌 Couldn't connect", summary: connector };
 		if (MISSING_CONNECTOR_TOOLS.has(error)) return { name: "🔌 No such tool", summary: String(args.tool ?? args.describe ?? item.details?.requestedTool ?? "").slice(0, 160), labelOnly: true };
@@ -543,10 +567,10 @@ function ToolChip({ item: shown, saidOnCard = false, elsewhere = false }: { item
 	// A command ended by Stop comes back as an error; the person stopped it, so it reads as stopped.
 	const item: ToolChatItem = isCommandStep(shown.name) && shown.status === "error" && commandAborted(shown.result) ? { ...shown, status: "stopped", result: undefined } : shown;
 	// Read through the hook, so a card shown before the server answered takes its words once it does.
-	const { sharedServer } = useRemoteClientContext();
+	const { sharedServer, remote } = useRemoteClientContext();
 	const failed = item.status === "error";
 	// A refusal (the app's rules, the room's settings or the person kept the step from running) looks calm; a failure stays red.
-	const outcome = failed && typeof item.result === "string" ? stepOutcome(item.result, item, sharedServer) : null;
+	const outcome = failed && typeof item.result === "string" ? stepOutcome(item.result, item, sharedServer, remote) : null;
 	const refused = outcome?.refused === true;
 	const summary = summariseToolArgs(item.name, item.args);
 	const goesOnElsewhere = elsewhere && item.status === "running";
@@ -729,6 +753,17 @@ function UserAttachmentThumb({ name, src, onOpen }: { name: string; src: string;
 	);
 }
 
+/** Above another person's message: who sent it. Your own messages name nobody. */
+export const SENDER_UNNAMED = "Someone else";
+export const SENDER_LEFT = "Someone who left";
+function senderWords(sender: Exclude<MessageSender, { is: "you" }>): string {
+	switch (sender.is) {
+		case "named": return sender.name;
+		case "unnamed": return SENDER_UNNAMED;
+		case "left": return SENDER_LEFT;
+	}
+}
+
 // When the message was written, in the action row under it: a relative label
 // ("5 minutes ago") that is revealed with the row on hover, the full date and
 // time as its tooltip. No timer per message: the label is computed from the
@@ -758,23 +793,28 @@ export interface FailureLineActions {
 }
 
 // Only the newest failure line is drawn in full, with its buttons; an older one
-// folds to its cause and keeps its Details.
-function FailureLine({ item, newest, actions }: { item: SystemChatItem; newest: boolean; actions?: FailureLineActions }) {
+// folds to its cause and keeps its Details. On a shared server the provider's
+// own words are the admin's: a member reads the line without Details, the
+// plain cause's way on sending them to the admin (failureLineForMember).
+function FailureLine({ item: saved, newest, actions }: { item: SystemChatItem; newest: boolean; actions?: FailureLineActions }) {
 	const saidId = useId();
 	const [open, setOpen] = useState(false);
+	const member = sharedServerRole(useRemoteClientContext()) === "member";
+	const item = member ? failureLineForMember(saved) : saved;
+	const details = member ? undefined : item.details;
 	const decided = newest && actions ? failureButtons(item.failure, item.quotaWay, actions.shared, item.gatewayFind) : null;
 	const buttons = decided && { ...decided, replaceKey: decided.replaceKey && Boolean(item.provider), reviewMemory: decided.reviewMemory && actions!.reviewsMemory };
 	const shown = failureLineParts(item);
 	const [cause, rest] = buttons ? [failureLineWords(shown.cause, buttons), failureLineWords(shown.rest, buttons)] : [shown.cause, shown.rest];
-	const toggle = item.details ? (
+	const toggle = details ? (
 		<button type="button" className="failure-details-toggle" aria-expanded={open} aria-controls={saidId} onClick={() => setOpen((value) => !value)}>
 			{newest ? (open ? "Hide details" : "Show details") : "Details"}
 		</button>
 	) : null;
-	const said = item.details ? (
+	const said = details ? (
 		<div id={saidId} className="failure-said" hidden={!open}>
 			{item.detailsFrom && <span className="failure-said-from">From {item.detailsFrom}</span>}
-			<span className="failure-said-words">{item.details}</span>
+			<span className="failure-said-words">{details}</span>
 		</div>
 	) : null;
 	if (!newest) {
@@ -800,7 +840,7 @@ function FailureLine({ item, newest, actions }: { item: SystemChatItem; newest: 
 				</div>
 				{(anyButton || toggle) && (
 					<div className="failure-actions">
-						{buttons?.tryAgain && <button type="button" className="rs-btn rs-btn-sm" disabled={actions?.tryAgainUnavailable} onClick={() => actions?.onTryAgain(item)}>Try again</button>}
+						{buttons?.tryAgain && <button type="button" className="rs-btn rs-btn-sm" disabled={actions?.tryAgainUnavailable} onClick={() => actions?.onTryAgain(saved)}>Try again</button>}
 						{buttons?.reviewMemory && <button type="button" className="rs-btn rs-btn-sm" onClick={() => actions?.onReviewMemory()}>Review memory</button>}
 						{buttons?.chooseModel && <button type="button" className="rs-btn rs-btn-sm" onClick={() => actions?.onChooseModel()}>Choose another model</button>}
 						{buttons?.replaceKey && <button type="button" className="rs-btn rs-btn-sm" onClick={() => actions?.onReplaceKey(item.provider ?? "")}>Replace key</button>}
@@ -887,7 +927,7 @@ export function BubbleEditor({ text, onCancel, onSend }: { text: string; onCance
  * (`withoutSendAgain`). `onEdit`: this is the newest message and may be
  * edited, so its row shows the pencil.
  */
-function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCard, newestFailure, failureActions, drawnAtOnce, elsewhere, followed, onEdit }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess; copyText?: string; copyTs?: number; saidOnCard?: boolean; newestFailure?: boolean; failureActions?: FailureLineActions; drawnAtOnce?: boolean; elsewhere?: boolean; followed?: boolean; onEdit?: (id: string) => void }) {
+function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCard, newestFailure, failureActions, drawnAtOnce, elsewhere, followed, onEdit, sender }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess; copyText?: string; copyTs?: number; saidOnCard?: boolean; newestFailure?: boolean; failureActions?: FailureLineActions; drawnAtOnce?: boolean; elsewhere?: boolean; followed?: boolean; onEdit?: (id: string) => void; sender?: MessageSender }) {
 	// Bumped on every hover of the row so the relative time is recomputed.
 	const [, refreshTime] = useReducer((n: number) => n + 1, 0);
 	const markdownRef = useRef<HTMLDivElement>(null);
@@ -935,9 +975,13 @@ function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCa
 	// deleted, whose muted chip is all that is left of it.
 	const thumbnailNames = new Set(thumbnails.map((attachment) => attachment.name));
 	const chipAttachments = (item.kind === "user" ? item.attachments ?? [] : []).filter((attachment) => !thumbnailNames.has(attachment.name));
+	// Another person's message sits on the left under their name, your own on the right with none.
+	const other = sender && sender.is !== "you" ? sender : undefined;
+	const side = isUser ? (other ? "user others" : "user") : "";
 	return (
-		<div className={`bubble-row ${isUser ? "user" : ""}`} onMouseEnter={refreshTime}>
-			<div className={`bubble-col ${isUser ? "user" : ""}`}>
+		<div className={`bubble-row ${side}`} onMouseEnter={refreshTime}>
+			<div className={`bubble-col ${side}`}>
+				{isUser && other && <div className="bubble-sender">{senderWords(other)}</div>}
 				<div className={`bubble ${isUser ? "user" : ""}`}>
 					{isUser ? (
 						<>
@@ -1004,18 +1048,26 @@ function MessageImpl({ item: saved, attachmentAccess, copyText, copyTs, saidOnCa
 					)}
 				</div>
 				{stopLine && <div className="answer-stop-line">{stopLine}</div>}
-				{/* Action row under the bubble: the user's sits right-aligned, time
-				    before the button, all revealed on hover; the reply's sits under
-				    its last segment (one per reply, once it has settled) with the
-				    button always visible and the reply's start time revealed on
-				    hover. */}
+				{/* Action row under the bubble. A person's sits on its bubble's side,
+				    revealed on hover: under your own, the time before the buttons;
+				    under another person's, the button before the time, as under a
+				    reply. A reply's sits under its last segment (one per reply, once
+				    it has settled) with the button always visible and its start time
+				    revealed on hover. */}
 				{isUser
 					? item.text && (
-						<div className="message-actions user">
-							{userTs !== undefined && <MessageTime ts={userTs} />}
-							{onEdit && <button type="button" className="message-edit-user" title="Edit" aria-label="Edit" onClick={() => onEdit(item.id)}><PencilIcon size={15} /></button>}
-							<CopyButton text={item.text} className="message-copy-user" />
-						</div>
+						other ? (
+							<div className={`message-actions ${side}`}>
+								<CopyButton text={item.text} className="message-copy-user" />
+								{userTs !== undefined && <MessageTime ts={userTs} />}
+							</div>
+						) : (
+							<div className={`message-actions ${side}`}>
+								{userTs !== undefined && <MessageTime ts={userTs} />}
+								{onEdit && <button type="button" className="message-edit-user" title="Edit" aria-label="Edit" onClick={() => onEdit(item.id)}><PencilIcon size={15} /></button>}
+								<CopyButton text={item.text} className="message-copy-user" />
+							</div>
+						)
 					)
 					: copyText && (
 						<div className="message-actions assistant">

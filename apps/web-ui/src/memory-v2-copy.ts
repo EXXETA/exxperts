@@ -11,7 +11,7 @@ import { modelDisplayName } from "./model-names";
 import { knownRemoteClientContext } from "./remote-client-context";
 import { GATEWAY_REFUSED_CAUSE, gatewayNotFoundLine, gatewayRefusedWayOn, quotaCause, quotaWayOn, REGION_OR_PLAN_CAUSE, unreachedCause, unreachedWayOn, type GatewayFind, type QuotaWay, type Unreached } from "./turn-failure-line";
 import { notOnAccountWhy } from "../../web-server/src/model-not-on-account";
-import { credentialGoneOf, credentialGoneWhy, credentialGoneWords, type CredentialKey } from "../../web-server/src/model-not-offered";
+import { credentialGoneOf, credentialGoneWhy, credentialGoneWords, sharedCredentialState, type CredentialKey } from "../../web-server/src/model-not-offered";
 
 /** Token counts are read, not scanned: group them the way the budget line does. */
 export function fmtTokenCount(value: number): string {
@@ -169,13 +169,14 @@ export function memoryModelSignInLabel(key?: CredentialKey): string {
 
 /** Why a run stopped on its Memory model, as the notice's sentence says it (draft wording). The provider names the account a refusal is about; `key` tells a key connection's missing or refused key from a sign-in; `unreached` says the model could not be reached, as the chat's line does. */
 export function memoryModelStopWhy(cause: MemoryModelStopCause, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay): string {
-	if (cause === "not-answering" && unreached) return unreachedCause(unreached);
+	const shared = knownRemoteClientContext()?.sharedServer === true;
+	if (cause === "not-answering" && unreached) return unreachedCause(unreached, shared);
 	switch (cause) {
 		case "busy": return "is still busy after several tries";
-		case "signed-out": return credentialGoneWhy(credentialGoneOf(key));
+		case "signed-out": return credentialGoneWhy(credentialGoneOf(key), shared);
 		case "quota": return quotaCause(quotaWay);
 		case "not-offered": return "is no longer offered";
-		case "not-on-account": return notOnAccountWhy(provider);
+		case "not-on-account": return notOnAccountWhy(provider, shared);
 		case "region-or-plan": return REGION_OR_PLAN_CAUSE;
 		case "gateway-refused": return GATEWAY_REFUSED_CAUSE;
 		default: return "isn't answering right now";
@@ -198,7 +199,8 @@ export function memoryModelStopWayOn(cause: MemoryModelStopCause, unreached?: Un
  */
 function pausedCause(model: string, cause: MemoryModelStopCause, provider?: string, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gateway?: string, gatewayFind?: GatewayFind): string {
 	if (cause === "signed-out") {
-		const state = credentialGoneWords(credentialGoneOf(key)).state;
+		const gone = credentialGoneOf(key);
+		const state = knownRemoteClientContext()?.sharedServer === true ? sharedCredentialState(gone) : credentialGoneWords(gone).state;
 		return gateway ? `${gateway} ${state}` : `${model.replace(/\s*\([^()]*\)$/, "")}'s provider ${state}`;
 	}
 	if (cause === "gateway-not-found") return gatewayNotFoundLine(gateway || provider || "The gateway", model, gatewayFind, false).cause.replace(/\.$/, "");

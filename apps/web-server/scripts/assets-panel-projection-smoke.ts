@@ -169,6 +169,27 @@ try {
 		assert(newerFirst, "user rows interleave by recency (newer user file above the older task row)");
 	}
 
+	// On a shared server the room's AI writes and edits the room's files, and a
+	// file's time is its last change: a person's upload and a file the AI wrote
+	// (neither has a ledger record) both read "updated"; the desktop keeps "attached".
+	{
+		const files = [
+			{ name: "report.md", bytes: 60, mtimeMs: Date.parse("2026-07-17T09:00:00.000Z"), origin: "user" as const, extension: ".md" },
+			{ name: "notes-plan.md", bytes: 104, mtimeMs: Date.parse("2026-07-17T09:30:00.000Z"), origin: "user" as const, extension: ".md" },
+		];
+		const shared = projectAssetRows([], { threadTaskIds: new Set(), sharedServer: true, now: NOW }, files);
+		const desktop = projectAssetRows([], { threadTaskIds: new Set(), sharedServer: false, now: NOW }, files);
+		for (const file of files) {
+			const when = expectedShortTime(new Date(file.mtimeMs).toISOString());
+			const sharedLine = shared.find((row) => row.userFileName === file.name)?.subline;
+			const desktopLine = desktop.find((row) => row.userFileName === file.name)?.subline;
+			assert(sharedLine === `updated · ${when}`, `on a shared server ${file.name} reads updated, got ${sharedLine}`);
+			assert(desktopLine === `attached · ${when}`, `on the desktop ${file.name} reads attached, got ${desktopLine}`);
+		}
+		const revising = projectAssetRows([], { liveTask: { taskId: "tsk-r", title: "Revise", templateId: "", reviseTargetNames: ["report.md"] }, threadTaskIds: new Set(), sharedServer: true, now: NOW }, files);
+		assert(revising.find((row) => row.userFileName === "report.md")?.subline === "updating…", "a file being changed reads updating… on a shared server too");
+	}
+
 	// Rows are files (revise-in-place): a revise run's row claims the shelf
 	// file; the older run whose files are ALL claimed folds into the origin
 	// story. Rows with tasks/ paths or any unclaimed file keep their row.

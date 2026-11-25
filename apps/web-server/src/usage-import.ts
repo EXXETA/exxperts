@@ -19,12 +19,16 @@
  * kill before it, or a torn or missing record, just means files are read again
  * and match the rows already there. A ledger short of what the record says (a
  * row that could not be written, rows lost) means the room's files are read.
+ *
+ * A ledger that cannot be read is not an empty one: matched against nothing,
+ * every turn on disk would be appended again at every start. The run then
+ * appends nothing, keeps the last record and says so.
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
-import { answerlessCallMovedNothing, appendUsage, closeTornUsageLine, loadUsage } from "./usage-log.js";
+import { answerlessCallMovedNothing, appendUsage, closeTornUsageLine, forEachUsageRow, USAGE_RECONCILE_SKIPPED } from "./usage-log.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
 
 interface ImportSummary {
@@ -78,17 +82,17 @@ function writeReconciled(files: Map<string, ReconciledFile>, warn: (message: str
 	}
 }
 
-/** Each room's rows as a multiset of token triples. A row that sums several calls counts as those calls, the way the session file holds them. */
-function ledgerTriplesByRoom(rows: UsageRow[]): Map<string, Map<string, number>> {
+/** Each room's rows as a multiset of token triples, folded as the log is read. A row that sums several calls counts as those calls, the way the session file holds them. Throws when the log cannot be read. */
+function ledgerTriplesByRoom(): Map<string, Map<string, number>> {
 	const rooms = new Map<string, Map<string, number>>();
-	for (const row of rows) {
+	forEachUsageRow((row) => {
 		const triples = rooms.get(row.agent) ?? new Map<string, number>();
 		rooms.set(row.agent, triples);
 		for (const call of Array.isArray(row.calls) ? row.calls : [row]) {
 			const key = matchKey(call.input, call.output, call.cacheRead);
 			triples.set(key, (triples.get(key) ?? 0) + 1);
 		}
-	}
+	});
 	return rooms;
 }
 
@@ -109,7 +113,13 @@ export function importHistoricalSessionUsage(agentsRoot: string, warn: (message:
 	if (!fs.existsSync(agentsRoot)) return null;
 
 	closeTornUsageLine(warn);
-	const ledger = ledgerTriplesByRoom(loadUsage());
+	let ledger: Map<string, Map<string, number>>;
+	try {
+		ledger = ledgerTriplesByRoom();
+	} catch {
+		warn(USAGE_RECONCILE_SKIPPED);
+		return null;
+	}
 	const reconciled = readReconciled();
 	const nextReconciled = new Map<string, ReconciledFile>();
 	const candidates: UsageRow[] = [];

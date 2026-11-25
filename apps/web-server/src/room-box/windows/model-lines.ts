@@ -1,26 +1,33 @@
 import { ALLOW_FOLDER_WHEN_ASKED, ALLOW_WHEN_ASKED, alsoAllowedSentence, boxSitesClause, type AlsoAllowedForModel, ASK_AGAIN_FROM_COMPUTER, ASK_FOR_FOLDER_TOOL_NAME, RUN_OUTSIDE_BOX_TOOL_NAME } from "../card-text.js";
 
 /**
- * What the model reads about a protected room's commands on Windows, where
- * they run in Windows PowerShell 5.1: the command tool's texts, the box's line,
- * the long-output line, the skill line and the outside tool's texts. The Mac's
- * are in ../card-text.ts, ../spill.ts and the runtime's bash tool.
+ * What the model reads about a room's commands on Windows where they run in
+ * Windows PowerShell 5.1 (a protected room's, and on a PC without Git an
+ * unprotected room's): the command tool's texts, the box's line, the
+ * long-output line, the skill line and the outside tool's texts. The Mac's are
+ * in ../card-text.ts, ../spill.ts and the runtime's bash tool, which a PC with
+ * Git has too.
  */
 
-/** The command tool's description; the limits are the runtime's bash tool's own. */
-export const windowsCommandDescription = (limits: { lines: number; kilobytes: number; timeoutSeconds: number }): string =>
-	`Run a Windows PowerShell 5.1 command in the room's folder. This is PowerShell, not bash: use Get-ChildItem, Get-Content, Select-String, $env:NAME, and ; between commands; && and || don't exist in 5.1. ls, cat, rm, cp and mv are PowerShell's own commands with PowerShell's options: write Remove-Item -Recurse -Force, not rm -rf. curl means Invoke-WebRequest; write curl.exe for curl. To pass text with double quotes to a program, put it in a file first. Text files a command writes are UTF-8 with a byte-order mark; write a file that must have none, such as JSON for Python, with the write tool. Programs a command starts end when it ends. Returns the output and errors. Output is truncated to the last ${limits.lines} lines or ${limits.kilobytes}KB (whichever is hit first); the full output is saved to a file. Commands time out after ${limits.timeoutSeconds} seconds by default; provide a timeout in seconds to override.`;
+/** The command tool's description; the limits are the runtime's bash tool's own. `boxed`: the box ends what a command started; nothing else does. */
+export const windowsCommandDescription = (limits: { lines: number; kilobytes: number; timeoutSeconds: number }, boxed = true): string =>
+	`Run a Windows PowerShell 5.1 command in the room's folder. This is PowerShell, not bash: use Get-ChildItem, Get-Content, Select-String, $env:NAME, and ; between commands; && and || don't exist in 5.1. ls, cat, rm, cp and mv are PowerShell's own commands with PowerShell's options: write Remove-Item -Recurse -Force, not rm -rf. curl means Invoke-WebRequest; write curl.exe for curl. To pass text with double quotes to a program, put it in a file first. Text files a command writes are UTF-8 with a byte-order mark; write a file that must have none, such as JSON for Python, with the write tool. ${boxed ? "Programs a command starts end when it ends. " : ""}Returns the output and errors. Output is truncated to the last ${limits.lines} lines or ${limits.kilobytes}KB (whichever is hit first); the full output is saved to a file. Commands time out after ${limits.timeoutSeconds} seconds by default; provide a timeout in seconds to override.`;
 
 export const WINDOWS_COMMAND_SNIPPET = "Run Windows PowerShell 5.1 commands (Get-ChildItem, Select-String, etc.)";
 
 export const WINDOWS_COMMAND_INPUT = "Windows PowerShell 5.1 command to run";
 
+/** Refused before anything starts; the box's command refuses with the same words (windows-engine.ts). */
+export const WINDOWS_COMMAND_TOO_LONG = "This command is longer than Windows lets one command be. Split it into shorter commands.";
+
 /**
  * In the box's line for the model on Windows, where each kind of file goes: TEMP
- * is the turn's temp (command-line.ts), removed when the turn ends, and pip's
- * user place is under APPDATA, which is the room's caches (box-request.ts).
+ * is the turn's temp (command-line.ts), removed when the turn ends, which lies
+ * in the box's own folder, so the file tools never open it (`ownTempRefusal`
+ * in ../../room-files.ts); pip's user place is under APPDATA, which is the
+ * room's caches (box-request.ts).
  */
-export const WINDOWS_FILE_HOMES_LINE = "Only what the person asked for goes into the room's folder. Helper scripts and other temporary files go under $env:TEMP, which is emptied after this answer. A library you install with pip is kept for this room.";
+export const WINDOWS_FILE_HOMES_LINE = "Write what the person asked for, and any file you need to open with the file tools, into the room's folder. Helper scripts and other temporary files go under $env:TEMP, which only commands can open and which is emptied after this answer. A library you install with pip is kept for this room.";
 
 /**
  * What the model is told each answer on Windows, as boxModelLine (../card-text.ts)
@@ -43,15 +50,21 @@ export const WINDOWS_SKILL_READ_ONLY_LINE = "Read them with the read tool. This 
 /**
  * In a skill's text, where a Mac says to run its files with the bash tool and
  * where to write, when the protection was given the skill's folder: read and
- * run, never written. It takes the place of the Mac's sentence on what a write
- * there does to the approval, since no command can write there.
+ * run, and written only where it lies in a place the room writes. It takes the
+ * place of the Mac's sentence on where to write.
  */
-export const WINDOWS_SKILL_RUN_LINE = `Read them with the read tool. Run one with this room's commands by naming its program and quoting its full path, never by its name alone: & '<full path>.ps1' for PowerShell, python '<full path>.py' or py '<full path>.py' for Python, node '<full path>.js' for Node. If Python or Node isn't on this computer, don't install it and don't rewrite a long script: tell the person which program the skill needs, and that exxperts must be started again once it's installed. A .sh file can't run on this computer: do its steps with PowerShell commands where they are simple, otherwise tell the person that step can't run here. Write outputs into the room's folder and helper files under $env:TEMP. The skill's folder can't be changed, so never call ${ASK_FOR_FOLDER_TOOL_NAME} for it because a write there was refused.`;
+export const WINDOWS_SKILL_RUN_LINE = `Read them with the read tool. Run one with this room's commands by naming its program and quoting its full path, never by its name alone: & '<full path>.ps1' for PowerShell, python '<full path>.py' for Python (py '<full path>.py' where python isn't found), node '<full path>.js' for Node. If Python or Node isn't on this computer, don't install it and don't rewrite a long script: tell the person which program the skill needs, and that exxperts must be quit, not just its window closed, and opened again once it's installed. A .sh file can't run on this computer: do its steps with PowerShell commands where they are simple, otherwise tell the person that step can't run here. Write outputs into the room's folder and helper files under $env:TEMP. If a write in the skill's folder is refused, never call ${ASK_FOR_FOLDER_TOOL_NAME} for it.`;
 
-/** The outside tool's description on Windows: it still runs Git Bash, so its command is bash while the room's are PowerShell. */
-export const WINDOWS_OUTSIDE_DESCRIPTION = "Ask the person to run one command outside this room's protection, with all their rights, when the room's commands can't do it: git push over SSH, git clone in their folder, opening an app. This one runs in Git Bash, not PowerShell, so write it in bash. They see the full command and your reason on a card and must say yes each time. Use this only when a PowerShell command in the room has failed for that reason, never just to get at a place the room's protection keeps closed on purpose, such as the person's keys or a local address, unless the person asks.";
+/** The outside tool's description on Windows, by the shell its command runs in: Git Bash on a PC that has it, while the room's are PowerShell, or PowerShell as well. */
+const windowsOutsideDescription = (shell: string): string => `Ask the person to run one command outside this room's protection, with all their rights, when the room's commands can't do it: git push over SSH, git clone in their folder, opening an app. ${shell} They see the full command and your reason on a card and must say yes each time. Use this only when a PowerShell command in the room has failed for that reason, never just to get at a place the room's protection keeps closed on purpose, such as the person's keys or a local address, unless the person asks.`;
+
+export const WINDOWS_OUTSIDE_DESCRIPTION = windowsOutsideDescription("This one runs in Git Bash, not PowerShell, so write it in bash.");
 
 export const WINDOWS_OUTSIDE_COMMAND_INPUT = "The one bash command to run outside this room, in Git Bash";
+
+export const WINDOWS_OUTSIDE_POWERSHELL_DESCRIPTION = windowsOutsideDescription("It runs in Windows PowerShell 5.1 as well; open an app or a file with Start-Process.");
+
+export const WINDOWS_OUTSIDE_POWERSHELL_COMMAND_INPUT = "The one Windows PowerShell 5.1 command to run outside this room";
 
 // The site decision's reasons, word for word as the Mac's box gives them (../box-session.ts): a row of
 // windows-switch-on-smoke.ts reads that file and fails when one differs. Each ends a refusal line.

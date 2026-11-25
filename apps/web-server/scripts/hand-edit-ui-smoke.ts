@@ -678,6 +678,10 @@ try {
 			const archived = (): Promise<string[]> => page.evaluate(async (url) => ((await (await fetch(`${url}/archive?limit=200`)).json()).entries as Array<{ id: string }>).map((row) => row.id), room);
 			const status = await page.evaluate(async (url) => (await fetch(`${url}/entries/m-0012`, { method: "DELETE" })).status, room);
 			assert(status === 200, `the note goes to the archive first, got ${status}`);
+			// Archived behind the open page's back: the page reads the archive again when Room settings opens.
+			await home();
+			await card(rooms.pane.name).getByRole("button", { name: "Room settings" }).click({ timeout: 10_000 });
+			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Memory$/ }).first().click({ timeout: 10_000 });
 			await pane.getByRole("button", { name: "Show", exact: true }).click();
 			const row = pane.locator(".memory-archive-entries .memory-entry").filter({ hasText: "Late invoices get a reminder." });
 			await row.waitFor({ timeout: 10_000 });

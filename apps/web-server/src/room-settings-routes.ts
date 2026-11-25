@@ -2,30 +2,32 @@ import type { FastifyRequest } from "fastify";
 import { MAINTENANCE_DIAGNOSTICS_KEEP, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, listMaintenanceDiagnostics, exportMaintenanceDiagnostics } from "./maintenance-diagnostics.js";
 import { createPersistentAgentInstance, saveWithOpenConversationCheck, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, savePersistentRoomInstructions } from "./persistent-agents.js";
 import { normalizePersistentRoomWorkspaceToolSelectionInput } from "./persistent-room-tool-policy.js";
-import { PersistentRoomWorkspacePolicyError, assertPersistentRoomWorkspaceDefaultMutable, type PersistentRoomCapabilityPolicy, persistentRoomCapabilityPolicyView, readPersistentRoomCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, deletePersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, createPersistentRoomDefaultCapabilityPolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomDefaultCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, createPersistentRoomCapabilityPolicy, writePersistentRoomCapabilityPolicy, persistentRoomCommandsStartOn } from "./persistent-room-workspace-policy.js";
+import { PersistentRoomWorkspacePolicyError, assertPersistentRoomWorkspaceDefaultMutable, type PersistentRoomCapabilityPolicy, persistentRoomCapabilityPolicyView, readPersistentRoomCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, deletePersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, createPersistentRoomDefaultCapabilityPolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomDefaultCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, createPersistentRoomCapabilityPolicy, writePersistentRoomCapabilityPolicy, persistentRoomCommandsStartOn, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID, resolvePersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
 import { readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { settleMemoryBudget } from "./memory-entries-store.js";
-import { readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
+import { readPersistentRoomBashSettings, unprotectedRoomOnAuto, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
 import { type PersistentRoomProtection, type PersistentRoomProtectionCause, persistentRoomProtection, persistentRoomWindowsBoxed, writePersistentRoomProtection } from "./persistent-room-protection.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice } from "./persistent-room-effort-settings.js";
 import { persistentRoomShellFound, PERSISTENT_ROOM_SHELL_MISSING_SENTENCE } from "./persistent-room-shell-missing.js";
 import { createRoomModelCatalog, resolveAiDefault, memoryModelTooSmallSentence, writeRoomModels } from "./room-models.js";
 import { ROOM_INSTRUCTIONS_MAX_CHARS } from "./persistent-room-instructions.js";
-import { readPersistentRoomSkillSettings, computeSkillStatuses, enablePersistentRoomSkill, disablePersistentRoomSkill, approvePersistentRoomSkillExecution, revokePersistentRoomSkillExecution } from "./persistent-room-skill-settings.js";
+import { readPersistentRoomSkillSettings, computeSkillStatuses, enablePersistentRoomSkill, disablePersistentRoomSkill } from "./persistent-room-skill-settings.js";
 import { listConfiguredMcpConnectorDisplayNames, listConfiguredMcpConnectorNames } from "./mcp-status.js";
-import { allowedToolsOf, readPersistentRoomMcpSettings, computeGrantedConnectorStatuses, forgetPersistentRoomMcpTool, grantPersistentRoomMcpConnector, type PersistentRoomMcpSettings, revokePersistentRoomMcpConnector } from "./persistent-room-mcp-settings.js";
+import { allowedToolsOf, readPersistentRoomMcpSettings, computeGrantedConnectorStatuses, forgetPersistentRoomMcpTool, grantPersistentRoomMcpConnector, type PersistentRoomMcpSettings, revokePersistentRoomMcpConnector, roomUsableMcpConnectors } from "./persistent-room-mcp-settings.js";
 import { connectorToolWords } from "../../../pi-package/extensions/mcp/room-scope.js";
+import { readConnectorToolChoices, toolChoiceIn } from "./connector-tool-choices.js";
 import { buildRoomMemoryHistory } from "./memory-api.js";
 import { registerMemoryEntryRoutes } from "./memory-entries-api.js";
 import { undoMemorySave } from "./memory-undo.js";
 import { withRoomSaveLock } from "./memory-commit.js";
 import { isSharedServer } from "./server-hooks.js";
+import { skillFilesReach } from "./persistent-room-skill-tool.js";
 import { activeRoomLock, REPO_ROOT, roomLockBusyStatus } from "./server-install-root.js";
 import { app } from "./server-app.js";
 import { getUsablePersistentAgentStatusForNormalUse, persistentAgentNormalUseErrorReply } from "./room-status.js";
 import { parseRoomModelPatch, roomModelsPayload } from "./ai-models.js";
 import { memoryBudgetRaiseRefusal, refuseMemoryBudgetRaise, refuseMemoryModelTooSmall } from "./ai-profile-models.js";
-import { resolveExecutableSkillFiles, resolveLibrarySkillManifest, skillLibraryFingerprint, withSkillDisplayNames } from "./skills-library.js";
+import { resolveLibrarySkillManifest, skillLibraryFingerprint, withSkillDisplayNames } from "./skills-library.js";
 import { addAlsoAllowedFolder, type AlsoAllowedEntry, readAlsoAllowed, removeAlsoAllowedEntry, removedAlsoAllowedEntry, restoreAlsoAllowedEntry } from "./room-box/also-allowed.js";
 import { CHANGE_SAVE_FAILED, FOLDER_ALREADY_USED, FOLDER_PICK_REFUSED, NO_FOLDER_WINDOW, PROTECTION_UNAVAILABLE, PROTECTION_UNAVAILABLE_COMPUTER, PROTECTION_UNAVAILABLE_FOLDER } from "./room-box/card-text.js";
 import { folderGrantable, roomFolderGrantable, soundFolders, writeEntries } from "./room-box/folder-offer.js";
@@ -326,18 +328,16 @@ app.get("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const settings = readPersistentRoomSkillSettings(status.id);
-		// `skills` is the mismatch view the settings panel (MR-5) renders:
-		// ok | hash-mismatch | missing per enabled skill, plus the execution
-		// approval state (none | approved | drifted) and, per skill, whether it
-		// is execution-capable at all and which bundled files it carries.
-		const skills = withSkillDisplayNames(computeSkillStatuses(settings.enabledSkills, skillLibraryFingerprint, (name) => resolveExecutableSkillFiles(name)?.filesSha256 ?? null));
+		// `skills` is the view the settings panel renders: ok | unreadable per
+		// enabled skill still in the room (a deleted one has no row), and whether
+		// its author marked it for picking by hand only.
+		const skills = withSkillDisplayNames(computeSkillStatuses(settings.enabledSkills, skillLibraryFingerprint));
 		return {
 			agentId: status.id,
 			settings,
-			skills: skills.map((skill) => {
-				const executable = resolveExecutableSkillFiles(skill.name);
-				return { ...skill, executable: executable !== null, bundledFiles: executable?.files ?? [], manualOnly: resolveLibrarySkillManifest(skill.name)?.disableModelInvocation === true };
-			}),
+			skills: skills.map((skill) => ({ ...skill, manualOnly: resolveLibrarySkillManifest(skill.name)?.disableModelInvocation === true })),
+			// What the room's skills can do with their files, as the model is told; the room's own policy, which every conversation runs on.
+			skillFiles: skillFilesReach(resolvePersistentRoomEffectiveWorkspacePolicy(status.id, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID), isSharedServer()),
 		};
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -351,28 +351,16 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 		const body = (req.body ?? {}) as any;
 		const action = String(body.action ?? "");
 		const name = String(body.name ?? "");
-		if (action !== "enable" && action !== "disable" && action !== "approve-execution" && action !== "revoke-execution") {
-			return reply.code(400).send({ error: "action must be 'enable', 'disable', 'approve-execution' or 'revoke-execution'" });
+		if (action !== "enable" && action !== "disable") {
+			return reply.code(400).send({ error: "action must be 'enable' or 'disable'" });
 		}
-		// Enable pins sha256(current library body), computed server-side by the
-		// resolver — the client never supplies the hash. An unknown skill is a 4xx.
-		// approve-execution pins the skill's whole-content files digest the same
-		// way: server-computed, only for an already-enabled, execution-capable
-		// user-store skill. revoke-execution withdraws it; the skill stays enabled.
-		const result =
-			action === "enable" ? enablePersistentRoomSkill(status.id, name, skillLibraryFingerprint)
-			: action === "disable" ? disablePersistentRoomSkill(status.id, name)
-			: action === "approve-execution" ? approvePersistentRoomSkillExecution(status.id, name, (n) => resolveExecutableSkillFiles(n)?.filesSha256 ?? null)
-			: revokePersistentRoomSkillExecution(status.id, name);
+		// Enable reads the skill's identity server-side through the resolver; the
+		// client never supplies it. An unknown skill is a 4xx.
+		const result = action === "enable" ? enablePersistentRoomSkill(status.id, name, skillLibraryFingerprint) : disablePersistentRoomSkill(status.id, name);
 		if (!result.ok) {
-			const message =
-				result.reason === "unknown-skill" ? `unknown skill: ${name}`
-				: result.reason === "not-enabled" ? `skill not enabled for this room: ${name}`
-				: result.reason === "no-files" ? `skill is not executable (not a user-library skill, or its content did not pass review): ${name}`
-				: "invalid skill name";
-			return reply.code(400).send({ error: message });
+			return reply.code(400).send({ error: result.reason === "unknown-skill" ? `unknown skill: ${name}` : "invalid skill name" });
 		}
-		return { agentId: status.id, settings: result.settings, skills: withSkillDisplayNames(computeSkillStatuses(result.settings.enabledSkills, skillLibraryFingerprint, (n) => resolveExecutableSkillFiles(n)?.filesSha256 ?? null)) };
+		return { agentId: status.id, settings: result.settings, skills: withSkillDisplayNames(computeSkillStatuses(result.settings.enabledSkills, skillLibraryFingerprint)) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -380,14 +368,32 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 
 /**
  * A room's connectors as the settings pane reads them. `granted` is the
- * per-grant configured/missing view the pane renders next to the full
- * configured list; `allowedTools`, the tools each enabled connector may use
- * without asking, by their own name and as people read it, never on a shared
- * server, where no yes is kept. What a yes is pinned to stays on the server.
+ * per-grant configured/missing view the pane renders next to the configured
+ * list; `allowedTools`, the old room yeses that still let a tool of an enabled
+ * connector run without asking, by their own name and as people read it: a
+ * tool the person has picked a choice for is left out, as the gate ignores its
+ * yes. Never on a shared server, where no yes is kept. What a yes is pinned to stays on the server. A
+ * configured connector the room may not use is in none of them, its stored
+ * grant included, which stays on disk unused. `asksNothing`: the room is on
+ * Auto without protection now, so no tool asks first; an unreadable setting
+ * reads as no.
  */
-async function roomConnectorsAnswer(agentId: string, { allowedTools, ...settings }: PersistentRoomMcpSettings, configuredNames: string[]) {
-	const allowed = isSharedServer() ? {} : { allowedTools: Object.fromEntries(settings.grantedConnectors.filter((name) => allowedToolsOf(allowedTools, name).length > 0).map((name) => [name, allowedToolsOf(allowedTools, name).map(({ tool }) => ({ tool, shown: connectorToolWords(tool) }))])) };
-	return { agentId, settings, configuredConnectors: configuredNames, displayNames: await listConfiguredMcpConnectorDisplayNames(), granted: computeGrantedConnectorStatuses(settings.grantedConnectors, configuredNames), ...allowed };
+function asksNothingNow(agentId: string): boolean {
+	try {
+		return unprotectedRoomOnAuto(agentId, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID);
+	} catch {
+		return false;
+	}
+}
+
+async function roomConnectorsAnswer(agentId: string, { allowedTools, ...stored }: PersistentRoomMcpSettings, configuredNames: string[]) {
+	const usable = roomUsableMcpConnectors(agentId, configuredNames);
+	const settings = { ...stored, grantedConnectors: stored.grantedConnectors.filter((name) => usable.includes(name) || !configuredNames.includes(name)) };
+	const choices = isSharedServer() ? null : readConnectorToolChoices();
+	const left = (name: string) => allowedToolsOf(allowedTools, name).filter(({ tool }) => !choices?.readable || toolChoiceIn(choices, name, tool) === null);
+	const allowed = isSharedServer() ? {} : { allowedTools: Object.fromEntries(settings.grantedConnectors.filter((name) => left(name).length > 0).map((name) => [name, left(name).map(({ tool }) => ({ tool, shown: connectorToolWords(tool) }))])) };
+	const displayNames = Object.fromEntries(Object.entries(await listConfiguredMcpConnectorDisplayNames()).filter(([name]) => usable.includes(name)));
+	return { agentId, settings, configuredConnectors: usable, displayNames, granted: computeGrantedConnectorStatuses(settings.grantedConnectors, configuredNames), ...allowed, ...(asksNothingNow(agentId) ? { asksNothing: true } : {}) };
 }
 
 app.get("/api/persistent-agents/:id/mcp-connectors", async (req, reply) => {

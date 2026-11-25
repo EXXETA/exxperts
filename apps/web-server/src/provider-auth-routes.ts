@@ -1,6 +1,20 @@
 import { AuthStorage, ModelRegistry, isApiKeyLoginProvider, getAgentDir } from "@exxeta/exxperts-runtime";
-import { startProviderLogin, ProviderAuthError, providerLoginState, cancelProviderLogin, logoutProvider, checkProviderApiKey, saveProviderApiKey } from "./provider-auth.js";
+import {
+	startProviderLogin,
+	ProviderAuthError,
+	AuthFileNotSavedError,
+	authFileNotSavedLine,
+	changeCredentials,
+	providerLoginState,
+	cancelProviderLogin,
+	logoutProvider,
+	checkProviderApiKey,
+	saveProviderApiKey,
+} from "./provider-auth.js";
 import { type PersistentAgentAiProfileId, getAvailablePersistentAgentAiProfiles } from "./persistent-agent-ai-profiles.js";
+import { builtInProfileIdForProvider, customAiProfileIdForProvider, deleteCustomAiProfile, readCustomAiProfiles } from "./custom-ai-profiles.js";
+import { clearSavedPersistentAgentAiProfileState, readSavedPersistentAgentAiProfileId } from "./persistent-agent-ai-profile-state.js";
+import { buildPersistentAgentAiProfileSelectionStatus } from "./ai-profile-models.js";
 import { forgetGatewayModelFind } from "./gateway-model-find.js";
 import { registerKnowledgeApi } from "./knowledge-api.js";
 import { browserSafeLocalPath } from "./status-diagnostics.js";
@@ -8,7 +22,12 @@ import { forgetKeyRefusal } from "./model-call-causes.js";
 import { app } from "./server-app.js";
 import { logProviderCallFailed } from "./usage-recording.js";
 import { isSharedServer } from "./server-hooks.js";
-import { startGatewayProviderId, START_GATEWAY_REFUSAL } from "./openai-compatible-gateways.js";
+import { GATEWAY_PROVIDER_ID_PREFIX, OPENAI_COMPATIBLE_PROVIDER_ID, startGatewayProviderId, START_GATEWAY_REFUSAL } from "./openai-compatible-gateways.js";
+
+// The key removal's refusals (draft words).
+export const KEY_REMOVAL_GATEWAY = "Remove the gateway instead.";
+export const KEY_REMOVAL_NO_KEY = "No key is saved for this provider.";
+export const KEY_REMOVAL_FAILED = "The key couldn't be removed. Try again.";
 
 const AUTH_PROVIDER_ORDER = [
 	{ id: "anthropic", name: "Anthropic / Claude" },
@@ -50,9 +69,12 @@ function getLoginProviderCatalog(shared?: { authStorage: AuthStorage; registry: 
 				authTypes,
 				configured: registry.getProviderAuthStatus(id).configured,
 				profileId: profileByProvider.get(id) ?? null,
+				...(!profileByProvider.has(id) && builtInProfileIdForProvider(id) ? { removeOnly: true } : {}),
 			};
 		})
-		.filter((entry) => entry.authTypes.length > 0);
+		// A built-in profile's provider this server does not offer (Anthropic on a
+		// shared server) is listed only while a key is saved under it, for its Remove.
+		.filter((entry) => entry.authTypes.length > 0 && (entry.profileId !== null || !builtInProfileIdForProvider(entry.id) || authStorage.get(entry.id)?.type === "api_key"));
 	entries.sort((a, b) => {
 		const aOauth = a.authTypes.includes("oauth") ? 0 : 1;
 		const bOauth = b.authTypes.includes("oauth") ? 0 : 1;
@@ -62,6 +84,8 @@ function getLoginProviderCatalog(shared?: { authStorage: AuthStorage; registry: 
 }
 
 function getAuthOverview() {
+	// A shared server holds no subscription sign-in, and its keys are the admin's: it lists no provider, to anyone.
+	if (isSharedServer()) return { anyConfigured: false, authDir: "", providers: [] };
 	const authStorage = AuthStorage.create();
 	const registry = ModelRegistry.create(authStorage);
 	const oauthProviders = new Map(authStorage.getOAuthProviders().map((provider) => [provider.id, provider.name]));
@@ -92,13 +116,23 @@ function getAuthOverview() {
 
 app.get("/api/auth/status", async () => getAuthOverview());
 
+function logAuthFileNotSaved(provider: string, error: unknown): void {
+	const line = authFileNotSavedLine(provider, error);
+	if (line) app.log.warn(...line);
+}
+
 app.post("/api/auth/login", async (req, reply) => {
 	const body = (req.body ?? {}) as { provider?: unknown; companyAddress?: unknown };
 	const provider = String(body.provider ?? "").trim();
 	if (!provider) return reply.code(400).send({ error: "provider is required" });
 	const companyAddress = typeof body.companyAddress === "string" ? body.companyAddress : undefined;
 	try {
-		return await startProviderLogin(provider, companyAddress, () => forgetKeyRefusal(provider));
+		return await startProviderLogin(
+			provider,
+			companyAddress,
+			() => forgetKeyRefusal(provider),
+			(error) => logAuthFileNotSaved(provider, error),
+		);
 	} catch (e) {
 		const statusCode = e instanceof ProviderAuthError ? e.statusCode : 500;
 		return reply.code(statusCode).send({ error: (e as Error).message });
@@ -117,6 +151,7 @@ app.post("/api/auth/logout", async (req, reply) => {
 		forgetKeyRefusal(provider);
 		return { ok: true };
 	} catch (e) {
+		logAuthFileNotSaved(provider, e);
 		const statusCode = e instanceof ProviderAuthError ? e.statusCode : 500;
 		return reply.code(statusCode).send({ error: (e as Error).message });
 	}
@@ -139,9 +174,47 @@ app.post("/api/auth/api-key", async (req, reply) => {
 		// Never echo the key back.
 		return { ok: true, provider, ...(notice ? { notice } : {}) };
 	} catch (e) {
+		logAuthFileNotSaved(provider, e);
 		const statusCode = e instanceof ProviderAuthError ? e.statusCode : 500;
 		return reply.code(statusCode).send({ error: (e as Error).message });
 	}
+});
+
+// Removes one saved API key, and the models approved for it, so they leave
+// everyone's list; a room on one keeps its pick and stops until someone there
+// picks another. A gateway's key goes with its gateway, and a sign-in is never
+// removed here. A removal cut before the profile went finishes on a repeat.
+app.delete("/api/auth/api-key/:provider", async (req, reply) => {
+	const provider = String((req.params as { provider?: unknown }).provider ?? "").trim();
+	if (provider === startGatewayProviderId()) return reply.code(403).send({ error: START_GATEWAY_REFUSAL });
+	if (provider === OPENAI_COMPATIBLE_PROVIDER_ID || provider.startsWith(GATEWAY_PROVIDER_ID_PREFIX)) return reply.code(409).send({ error: KEY_REMOVAL_GATEWAY });
+	const profileId = customAiProfileIdForProvider(provider);
+	const hasProfile = readCustomAiProfiles().entries.some((entry) => entry.id === profileId);
+	const storage = AuthStorage.create();
+	// A store it could not read says nothing about the key: never a key already gone.
+	if (storage.drainErrors().length > 0) return reply.code(500).send({ error: KEY_REMOVAL_FAILED });
+	const stored = storage.get(provider)?.type;
+	if (stored !== "api_key" && (stored !== undefined || !hasProfile)) return reply.code(404).send({ error: KEY_REMOVAL_NO_KEY });
+	if (stored === "api_key") {
+		try {
+			changeCredentials((credentials) => credentials.logout(provider), storage);
+		} catch (e) {
+			// auth.json it cannot read or write: the sentence every credential change gives, and the operator's line.
+			logAuthFileNotSaved(provider, e);
+			if (e instanceof AuthFileNotSavedError) return reply.code(e.statusCode).send({ error: e.message });
+			throw e;
+		}
+		// The file, read again, says whether the key went.
+		const readBack = AuthStorage.create();
+		if (storage.drainErrors().length > 0 || readBack.drainErrors().length > 0 || readBack.get(provider) !== undefined) return reply.code(500).send({ error: KEY_REMOVAL_FAILED });
+		forgetKeyRefusal(provider);
+		forgetGatewayModelFind(provider);
+	}
+	if (hasProfile) {
+		deleteCustomAiProfile(profileId);
+		if (readSavedPersistentAgentAiProfileId() === profileId) clearSavedPersistentAgentAiProfileState();
+	}
+	return buildPersistentAgentAiProfileSelectionStatus();
 });
 
 registerKnowledgeApi(app);

@@ -17,7 +17,8 @@ import { clearPersistentAgentUnseenLandedAnswer, hasPersistentAgentTurnInFlight 
 import { assertPersistentAgentDisplayNameAvailable, collapseHumanWhitespace } from "./persistent-agent-create.js";
 import { type RoomViewer, roomIdsForViewer } from "./persistent-agent-status.js";
 import { settleRoom } from "./room-settle.js";
-import { serverHooks } from "./server-hooks.js";
+import { isSharedServer, serverHooks } from "./server-hooks.js";
+import { roomHosts } from "./room-live-sessions.js";
 
 export interface PersistentAgentArchiveOptions {
 	confirmation: string;
@@ -67,7 +68,8 @@ export function archivePersistentAgent(agentIdRaw: string, options: PersistentAg
 	// from under a running turn (or another surface holding it) exactly like a
 	// purge would, just recoverably — refuse with the same honest reasons.
 	const lock = activePersistentRoomLock(instance.agentId);
-	if (lock) {
+	// On a shared server a page open on the room is no reason to refuse: its pages are told the room went.
+	if (lock && !(isSharedServer() && lock.surface === "web")) {
 		const where = lock.surface === "web"
 			? "is still open in a browser session; leave the room (or close the other session) and try again"
 			: `is open or busy in another surface (${lock.surface ?? "unknown"}); close it there before deleting`;
@@ -97,6 +99,7 @@ export function archivePersistentAgent(agentIdRaw: string, options: PersistentAg
 	writePersistentAgentRuntimeState(instance.agentId, { state: "idle" });
 	clearPersistentAgentUnseenLandedAnswer(instance.agentId);
 	writeFileAtomic(agentJsonPath, JSON.stringify(updatedMeta, null, 2) + "\n");
+	roomHosts.get(instance.agentId)?.roomGone("archived");
 	return { agentId: instance.agentId, archivedAt, status: "archived" };
 }
 
@@ -422,7 +425,8 @@ export function purgePersistentAgent(agentIdRaw: string, options: PersistentAgen
 		throw error;
 	}
 	const lock = activePersistentRoomLock(instance.agentId);
-	if (lock) {
+	// On a shared server a page open on the room is no reason to refuse: its pages are told the room went.
+	if (lock && !(isSharedServer() && lock.surface === "web")) {
 		// A web lock's owner may be the very session asking — the client leaves
 		// the room before purging, so this wording has to cover both that race
 		// and a genuinely different browser session honestly.
@@ -446,6 +450,7 @@ export function purgePersistentAgent(agentIdRaw: string, options: PersistentAgen
 		throw purgeBusyError(`persistent room still has a task working in the background; stop it or wait for it to finish before deleting: ${instance.agentId}`, "specialist_running");
 	}
 	abortAllSpecialistTasks(instance.agentId);
+	const deleteEnds = roomHosts.get(instance.agentId)?.deleteBegins();
 
 	// The ledger is read BEFORE any deletion: it lives inside the room dir and
 	// names the task folders outside it.
@@ -468,6 +473,7 @@ export function purgePersistentAgent(agentIdRaw: string, options: PersistentAgen
 	const purgeLockOwner = { surface: "scheduler", lockId: `purge_${crypto.randomBytes(8).toString("hex")}`, label: "purge" };
 	const acquiredLock = persistentRoomLock.tryAcquire(instance.agentId, purgeLockOwner);
 	if (!acquiredLock.ok) {
+		deleteEnds?.(false);
 		throw purgeBusyError(`persistent room was taken by another surface (${acquiredLock.heldBy?.surface ?? "unknown"}) just before deleting; try again: ${instance.agentId}`, "room_lock");
 	}
 
@@ -485,6 +491,7 @@ export function purgePersistentAgent(agentIdRaw: string, options: PersistentAgen
 	const relativePath = path.relative(PERSISTENT_AGENTS_ROOT, instance.rootDir);
 	if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
 		try { persistentRoomLock.release(instance.agentId, purgeLockOwner); } catch {}
+		deleteEnds?.(false);
 		throw new Error("persistent agent root escaped the agents root; refusing to delete");
 	}
 	const tombstone = `${instance.rootDir}${PURGE_TOMBSTONE_INFIX}${Date.now()}`;
@@ -492,8 +499,10 @@ export function purgePersistentAgent(agentIdRaw: string, options: PersistentAgen
 		fs.renameSync(instance.rootDir, tombstone);
 	} catch (error) {
 		try { persistentRoomLock.release(instance.agentId, purgeLockOwner); } catch {}
+		deleteEnds?.(false);
 		throw new Error(`persistent room directory could not be detached for deletion (${failureReason(error)})`);
 	}
+	deleteEnds?.(true);
 	forgetPersistentRoomProtection(instance.agentId);
 	// A deletion the server hook could not note keeps the detached folder as its proof, which the next start notes before its boot sweep removes it.
 	if (serverHooks().deletionLanded?.({ kind: "room", roomId: instance.agentId, createdAt, at: new Date().toISOString() }) !== false) {

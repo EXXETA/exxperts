@@ -2,6 +2,55 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.16.1 (2026-11-25)
+
+- Look: Settings, Room settings and light mode have a new look. Home is now called Rooms, and every
+  connector has a page of its own, with its status, its tools and the rooms that use it.
+- Conversations: Keep going in one conversation with many large pictures (suggested in issue #92). Older
+  pictures the assistant read stay in the conversation but are no longer sent once they are too big
+  together, and it can read a file again when it needs it. Stop now ends an answer within a few seconds.
+- Connectors: Set each tool of a connector to Always allow, Ask first or Blocked. Your choice counts in
+  every room where the connector is on. A tool on Always allow runs without asking, also while you're
+  away, and you can choose it for any tool, even one that can delete things. A tool you allowed for one
+  room before stays allowed there until you choose.
+- Connectors: See in the list what a connector needs, with the fix beside it where there is one. In a
+  room, a step that can't connect, or whose key or sign-in a web service turns down, says so in plain
+  words, with Open in Settings where the fix is. A connector that needs details from you asks for them on
+  one card, and it can no longer ask to use your AI model. The directory now holds the apps you add with a
+  click, a sign-in or a key; HubSpot, Asana, Google Drive, Gmail and Microsoft 365 have left it, and ones
+  you added stay.
+- Skills: One switch now turns on a skill of yours together with the scripts your computer can run. They
+  run while the room's commands are on, also for a skill that was already on, and on Ask each one asks
+  first. A skill stays on when its files change, with no new review, and skills paused for one are on
+  again. Type / in the message box to see a room's skills. Most skills in ~/.agents/skills can run their
+  scripts too.
+- Skills: Keep the skills you add from a repository up to date. New versions are looked for shortly after
+  exxperts starts and then daily, with your git sign-in where a repository needs one, and, without it,
+  when you open Settings, Skills. Update automatically is off until you switch it on. The skill's page
+  lists what an update changes; new scripts can run at once, without a review, in rooms where the skill
+  and commands are on. To update a skill you added before, add it once more; one fixed to a commit stays
+  as it is.
+- Folders: When a room needs a file outside its folder, the question can now name the file. Where you can
+  allow it with one click, it also says that your yes opens the whole folder the file is in.
+- Auto: Without protection, a room on Auto now works without asking for your permission. Such a room can
+  change or delete any of your files, key files such as .env and .ssh included, use its connectors, also
+  tools set to Ask first, and send anything it can read to a website, also after you leave it; choosing
+  Auto there asks you first. Blocked tools stay blocked. A room already set this way works like this from
+  the update on.
+- Windows: Commands now work without Git for Windows, in Windows PowerShell. A room on Auto without
+  protection whose commands couldn't run for lack of Git runs them without asking from the update on, also
+  after you leave. Protected rooms now find a 64-bit Python you installed from python.org in its usual
+  place.
+- Models: Long Claude runs through a company gateway such as LiteLLM now cost less, where the gateway says
+  it caches that model. The gateway, and other services reached the same way, now see exxperts' name and
+  version with each request for an answer.
+- Containers: With --container, run exxperts in a Linux container on your own computer. Publish its port
+  to your own computer only. Started from a terminal, exxperts now prints its sign-in link at every start.
+- Fixed: Deleting a skill takes it out of every room, and one unreadable skill file affects only that
+  skill. The Wallet says when it can't read your usage. A room's memory settings keep their last saved
+  state if the app stops in the middle of a save. On a Mac, where LibreOffice can't start in a protected
+  room, the step no longer hangs and the room can ask to run it outside.
+
 ## 0.16.0 (2026-11-17)
 
 - Protection: On a Mac, and on Windows 11 (version 24H2 or later) where Windows offers it, a room's

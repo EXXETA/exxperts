@@ -277,6 +277,45 @@ async function main(): Promise<void> {
 		}
 	}, "posix");
 
+	await row("with stop folders, the walk ends where the way enters one, told by the folder itself and not its name: a link outside is followed into it, and no link inside it is looked at", async () => {
+		fs.mkdirSync(inRoom("stop-sub"), { recursive: true });
+		fs.mkdirSync(path.join(elsewhere, "beyond"), { recursive: true });
+		fs.symlinkSync(path.join(elsewhere, "beyond"), inRoom("stop-sub", "inside-link"));
+		fs.symlinkSync(inRoom("stop-sub", "inside-link", "skill"), path.join(elsewhere, "into-room"));
+		// The room's folder named by another way to it: the walk still knows it.
+		const otherName = path.join(elsewhere, "room-by-link");
+		fs.symlinkSync(folder, otherName);
+		try {
+			const entering = await recorded(() => walkPlace(path.join(elsewhere, "into-room"), [], { stopAt: [otherName] }));
+			assert(entering.value.stoppedAt === inRoom("stop-sub", "inside-link", "skill") && entering.value.real === entering.value.stoppedAt, `where the way enters the room's folder: ${JSON.stringify(entering.value)}`);
+			noCallThrough(entering.calls, inRoom("stop-sub"), "a stopped walk");
+			noCallOn(entering.calls, [path.join(elsewhere, "beyond")], "a stopped walk");
+			// The same way with no stop folders follows the link inside, and one that never enters a stop folder walks as before.
+			assert(walkPlace(path.join(elsewhere, "into-room")).real === path.join(elsewhere, "beyond", "skill"), "with no stop folder, the link inside is followed");
+			const away = walkPlace(path.join(elsewhere, "beyond"), [], { stopAt: [folder] });
+			assert(away.stoppedAt === undefined && away.real === path.join(elsewhere, "beyond"), `a way that never enters a stop folder: ${JSON.stringify(away)}`);
+			const gone = walkPlace(path.join(elsewhere, "beyond"), [], { stopAt: [path.join(elsewhere, "not-there")] });
+			assert(gone.stoppedAt === undefined, `a stop folder that isn't there stops nothing: ${JSON.stringify(gone)}`);
+			// A `..` left past the stop leads where only a look inside could tell: the walk still stops, and names no place.
+			fs.symlinkSync(`${inRoom("stop-sub")}/x/../../../out`, path.join(elsewhere, "back-out"));
+			const back = walkPlace(path.join(elsewhere, "back-out"), [], { stopAt: [folder] });
+			fs.rmSync(path.join(elsewhere, "back-out"));
+			assert(back.stoppedAt === null && back.real === folder, `a way that leaves the stop folder by \`..\`: ${JSON.stringify(back)}`);
+		} finally {
+			fs.rmSync(path.join(elsewhere, "into-room"));
+			fs.rmSync(otherName);
+			fs.rmSync(inRoom("stop-sub"), { recursive: true, force: true });
+			fs.rmSync(path.join(elsewhere, "beyond"), { recursive: true, force: true });
+		}
+	}, "posix");
+
+	await row("on a Mac, a stop folder named under /System/Volumes/Data is the same folder as its plain name", () => {
+		const dataName = path.join("/System/Volumes/Data", folder);
+		assert(fs.existsSync(dataName), `no ${dataName} on this Mac`);
+		const walked = walkPlace(inRoom("notes.md"), [], { stopAt: [dataName] });
+		assert(walked.stoppedAt === inRoom("notes.md"), `the room's folder by its data volume name: ${JSON.stringify(walked)}`);
+	}, "mac");
+
 	// ---- the folder checks and the saved Also allowed list ----
 	await row("a saved Also allowed entry naming a network place is dropped when read back, with no call on it; an ordinary one stays", async () => {
 		const ordinary = { path: path.join(elsewhere, "shared"), access: "read" as const };

@@ -6,9 +6,14 @@
 // message, so it still knows those files exist, and the step back writes them
 // down, so a second edit of the same message tells the model about both.
 
-import { defangNoteMarkers, withoutAnswerNote } from "./cut-answer-note.js";
+import { APP_PROMPT_MARK } from "@exxeta/exxperts-runtime";
+import { defangNoteMarkers, withoutAnswerNote, withoutMessageFrom, withoutMessageFromMarkers } from "./cut-answer-note.js";
 import { commandRan } from "./persistent-room-bash-approval.js";
+import { connectorCallEnd } from "./connector-call-ends.js";
 import { userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
+import type { SessionPathSource } from "./session-path-reader.js";
+import { withoutSkillNote } from "./skill-pick.js";
+import { type MessageAuthor, readMessageAuthor } from "./thread-items-by-id.js";
 
 /** What the edit needs of a room's session. */
 interface EditingSession {
@@ -30,7 +35,7 @@ interface EditEntry {
 }
 
 /** Why an edit was refused: the page puts everything back and says so. */
-export type EditRefusal = "running" | "held" | "no-message" | "not-typed" | "not-shown" | "shortened" | "cancelled";
+export type EditRefusal = "running" | "held" | "no-message" | "not-typed" | "not-shown" | "shortened" | "cancelled" | "not-yours";
 
 /** `ran`: what the replaced answer changed, for the line; `kept`: that and what earlier edits of this message had already left, for the model's note. */
 export type EditStepBack = { ok: true; ran: string[]; kept: string[] } | { ok: false; refused: EditRefusal };
@@ -40,8 +45,9 @@ export const SUMMARY_ENTRY_TYPES: ReadonlySet<string> = new Set(["compaction", "
 
 // Written right after every edit's step back, so it sits just before the edited message: what had changed and stays (maybe nothing). Written down, the step back also outlasts a reload: the session file reopens on its last entry.
 const EDIT_KEPT = "edit-kept-steps";
-// Written right before a prompt the server sends by itself (the request for a missing answer), so an edit passes over it to the person's message.
-const APP_PROMPT = "app-prompt";
+// Written right after a person's message on a shared server, naming it by id: who sent it, where no page's save reaches, so an edit goes only to its sender.
+// After it, never before: the runtime's cut for a shortening takes in the marks before a message, and one there would split the turn before it in two.
+const MESSAGE_AUTHOR = "message-author";
 
 export const EDITED_MESSAGE_OPEN = "[EDITED MESSAGE]";
 export const EDITED_MESSAGE_CLOSE = "[/EDITED MESSAGE]";
@@ -60,13 +66,14 @@ function clip(text: string, max = 60): string {
 
 /**
  * How a step ended: with a result, with an error after it ran (a command that
- * failed may have changed things first), with an error and nothing run (a
- * refused, missing or failed step), or with no result at all (stopped while
- * it ran). The runtime gives a result to every call it starts, a stopped one
+ * failed may have changed things first), cut off while it ran (a connector
+ * call the answer's stop or a time limit ended, which may have done part of
+ * its work), with an error and nothing run (a refused, missing or failed
+ * step), or with no result at all (stopped while it ran). The runtime gives a result to every call it starts, a stopped one
  * included, so a call with no result began only when its message asked for
  * the tools to run; one cut while the model was still writing it never ran.
  */
-export type StepEnd = "done" | "ran-and-failed" | "failed" | "unanswered";
+export type StepEnd = "done" | "ran-and-failed" | "cut-off" | "failed" | "unanswered";
 
 /** What one step changed, in the words of the not-undone line, or nothing for a step that only read or changed nothing. */
 export function changedThingOf(name: string, args: unknown, end: StepEnd): string | undefined {
@@ -78,7 +85,7 @@ export function changedThingOf(name: string, args: unknown, end: StepEnd): strin
 	if (name === "artifact_write" || name === "artifact_write_html_deck") return `wrote ${named("name") || named("path") || named("title") || "an artifact"}`;
 	if (name === "bash" || name === "run_outside_box") return `ran ${named("command") || "a command"}`;
 	// Only a connector's own tool acts; listing, searching and describing its tools read.
-	if (name === "mcp" && named("tool")) return `used ${named("tool")}${named("server") ? ` (${named("server")})` : ""}`;
+	if (name === "mcp" && named("tool")) return `used ${named("tool")}${named("server") ? ` (${named("server")})` : ""}${end === "cut-off" ? ", maybe only in part" : ""}`;
 	if (name === "delegate_task") return "started a helper";
 	return undefined;
 }
@@ -86,6 +93,7 @@ export function changedThingOf(name: string, args: unknown, end: StepEnd): strin
 function stepEndOf(result: EditEntry["message"] | undefined, askedToRun: boolean): StepEnd {
 	if (!result) return askedToRun ? "unanswered" : "failed";
 	if (!result.isError) return "done";
+	if (connectorCallEnd(result.details)) return "cut-off";
 	return commandRan(result.details) ? "ran-and-failed" : "failed";
 }
 
@@ -113,19 +121,25 @@ function readKept(data: unknown): string[] {
  * the answer, not the person. `shortened` when a summary lies between, since
  * stepping back past it would throw the summary away.
  */
-function lastMessageOf(manager: EditingSession["sessionManager"]): { entry?: EditEntry; ran: string[]; earlier: string[]; shortened: boolean } {
+function lastMessageOf(manager: EditingSession["sessionManager"]): { entry?: EditEntry; author?: MessageAuthor; ran: string[]; earlier: string[]; shortened: boolean } {
 	const calls: { id: string; name: string; args: unknown; askedToRun: boolean }[] = [];
 	const results = new Map<string, EditEntry["message"]>();
 	let entry = manager.getLeafEntry();
 	let earlier: string[] = [];
+	let author: MessageAuthor | undefined;
+	// The room's marks passed on the way back: a message's author mark comes after it.
+	const passed: EditEntry[] = entry?.type === "custom" ? [entry] : [];
 	while (entry) {
 		if (SUMMARY_ENTRY_TYPES.has(entry.type)) return { ran: [], earlier: [], shortened: true };
 		const message = entry.type === "message" ? entry.message : undefined;
 		const before = wordsBefore(manager, entry);
-		if (message?.role === "user" && !before.marks.some((mark) => mark.customType === APP_PROMPT)) {
+		if (message?.role === "user" && !before.marks.some((mark) => mark.customType === APP_PROMPT_MARK)) {
 			earlier = readKept(before.marks.find((mark) => mark.customType === EDIT_KEPT)?.data);
+			const id = entry.id;
+			author = readMessageAuthor(passed.find((mark) => mark.customType === MESSAGE_AUTHOR && (mark.data as { for?: unknown } | undefined)?.for === id)?.data);
 			break;
 		}
+		passed.push(...before.marks);
 		if (message?.role === "toolResult" && message.toolCallId) results.set(message.toolCallId, message);
 		if (message?.role === "assistant" && Array.isArray(message.content)) {
 			const askedToRun = message.stopReason === "toolUse";
@@ -135,18 +149,19 @@ function lastMessageOf(manager: EditingSession["sessionManager"]): { entry?: Edi
 		entry = before.at;
 	}
 	const ran = [...new Set(calls.map((call) => changedThingOf(call.name, call.args, stepEndOf(results.get(call.id), call.askedToRun))).filter((thing): thing is string => !!thing))];
-	return { entry, ran, earlier, shortened: false };
+	return { entry, ...(author ? { author } : {}), ran, earlier, shortened: false };
 }
 
 /**
  * The typed text of a user message as the room shows it, without the notes
- * the room puts in front of it (after a cut, a Stop or an edit), or nothing
+ * the room puts in front of it (after a cut, a Stop or an edit, for a
+ * skill the person picked, and who sent it), or nothing
  * for one carrying more than the person typed (a file note, a transfer, an
  * image), since only typed text can go back into a box.
  */
 export function typedMessageText(content: unknown): string | undefined {
 	const wire = textOnly(content);
-	const sent = wire === undefined ? undefined : withoutEditNote(withoutAnswerNote(wire));
+	const sent = wire === undefined ? undefined : withoutMessageFrom(withoutSkillNote(withoutEditNote(withoutAnswerNote(wire))));
 	if (sent === undefined || !sent.trim() || userAuthoredPromptText(sent).trim() !== sent.trim()) return undefined;
 	return sent.trim();
 }
@@ -181,14 +196,17 @@ export function notEditableMessageId(session: Pick<EditingSession, "sessionManag
  * shortening came after it; answers the steps that had changed something,
  * and writes them down with the earlier edits' ones for the next edit.
  */
-export async function stepBackForEdit(session: EditingSession, shown: string): Promise<EditStepBack> {
+export async function stepBackForEdit(session: EditingSession, shown: string, who?: MessageAuthor): Promise<EditStepBack> {
 	const manager = session.sessionManager;
-	const { entry, ran, earlier, shortened } = lastMessageOf(manager);
+	const { entry, author, ran, earlier, shortened } = lastMessageOf(manager);
 	if (shortened) return { ok: false, refused: "shortened" };
 	if (!entry) return { ok: false, refused: "no-message" };
+	// A message that names who sent it is theirs to edit; one from before names nobody and stays open to an edit.
+	if (author && (author.person !== who?.person || author.space !== who?.space)) return { ok: false, refused: "not-yours" };
 	const typed = typedText(entry);
 	if (typed === undefined) return { ok: false, refused: "not-typed" };
-	if (typed !== shown.trim()) return { ok: false, refused: "not-shown" };
+	// A message sent with who sent it lost the brackets of any such line of its own (withMessageFrom); the bubble kept them.
+	if (withoutMessageFromMarkers(typed) !== withoutMessageFromMarkers(shown.trim())) return { ok: false, refused: "not-shown" };
 	const moved = await session.navigateTree(entry.id);
 	if (moved.cancelled) return { ok: false, refused: "cancelled" };
 	const kept = [...new Set([...earlier, ...ran])];
@@ -215,12 +233,20 @@ export function keptBeforeNextMessage(session: Pick<EditingSession, "sessionMana
 
 /** Whether a saved entry is the mark that the prompt after it is the server's own, not the person's. */
 export function isAppPromptMark(entry: { type?: string; customType?: string }): boolean {
-	return entry.type === "custom" && entry.customType === APP_PROMPT;
+	return entry.type === "custom" && entry.customType === APP_PROMPT_MARK;
+}
+
+/** Marks a person's message as `author`'s once the session has written it, as its newest entry; false when the newest entry is not `message`. */
+export function markMessageAuthor(session: Pick<EditingSession, "sessionManager">, message: unknown, author: MessageAuthor): boolean {
+	const saved = session.sessionManager.getLeafEntry();
+	if (!saved || saved.type !== "message" || saved.message !== message) return false;
+	session.sessionManager.appendCustomEntry(MESSAGE_AUTHOR, { person: author.person, space: author.space, for: saved.id });
+	return true;
 }
 
 /** Marks the next prompt as the server's own, so an edit after it goes to the person's message before it. */
 export function markAppPrompt(session: Pick<EditingSession, "sessionManager">): void {
-	session.sessionManager.appendCustomEntry(APP_PROMPT, {});
+	session.sessionManager.appendCustomEntry(APP_PROMPT_MARK, {});
 }
 
 /** The line the room shows where the replaced answer was, when steps of it had changed something: the page shows it live and the new turn's landing saves it, under one id. */
@@ -250,6 +276,32 @@ export function withoutEditNote(text: string): string {
 	const close = `\n${EDITED_MESSAGE_CLOSE}\n\n`;
 	const end = text.indexOf(close);
 	return end < 0 ? text : text.slice(end + close.length);
+}
+
+/**
+ * The saved messages on the session path that the server sent with the line
+ * naming who sent them (withMessageFrom): a message with its sender's mark,
+ * once the path up to it holds the marks of more than one person, as
+ * room-socket.ts decides when it sends one (severalWrote). Only a shared
+ * server marks who sent a message, so on the desktop there are none.
+ */
+export function messagesWithSenderLine(session: SessionPathSource): ReadonlySet<unknown> {
+	const branch = session.getBranch() as unknown as EditEntry[];
+	const senderOf = new Map<string, string>();
+	for (const entry of branch) {
+		const author = entry.customType === MESSAGE_AUTHOR ? readMessageAuthor(entry.data) : undefined;
+		const id = (entry.data as { for?: unknown } | undefined)?.for;
+		if (author && typeof id === "string") senderOf.set(id, JSON.stringify([author.space, author.person]));
+	}
+	const people = new Set<string>();
+	const lined = new Set<unknown>();
+	for (const entry of branch) {
+		const sender = entry.type === "message" ? senderOf.get(entry.id) : undefined;
+		if (!sender) continue;
+		people.add(sender);
+		if (people.size > 1) lined.add(entry.message);
+	}
+	return lined;
 }
 
 /** An edit as the prompt frame names it: the bubble's id and the text it showed. */

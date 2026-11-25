@@ -1,0 +1,1019 @@
+/* The settings windows' new look: a skill's page, the review before adding,
+   Write it yourself, the upload dialog, From a repository address and Browse
+   featured. Built while its switch is off (settings-look.ts): every rule
+   starts with .settings-dialog.settings-look-next, the class the shell sets
+   only when the switch is on, or with the upload dialog's veil carrying the
+   same class (it is drawn on <body>, outside the window). Skill updates'
+   group on a skill's page (.skill-update-group) is left as it is. */
+
+/* --- A skill's page and each way to add one: the header is the look's own for
+   a page inside a page (44-settings-look.css), and the page spaces its parts. */
+.settings-dialog.settings-look-next .skills-page:has(.pane-head-back) {
+	gap: 0;
+}
+/* While a review shows, its own title line takes the place of the page's. */
+.settings-dialog.settings-look-next .skills-page:has(.skill-review) > .pane-top {
+	display: none;
+}
+/* The skill's own page lays its parts straight into the page, so a notice
+   from its update sits above the facts, after the name and, when one shows,
+   skill updates' group, which keeps its own place; the header stays first. */
+.settings-dialog.settings-look-next .skills-page .skill-detail {
+	display: contents;
+}
+.settings-dialog.settings-look-next .skills-page:has(> .skill-detail) > .cli-note {
+	order: 1;
+	margin: 24px 0 -20px;
+}
+.settings-dialog.settings-look-next .skill-detail > :is(.skill-review-banner, .settings-group:not(.skill-update-group)) {
+	order: 2;
+}
+/* --- The identity: the tag 8 after the name, then the description, help's
+   13/18 muted; 24 to what follows. */
+.settings-dialog.settings-look-next .pane-head h2 > .skill-tag {
+	margin-left: 8px;
+	vertical-align: 2px;
+}
+.settings-dialog.settings-look-next .skill-import-help {
+	margin: -3px 0 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .skill-detail .pane-lead .skill-detail-more {
+	margin-top: 2px;
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 500;
+	color: var(--fg);
+}
+/* A skill whose files can't be opened, or whose name another has: its reason in
+   soft words after a red dot, a wrapped line starting under the words (the dot
+   and its margins are 18 px). */
+.settings-dialog.settings-look-next .skill-detail-problem {
+	display: block;
+	overflow-wrap: anywhere;
+	padding-left: 18px;
+	text-indent: -18px;
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next .skill-detail-problem::before {
+	content: "";
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin: 0 8px 1px 2px;
+	border-radius: 50%;
+	background: var(--error-text);
+}
+
+/* --- Sections on a skill's page: 24 under the identity, 32 apart. */
+.settings-dialog.settings-look-next .skill-detail > :is(.skill-review-banner, .settings-group:not(.skill-update-group)) {
+	margin-top: 32px;
+}
+.settings-dialog.settings-look-next .skill-detail > .pane-top + :is(.skill-review-banner, .settings-group:not(.skill-update-group)) {
+	margin-top: 24px;
+}
+/* Skill updates' group keeps its own rules; the identity leaves 12 above it,
+   so its line doesn't read as the description's next sentence. The identity's
+   box lays its parts straight into the page, so the space goes on its last part. */
+.settings-dialog.settings-look-next .skill-detail > .pane-top:has(+ .skill-update-group) > :last-child {
+	margin-bottom: 12px;
+}
+
+/* --- Facts: one card of 44 px rows, the label 13/18 muted in a 160 column,
+   the value 13/18 in the text colour 12 after it, up to two lines. An
+   address is a link in the sentence: underlined at 40 %, full under the
+   pointer. A label stays on its value's first line when the value wraps. On
+   a phone the label column is 112. */
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row:has(> .skill-fact-value, > .skill-fact-line) {
+	display: grid;
+	grid-template-columns: 160px minmax(0, 1fr);
+	column-gap: 12px;
+	align-items: start;
+	box-sizing: border-box;
+	min-height: 44px;
+	padding: 13px 0;
+}
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row:has(> .skill-fact-value, > .skill-fact-line) > .settings-row-label {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+}
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row > .skill-fact-value {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	max-width: none;
+	overflow: hidden;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	text-align: left;
+}
+/* A fact row's line, in the value column under the value when there is one, never
+   clamped: where a shared-folder skill's files are, or why rooms use only its
+   instructions. On a phone it takes the row's full width under the label. */
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row > .skill-fact-line {
+	grid-column: 2;
+}
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row:has(> .skill-fact-line) {
+	row-gap: 4px;
+}
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .skill-fact-link {
+	color: var(--fg);
+	text-decoration: underline;
+	text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	transition: text-decoration-color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .skill-fact-link:hover {
+		text-decoration-color: currentColor;
+	}
+}
+
+/* --- Files: a card of kind rows 48 tall: the chevron, 12, the kind 14/20 at
+   500, its count 13/18 muted at the row's end, 16 in. Opened, the chevron
+   turns down and the file names follow under the kind's words, mono 12/18,
+   wrapping only between names; the Scripts line sits inside its row, muted.
+   The row tints under the pointer and takes its ring inside the card. */
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kinds {
+	display: block;
+	margin: 0;
+	padding: 0 8px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--exx-surface-card);
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind {
+	position: relative;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind + .skill-file-kind::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	right: 8px;
+	left: 8px;
+	height: 1px;
+	background: var(--exx-hairline);
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .rs-text-btn.skill-file-kind-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 48px;
+	padding: 0 8px;
+	border-radius: 8px;
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+	text-decoration: none;
+	transition: background-color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .rs-text-btn.skill-file-kind-head:hover {
+		background: var(--exx-row-hover);
+	}
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .rs-text-btn.skill-file-kind-head:active {
+	background: var(--exx-row-press);
+}
+/* Over the hover and pressed fills the muted count and the quiet chevron
+   fall under 4.5:1 and 3:1, so they step up to the soft text colour there. */
+@media (hover: hover) {
+	.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .rs-text-btn.skill-file-kind-head:hover :is(.skill-file-kind-count, .skill-file-kind-mark) {
+		color: var(--fg-soft);
+	}
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .rs-text-btn.skill-file-kind-head:active :is(.skill-file-kind-count, .skill-file-kind-mark) {
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .rs-text-btn.skill-file-kind-head:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind-mark {
+	display: inline-flex;
+	flex: none;
+	width: 16px;
+	height: 16px;
+	color: var(--exx-icon-quiet);
+	transform: rotate(-90deg);
+	transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind-head[aria-expanded="true"] .skill-file-kind-mark {
+	transform: none;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind-name {
+	min-width: 0;
+	flex: 1 1 auto;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind-count {
+	flex: none;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+	font-variant-numeric: tabular-nums;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind > :is(.skill-file-kind-line, .skill-file-kind-files) {
+	margin: 0 8px 0 36px;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind > .skill-file-kind-line {
+	margin-top: -10px;
+	padding-bottom: 8px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind > .skill-file-kind-files {
+	gap: 4px;
+	padding-bottom: 14px;
+	font-size: 12px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind-head[aria-expanded="true"] + .skill-file-kind-files {
+	margin-top: -6px;
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next :is(.skill-detail-files, .skill-review-section) .skill-file-kind-mark {
+		transition: none;
+	}
+}
+
+/* --- Instructions: a card 16 inside, as the others, 14/22, folded at 340 as today; "Show
+   all instructions" under it, its words on the content's left edge. */
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-section) > .skill-doc {
+	box-sizing: border-box;
+	padding: 16px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--exx-surface-card);
+	font-size: 14px;
+	line-height: 22px;
+}
+.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-section) > .skill-doc :is(p, li, td, th) {
+	font-size: 14px;
+	line-height: 22px;
+}
+/* Today's fold masks the whole element, which here is the card: its edge and
+   corners would fade too. The card stays whole and only the words fade, into
+   the card's own colour. */
+.settings-dialog.settings-look-next .skill-detail > .settings-group:not(.skill-update-group) > .skill-doc.folded {
+	position: relative;
+	-webkit-mask-image: none;
+	mask-image: none;
+}
+.settings-dialog.settings-look-next .skill-detail > .settings-group:not(.skill-update-group) > .skill-doc.folded::after {
+	content: "";
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	height: 40%;
+	background: linear-gradient(transparent, var(--exx-surface-card));
+	pointer-events: none;
+}
+.settings-dialog.settings-look-next .skill-detail > .settings-group:not(.skill-update-group) > .skill-doc-toggle {
+	margin: 8px 0 0 calc(-1 * var(--exx-btn-inset));
+}
+
+/* --- Delete: its own card, last; its words as a form row's, the soft red
+   button at the right. A failure is a message above the card. */
+.settings-dialog.settings-look-next .skill-detail > .settings-group:not(.skill-update-group) > .skill-message + .settings-rows {
+	margin-top: 12px;
+}
+
+/* --- Messages: the hidden-character warning on a skill's page and in the
+   review is a strip with a red dot, its findings mono 12/18 muted. */
+.settings-dialog.settings-look-next :is(.skill-detail, .skill-review) > .skill-review-banner {
+	position: relative;
+	box-sizing: border-box;
+	min-height: 40px;
+	padding: 11px 12px 11px 32px;
+	border: 0;
+	border-radius: 12px;
+	background: color-mix(in srgb, var(--fg) 5%, var(--exx-surface-page));
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.skill-detail, .skill-review) > .skill-review-banner::before {
+	content: "";
+	position: absolute;
+	top: 16px;
+	left: 14px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--error-text);
+}
+.settings-dialog.settings-look-next :is(.skill-detail, .skill-review) > .skill-review-banner strong {
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next :is(.skill-detail, .skill-review) > .skill-review-banner .skill-review-findings {
+	gap: 0;
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+	color: var(--muted);
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	line-height: 18px;
+}
+
+/* --- The review: identity, the question 16 under its description, then the scripts
+   message, the description field, the facts, the warning, the instructions
+   in full and the files. 12 between a message and what follows, 32 between
+   sections. */
+.settings-dialog.settings-look-next .skills-page .skill-review {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	max-width: none;
+	margin: 0;
+	padding: 0;
+}
+.settings-dialog.settings-look-next .skill-review > .pane-top ~ * {
+	margin-top: 32px;
+}
+.settings-dialog.settings-look-next .skill-review > :is(.skill-review-lead, .skill-review-scripts, .skill-review-outside) {
+	margin-top: 16px;
+}
+/* Right under the title, with no description between, the question stands where every page's lead does. */
+.settings-dialog.settings-look-next .skill-review > .pane-top:not(:has(> .pane-lead)) + .skill-review-lead {
+	margin-top: -3px;
+}
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .skill-review > .pane-top:not(:has(> .pane-lead)) + .skill-review-lead {
+		margin-top: 0;
+	}
+}
+.settings-dialog.settings-look-next .skill-review > :is(.skill-review-field, .skill-review-facts) {
+	margin-top: 24px;
+}
+.settings-dialog.settings-look-next .skill-review > :is(.skill-review-scripts, .skill-review-outside, .skill-review-banner) + * {
+	margin-top: 12px;
+}
+/* The line on files outside the skill's folder wraps beside its dot, which stays on its first line;
+   11 above and below keeps one line in the middle of the strip's 40. */
+.settings-dialog.settings-look-next .skill-review-outside {
+	align-items: flex-start;
+	padding-block: 11px;
+}
+.settings-dialog.settings-look-next .skill-review-outside::before {
+	margin-top: 5px;
+}
+.settings-dialog.settings-look-next .skill-review-outside > span {
+	flex: 1 1 0;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .skill-review-lead {
+	overflow-wrap: anywhere;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+}
+/* The scripts message: its count at 500, the Scripts line, Show scripts at the end. */
+.settings-dialog.settings-look-next .skill-review-scripts-text {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .skill-review-scripts-text > strong {
+	font-weight: 500;
+}
+/* The message's 120 px floor is for a long "Update <name>"; "Show scripts" and
+   "Retry" are short, so they take their own width: the words end the strip's 8
+   and the button's own inset from the right. */
+.settings-dialog.settings-look-next :is(.skill-review-scripts, .skill-browse-error) > .rs-btn {
+	min-width: 0;
+}
+/* The description: label, field and help 6 apart; the field the form's width (44); the count under its right end. */
+.settings-dialog.settings-look-next .skill-review-field {
+	display: grid;
+	gap: 6px;
+}
+.settings-dialog.settings-look-next .skill-review-field .skill-review-desc-input {
+	width: 100%;
+}
+.settings-dialog.settings-look-next .skill-field-foot {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 12px;
+}
+.settings-dialog.settings-look-next :is(.skill-field-help, .skill-write-id-hint) {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .skill-write-id-hint code {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+}
+.settings-dialog.settings-look-next .skill-field-foot > .skill-review-desc-counter {
+	flex: none;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 16px;
+	font-variant-numeric: tabular-nums;
+}
+.settings-dialog.settings-look-next .skill-field-foot > .skill-review-desc-counter.over {
+	color: var(--error-text);
+}
+
+/* --- The pinned foot: 64 tall on the pane's bottom edge at every scroll, the
+   page's fill with a hairline above; Cancel then the main button, ending on
+   the content's right edge. Held by the window, so the pane's scrolling
+   never moves it; the pane's bottom room grows by 64 so nothing ends under
+   it, and a field the keyboard reaches stops above it. */
+.settings-dialog.settings-look-next .skill-review-actions {
+	position: absolute;
+	z-index: 6;
+	right: 0;
+	bottom: 0;
+	left: var(--settings-side-w);
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	box-sizing: border-box;
+	height: 64px;
+	margin: 0;
+	padding: 0 var(--settings-pad);
+	background: var(--exx-surface-page);
+	box-shadow: 0 -1px 0 var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .settings-dialog-pane:has(.skill-review-actions) {
+	padding-bottom: calc(var(--settings-pad) + 64px);
+	scroll-padding-bottom: 72px;
+}
+/* While a review shows, its foot holds the screen's one ink button: the
+   repository page's lead, field and Scan step aside. */
+.settings-dialog.settings-look-next .skill-import-from-repo:has(.skill-review) > :not(.skill-import-found) {
+	display: none;
+}
+
+/* --- Write it yourself: the form's column (44), label, field and help 6
+   apart, 20 between fields; Instructions 240 tall, growing downward only.
+   Save skill then Cancel 24 under them, on the content's left edge. */
+.settings-dialog.settings-look-next .skills-page .skill-write-block {
+	display: block;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+}
+.settings-dialog.settings-look-next .skill-write-block > .connector-form {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+	margin: 24px 0 0;
+	padding: 0;
+	border: 0;
+	background: none;
+}
+.settings-dialog.settings-look-next .skill-write-block .connector-form-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin: 0;
+}
+.settings-dialog.settings-look-next .skill-write-block .connector-form-field > .skill-write-instructions {
+	height: 240px;
+	min-height: 240px;
+	padding: 12px 14px;
+	resize: vertical;
+}
+/* A finger can't drag the grip, and a phone's rounded corner cuts it to a dot. */
+@media (hover: none), (max-width: 760px) {
+	.settings-dialog.settings-look-next .skill-write-block .connector-form-field > .skill-write-instructions {
+		resize: none;
+	}
+}
+.settings-dialog.settings-look-next .skill-write-block .settings-form-foot {
+	display: flex;
+	justify-content: flex-start;
+	gap: 8px;
+	margin: 4px 0 0;
+	padding: 0;
+	border: 0;
+}
+
+/* --- From a repository address and Browse featured: the identity, the lead,
+   then the address with Scan 8 after it, or the sources. */
+.settings-dialog.settings-look-next .skills-page > .ai-setup-section:has(> .skill-import-from-repo, > .skill-browse-directory, > .skill-browse-retry) {
+	display: block;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.settings-dialog.settings-look-next .skill-import-from-repo {
+	display: block;
+	margin: 0;
+}
+.settings-dialog.settings-look-next .skill-import-from-repo > .skill-import-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 24px;
+}
+.settings-dialog.settings-look-next .skill-import-from-repo > :is(.skill-import-loading, .skill-message, .cli-note) {
+	margin-top: 12px;
+}
+/* A sign-in's failure says the other way on a line of its own. */
+.settings-dialog.settings-look-next .skill-import-from-repo > .skill-message-failed {
+	white-space: pre-line;
+}
+.settings-dialog.settings-look-next .skill-import-loading {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .skill-import-from-repo > .skill-import-found {
+	display: block;
+	margin-top: 32px;
+}
+.settings-dialog.settings-look-next .skill-import-from-repo:has(.skill-review) > .skill-import-found {
+	margin-top: 0;
+}
+.settings-dialog.settings-look-next .skill-import-found-count {
+	margin-bottom: 8px;
+	overflow-wrap: anywhere;
+}
+/* The skills found: a card of 64 px rows, the name with its tag over its
+   description on one line, cut with "…" (whole in its tip), and a chevron.
+   A row opens its review; one added or too big opens nothing and has no
+   chevron, and a skill too big says why after a red dot. */
+.settings-dialog.settings-look-next .skill-import-rows {
+	padding: 0 8px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--exx-surface-card);
+}
+.settings-dialog.settings-look-next .skill-import-rows > .skill-import-option {
+	position: relative;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 16px;
+	align-items: center;
+	column-gap: 12px;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 64px;
+	margin: 0;
+	padding: 12px 8px;
+	border: 0;
+	border-radius: 8px;
+	background: none;
+	color: var(--fg);
+	font: inherit;
+	text-align: left;
+	cursor: default;
+	transition: background-color 100ms ease;
+}
+.settings-dialog.settings-look-next .skill-import-rows > .skill-import-option + .skill-import-option::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	right: 8px;
+	left: 8px;
+	height: 1px;
+	background: var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .skill-import-rows > button.skill-import-option {
+	cursor: pointer;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .skill-import-rows > button.skill-import-option:hover {
+		background: var(--exx-row-hover);
+	}
+}
+.settings-dialog.settings-look-next .skill-import-rows > button.skill-import-option:active {
+	background: var(--exx-row-press);
+}
+.settings-dialog.settings-look-next .skill-import-rows > button.skill-import-option:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
+.settings-dialog.settings-look-next .skill-import-rows .skill-import-option-main {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .skill-import-rows .skill-import-option-name {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .skill-import-rows .skill-import-option-name-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.settings-dialog.settings-look-next .skill-import-rows .skill-import-option-name > :is(.skill-tag, .skill-import-option-added) {
+	flex: none;
+	margin-left: 8px;
+}
+.settings-dialog.settings-look-next .skill-import-rows .skill-import-option-desc {
+	overflow: hidden;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* The reason hangs on its words' left edge, after the 16 the dot takes, and a
+   row with no chevron gives its words that column too. */
+.settings-dialog.settings-look-next .skill-import-rows .skill-import-option-desc.skill-import-too-big {
+	padding-left: 16px;
+	color: var(--fg-soft);
+	text-indent: -16px;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .skill-import-rows > .skill-import-option:not(:has(> .skill-import-chevron)) > .skill-import-option-main {
+	grid-column: 1 / -1;
+}
+.settings-dialog.settings-look-next .skill-import-rows .skill-import-too-big::before {
+	content: "";
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin: 0 6px 1px 2px;
+	border-radius: 50%;
+	background: var(--error-text);
+}
+.settings-dialog.settings-look-next .skill-import-chevron {
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	color: var(--exx-icon-quiet);
+	transform: rotate(-90deg);
+}
+/* Over the hover and pressed fills the muted description and the quiet
+   chevron fall under 4.5:1 and 3:1, so they step up to the soft text colour. */
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .skill-import-rows > button.skill-import-option:hover :is(.skill-import-option-desc, .skill-import-chevron) {
+		color: var(--fg-soft);
+	}
+}
+.settings-dialog.settings-look-next .skill-import-rows > button.skill-import-option:active :is(.skill-import-option-desc, .skill-import-chevron) {
+	color: var(--fg-soft);
+}
+
+/* Browse featured: each source a section (its author the title, its address
+   the help), 8 above a card of 64 px rows: the name over its description on
+   one line, the licence in a 128 column, Add (small) at the row's end, or
+   "Added" in its place. A source with no skill has no card. */
+.settings-dialog.settings-look-next .skills-page .ai-setup-section > .skill-browse-directory,
+.settings-dialog.settings-look-next .skills-page .ai-setup-section > .skill-browse-retry,
+.settings-dialog.settings-look-next .skills-page .ai-setup-section > .skill-browse-loading {
+	margin-top: 24px;
+}
+.settings-dialog.settings-look-next .skills-page .ai-setup-section > .skill-review {
+	margin-top: 0;
+}
+.settings-dialog.settings-look-next .skill-browse-directory {
+	display: flex;
+	flex-direction: column;
+	gap: 32px;
+}
+.settings-dialog.settings-look-next .skill-browse-directory > .settings-group {
+	margin: 0;
+}
+.settings-dialog.settings-look-next .skill-browse-directory > .settings-group > .skill-message + .settings-rows {
+	margin-top: 12px;
+}
+.settings-dialog.settings-look-next .skill-browse-directory .settings-rows:empty {
+	display: none;
+}
+.settings-dialog.settings-look-next .skill-browse-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 128px 64px;
+	align-items: center;
+	column-gap: 12px;
+	box-sizing: border-box;
+	min-height: 64px;
+	padding: 12px 0;
+}
+.settings-dialog.settings-look-next .skill-browse-row > .settings-row-main {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .skill-browse-row .settings-row-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .skill-browse-row .settings-row-clamp {
+	display: block;
+	overflow: hidden;
+	color: var(--muted);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	-webkit-line-clamp: none;
+}
+.settings-dialog.settings-look-next .skill-browse-license {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* The licence beside the name, as a connector's tag is, the description under both: no words between them and Add. */
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .skill-browse-row {
+		grid-template-columns: minmax(0, max-content) minmax(96px, 1fr) 64px;
+		grid-template-rows: 20px;
+		row-gap: 0;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row > .settings-row-main {
+		display: contents;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row .settings-row-label {
+		grid-column: 1;
+		grid-row: 1;
+		align-self: baseline;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row .settings-row-sub {
+		grid-column: 1 / 3;
+		margin-top: 2px;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row > .skill-browse-license {
+		grid-column: 2;
+		grid-row: 1;
+		align-self: baseline;
+		margin-left: -4px;
+		font-size: 12px;
+		line-height: 16px;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row > .skill-browse-add {
+		grid-column: 3;
+		grid-row: 1 / span 2;
+		align-self: center;
+	}
+	/* A skill that shares its name has its folder's line too. */
+	.settings-dialog.settings-look-next .skill-browse-row:has(.settings-row-sub + .settings-row-sub) > .skill-browse-add {
+		grid-row: 1 / span 3;
+	}
+}
+.settings-dialog.settings-look-next .skill-browse-add {
+	display: flex;
+	justify-content: flex-end;
+}
+.settings-dialog.settings-look-next .skill-browse-add > .settings-row-value {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.skill-browse-loading, .skill-browse-retry > .skill-browse-loading) {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .skill-browse-retry {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+}
+.settings-dialog.settings-look-next .skill-browse-retry > .skill-message {
+	align-self: stretch;
+}
+
+/* --- The upload dialog: the window's question dialog, 400 wide, radius 16,
+   24 inside, on the veil; its title 18/24; a drop area 120 tall with the one
+   dashed line, which tints and turns ink under the pointer or a dragged
+   file; the requirements as two muted lines. */
+.skill-upload-overlay.settings-look-next {
+	padding: 24px;
+	background: var(--exx-veil);
+	backdrop-filter: none;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-modal {
+	display: block;
+	box-sizing: border-box;
+	width: min(400px, 100%);
+	max-width: none;
+	padding: 24px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 16px;
+	background: var(--exx-surface-card);
+	box-shadow: var(--exx-shadow-window);
+}
+.skill-upload-overlay.settings-look-next .skill-upload-modal-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-modal-head h3 {
+	margin: 0;
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-size: 18px;
+	line-height: 24px;
+	font-weight: 700;
+	letter-spacing: normal;
+}
+/* The close's 16 px mark ends on the content's right edge and the title's
+   line stays 24, whether the button is 28 or a phone's 44. */
+.skill-upload-overlay.settings-look-next .skill-upload-modal-head > .rs-btn {
+	margin: calc((24px - var(--btn-h)) / 2) calc((16px - var(--btn-h)) / 2) calc((24px - var(--btn-h)) / 2) 0;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-drop {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	box-sizing: border-box;
+	width: 100%;
+	height: 120px;
+	margin-top: 16px;
+	padding: 0 16px;
+	border: 1px dashed var(--exx-border-field);
+	border-radius: 12px;
+	background: none;
+	color: var(--fg);
+	transition: background-color 100ms ease, border-color 100ms ease;
+}
+@media (hover: hover) {
+	.skill-upload-overlay.settings-look-next .skill-upload-drop:hover {
+		border-color: var(--exx-action-primary-bg);
+		background: var(--exx-row-hover);
+	}
+}
+.skill-upload-overlay.settings-look-next .skill-upload-drop.dragging,
+.skill-upload-overlay.settings-look-next .skill-upload-drop:active {
+	border-color: var(--exx-action-primary-bg);
+	background: var(--exx-row-hover);
+}
+.skill-upload-overlay.settings-look-next .skill-upload-drop:active {
+	background: var(--exx-row-press);
+}
+.skill-upload-overlay.settings-look-next .skill-upload-drop:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-drop-glyph {
+	display: inline-flex;
+	color: var(--exx-icon-quiet);
+	opacity: 1;
+	transform: rotate(90deg);
+}
+/* With the line, the arrow turns ink: the quiet icon colour falls under 3:1
+   over the hover and pressed fills. */
+@media (hover: hover) {
+	.skill-upload-overlay.settings-look-next .skill-upload-drop:hover .skill-upload-drop-glyph {
+		color: var(--exx-action-primary-bg);
+	}
+}
+.skill-upload-overlay.settings-look-next :is(.skill-upload-drop.dragging, .skill-upload-drop:active) .skill-upload-drop-glyph {
+	color: var(--exx-action-primary-bg);
+}
+.skill-upload-overlay.settings-look-next .skill-upload-drop-label {
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-reqs {
+	display: block;
+	margin-top: 12px;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-reqs-title {
+	display: block;
+	color: var(--fg-soft);
+	font-size: 12px;
+	line-height: 16px;
+	font-weight: 500;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-reqs ul {
+	display: block;
+	margin: 4px 0 0;
+	padding: 0;
+	list-style: none;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+/* 4 between the two, so a wrapped line stays with its own requirement. */
+.skill-upload-overlay.settings-look-next .skill-upload-reqs li + li {
+	margin-top: 4px;
+}
+.skill-upload-overlay.settings-look-next .skill-upload-reqs code {
+	font-family: var(--exx-font-sans);
+	font-size: inherit;
+}
+@media (prefers-reduced-motion: reduce) {
+	.skill-upload-overlay.settings-look-next .skill-upload-drop {
+		transition: none;
+	}
+}
+
+/* --- Phone (760 px and less): the facts' label column is 112; every field is the column's width;
+   the foot's buttons are the family's 44 and the foot rides up with the
+   keyboard, as the message box does (38-phone.css). */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .skill-import-help {
+		margin-top: 0;
+	}
+	/* The scripts message: the sentence takes the strip's width and Show
+	   scripts goes under it, its words on the sentence's edge (the dot's 12
+	   and the gap's 6, less the button's inset); the dot stays on line one. */
+	.settings-dialog.settings-look-next .skill-review-scripts {
+		flex-wrap: wrap;
+		align-items: flex-start;
+	}
+	.settings-dialog.settings-look-next .skill-review-scripts::before {
+		margin-top: 5px;
+	}
+	.settings-dialog.settings-look-next .skill-review-scripts-text {
+		flex-basis: calc(100% - 18px);
+	}
+	/* Its 44 px touch area reaches over the gap above and the strip's padding
+	   below, so its words sit as near the sentence and the strip's bottom as
+	   the sentence sits to the strip's top. */
+	.settings-dialog.settings-look-next .skill-review-scripts > .rs-btn {
+		margin: -14px 0 -13px calc(18px - var(--exx-btn-inset-sm));
+	}
+	.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row:has(> .skill-fact-value, > .skill-fact-line) {
+		grid-template-columns: 112px minmax(0, 1fr);
+	}
+	.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row > .skill-fact-value {
+		display: block;
+		overflow: visible;
+		overflow-wrap: anywhere;
+	}
+	.settings-dialog.settings-look-next :is(.skill-detail > .settings-group:not(.skill-update-group), .skill-review-facts) .settings-row > .skill-fact-line {
+		grid-column: 1 / -1;
+	}
+	.settings-dialog.settings-look-next .skill-review-actions {
+		left: 0;
+		bottom: var(--phone-keyboard-lift, 0px);
+		padding: 0 16px;
+		transition: bottom 80ms linear;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-pane:has(.skill-review-actions) {
+		padding-bottom: calc(24px + 64px + var(--phone-keyboard-lift, 0px));
+		scroll-padding-bottom: calc(72px + var(--phone-keyboard-lift, 0px));
+	}
+	.settings-dialog.settings-look-next .skill-write-block .connector-form-field:is(:nth-child(1), :nth-child(2)) > input,
+	.settings-dialog.settings-look-next .skill-review-field,
+	.settings-dialog.settings-look-next .skill-import-row > .skill-import-url {
+		width: 100%;
+	}
+	.settings-dialog.settings-look-next .skill-import-row > .skill-import-url {
+		flex: 1 1 auto;
+	}
+	/* A phone has no tip to read the rest: a found or featured row's description wraps whole. */
+	.settings-dialog.settings-look-next :is(.skill-import-rows .skill-import-option-desc, .skill-browse-row .settings-row-clamp) {
+		overflow: visible;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+	/* The licence follows the description as its next line, 2 under it. */
+	.settings-dialog.settings-look-next .skill-browse-row {
+		grid-template-columns: minmax(0, 1fr) 64px;
+		grid-template-rows: auto auto;
+		row-gap: 2px;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row > .settings-row-main {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row > .skill-browse-license {
+		grid-column: 1;
+		grid-row: 2;
+	}
+	.settings-dialog.settings-look-next .skill-browse-row > .skill-browse-add {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+	}
+	.skill-upload-overlay.settings-look-next {
+		padding: 16px;
+	}
+}
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next .skill-review-actions {
+		transition: none;
+	}
+}

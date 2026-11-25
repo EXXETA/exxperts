@@ -405,6 +405,18 @@ async function chooseLinuxFolder(options: ChooseLocalFolderOptions = {}): Promis
 	const runner = options.runner ?? defaultFolderPickerRunner;
 	const zenityPath = options.zenityPath ?? DEFAULT_ZENITY_PATH;
 	const prompt = options.prompt ?? DEFAULT_FOLDER_PICKER_PROMPT;
+	// With no display (a container, a server over SSH) zenity exits 1 with
+	// nothing printed, which reads as a cancel: say there is no window, so the
+	// page offers the typed path.
+	if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+		return {
+			ok: false,
+			supported: false,
+			cancelled: false,
+			code: "folder_chooser_unavailable",
+			error: "Folder chooser is unavailable because there is no display. Enter the path manually.",
+		};
+	}
 
 	try {
 		const result = await runner(zenityPath, linuxChooseFolderArgs(prompt, options.startAt), runnerOptions(options));

@@ -5,10 +5,14 @@
 //
 // - running: the keyed turn running now and its question (persistent-agent-turns.ts);
 //   a file left by a process that is gone is a turn a kill ended, told at the
-//   room's settle;
+//   room's settle. On a shared server every turn writes it as it begins, an
+//   unkeyed one with its id and start alone, which the settle just removes;
 // - items: the latest-turn marker, the recent turns' keys and the ids removed
 //   on purpose lately (persistent-agent-turns.ts);
 // - taken: the messages the last turn took or gave back (room-socket.ts);
+// - transfers: on a shared server, the transfers a message carried, by their
+//   block's hash, so a page that names one again never queues it twice
+//   (persistent-agent-threads.ts);
 // - note: what the person saw of an answer their Stop or cut ended, for the
 //   next message (room-socket.ts);
 // - kept: the landing of a message the room offered back, waiting for the
@@ -21,6 +25,7 @@
 // conversation's words, so
 // Forget and a conversation's delete erase every piece (`turnPieceFiles`).
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "@exxeta/exxperts-runtime";
@@ -28,7 +33,7 @@ import type { AnswerNote } from "./cut-answer-note.js";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
 import { readTurnKey, type ThreadItem } from "./thread-items-by-id.js";
 
-type TurnPiece = "running" | "items" | "taken" | "note" | "kept";
+type TurnPiece = "running" | "items" | "taken" | "transfers" | "note" | "kept";
 
 const TURN_PIECES_DIR = "turn-pieces";
 const SCHEMA_VERSION = 1;
@@ -70,7 +75,7 @@ const ownItems = (value: unknown): ThreadItem[] => (Array.isArray(value) ? value
 
 // --- running ---------------------------------------------------------------
 
-/** A keyed turn that began and has not finished, with what its landing puts first and where (thread-items-by-id.ts `landTurnItems`): its question as the bubble showed it, which the page may not have saved yet. */
+/** A keyed turn that began and has not finished, with what its landing puts first and where (thread-items-by-id.ts `landTurnItems`): its question as the bubble showed it, which the page may not have saved yet, and on a shared server each message it took (`steered`), with who sent it. */
 export interface RunningTurn { turnId: string; key: string; startedAt: number; continued: boolean; startAnchorId?: string; own: ThreadItem[] }
 
 export function readRunningTurn(agentId: string, conversationId: string): RunningTurn | null {
@@ -88,6 +93,8 @@ export function runningTurnConversations(roomDir: string): string[] {
 }
 
 export const writeRunningTurn = (agentId: string, conversationId: string, turn: RunningTurn): void => writeTurnPiece(agentId, conversationId, "running", turn);
+/** A turn that runs, before it says whether it has a key: readRunningTurn reads it as none. */
+export const writeRunningMark = (agentId: string, conversationId: string, mark: { turnId: string; startedAt: number }): void => writeTurnPiece(agentId, conversationId, "running", mark);
 export const dropRunningTurn = (agentId: string, conversationId: string): void => dropTurnPiece(agentId, conversationId, "running");
 
 // --- items -----------------------------------------------------------------
@@ -118,6 +125,23 @@ export function addTakenSteer(agentId: string, conversationId: string, steer: Ta
 }
 
 export const dropTakenSteers = (agentId: string, conversationId: string): void => dropTurnPiece(agentId, conversationId, "taken");
+
+// --- transfers -------------------------------------------------------------
+
+/** A transfer's name: its block's hash. A block holds its consult's answer and the times it was asked, so two transfers never share one. */
+export const transferId = (block: string): string => createHash("sha256").update(block).digest("hex");
+
+/** The names of the transfers a message of this conversation carried. */
+export function readTakenTransfers(agentId: string, conversationId: string): Set<string> {
+	return new Set(texts(readTurnPiece(agentId, conversationId, "transfers")));
+}
+
+/** The newest `kept` only: it bounds what one conversation holds. */
+export function addTakenTransfers(agentId: string, conversationId: string, blocks: readonly string[], kept: number): void {
+	if (!blocks.length) return;
+	const taken = [...readTakenTransfers(agentId, conversationId)];
+	writeTurnPiece(agentId, conversationId, "transfers", [...taken, ...blocks.map(transferId).filter((id) => !taken.includes(id))].slice(-kept));
+}
 
 // --- note ------------------------------------------------------------------
 

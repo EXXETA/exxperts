@@ -11,7 +11,7 @@ import { BackArrowIcon, CloseIcon, DownloadIcon, PaperclipIcon, PencilIcon, Tras
 /** Where a room's Attachments show: the panel beside the chat, or the gallery in place of it. */
 export type AttachmentsView = "panel" | "gallery";
 
-/** The room sidebar's entry, under Home and in Home's look: the name, and the count once there is one. */
+/** The room sidebar's entry, under Rooms and in its look: the name, and the count once there is one. */
 export function AttachmentsEntry({ count, open, onClick }: { count: number; open: boolean; onClick: () => void }) {
 	return (
 		<button className="list-btn attachments-entry" aria-expanded={open} onClick={onClick}>

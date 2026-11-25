@@ -1,3 +1,5 @@
+import { SKILL_PICKED_OPEN, withoutSkillNote } from "./skill-pick.js";
+
 /**
  * The words the person typed in a room message, apart from what other actors
  * put in front of them. This module once also held the visual specialists'
@@ -34,19 +36,30 @@ export function userAuthoredPromptText(wireText: string): string {
 	// or a Stop, or while the room worked (cut-answer-note.ts), go too. The cut
 	// note's markers carry nothing after their name, so they match only exactly:
 	// a suffix such as "[/ANSWER CUT OFFx]" escapes the defanging's word
-	// boundary and must not close the note early.
+	// boundary and must not close the note early. The note of a skill the
+	// person picked (skill-pick.ts) stands in front of the message, behind the
+	// cut and edit notes when there are any: it is one more layer, cut where it is met.
 	const openFence = /^\[(CONSULT HANDOFF FROM|SPECIALIST RESULT:|ANSWER CUT OFF(?=\]))[^\]\n]*\]$/;
 	const closeFence = /^\[\/(CONSULT HANDOFF FROM|SPECIALIST RESULT:|ANSWER CUT OFF(?=\]))[^\]\n]*\]$/;
-	const oneLineFence = /^\[SENT WHILE YOU WORKED\].*\[\/SENT WHILE YOU WORKED\]$/;
+	// One line of the server's own: a message sent while the room worked, and who sent a message (cut-answer-note.ts).
+	const oneLineFence = /^\[(SENT WHILE YOU WORKED|MESSAGE FROM)\].*\[\/\1\]$/;
 	// Deliberately unanchored at the tail: a note line that somehow lost its
 	// closing bracket must still strip (stripping MORE is the safe direction —
 	// it can only shrink what counts as consent).
 	const attachmentNote = /^\[FILE ATTACHED: /;
-	const lines = String(wireText ?? "").replace(/\r\n/g, "\n").split("\n");
+	let lines = String(wireText ?? "").replace(/\r\n/g, "\n").trimStart().split("\n");
 	let at = 0;
 	while (at < lines.length) {
 		const line = lines[at].trim();
 		if (line === "" || attachmentNote.test(line) || oneLineFence.test(line)) { at++; continue; }
+		if (line === SKILL_PICKED_OPEN) {
+			const rest = lines.slice(at).join("\n");
+			const after = withoutSkillNote(rest);
+			if (after === rest) break; // an open marker with no close: not a note, the person's words from here
+			lines = after.split("\n");
+			at = 0;
+			continue;
+		}
 		const open = openFence.exec(line);
 		if (!open) break;
 		const family = open[1];

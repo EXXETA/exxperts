@@ -1,5 +1,6 @@
 // What the model is told when the person cut its answer, stopped it, or sent
-// a message while it worked, and after exxperts stopped mid-answer. The
+// a message while it worked, after exxperts stopped mid-answer, and who sent a
+// message where more than one person writes. The
 // runtime drops a stopped answer before it reaches the provider, so without
 // the note the model would get the person's two messages back to back and
 // start its answer again. The note travels in front of the person's message
@@ -14,6 +15,8 @@ export const ANSWER_CUT_OFF_OPEN = "[ANSWER CUT OFF]";
 export const ANSWER_CUT_OFF_CLOSE = "[/ANSWER CUT OFF]";
 export const SENT_WHILE_YOU_WORKED_OPEN = "[SENT WHILE YOU WORKED]";
 export const SENT_WHILE_YOU_WORKED_CLOSE = "[/SENT WHILE YOU WORKED]";
+export const MESSAGE_FROM_OPEN = "[MESSAGE FROM]";
+export const MESSAGE_FROM_CLOSE = "[/MESSAGE FROM]";
 
 /** How the answer before the person's message ended: cut by their message, stopped by their Stop, or cut by exxperts stopping. */
 export type AnswerNoteKind = "cut" | "stop" | "server-stop";
@@ -106,6 +109,53 @@ export function withoutAnswerNote(text: string): string {
 	const close = `\n${ANSWER_CUT_OFF_CLOSE}\n\n`;
 	const end = text.indexOf(close);
 	return end < 0 ? text : text.slice(end + close.length);
+}
+
+/**
+ * The person's message as the model gets it in a shared server's conversation
+ * more than one person wrote in: one line in front of it naming who sent it,
+ * the app's line, never theirs. The name comes from the company sign-in but is
+ * still words a person chose, so it is folded onto one line, loses its
+ * brackets (no marker can be made of it) and is quoted, as data. "" when the
+ * sign-in gave none. Such a line inside the message loses its brackets, so
+ * the message cannot carry a second one in someone else's name.
+ */
+export function withMessageFrom(name: string, message: string): string {
+	const folded = name.replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
+	const who = folded ? JSON.stringify(folded) : "a person whose name is not known";
+	return `${MESSAGE_FROM_OPEN} ${who} ${MESSAGE_FROM_CLOSE}\n\n${withoutMessageFromMarkers(message)}`;
+}
+// This line's marker-like tokens only, taken as consult-handoff.ts FENCE_MARKER_LIKE takes them: the message may carry
+// the server's own envelopes (a transfer's), which a defang of every family would open.
+const MESSAGE_FROM_LIKE = /\[(?<![[][\s/]*[[])[[\s/]*MESSAGE\s+FROM\b[^[\]\n]*\]?/gi;
+/** The text with the brackets taken off every `[MESSAGE FROM]`-like token in it, as `withMessageFrom` sends a message. */
+export function withoutMessageFromMarkers(text: string): string {
+	return text.replace(MESSAGE_FROM_LIKE, (marker) => marker.replace(/[[\]]/g, ""));
+}
+
+/** The message without the line `withMessageFrom` put in front of it; any other text comes back as it is. A line that is the whole text leaves "" (a blank message, trimmed). */
+export function withoutMessageFrom(text: string): string {
+	if (!text.startsWith(`${MESSAGE_FROM_OPEN} `)) return text;
+	const end = text.indexOf(MESSAGE_FROM_CLOSE) + MESSAGE_FROM_CLOSE.length;
+	const after = text.slice(end);
+	if (end < MESSAGE_FROM_CLOSE.length || text.slice(0, end).includes("\n") || (after !== "" && !after.startsWith("\n\n"))) return text;
+	return after.slice(2);
+}
+
+/**
+ * A message the server sent with the line naming who sent it, as memory and
+ * the search over conversations read it: the notes it put in front of that
+ * line stay, and the line goes. It is the last such line in the message: the
+ * notes in front of it can quote one, but the person's words behind it lost
+ * the brackets of theirs. Only for a message sent with the line
+ * (messagesWithSenderLine, edit-last-message.ts): without it, such a line is
+ * the person's own.
+ */
+export function withoutMessageFromLine(text: string): string {
+	const open = `${MESSAGE_FROM_OPEN} `;
+	const after = text.lastIndexOf(`\n\n${open}`);
+	const start = after >= 0 ? after + 2 : text.startsWith(open) ? 0 : -1;
+	return start < 0 ? text : text.slice(0, start) + withoutMessageFrom(text.slice(start));
 }
 
 /** A message that goes in after a step, as the model gets it. */

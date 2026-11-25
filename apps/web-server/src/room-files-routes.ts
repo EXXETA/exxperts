@@ -8,6 +8,7 @@ import { sweepExpiredShelfTrash, replayShelfRenameJournals, listShelfFilesWithOr
 import { cachedShelfPageCount, SHELF_READ_MAX_FILE_BYTES, sniffShelfFileBuffer, readShelfFileText } from "./persistent-room-shelf-reading.js";
 import { stateHome } from "../../../pi-package/product-state-paths.js";
 import { app } from "./server-app.js";
+import { IN_FLIGHT_TEMPORARY_MARK } from "./room-files-folder.js";
 import { ARTIFACT_SECURITY_HEADERS, isLoopbackAddress, isLoopbackOrLocalhostOrigin, requestRemoteAddresses } from "./request-checks.js";
 import { artifactContentType, nameIsTaken, writeReplacingNoLink } from "./artifact-routes.js";
 
@@ -122,10 +123,15 @@ function landUpload(shelfDir: string, unanswered: string, desiredName: string, b
 	}
 }
 
-/** What a kill left of an upload's temporary files. Landing is synchronous, so none of this server's is in flight; another server's upload caught here fails and says so. */
+/**
+ * What a kill left of the temporary files of an upload or of a room's edit.
+ * An upload lands synchronously, but a room's edit may be writing one now: its
+ * name carries this server start's mark, so it stays. Another server's caught
+ * here fails and says so.
+ */
 function removeUploadLeftovers(shelfDir: string): void {
 	for (const name of fs.readdirSync(shelfDir)) {
-		if (name.startsWith(".") && name.includes(".tmp-")) fs.rmSync(path.join(shelfDir, name), { force: true });
+		if (name.startsWith(".") && name.includes(".tmp-") && !name.includes(IN_FLIGHT_TEMPORARY_MARK)) fs.rmSync(path.join(shelfDir, name), { force: true });
 	}
 }
 

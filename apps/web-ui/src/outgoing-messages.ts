@@ -79,6 +79,8 @@ export type OutgoingAction =
 	| { type: "gone"; ids: readonly string[] }
 	/** These are held now; one not in the list yet joins it held. */
 	| { type: "held"; messages: readonly ListedMessage[] }
+	/** The room's held messages are these (another page held, sent, edited or dropped one): a held one not listed is gone. */
+	| { type: "heldAre"; messages: readonly ListedMessage[] }
 	/**
 	 * A new connection, once its ready said what the server has: the running
 	 * answer's waiting messages, the conversation's held ones, and the ones the
@@ -116,6 +118,12 @@ export function reduceOutgoing(list: readonly OutgoingMessage[], action: Outgoin
 			const ids = new Set(action.messages.map((message) => message.id));
 			const known = new Set(list.map((message) => message.id));
 			const kept = list.map((message) => (ids.has(message.id) ? { ...message, state: "held" as const } : message));
+			return [...kept, ...action.messages.filter((message) => !known.has(message.id) && message.text.trim()).map((message) => ({ id: message.id, text: message.text.trim(), state: "held" as const }))];
+		}
+		case "heldAre": {
+			const listed = new Map(action.messages.map((message) => [message.id, message.text.trim()]));
+			const known = new Set(list.map((message) => message.id));
+			const kept = list.filter((message) => message.state !== "held" || listed.has(message.id)).map((message) => (message.state === "held" ? { ...message, text: listed.get(message.id) || message.text } : message));
 			return [...kept, ...action.messages.filter((message) => !known.has(message.id) && message.text.trim()).map((message) => ({ id: message.id, text: message.text.trim(), state: "held" as const }))];
 		}
 		case "reconcile": {

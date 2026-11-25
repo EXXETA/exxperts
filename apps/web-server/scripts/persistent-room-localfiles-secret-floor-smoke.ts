@@ -45,7 +45,7 @@ Object.assign(process.env, {
 const { createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition } = await import("@exxeta/exxperts-runtime");
 const { createPersistentRoomCapabilityPolicy, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, resolvePersistentRoomEffectiveWorkspacePolicy, writePersistentRoomDefaultCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");
 const { createPersistentRoomWorkspaceTools } = await import("../src/persistent-room-workspace-tools.js");
-const { ROOM_FOLDER_MOVED, ROOM_FOLDER_REFUSED } = await import("../src/room-files.js");
+const { ROOM_FOLDER_MOVED, ROOM_FOLDER_REFUSED, skillsFolderRefusal } = await import("../src/room-files.js");
 const { placeRefused } = await import("../src/path-shapes.js");
 const { saveAlsoAllowedFolders } = await import("../src/room-box/also-allowed.js");
 
@@ -973,22 +973,25 @@ try {
 	await open("read", { path: "decks/bundle.key" }, "zipped", "a zip named *.key that holds a key");
 
 	// ---- no room changes a skill, wherever the agent folder lives ---------
-	const movedAgentDir = path.join(tmp, "opt", "agent");
-	const movedSkill = path.join(movedAgentDir, "skills", "guide");
-	fs.mkdirSync(movedSkill, { recursive: true });
-	write(path.join(movedSkill, "SKILL.md"), "---\nname: guide\n---\n");
-	write(path.join(movedSkill, "provenance.json"), "{\"source\":\"upload\"}\n");
-	process.env.EXXPERTS_CODING_AGENT_DIR = movedAgentDir;
-	for (const [name, params, label] of [
-		["write", { path: path.join(movedSkill, "provenance.json"), content: "{}\n" }, "writing a skill's provenance.json"],
-		["edit", { path: path.join(movedSkill, "provenance.json"), edits: [{ oldText: "upload", newText: "local" }] }, "editing a skill's provenance.json"],
-		["write", { path: path.join(movedAgentDir, "skills", "made-here", "provenance.json"), content: "{}\n" }, "writing provenance.json into a new skill"],
-		["write", { path: path.join(movedSkill, "SKILL.md"), content: "---\nname: guide\n---\nchanged\n" }, "writing a skill's SKILL.md"],
-		["write", { path: path.join(movedAgentDir, "skills", "made-here", "notes.md"), content: "notes\n" }, "writing a new skill's notes"],
-	] as const) {
-		await refused(name, params, `${label} with the agent folder moved`);
+	// A moved agent folder is the app's data as the ordinary one is, so the model reads the same sentence for both.
+	for (const [where, agentDir] of [["at its ordinary place", path.join(home, ".exxperts", "agent")], ["moved", path.join(tmp, "opt", "agent")]] as const) {
+		const skill = path.join(agentDir, "skills", "guide");
+		fs.mkdirSync(skill, { recursive: true });
+		write(path.join(skill, "SKILL.md"), "---\nname: guide\n---\n");
+		write(path.join(skill, "provenance.json"), "{\"source\":\"upload\"}\n");
+		if (where === "moved") process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
+		for (const [name, params, label] of [
+			["write", { path: path.join(skill, "provenance.json"), content: "{}\n" }, "writing a skill's provenance.json"],
+			["edit", { path: path.join(skill, "provenance.json"), edits: [{ oldText: "upload", newText: "local" }] }, "editing a skill's provenance.json"],
+			["write", { path: path.join(agentDir, "skills", "made-here", "provenance.json"), content: "{}\n" }, "writing provenance.json into a new skill"],
+			["write", { path: path.join(skill, "SKILL.md"), content: "---\nname: guide\n---\nchanged\n" }, "writing a skill's SKILL.md"],
+			["write", { path: path.join(agentDir, "skills", "made-here", "notes.md"), content: "notes\n" }, "writing a new skill's notes"],
+		] as const) {
+			const outcome = await run(name, params);
+			assert(outcome.error === skillsFolderRefusal(params.path), `${name} ${label} with the agent folder ${where} must be refused as the app's skills folder, got ${JSON.stringify(outcome).slice(0, 300)}`);
+		}
+		assert(fs.readFileSync(path.join(skill, "provenance.json"), "utf8") === "{\"source\":\"upload\"}\n" && fs.readFileSync(path.join(skill, "SKILL.md"), "utf8") === "---\nname: guide\n---\n" && !fs.existsSync(path.join(agentDir, "skills", "made-here")), `refused writes must leave the skills alone with the agent folder ${where}`);
 	}
-	assert(fs.readFileSync(path.join(movedSkill, "provenance.json"), "utf8") === "{\"source\":\"upload\"}\n" && fs.readFileSync(path.join(movedSkill, "SKILL.md"), "utf8") === "---\nname: guide\n---\n" && !fs.existsSync(path.join(movedAgentDir, "skills", "made-here")), "refused writes must leave the skills alone");
 	await open("write", { path: "provenance.json", content: "{\"project\":true}\n" }, "", "a project's own provenance.json");
 	assert(fs.readFileSync(path.join(project, "provenance.json"), "utf8") === "{\"project\":true}\n", "a project's own provenance.json must stay writable");
 	delete process.env.EXXPERTS_CODING_AGENT_DIR;

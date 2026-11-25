@@ -51,6 +51,8 @@ const realExecFile = childProcess.execFile;
 	return { kill() {}, on() {} } as any;
 };
 syncBuiltinESMExports();
+// zenity opens its window on a display; on a Linux runner with none the chooser answers unavailable before the stand-in above is asked.
+process.env.DISPLAY ||= ":0";
 
 const agents = await import("../src/persistent-agents.js");
 const policyStore = await import("../src/persistent-room-workspace-policy.js");

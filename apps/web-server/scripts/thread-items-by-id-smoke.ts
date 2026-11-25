@@ -90,6 +90,15 @@ row("a question the page never saved lands after what the conversation ended on 
 	const after = landTurnItems(later, [q("k1", "Next")], place("k1", ["k0", "k1"], "k0-a1"), none);
 	assert(ids(after) === "k0,k0-a1,k0-a2,k1", `after the turn before's last part, got ${ids(after)}`);
 });
+row("on a shared server a stale save keeps what another page saved and the server landed, but not what it removed", () => {
+	const file = [q("k1", "One"), a("k1-a1", "One answer", { landed: true }), q("i_other", "Saved by another page"), q("i_gone", "Removed on purpose")];
+	const stale = [q("k1", "One")];
+	const kept = mergeSaveById(file, stale, new Set(["i_gone"]), always, true);
+	assert(ids(kept) === "k1,k1-a1,i_other", `the other page's item and the landing stay, the removed one goes, got ${ids(kept)}`);
+	const desktop = mergeSaveById(file, stale, new Set(["i_gone"]), always);
+	assert(ids(desktop) === "k1,k1-a1", `on the desktop only landed items come back, got ${ids(desktop)}`);
+});
+
 row("a late save of the three questions keeps each turn's items in its own turn", () => {
 	let file: ThreadItem[] = [];
 	file = landTurnItems(file, [q("k1", "One"), took("s1", "And this"), a("k1-a1", "First answer")], place("k1", ["k1"], null), none);

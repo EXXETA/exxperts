@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fetchJson } from "../api";
-import { SHARED_SERVER_ADMIN_LINE, showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
+import { type RemoteClientContext, SHARED_SERVER_ADMIN_LINE, sharedServerRole, showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 import { GroupHeader } from "./pane-header";
 import { providerDisplayName } from "../model-names";
+import { WEB_PAGES_LINES } from "../../../web-server/src/web-pages-text";
 
 // The two subscriptions that search on their own side, named as Models & providers names them.
 const SUBSCRIPTION_ROOMS = `${providerDisplayName("anthropic")} and ${providerDisplayName("openai-codex")} rooms`;
@@ -36,12 +37,13 @@ type WebSearchSettingsPayload = {
 	baseUrl: string;
 	source: "environment" | "settings" | "default";
 	providerSearch: boolean;
+	webPages: boolean;
 	saved: { provider: WebSearchProvider | null; baseUrl: string };
 	envProvider: string | null;
 	unreadable: string | null;
 };
 
-const OPTIONS: Array<{ id: WebSearchProvider; label: string; blurb: (providerSearchOn: boolean) => string }> = [
+const OPTIONS: Array<{ id: WebSearchProvider; label: string; blurb: (providerSearchOn: boolean, sharedServer: boolean) => string }> = [
 	{
 		id: "duckduckgo",
 		label: "DuckDuckGo",
@@ -59,10 +61,14 @@ const OPTIONS: Array<{ id: WebSearchProvider; label: string; blurb: (providerSea
 		// one option somebody picks for a reason they care about. The switch above
 		// keeps the two subscriptions searching, and a gateway model ticked for web
 		// search carries that on the model itself, past anything chosen here.
-		blurb: (providerSearchOn) =>
-			providerSearchOn
-				? `${SUBSCRIPTION_ROOMS} still search through the provider, gateway models where ticked. Rooms can still open links you give them.`
-				: "Gateway models still search where ticked. Rooms can still open links you give them.",
+		// On a shared server rooms open links only where its admin lets them, so
+		// the label says it all there.
+		blurb: (providerSearchOn, sharedServer) =>
+			sharedServer
+				? ""
+				: providerSearchOn
+					? `${SUBSCRIPTION_ROOMS} still search through the provider, gateway models where ticked. Rooms can still open links you give them.`
+					: "Gateway models still search where ticked. Rooms can still open links you give them.",
 	},
 ];
 
@@ -124,13 +130,55 @@ function setupLine(status: SearxngSetupStatus): ReactNode | null {
 }
 
 /** Which control is mid-save, so only that one shows as busy. */
-type Pending = null | { kind: "providerSearch"; value: boolean } | { kind: "provider"; value: WebSearchProvider } | { kind: "baseUrl" };
+type Pending = null | { kind: "providerSearch"; value: boolean } | { kind: "provider"; value: WebSearchProvider } | { kind: "baseUrl" } | { kind: "webPages"; value: boolean };
+
+/** Provider search as a line, for whoever can't change it. */
+function ProviderSearchRow({ on }: { on: boolean }) {
+	return (
+		<div className="settings-row">
+			<div className="settings-row-main">
+				<span className="settings-row-label">Provider search</span>
+				<span className="settings-row-sub">{on ? `On. ${SUBSCRIPTION_ROOMS} search on the provider's side.` : `Off. ${SUBSCRIPTION_ROOMS} use the search below.`}</span>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * Web pages on a shared server: a switch where the server can reach public
+ * pages and the person may change it, a line where it can't, and nothing while
+ * the server hasn't said which.
+ */
+function WebPagesRow({ on, publicPages, toggle }: { on: boolean; publicPages: RemoteClientContext["publicPages"]; toggle?: { pending: boolean; disabled: boolean; set: (next: boolean) => void } }) {
+	if (publicPages === null) return null;
+	const reachable = publicPages === "reachable";
+	const main = (
+		<div className="settings-row-main">
+			<span className="settings-row-label">Web pages{toggle?.pending ? " (saving…)" : ""}</span>
+			<span className="settings-row-sub">{!reachable ? WEB_PAGES_LINES.unreachable : on ? WEB_PAGES_LINES.on : WEB_PAGES_LINES.off}</span>
+		</div>
+	);
+	return (
+		<div className="settings-rows">
+			{reachable && toggle ? (
+				<label className={`settings-row${toggle.pending ? " pending" : ""}`}>
+					{main}
+					<input className="workspaces-tool-switch" type="checkbox" checked={on} disabled={toggle.disabled} onChange={(e) => toggle.set(e.target.checked)} aria-label="Web pages" />
+				</label>
+			) : (
+				<div className="settings-row">{main}</div>
+			)}
+		</div>
+	);
+}
 
 export function WebSearchSettingsSection() {
 	const remoteClient = useRemoteClientContext();
 	// The SearXNG setup starts a container on this computer: not on a remote
 	// device, and not on a shared server, where its status is not read either.
 	const computerOnlyControls = showsComputerOnlyControls(remoteClient);
+	// On a shared server the admin changes what the server lets them; everyone else reads it.
+	const role = sharedServerRole(remoteClient);
 	const [settings, setSettings] = useState<WebSearchSettingsPayload | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -187,7 +235,7 @@ export function WebSearchSettingsSection() {
 	const shownBaseUrl = baseUrlDraft ?? savedBaseUrl;
 	const envHeld = settings?.source === "environment";
 
-	async function put(body: Record<string, unknown>, kind: Pending, savedNote: string) {
+	async function put(body: Record<string, unknown>, kind: Pending, savedNote: string | null) {
 		setPending(kind);
 		setError(null);
 		setNote(null);
@@ -198,7 +246,8 @@ export function WebSearchSettingsSection() {
 				body: JSON.stringify(body),
 			});
 			adopt(payload, kind?.kind === "baseUrl" || kind?.kind === "provider");
-			setPendingChoice(null);
+			// The Web pages switch, saved meanwhile, keeps an unsaved SearXNG pick and its address in view.
+			if (kind?.kind !== "webPages") setPendingChoice(null);
 			setNote(savedNote);
 		} catch (e) {
 			setError((e as Error).message);
@@ -313,8 +362,8 @@ export function WebSearchSettingsSection() {
 	// A remote device can read this setting but not change it: the PUT route is
 	// local-only in the server's remote route policy, so every control here
 	// would refuse each tap. State the facts and offer nothing operable. A
-	// shared server reads the same way: only its admin changes the setting.
-	if (remoteClient.remote || remoteClient.sharedServer) {
+	// shared server's member reads the same way: only its admin changes the setting.
+	if (remoteClient.remote || role === "member") {
 		return (
 			<section className="ai-setup-section" aria-label="Web search">
 				{settings.unreadable && (
@@ -324,16 +373,7 @@ export function WebSearchSettingsSection() {
 					</div>
 				)}
 				<div className="settings-rows">
-					<div className="settings-row">
-						<div className="settings-row-main">
-							<span className="settings-row-label">Provider search</span>
-							<span className="settings-row-sub">
-								{settings.providerSearch
-									? `On. ${SUBSCRIPTION_ROOMS} search on the provider's side.`
-									: `Off. ${SUBSCRIPTION_ROOMS} use the search below.`}
-							</span>
-						</div>
-					</div>
+					<ProviderSearchRow on={settings.providerSearch} />
 					<div className="settings-row">
 						<div className="settings-row-main">
 							<span className="settings-row-label">Everything else</span>
@@ -341,12 +381,13 @@ export function WebSearchSettingsSection() {
 								{settings.provider === "searxng"
 									? `Your own SearXNG${settings.baseUrl ? ` at ${settings.baseUrl}` : ""}.`
 									: settings.provider === "disabled"
-										? "Off. Rooms can still open links you give them."
+										? remoteClient.sharedServer ? "Off." : "Off. Rooms can still open links you give them."
 										: "DuckDuckGo."}
 							</span>
 						</div>
 					</div>
 				</div>
+				{remoteClient.sharedServer && <WebPagesRow on={settings.webPages} publicPages={remoteClient.publicPages} />}
 				<p className="cli-note">{remoteClient.sharedServer ? SHARED_SERVER_ADMIN_LINE : "Web search is set up on the computer itself."}</p>
 			</section>
 		);
@@ -356,6 +397,7 @@ export function WebSearchSettingsSection() {
 	const setupMessage = setup ? setupLine(setup) : null;
 	const setupFailed = setup ? setup.phase === "error" || setup.phase === "docker-missing" || setup.phase === "docker-stopped" || setup.phase === "stopped" : false;
 	const togglePending = pending?.kind === "providerSearch";
+	const sharedAdmin = role === "admin";
 	const baseUrlPending = pending?.kind === "baseUrl" || (pending?.kind === "provider" && pending.value === "searxng");
 
 	return (
@@ -369,7 +411,7 @@ export function WebSearchSettingsSection() {
 			)}
 
 			<div className="settings-rows">
-				<label className={`settings-row${togglePending ? " pending" : ""}`}>
+				{sharedAdmin ? <ProviderSearchRow on={providerSearchOn} /> : <label className={`settings-row${togglePending ? " pending" : ""}`}>
 					<div className="settings-row-main">
 						<span className="settings-row-label">Provider search where available{togglePending ? " (saving…)" : ""}</span>
 						<span className="settings-row-sub">{SUBSCRIPTION_ROOMS} search on the provider's side; nothing runs on your machine. Gateway models follow their own per-model web search tick, not this switch. Rooms on a {providerDisplayName("anthropic-api-key")} use the search below.</span>
@@ -382,13 +424,13 @@ export function WebSearchSettingsSection() {
 						onChange={(e) => void saveProviderSearch(e.target.checked)}
 						aria-label="Provider search where available"
 					/>
-				</label>
+				</label>}
 			</div>
 
 			<div className="settings-group">
 				<GroupHeader
 					kicker="Everything else"
-					line={providerSearchOn
+					line={sharedAdmin ? undefined : providerSearchOn
 						? `The search every room uses except ${SUBSCRIPTION_ROOMS}. Gateway models use it alongside their own.`
 						: `The search every room uses, including ${SUBSCRIPTION_ROOMS} while the switch above is off.`}
 				/>
@@ -402,6 +444,7 @@ export function WebSearchSettingsSection() {
 					{OPTIONS.map((option) => {
 						const optionPending = pending?.kind === "provider" && pending.value === option.id;
 						const unsaved = pendingChoice === option.id && savedProvider !== option.id;
+						const blurb = option.blurb(providerSearchOn, remoteClient.sharedServer);
 						return (
 							<label key={option.id} className={`settings-row settings-row-choice${optionPending ? " pending" : ""}`}>
 								<input
@@ -425,7 +468,7 @@ export function WebSearchSettingsSection() {
 										{optionPending && <span className="web-search-pending-note"> saving…</span>}
 										{unsaved && !optionPending && <span className="web-search-pending-note"> not saved yet</span>}
 									</span>
-									<span className="settings-row-sub">{option.blurb(providerSearchOn)}</span>
+									{blurb && <span className="settings-row-sub">{blurb}</span>}
 								</span>
 							</label>
 						);
@@ -448,7 +491,7 @@ export function WebSearchSettingsSection() {
 						</button>
 						{/* The other half of the choice: an address somebody already has, or
 						    one this app makes for them. Nothing here asks for a terminal. */}
-						<div className="web-search-searxng-setup">
+						{computerOnlyControls && <div className="web-search-searxng-setup">
 							<button
 								className="rs-btn"
 								type="button"
@@ -460,10 +503,21 @@ export function WebSearchSettingsSection() {
 							{setupMessage && (
 								<span className={`web-search-searxng-status${setupFailed ? " failed" : ""}`} role="status">{setupMessage}</span>
 							)}
-						</div>
+						</div>}
 					</div>
 				)}
 			</div>
+			{sharedAdmin && (
+				<WebPagesRow
+					on={settings.webPages}
+					publicPages={remoteClient.publicPages}
+					toggle={{
+						pending: pending?.kind === "webPages",
+						disabled: pending !== null || !!settings.unreadable,
+						set: (next) => void put({ webPages: next }, { kind: "webPages", value: next }, null),
+					}}
+				/>
+			)}
 			{note && <p className="archived-rooms-note" role="status">{note}</p>}
 			{error && <div className="workspaces-error archived-rooms-note" role="alert">{error}</div>}
 		</section>

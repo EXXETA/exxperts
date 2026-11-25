@@ -196,11 +196,14 @@ Rooms get tools through a per-room policy rather than a global grant:
 
 - **Workspace**: the room works in a folder you choose and the folders you
   allow. Its Read, List, Find, Search, Write and Edit tools stay in those
-  folders: the folder is re-verified against its fingerprint on every use
-  (a swapped or redirected folder is refused), common secret and key files
-  stay closed to them, and Search runs on ripgrep with a guarded built-in
-  fallback. With **Can change files** off, the room can only read while
-  its protection is on
+  folders, and can read the skills that are on in the room: the folder is
+  re-verified against its fingerprint on every use (a swapped or redirected
+  folder is refused), common secret and key files stay closed to them, and
+  Search runs on ripgrep with a guarded built-in fallback. In a room without
+  protection on Auto they reach any file you can reach without asking, key
+  files included; exxperts' own data stays closed to them, and they change
+  nothing in a folder set to **Can read**. With **Can change files** off, the
+  room can only read while its protection is on
   ([`workspace-and-bash.md`](workspace-and-bash.md)).
 - **Commands**: on a Mac and on Windows 11, a room's commands run inside its
   protection: they change files only in the room's folders, can't read your
@@ -229,8 +232,25 @@ Rooms get tools through a per-room policy rather than a global grant:
   (extensions never load in rooms). The library lists skills from the
   exxperts store and from the cross-tool `~/.agents/skills` directory
   shared with other agent tools (read-only on our side); wherever a
-  skill lives, a room only uses it after you review and enable it
-  there, and an edited skill must be re-reviewed.
+  skill lives, a room only uses it after you enable it there, and an
+  edited skill is used as it now is. A skill in `~/.agents/skills` whose
+  `SKILL.md` is a link is used only when the link leads to another file
+  named `SKILL.md` outside the rooms' folders and their **Also allowed**
+  folders; otherwise its page says to replace the link with a copy of that
+  file.
+  A skill that is on in a room can run its scripts there where the room's
+  commands are on, and typing `/` in the message box lists the skills on in
+  the room. A skill added from a repository's branch or tag can be updated:
+  exxperts looks for a new version by itself as you open Settings → Skills
+  (at most once an hour) and once a day, and **Check now** looks at once;
+  **Update** or **Update all** installs it, scripts included. One added
+  before 0.16.1 must be added again first; one fixed to a commit doesn't
+  update. The files change at once, so an answer that is running can
+  already run the new scripts; rooms where it's on read the new
+  version from their next message. **Update automatically**, off until
+  you switch it on, does this by itself for a new version a check
+  first saw at least 12 hours before, but not for one with hidden
+  characters or a skill you changed on this computer.
 - **Consult**: a room can ask another room a question via @-mention in
   chat; the consulted room answers read-only from its own memory and
   context.

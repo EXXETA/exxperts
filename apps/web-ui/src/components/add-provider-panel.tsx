@@ -1,10 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { GroupHeader } from "./pane-header";
-import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
+import type { LoginProviderCatalogEntry, ModelsRunIn, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
 import { ApiRequestError, apiFetch, fetchJson, withoutServiceLine } from "../api";
 import { distinctModelNames } from "../model-names";
-import { useRemoteClientContext } from "../remote-client-context";
+import { MODELS_RUN_IN_FIELD, SHARED_SERVER_GATEWAY_LINE, SHARED_SERVER_NEW_ADDRESS_LINE, sharedServerRemoveKeyOnlyLine, sharedServerRemoveLine, useRemoteClientContext } from "../remote-client-context";
 import { nameEndsInKey } from "../../../web-server/src/model-not-offered";
 import { applyToApproved, approvedCount, detectionAnswers, draftEffective, isNonChatMode, setAllApproved, trustDetected, type BulkDetection } from "../gateway-model-bulk";
 
@@ -236,6 +236,22 @@ export function CopilotSignInForm({ login, className, onCancel }: {
 	);
 }
 
+/**
+ * A shared server's choice of where a gateway's or a key's models run: Unknown
+ * until the admin says otherwise, read-only for the install's own gateway.
+ */
+function ModelsRunInField({ value, onChange, setByInstall = false }: { value: ModelsRunIn; onChange: (next: ModelsRunIn) => void; setByInstall?: boolean }) {
+	return (
+		<div className="configure-profile-field models-run-in-field">
+			<h3>{MODELS_RUN_IN_FIELD.heading}</h3>
+			<select className="configure-profile-select" value={value} disabled={setByInstall} aria-label={MODELS_RUN_IN_FIELD.heading} onChange={(e) => onChange(e.target.value as ModelsRunIn)}>
+				{MODELS_RUN_IN_FIELD.choices.map(([choice, label]) => <option key={choice} value={choice}>{label}</option>)}
+			</select>
+			<p className="cli-note">{setByInstall ? MODELS_RUN_IN_FIELD.setByInstall : MODELS_RUN_IN_FIELD.help}</p>
+		</div>
+	);
+}
+
 // Suggest-then-approve model configuration for one provider: which models its
 // rooms may use, and its memory model (each room's Memory row
 // decides what runs). Saving creates or updates the provider's custom AI
@@ -256,6 +272,12 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 	const [learnModel, setLearnModel] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [removing, setRemoving] = useState(false);
+	// On a shared server Remove profile asks first, as the row menu's removal does.
+	const { sharedServer } = useRemoteClientContext();
+	const [confirmRemove, setConfirmRemove] = useState(false);
+	// Sent only when changed here, as the gateway forms send their name and address.
+	const savedRunsIn: ModelsRunIn = existingProfile?.runsIn ?? "unknown";
+	const [runsIn, setRunsIn] = useState<ModelsRunIn>(savedRunsIn);
 	const [saveError, setSaveError] = useState<string | null>(null);
 	useEscapeKey(onClose, true);
 
@@ -307,6 +329,7 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 					label: providerName,
 					roomModels: [...roomModels],
 					learnModel,
+					...(sharedServer && runsIn !== savedRunsIn ? { runsIn } : {}),
 				}),
 			});
 			onSaved();
@@ -371,16 +394,26 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 								</select>
 								<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 							</div>
+							{sharedServer && <ModelsRunInField value={runsIn} onChange={setRunsIn} />}
 							{saveError && <div className="checkpoint-proposal-error">{saveError}</div>}
 							<div className="create-room-actions">
 								<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save profile"}</button>
 								<button className="rs-btn" disabled={saving || removing} onClick={onClose}>Cancel</button>
-								{existingProfile && allowRemove && (
-									<button className="rs-btn rs-btn-danger rs-btn-sm configure-profile-remove" disabled={saving || removing} onClick={() => void removeProfile()}>
+								{existingProfile && allowRemove && !confirmRemove && (
+									<button className="rs-btn rs-btn-danger rs-btn-sm configure-profile-remove" disabled={saving || removing} onClick={() => sharedServer ? setConfirmRemove(true) : void removeProfile()}>
 										{removing ? "Removing…" : "Remove profile"}
 									</button>
 								)}
 							</div>
+							{existingProfile && confirmRemove && (
+								<div className="configure-profile-remove-confirm" role="group" aria-label={`Remove ${providerName}`}>
+									<p className="settings-help">{sharedServerRemoveLine(providerName)}</p>
+									<div className="create-room-actions">
+										<button className="rs-btn rs-btn-danger" disabled={removing} onClick={() => void removeProfile()}>{removing ? "Removing…" : "Remove"}</button>
+										<button className="rs-btn" disabled={removing} autoFocus onClick={() => setConfirmRemove(false)}>Keep it</button>
+									</div>
+								</div>
+							)}
 						</>
 					)}
 				</div>
@@ -413,6 +446,9 @@ export type GatewayConfig = {
 	maintenanceModel: string;
 	/** The gateway that existed before the app could hold several. Its ids are frozen. */
 	isDefault: boolean;
+	/** On a shared server only: where its models run, and whether the install set it up. */
+	runsIn?: ModelsRunIn;
+	setByInstall?: boolean;
 };
 
 type GatewayListResponse = { gateways: GatewayConfig[]; errors: string[]; unreadable?: boolean; defaultContextWindow: number };
@@ -420,6 +456,16 @@ type GatewayDetection = BulkDetection & { id: string };
 type GatewayDiscoverResponse = { models: string[]; detected?: GatewayDetection[]; excludedNonChat?: Array<{ id: string; mode: string }> };
 type GatewaySaveResponse = { gateway?: GatewayConfig | null; error?: string; code?: string };
 const GATEWAY_KEY_FOR_NEW_ADDRESS = "gateway_key_for_new_address";
+/** The server's words for the same refusal (apps/web-server/src/gateways.ts): change both together. */
+const KEY_FOR_NEW_ADDRESS_LINE = "Enter the gateway API key to save a new address.";
+/** The server part of an address (scheme, host, port), or the text itself when it does not parse. */
+function originOf(address: string): string {
+	try {
+		return new URL(address.trim()).origin;
+	} catch {
+		return address.trim();
+	}
+}
 
 // What the runtime falls back to when a gateway model declares no window. Shown
 // in the field rather than left blank, so the number driving the context chip
@@ -875,10 +921,33 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 	// Fields the person has touched are never overwritten by the load that was
 	// already in flight when they started typing.
 	const dirtyRef = useRef<{ label: boolean; baseUrl: boolean }>({ label: false, baseUrl: false });
+	const { sharedServer } = useRemoteClientContext();
+	// On a shared server, Save on a new address for a saved gateway asks first.
+	const [confirmAddress, setConfirmAddress] = useState(false);
+	const keyFieldRef = useRef<HTMLDivElement>(null);
+	const keyInputRef = useRef<HTMLInputElement>(null);
+	const confirmRef = useRef<HTMLDivElement>(null);
+	// On a shared server both answers to Save appear away from the Save button: the key's sentence at the key field, high in a
+	// long form, and the question at the bottom edge. Each is brought into view so Save never seems to do nothing. On this
+	// computer the focus stays where it was.
+	useEffect(() => {
+		if (!keyError || !sharedServer) return;
+		keyInputRef.current?.focus({ preventScroll: true });
+		keyFieldRef.current?.scrollIntoView({ block: "nearest" });
+	}, [keyError, sharedServer]);
+	useEffect(() => {
+		if (confirmAddress) confirmRef.current?.scrollIntoView({ block: "nearest" });
+	}, [confirmAddress]);
+	const [runsIn, setRunsIn] = useState<ModelsRunIn>("unknown");
 	useEscapeKey(onClose, true);
 
 	const targetGatewayId = gatewayId ?? createdId;
 	const configured = saved !== null;
+	const addressChanged = saved !== null && baseUrl.trim() !== (saved.baseUrl ?? "").trim();
+	// A move to another server needs that server's key. With the key left blank, Save says so at the key field and sends nothing:
+	// asking "Use the new address?" would offer a yes the server refuses, and a save sent anyway could pass unasked when another
+	// window has meanwhile moved the gateway to that server.
+	const addressNeedsKey = addressChanged && !token.trim() && originOf(baseUrl) !== originOf(saved?.baseUrl ?? "");
 
 	useEffect(() => {
 		if (gatewayId === null) return;
@@ -889,6 +958,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 				setSaved(config);
 				if (!dirtyRef.current.label) setLabel(config.label);
 				if (!dirtyRef.current.baseUrl) setBaseUrl(config.baseUrl ?? "");
+				setRunsIn(config.runsIn ?? "unknown");
 				setMaintenanceModel(config.maintenanceModel ?? "");
 				setDrafts(config.roomModels.map((model) => draftFromParts(model.modelId, true, model, undefined)));
 				setModelsText(config.roomModels.map((model) => model.modelId).join("\n"));
@@ -962,8 +1032,12 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 		setKeyError(null);
 		try {
 			const payload = {
-				label,
-				baseUrl,
+				// On a shared server a saved gateway's name and address go only when
+				// changed here: an untouched field would put back what another window
+				// has saved since. This computer sends both, as before.
+				...(!sharedServer || !configured || dirtyRef.current.label ? { label } : {}),
+				...(!sharedServer || !configured || dirtyRef.current.baseUrl ? { baseUrl } : {}),
+				...(sharedServer && runsIn !== (saved?.runsIn ?? "unknown") ? { runsIn } : {}),
 				roomModels: draftsToPayload(effectiveDrafts),
 				maintenanceModel: effectiveMaintenanceModel,
 				// Sent with the gateway so the key is filed the moment its provider
@@ -1018,22 +1092,24 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 					<p className="ai-setup-copy">
 						Connect an OpenAI-compatible endpoint such as a company LiteLLM or vLLM gateway. Give it a name, enter the address and your API key, load the models it routes, and approve the ones your rooms may use. You can save as many gateways as you like; each room picks its models in Room settings, Model.
 					</p>
+					{sharedServer && <p className="settings-help gateway-shared-line">{SHARED_SERVER_GATEWAY_LINE}</p>}
 					<div className="configure-profile-field">
 						<h3>Name</h3>
 						<input className="launcher-path-input create-room-input" type="text" placeholder="Company gateway" value={label} onChange={(e) => { dirtyRef.current.label = true; setLabel(e.target.value); }} />
 					</div>
 					<div className="configure-profile-field">
 						<h3>Base URL</h3>
-						<input className="launcher-path-input create-room-input" type="text" placeholder="https://litellm.example.com/v1" value={baseUrl} onChange={(e) => { dirtyRef.current.baseUrl = true; setBaseUrl(e.target.value); }} />
+						<input className="launcher-path-input create-room-input" type="text" placeholder="https://litellm.example.com/v1" value={baseUrl} onChange={(e) => { dirtyRef.current.baseUrl = true; setBaseUrl(e.target.value); setConfirmAddress(false); }} />
 					</div>
-					<div className="configure-profile-field">
+					<div className="configure-profile-field" ref={keyFieldRef}>
 						<h3>API key</h3>
 						<input
+							ref={keyInputRef}
 							className="launcher-path-input create-room-input"
 							type="password"
 							placeholder={configured ? "leave blank to keep the saved key" : "sk-…"}
 							value={token}
-							onChange={(e) => { setToken(e.target.value); setKeyError(null); }}
+							onChange={(e) => { setToken(e.target.value); setKeyError(null); setConfirmAddress(false); }}
 						/>
 						{keyError && <div className="checkpoint-proposal-error" role="alert">{keyError}</div>}
 					</div>
@@ -1088,11 +1164,22 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 						</select>
 						<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 					</div>
+					{sharedServer && <ModelsRunInField value={runsIn} onChange={setRunsIn} setByInstall={saved?.setByInstall} />}
 					{error && <div className="checkpoint-proposal-error">{error}</div>}
-					<div className="create-room-actions">
-						<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save gateway"}</button>
-						<button className="rs-btn" disabled={saving} onClick={onClose}>Cancel</button>
-					</div>
+					{confirmAddress ? (
+						<div className="gateway-address-confirm" role="group" aria-label="New address" ref={confirmRef}>
+							<p className="settings-help">{SHARED_SERVER_NEW_ADDRESS_LINE}</p>
+							<div className="create-room-actions">
+								<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={(e) => { if (e.detail > 1) return; setConfirmAddress(false); void save(); }}>Use new address</button>
+								<button className="rs-btn" autoFocus onClick={() => setConfirmAddress(false)}>Keep editing</button>
+							</div>
+						</div>
+					) : (
+						<div className="create-room-actions">
+							<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => !sharedServer || !addressChanged ? void save() : addressNeedsKey ? setKeyError(KEY_FOR_NEW_ADDRESS_LINE) : setConfirmAddress(true)}>{saving ? "Saving…" : "Save gateway"}</button>
+							<button className="rs-btn" disabled={saving} onClick={onClose}>Cancel</button>
+						</div>
+					)}
 				</div>
 			</div>
 		</div>
@@ -1122,6 +1209,7 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 	const [maintenanceModel, setMaintenanceModel] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState<string | null>(null);
+	const { sharedServer } = useRemoteClientContext();
 	useEscapeKey(onClose, true);
 
 	async function discover(gateway: GatewayConfig, keepDrafts: ModelDraft[]) {
@@ -1203,12 +1291,16 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 			await fetchJson(gatewaysUrl(config.id), {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
+				// On a shared server no name and no address: the server keeps the
+				// ones it has, so this window never puts back what another one has
+				// changed since it opened. This computer sends both, as before.
 				body: JSON.stringify({
-					label: config.label,
-					// Only sent when the gateway actually has one. A gateway carried
-					// over from the legacy file may have no address recorded
-					// anywhere, and this screen is not the one that asks for it.
-					...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+					...(sharedServer ? {} : {
+						label: config.label,
+						// Only sent when the gateway actually has one: a gateway carried
+						// over from the legacy file may have no address recorded.
+						...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+					}),
 					roomModels: draftsToPayload(effectiveDrafts),
 					maintenanceModel: effectiveMaintenanceModel,
 				}),
@@ -1241,6 +1333,7 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 					<p className="ai-setup-copy">
 						Choose the models your rooms may run on, whether each one can look at images, and how much context it has. The gateway address and API key stay as they are; use Edit gateway to change those.
 					</p>
+					{sharedServer && <p className="settings-help gateway-shared-line">{SHARED_SERVER_GATEWAY_LINE}</p>}
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{loading && <p className="cli-note">Loading gateway configuration…</p>}
 					{config && (
@@ -1344,9 +1437,11 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	serviceBack?: number;
 }) {
 	// A shared server holds the organisation's keys and gateways, not a
-	// person's own subscription: sign-in and removing a key are not offered.
+	// person's own subscription: sign-in is not offered, and removing a key asks first.
 	const { sharedServer } = useRemoteClientContext();
 	const [providers, setProviders] = useState<LoginProviderCatalogEntry[] | null>(null);
+	// The saved key whose removal is being confirmed (a shared server only).
+	const [confirmRemoveKey, setConfirmRemoveKey] = useState<string | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [apiKeyProvider, setApiKeyProvider] = useState<LoginProviderCatalogEntry | null>(null);
 	// Copilot's Sign in opens its form first, for an optional company address.
@@ -1443,15 +1538,23 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	async function removeKey(provider: LoginProviderCatalogEntry) {
 		login.setError(null);
 		try {
-			await fetchJson("/api/auth/logout", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ provider: provider.id }),
-			});
+			// A shared server's admin removes the key alone; this computer's sign-out also ends a sign-in.
+			if (sharedServer) await fetchJson(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
+			else {
+				await fetchJson("/api/auth/logout", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ provider: provider.id }),
+				});
+			}
+			setConfirmRemoveKey(null);
 			onProfilesChanged();
 			void refreshProviders();
 		} catch (e) {
 			login.setError((e as Error).message);
+			// Another admin may have removed it first: the list shows what is saved now.
+			setConfirmRemoveKey(null);
+			void refreshProviders();
 		}
 	}
 
@@ -1558,7 +1661,7 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 							<button className="rs-btn" onClick={() => setGatewayEdit({ id: null })}>Add gateway</button>
 						</div>
 						{apiKeyProviders.map((provider) => (
-							<div key={provider.id} className={`add-provider-row-group${keyFormOpen === provider.id ? " key-open" : ""}`}>
+							<div key={provider.id} className={`add-provider-row-group${keyFormOpen === provider.id ? " key-open" : ""}${sharedServer ? " on-shared-server" : ""}`}>
 								<div className="settings-row">
 									<div className="settings-row-main">
 										<span className="settings-row-label">{provider.name}</span>
@@ -1569,11 +1672,12 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 										    Cancel put two of them on screen, both closing the same thing. */}
 										{provider.configured ? (
 											<>
-												<button className="rs-btn" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
-												{keyFormOpen !== provider.id && (
+												{!provider.removeOnly && <button className="rs-btn" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>}
+												{keyFormOpen !== provider.id && !provider.removeOnly && (
 													<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" onClick={() => openApiKeyProvider(provider)}>Replace key</button>
 												)}
-												{!sharedServer && <button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" onClick={() => void removeKey(provider)}>Remove key</button>}
+												{/* Off, in its place, while its question is asked, so the row's buttons stay where they were. */}
+												<button className="rs-btn rs-btn-quiet rs-btn-sm rs-quiet" disabled={confirmRemoveKey === provider.id} onClick={() => sharedServer ? setConfirmRemoveKey(provider.id) : void removeKey(provider)}>{sharedServer ? "Remove key…" : "Remove key"}</button>
 											</>
 										) : (
 											keyFormOpen !== provider.id && (
@@ -1582,6 +1686,13 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 										)}
 									</span>
 								</div>
+								{confirmRemoveKey === provider.id && (
+									<div className="add-provider-remove-confirm" role="group" aria-label={`Remove ${provider.name}`}>
+										<p className="settings-help">{sharedServerRemoveKeyOnlyLine(provider.name)}</p>
+										<button className="rs-btn rs-btn-danger rs-btn-sm" onClick={() => void removeKey(provider)}>Remove</button>
+										<button className="rs-btn rs-btn-sm" autoFocus onClick={() => setConfirmRemoveKey(null)}>Keep it</button>
+									</div>
+								)}
 								{keyFormOpen === provider.id && (
 									<>
 										<ApiKeyForm className="add-provider-row-key-form" providerName={provider.name} onSave={saveApiKey} onCancel={() => setApiKeyProvider(null)} />

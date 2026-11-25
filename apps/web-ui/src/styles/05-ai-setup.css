@@ -66,6 +66,10 @@
 	font-size: 15px;
 	color: var(--fg);
 }
+/* The name keeps its words together, so where its line is short the label beside it drops to the next line as a whole. */
+.ai-profile-name-text {
+	display: inline-block;
+}
 .ai-profile-sub {
 	font-size: 12.5px;
 	color: var(--muted);
@@ -543,4 +547,104 @@
 }
 .ai-setup-section:last-child {
 	border-bottom: none;
+}
+
+/* Where a provider's models run, on a shared server: beside each model in the model menus and beside the provider in AI setup. */
+.models-run-in {
+	flex: 0 0 auto;
+	margin-left: 6px;
+	padding: 0 5px;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	/* Inside a model row, the rows' own muted colour, which holds 4.5:1 on a hovered or focused row's wash too (41-room-model.css). */
+	color: var(--row-muted, var(--muted));
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 16px;
+	white-space: nowrap;
+	vertical-align: middle;
+}
+/* A name with its label: where both do not fit on one line, the label goes under the name as a whole, so the name keeps
+ * its width and the label starts at the name's left edge. Without a label (the desktop) the box takes no layout of its own. */
+.models-run-in-title,
+.ai-profile-name:has(> .models-run-in) {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: 6px;
+	row-gap: 2px;
+	min-width: 0;
+}
+.models-run-in-title {
+	flex: 1 1 auto;
+	align-items: baseline;
+	column-gap: 8px;
+}
+.models-run-in-title:not(:has(> .models-run-in)) { display: contents; }
+.models-run-in-title > :first-child { min-width: 0; max-width: 100%; }
+:is(.models-run-in-title, .ai-profile-name) > .models-run-in { margin-left: 0; }
+/* In the message box's list, a label gone under its name keeps the row's figures on the name's line, as Room settings' list does. */
+.model-pick-row > .models-run-in-title:has(> .models-run-in),
+.model-pick-row:has(> .models-run-in-title > .models-run-in) > .model-pick-row-end { align-self: baseline; }
+/* A form's question before a new address or a removal: its own line above a row of buttons like the form's Save row. */
+.gateway-address-confirm,
+.configure-profile-remove-confirm {
+	display: grid;
+	gap: 10px;
+	padding-top: 8px;
+}
+/* A saved key's row on a shared server's phone: its three buttons (Approve models, Replace key, Remove key) go under the
+ * name, left aligned and wrapping, as a wide control does in any settings row, instead of pushing the row past the screen. */
+@media (max-width: 760px) {
+	.add-provider-row-group.on-shared-server > .settings-row:has(> .settings-row-value > .rs-btn ~ .rs-btn ~ .rs-btn) {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
+	}
+	/* Approve models on a line of its own, the two quiet buttons under it, each as wide as its words, moved over by the
+	 * small button's inset so the first one's words start on the name's edge. */
+	.add-provider-row-group.on-shared-server > .settings-row > .settings-row-value:has(> .rs-btn ~ .rs-btn ~ .rs-btn) {
+		display: grid;
+		grid-template-columns: max-content max-content;
+		justify-content: start;
+		row-gap: 10px;
+		white-space: normal;
+	}
+	.add-provider-row-group.on-shared-server > .settings-row > .settings-row-value:has(> .rs-btn ~ .rs-btn ~ .rs-btn) > .rs-btn {
+		justify-self: start;
+	}
+	.add-provider-row-group.on-shared-server > .settings-row > .settings-row-value:has(> .rs-btn ~ .rs-btn ~ .rs-btn) > .rs-btn:first-child {
+		grid-column: 1 / -1;
+	}
+	.add-provider-row-group.on-shared-server > .settings-row > .settings-row-value:has(> .rs-btn ~ .rs-btn ~ .rs-btn) > .rs-btn:not(:first-child) {
+		position: relative;
+		left: calc(-1 * var(--exx-btn-inset-sm));
+	}
+}
+/* A word-only button's text sits its inset in from its edge; the first one in a removal's question is pulled back
+ * by that inset so "Remove" starts where the question's sentence and the row's name do. */
+.add-provider-remove-confirm > .rs-btn-sm:first-of-type { margin-left: calc(-1 * var(--exx-btn-inset-sm)); }
+.configure-profile-remove-confirm > .create-room-actions > .rs-btn-danger:first-child { margin-left: calc(-1 * var(--exx-btn-inset)); }
+/* Brought into view with the form's own bottom padding (.room-settings-body), not flush on the window's edge. */
+.gateway-address-confirm,
+.gateway-address-confirm button { scroll-margin-bottom: 22px; }
+.gateway-config-modal .configure-profile-field { scroll-margin-top: 22px; }
+.gateway-address-confirm .settings-help,
+.configure-profile-remove-confirm .settings-help {
+	margin: 0;
+}
+/* The line above a member's model list carries the group headings' class, so its words start where theirs do in every
+ * list and at every width. It reads at one size in both lists, and wraps at the width the models give rather than widening
+ * a list that is as wide as its longest name. */
+.room-model-menu-kicker.models-run-in-note {
+	font-size: 12px;
+	line-height: 16px;
+	contain: inline-size;
+}
+/* Room settings' list keeps the room it gives its models: with the line on top, its cap grows by the line's height
+ * (a heading's 16 and its 8 and 4 of padding). A phone's sheet has its own cap. */
+@media (min-width: 721px) {
+	.room-model-menu:has(> .models-run-in-note) {
+		max-height: min(448px, 60vh, var(--room-model-menu-room, 448px));
+	}
 }

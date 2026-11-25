@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeFileAtomic } from "@exxeta/exxperts-runtime";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
 
 /**
@@ -73,6 +74,6 @@ export function writePersistentRoomGlobalInstructionsEnabled(agentIdRaw: string,
 	const settingsPath = persistentRoomGlobalInstructionsSettingPath(agentIdRaw, options);
 	const settings: PersistentRoomGlobalInstructionsSetting = { schemaVersion: 1, enabled, updatedAt: now.toISOString() };
 	fs.mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
-	fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+	writeFileAtomic(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 	return settings;
 }

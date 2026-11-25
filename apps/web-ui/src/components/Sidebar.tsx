@@ -10,7 +10,7 @@ interface Props {
 	onSetAppearance: (pref: AppearancePreference) => void;
 	/** Opens the Settings overlay over the room; the optional section targets it. */
 	onSettings: (section?: "remote") => void;
-	/** The room's Attachments entry: a row of the list, under Home. */
+	/** The room's Attachments entry: a row of the list, under Rooms. */
 	assetsSlot?: ReactNode;
 }
 
@@ -24,7 +24,7 @@ export function Sidebar({ theme, appearance, onSetAppearance, onSettings, onHome
 				</div>
 			</div>
 			<nav className="sidebar-primary-nav" aria-label="Room navigation">
-				<button className="list-btn sidebar-home-btn" onClick={onHome}>Home</button>
+				<button className="list-btn sidebar-home-btn" onClick={onHome}>Rooms</button>
 				{assetsSlot}
 			</nav>
 

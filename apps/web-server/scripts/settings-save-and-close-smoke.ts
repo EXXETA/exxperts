@@ -39,18 +39,19 @@ let server: ChildProcessWithoutNullStreams | null = null;
 const BUSY = "The room is busy with a scheduled task. Save again when it has finished.";
 
 type Rect = { x: number; y: number; width: number; height: number };
-const inBoxCorner = (button: Rect, box: Rect): boolean =>
-	button.y > box.y && button.y + button.height < box.y + box.height / 2
-	&& button.x + button.width < box.x + box.width && button.x + button.width >= box.x + box.width - 16;
+/** Below the box, level with the buttons' line under it: where Clear and its Undo sit with Save and Discard. */
+const onFootLine = (button: Rect, box: Rect, actions: Rect): boolean =>
+	button.y >= box.y + box.height && Math.abs((button.y + button.height / 2) - (actions.y + actions.height / 2)) <= 4;
 
 // Both Instructions panes, measured in the page: Clear (and its Undo) sits
-// in the box's top right corner without moving the box, the text wraps before
-// it, the counter under the box reads "N / 8,000" and turns the app's danger
-// red only past the limit, and the row under the box stays on one line with
-// Save in place as the text crosses the limit. Leaves `keep` in the box.
+// on the buttons' line under the box without moving the box, so it covers no
+// text, the counter on that line at the box's right edge reads "N / 8,000" and turns the
+// app's danger red only past the limit, and the counter and Save keep their
+// places as the text crosses the limit. Leaves `keep` in the box.
 async function checkInstructionsBox(page: Page, pane: Locator, label: string, keep: string): Promise<void> {
 	const box = pane.locator(".room-instructions-textarea");
 	const counter = pane.locator(".room-instructions-count [aria-hidden='true']");
+	const actions = pane.locator(".room-instructions-foot .rs-pane-actions");
 	const rect = async (locator: Locator) => {
 		const found = await locator.boundingBox();
 		assert(found, `${label}: ${locator} is on screen`);
@@ -67,10 +68,10 @@ async function checkInstructionsBox(page: Page, pane: Locator, label: string, ke
 	});
 	// Waits for the counter to read `text`; the assertion after it says what was there instead.
 	const counterReads = (text: string) => pane.locator(".room-instructions-count [aria-hidden='true']", { hasText: new RegExp(`^${text}$`) }).waitFor({ timeout: 5000 }).catch(() => {});
-	const sameLine = async () => {
-		const count = await rect(counter);
-		const save = await rect(button("Save"));
-		return Math.abs((count.y + count.height / 2) - (save.y + save.height / 2)) <= 4;
+	// Save and the counter share the line under the box, the counter ending on the box's right edge.
+	const footInPlace = async () => {
+		const [count, save, under] = [await rect(counter), await rect(button("Save")), await rect(box)];
+		return Math.abs((count.x + count.width) - (under.x + under.width)) <= 2 && onFootLine(count, under, save) && onFootLine(save, under, await rect(actions));
 	};
 
 	await box.fill("");
@@ -89,27 +90,22 @@ async function checkInstructionsBox(page: Page, pane: Locator, label: string, ke
 	if (await toggle.count()) {
 		const shared = await rect(toggle);
 		assert(shared.y + shared.height <= boxRect.y, `${label}: "Show the global instructions" sits above the box`);
-		// With the global text shown, Clear stays in the room's own box, under that text.
+		// With the global text shown, the room's own box stays under that text and Clear on the line under the box.
 		await toggle.click();
 		const globalText = pane.locator(".room-instructions-global-text");
 		await globalText.waitFor({ timeout: 5000 });
 		const shown = await rect(globalText);
 		const clearOpen = await rect(button("Clear"));
 		const boxOpen = await rect(box);
-		assert(boxOpen.y >= shown.y + shown.height && inBoxCorner(clearOpen, boxOpen), `${label}: with the global text shown, Clear sits in the box under it`);
+		assert(boxOpen.y >= shown.y + shown.height && onFootLine(clearOpen, boxOpen, await rect(actions)), `${label}: with the global text shown, the box sits under it and Clear on the line under the box, got ${JSON.stringify({ shown, boxOpen, clearOpen, actions: await rect(actions) })}`);
 		await toggle.click();
 		await globalText.waitFor({ state: "detached", timeout: 5000 });
 		assert((await rect(box)).y === emptyTop, `${label}: hiding the global text puts the box back`);
 	}
 	assert((await rect(counter)).y === cleanCounterTop, `${label}: the counter stays put when Discard and Save appear`);
-	assert(inBoxCorner(clear, boxRect), `${label}: Clear sits in the box's top right corner`);
-	const textRight = await box.evaluate((element) => {
-		const style = getComputedStyle(element);
-		return element.getBoundingClientRect().right - parseFloat(style.paddingRight);
-	});
-	assert(textRight <= clear.x, `${label}: the text wraps before Clear`);
+	assert(onFootLine(clear, boxRect, await rect(actions)), `${label}: Clear sits on the line under the box, so it covers no text`);
 	assert(await counter.innerText() === `${keep.length} / 8,000` && !(await isDanger()), `${label}: under the limit the counter is plain, got ${JSON.stringify(await counter.innerText())}`);
-	assert(await sameLine(), `${label}: the counter and Save share one line`);
+	assert(await footInPlace(), `${label}: the counter and Save on the line under the box, the counter at its right edge`);
 
 	await box.fill("x".repeat(8000));
 	await counterReads("8,000 / 8,000");
@@ -121,15 +117,15 @@ async function checkInstructionsBox(page: Page, pane: Locator, label: string, ke
 	const spoken = await pane.locator(".room-instructions-count .sr-only").innerText();
 	assert(spoken === "8,100 of 8,000 characters, 100 over the limit", `${label}: a screen reader hears the count in words, got ${JSON.stringify(spoken)}`);
 	assert(!(await button("Save").isEnabled()), `${label}: past the limit Save waits`);
-	assert(await sameLine(), `${label}: past the limit the row under the box stays on one line`);
+	assert(await footInPlace(), `${label}: past the limit the counter and Save keep their places`);
 	const saveOver = await rect(button("Save"));
 	assert(saveOver.x === saveAtLimit.x && saveOver.y === saveAtLimit.y, `${label}: Save stays in place as the text crosses the limit`);
 
-	// Clear turns into Undo in the same place, and the box does not move.
+	// Clear turns into Undo on the same line, and the box does not move.
 	await button("Clear").click();
 	await button("Undo").waitFor({ timeout: 5000 });
 	const undo = await rect(button("Undo"));
-	assert((await rect(box)).y === emptyTop && inBoxCorner(undo, boxRect), `${label}: Undo takes Clear's place in the box`);
+	assert((await rect(box)).y === emptyTop && onFootLine(undo, boxRect, await rect(actions)), `${label}: Undo takes Clear's place on the line under the box`);
 	await button("Undo").click();
 	assert((await box.inputValue()).length === 8100, `${label}: Undo puts the text back`);
 	await box.fill(keep);
@@ -148,7 +144,7 @@ try {
 	assert(created.ok, `room create failed: ${created.status}`);
 	const roomId = String(((await created.json()) as { agent?: { id?: string } }).agent?.id ?? "");
 	assert(roomId, "the new room has an id");
-	// A global text, so the room's pane shows its "Show the global instructions" row, the row Clear shares.
+	// A global text, so the room's pane shows its "Show the global instructions" row above the box.
 	const seeded = await authedFetch(`${baseUrl}/api/settings/instructions`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Be terse." }) });
 	assert(seeded.ok, `global instructions seed failed: ${seeded.status}`);
 

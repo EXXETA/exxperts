@@ -523,7 +523,8 @@ section("Optional features");
 }
 
 // --- bash / shell for the rooms shell tool (warning-only) -------------------------
-// Needed only for the rooms' shell tool and for source installs; the product
+// Needed for source installs and, except on Windows, where room commands run
+// in Windows PowerShell without it, for the rooms' shell tool; the product
 // itself runs fine without it.
 if (isWindows) {
 	// Same discovery as install.ps1 and the runtime shell resolvers: Git's
@@ -549,8 +550,10 @@ if (isWindows) {
 		bashPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
 	}
 	if (!bashPath) {
+		// Windows' own launcher for its Linux part is no bash to run commands in: the app passes over the same folders (LINUX_LAUNCHER in apps/web-server/src/room-command-tool.ts).
+		const launcher = /[\\/](?:system32|sysnative|syswow64|windowsapps)[\\/]bash\.exe$/i;
 		for (const dir of String(process.env.PATH ?? "").split(path.delimiter)) {
-			if (dir && fs.existsSync(path.join(dir, "bash.exe"))) {
+			if (dir && !launcher.test(path.join(dir, "bash.exe")) && fs.existsSync(path.join(dir, "bash.exe"))) {
 				bashPath = path.join(dir, "bash.exe");
 				break;
 			}
@@ -560,8 +563,8 @@ if (isWindows) {
 		ok("bash found (rooms shell tool)", bashPath);
 	} else {
 		warn(
-			"bash not found (needed only for the rooms' shell tool and source installs)",
-			"install Git for Windows (https://gitforwindows.org; no admin rights needed, per-user install works); a WSL bash on PATH also works, shell commands then run inside the WSL Linux environment",
+			"bash not found (needed only for source installs; room commands run in Windows PowerShell)",
+			"install Git for Windows (https://gitforwindows.org; no admin rights needed, per-user install works)",
 		);
 	}
 } else {

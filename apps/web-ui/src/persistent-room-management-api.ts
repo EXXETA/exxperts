@@ -1,5 +1,6 @@
-import { apiFetch } from "./api";
+import { apiFetch, fetchJson as fetchJsonWithCode } from "./api";
 import { McpRequestError } from "./mcp-api";
+import { isTurnRunningRefusal, removalTurnRunningLine, type RoomRemoval } from "./turn-running-words";
 import type { ArchivedPersistentAgentSummary, PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentLifecycleCounts, PersistentAgentPurgeBusyReason, PersistentAgentPurgeResponse, PersistentAgentRenameResponse, PersistentAgentRestoreResponse, PersistentRoomProtection } from "./types";
 
 const PURGE_BUSY_REASONS: readonly PersistentAgentPurgeBusyReason[] = ["room_lock", "turn_in_flight", "detached_cooking", "specialist_running"];
@@ -37,6 +38,13 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallba
 	return payload as T;
 }
 
+function roomRemovalError(payload: unknown, removal: RoomRemoval): PersistentRoomPurgeError {
+	const reason = payload && typeof payload === "object" ? (payload as { reason?: unknown }).reason : undefined;
+	const error: PersistentRoomPurgeError = new Error(isTurnRunningRefusal(reason) ? removalTurnRunningLine(removal) : parsePersistentRoomManagementError(payload, "Failed to delete room."));
+	if (typeof reason === "string" && (PURGE_BUSY_REASONS as readonly string[]).includes(reason)) error.reason = reason as PersistentAgentPurgeBusyReason;
+	return error;
+}
+
 // Not fetchJson: like purge, the archive error carries a machine-readable busy
 // reason — the caller retries briefly on its own just-released room lock.
 export async function archivePersistentRoom(agentId: PersistentAgentId, request: PersistentAgentArchiveRequest): Promise<PersistentAgentArchiveResponse> {
@@ -46,12 +54,7 @@ export async function archivePersistentRoom(agentId: PersistentAgentId, request:
 		body: JSON.stringify(request),
 	});
 	const payload = await readJsonOrText(response);
-	if (!response.ok) {
-		const error: PersistentRoomPurgeError = new Error(parsePersistentRoomManagementError(payload, "Failed to delete room."));
-		const reason = payload && typeof payload === "object" ? (payload as { reason?: unknown }).reason : undefined;
-		if (typeof reason === "string" && (PURGE_BUSY_REASONS as readonly string[]).includes(reason)) error.reason = reason as PersistentAgentPurgeBusyReason;
-		throw error;
-	}
+	if (!response.ok) throw roomRemovalError(payload, "archived");
 	return payload as PersistentAgentArchiveResponse;
 }
 
@@ -73,12 +76,7 @@ export async function purgePersistentRoom(agentId: PersistentAgentId, confirmati
 		body: JSON.stringify({ confirmation }),
 	});
 	const payload = await readJsonOrText(response);
-	if (!response.ok) {
-		const error: PersistentRoomPurgeError = new Error(parsePersistentRoomManagementError(payload, "Failed to delete room."));
-		const reason = payload && typeof payload === "object" ? (payload as { reason?: unknown }).reason : undefined;
-		if (typeof reason === "string" && (PURGE_BUSY_REASONS as readonly string[]).includes(reason)) error.reason = reason as PersistentAgentPurgeBusyReason;
-		throw error;
-	}
+	if (!response.ok) throw roomRemovalError(payload, "deleted");
 	return payload as PersistentAgentPurgeResponse;
 }
 
@@ -201,27 +199,20 @@ export interface PersistentRoomEnabledSkillStatus {
 	name: string;
 	/** The name the Skills pane shows, when the library still holds the skill. */
 	displayName?: string;
-	sha256: string;
-	currentSha256: string | null;
-	status: "ok" | "hash-mismatch" | "missing";
-	/** Execution approval in this room, pinned to the skill's whole-content digest:
-	 *  "none" (never approved), "approved" (this exact version may run its files),
-	 *  "drifted" (approved once, but the files changed since). */
-	executeState: "none" | "approved" | "drifted";
-	/** GET view only: whether this skill can be approved for execution at all. */
-	executable?: boolean;
-	/** GET view only: the files bundled next to SKILL.md (SKILL.md excluded). */
-	bundledFiles?: string[];
-	/** GET view only: the author marked this skill for manual invocation only, so
-	 *  the model never auto-runs it. Rooms have no manual trigger yet, so it is
-	 *  inert once enabled; the UI says so. */
+	/** "unreadable": its SKILL.md or the record kept beside it can't be read, so the room doesn't use it.
+	 *  A skill deleted from the library has left the room and has no entry here. */
+	status: "ok" | "unreadable";
+	/** GET view only: the author marked this skill to start only when the person
+	 *  picks it, by starting a message with its name; the assistant never starts it. */
 	manualOnly?: boolean;
 }
 
 export interface PersistentRoomSkillSettingsResponse {
 	agentId: PersistentAgentId;
-	settings: { schemaVersion: 1; enabledSkills: { name: string; sha256: string }[]; updatedAt: string };
+	settings: { schemaVersion: 1; enabledSkills: { name: string; identity?: string }[]; updatedAt: string };
 	skills: PersistentRoomEnabledSkillStatus[];
+	/** GET view only: what the room's skills can do with their files now: read them and run their scripts, read them only, or neither. */
+	skillFiles?: "run" | "read" | "none";
 }
 
 export function fetchPersistentRoomSkillSettings(agentId: PersistentAgentId): Promise<PersistentRoomSkillSettingsResponse> {
@@ -232,15 +223,16 @@ export function fetchPersistentRoomSkillSettings(agentId: PersistentAgentId): Pr
 	);
 }
 
-export function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, action: "enable" | "disable" | "approve-execution" | "revoke-execution", name: string): Promise<PersistentRoomSkillSettingsResponse> {
-	return fetchJson<PersistentRoomSkillSettingsResponse>(
+/** Switches a skill on or off in a room. A refusal keeps the server's code (`ApiRequestError`),
+ *  so the switch can tell a remote device's refusal from any other failure. */
+export function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, action: "enable" | "disable", name: string): Promise<PersistentRoomSkillSettingsResponse> {
+	return fetchJsonWithCode<PersistentRoomSkillSettingsResponse>(
 		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings`,
 		{
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ action, name }),
 		},
-		"Failed to update room skill settings."
 	);
 }
 
@@ -261,6 +253,8 @@ export interface PersistentRoomMcpConnectorsResponse {
 	granted: PersistentRoomGrantedConnectorStatus[];
 	/** The tools each enabled connector may use without asking, by their own name and as people read them; never on a shared server. */
 	allowedTools?: Record<string, Array<{ tool: string; shown: string }>>;
+	/** The room is on Auto without protection now: no tool asks first. Never on a shared server. */
+	asksNothing?: true;
 }
 
 /** A room's connectors; a refusal carries its status, which the pane words it by. */

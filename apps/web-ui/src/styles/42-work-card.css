@@ -72,7 +72,7 @@ button.wk-head:hover:not(:disabled) { color: var(--exx-text-soft); }
 }
 .wk-card.waiting .wk-head { color: var(--exx-warning); }
 .wk-card.waiting .wk-dot { background: var(--exx-warning); animation: none; }
-/* Waiting on the room's question above the message box: the head stays quiet, its dot still. */
+/* Waiting on the room's question above the message box, or on another person's answer: the head stays quiet, its dot still. */
 .wk-card.asks .wk-dot { background: var(--exx-text-muted); animation: none; }
 .wk-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 280ms cubic-bezier(.2, 0, 0, 1), opacity 200ms; }
 .wk-card[data-open="0"] .wk-body { grid-template-rows: 0fr; opacity: 0; }
@@ -185,6 +185,9 @@ button.wk-tx:hover { color: var(--exx-text); }
 .wk-ask-facts { color: var(--exx-text-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wk-ask-input { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--exx-border); border-radius: var(--exx-radius-control); background: var(--exx-surface-inset); color: var(--exx-text); font: inherit; font-size: 13px; resize: vertical; }
 .wk-ask-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-self: end; }
+/* A question in another person's answer: the same card, quiet, with whom it waits for where its answers would be. */
+.wk-ask[data-s="waiting"] { border-color: var(--exx-border); background: var(--exx-surface-inset); }
+.wk-ask-wait { grid-column: 2; justify-self: end; color: var(--exx-text-muted); font-size: 12.5px; }
 /* An answer's key sits after its word, the gap the words of a row keep. */
 .wk-btn kbd { margin-inline-start: 7px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 5px; background: transparent; color: inherit; font-family: inherit; font-size: 11px; line-height: 1.2; opacity: 0.7; animation: wk-fade 150ms both; }
 

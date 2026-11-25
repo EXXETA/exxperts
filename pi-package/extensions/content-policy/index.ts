@@ -45,6 +45,13 @@ interface MatchResult {
 const CONFIG_PATH = productAppStatePath("content-policy.json");
 const DEFAULT_LOG_PATH = productAppStatePath("content-policy-blocks.jsonl");
 const INTERNAL_COORDINATION_TOOLS = new Set(["start_handoff", "return_handoff", "delegate"]);
+/**
+ * The room's six file tools and its command tool. In a room that asks nothing
+ * the built-in rules step aside for these alone: its commands reach any file
+ * the person can without naming it. Every other tool, a connector's and the
+ * web's included, keeps every rule there too.
+ */
+export const ROOM_FILE_AND_COMMAND_TOOLS: ReadonlySet<string> = new Set(["read", "ls", "find", "grep", "write", "edit", "bash"]);
 
 // The label rules below look at the value that follows "label: " or
 // "label = ". Ordinary source code puts identifiers, type names and env
@@ -110,8 +117,10 @@ function acceptPasswordValue(match: RegExpMatchArray): boolean {
 const DEFAULT_RULES: Rule[] = [
 	// Block secret-bearing .env files but allow common documentation templates
 	// such as .env.example, .env.sample, .env.template, and .env.dist; a word
-	// character before the dot (process.env, os.environ) is code, not a file.
-	{ id: "dot-env", pattern: /(?<![A-Za-z0-9_])\.env(?!\.(?:example|sample|template|dist)\b)(?:$|["'\\/.,}\]\w-])/i, reason: RULE_WORDS["dot-env"].reason },
+	// character before the dot (process.env, os.environ) is code, not a file,
+	// and so is the whole word .environ or .environment right after a call or
+	// an index, as in __import__('os').environ.
+	{ id: "dot-env", pattern: /(?<![A-Za-z0-9_])\.env(?!\.(?:example|sample|template|dist)\b)(?!(?<=[)\]]\.env)iron(?:ment)?(?![\w-]))(?:$|["'\\/.,}\]\w-])/i, reason: RULE_WORDS["dot-env"].reason },
 	{ id: "pem-file", pattern: /\.pem(?:$|["'\\/.,}\]])/i, reason: RULE_WORDS["pem-file"].reason },
 	{ id: "id-rsa", pattern: /id_rsa(?:$|["'\\/.,}\]\w-])/i, reason: RULE_WORDS["id-rsa"].reason },
 	{
@@ -162,7 +171,8 @@ function compileRule(config: RuleConfig, index: number): Rule | null {
 	}
 }
 
-export function buildPolicy(config: ContentPolicyConfig = loadConfig()): { enabled: boolean; logPath: string; rules: Rule[] } {
+/** `rules` holds the built-in rules and the person's own; `own` the person's own alone. */
+export function buildPolicy(config: ContentPolicyConfig = loadConfig()): { enabled: boolean; logPath: string; rules: Rule[]; own: Rule[] } {
 	const disabled = new Set((config.disabledRuleIds || []).map((id) => String(id).trim()).filter(Boolean));
 	const defaults = DEFAULT_RULES.filter((rule) => !disabled.has(rule.id));
 	const custom = (config.rules || []).map(compileRule).filter((rule): rule is Rule => Boolean(rule));
@@ -170,6 +180,7 @@ export function buildPolicy(config: ContentPolicyConfig = loadConfig()): { enabl
 		enabled: config.enabled !== false,
 		logPath: expandHome(config.logPath || DEFAULT_LOG_PATH),
 		rules: [...defaults, ...custom],
+		own: custom,
 	};
 }
 
@@ -253,30 +264,49 @@ function appendBlockedAttempt(logPath: string, row: Record<string, unknown>): vo
 	}
 }
 
-export default function (pi: ExtensionAPI) {
-	const policy = buildPolicy();
-	stripArgumentPreviews(policy.logPath);
-
-	// Enforcement happens in the tool_call hook below; we intentionally do not
-	// surface a "content policy: on" status line in the UI.
-
-	pi.on("tool_call", async (event, ctx) => {
-		if (!policy.enabled) return undefined;
-		if (!shouldScanTool(event.toolName)) return undefined;
-
-		const input = (event as any).input ?? (event as any).arguments ?? {};
-		const match = scanArguments(input, policy.rules);
-		if (!match) return undefined;
-
-		appendBlockedAttempt(policy.logPath, {
-			ts: new Date().toISOString(),
-			cwd: ctx.cwd,
-			tool: event.toolName,
-			ruleId: match.rule.id,
-			reason: match.rule.reason,
-		});
-
-		// The reason is for the model; the page shows the person one plain line on the step's card (words.ts).
-		return { block: true, reason: contentPolicyBlockReason(event.toolName, match.rule.reason, matchedOnlyInText(input, match.rule)) };
-	});
+/** Whether a room that asks nothing lets this tool past the built-in rules; a reader that throws reads as no. */
+function builtInRulesStepAside(toolName: string | undefined, asksNothing: (() => boolean) | undefined): boolean {
+	if (!asksNothing || !toolName || !ROOM_FILE_AND_COMMAND_TOOLS.has(toolName)) return false;
+	try {
+		return asksNothing() === true;
+	} catch {
+		return false;
+	}
 }
+
+/**
+ * The check, given whether the room asks nothing (read at each call, since the
+ * room can switch mid-conversation). Without a reader, as in a scheduled run,
+ * every rule applies to every tool.
+ */
+export function createContentPolicyExtension(options: { asksNothing?: () => boolean } = {}) {
+	return (pi: ExtensionAPI) => {
+		const policy = buildPolicy();
+		stripArgumentPreviews(policy.logPath);
+
+		// Enforcement happens in the tool_call hook below; we intentionally do not
+		// surface a "content policy: on" status line in the UI.
+
+		pi.on("tool_call", async (event, ctx) => {
+			if (!policy.enabled) return undefined;
+			if (!shouldScanTool(event.toolName)) return undefined;
+
+			const input = (event as any).input ?? (event as any).arguments ?? {};
+			const match = scanArguments(input, builtInRulesStepAside(event.toolName, options.asksNothing) ? policy.own : policy.rules);
+			if (!match) return undefined;
+
+			appendBlockedAttempt(policy.logPath, {
+				ts: new Date().toISOString(),
+				cwd: ctx.cwd,
+				tool: event.toolName,
+				ruleId: match.rule.id,
+				reason: match.rule.reason,
+			});
+
+			// The reason is for the model; the page shows the person one plain line on the step's card (words.ts).
+			return { block: true, reason: contentPolicyBlockReason(event.toolName, match.rule.reason, matchedOnlyInText(input, match.rule)) };
+		});
+	};
+}
+
+export default createContentPolicyExtension();

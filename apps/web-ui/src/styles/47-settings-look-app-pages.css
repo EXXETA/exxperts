@@ -1,0 +1,444 @@
+/* The settings windows' new look: Settings' Web search, Appearance, Remote
+   access and Profiles pages ----------------------------------------------
+   Loaded after 44-settings-look.css, and built while the switch is off as it
+   is: every rule starts with .settings-dialog.settings-look-next, so with the
+   switch off nothing here applies. */
+
+.settings-dialog.settings-look-next {
+	/* Tiles and inset strips: 5 % of the text colour on the page, one step
+	   above the card in dark. */
+	--look-tile: color-mix(in srgb, var(--fg) 5%, var(--exx-surface-page));
+}
+.settings-dialog.settings-look-next:where(:root:not([data-theme="light"]) *) {
+	--look-tile: var(--exx-surface-hover);
+}
+
+/* A line that reports (saved, or failed): one strip where it sits today, its
+   words in the text colour after a green or a red dot. The dot stays on the
+   words' first line when they wrap; the strip's one button (Try again) ends
+   it, on that line too. */
+.settings-dialog.settings-look-next :is(.settings-web-search, .remote-access-shell, .state-profiles) .archived-rooms-note {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	box-sizing: border-box;
+	width: 100%;
+	max-width: none;
+	min-height: 40px;
+	margin: 0;
+	padding: 11px 8px 11px 12px;
+	border-radius: 12px;
+	background: var(--look-tile);
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next :is(.settings-web-search, .remote-access-shell, .state-profiles) .archived-rooms-note::before {
+	content: "";
+	flex: 0 0 8px;
+	height: 8px;
+	margin: 5px 2px 0;
+	border-radius: 50%;
+	background: var(--success);
+}
+.settings-dialog.settings-look-next :is(.settings-web-search, .remote-access-shell, .state-profiles) .archived-rooms-note.workspaces-error::before {
+	background: var(--error);
+}
+.settings-dialog.settings-look-next .state-profiles .archived-rooms-note > .rs-btn {
+	flex-shrink: 0;
+	margin: calc((18px - var(--btn-h)) / 2) 0 calc((18px - var(--btn-h)) / 2) auto;
+}
+/* A finger's 44 px button: the strip grows round it. */
+@media (hover: none), (max-width: 760px) {
+	.settings-dialog.settings-look-next .state-profiles .archived-rooms-note:has(> .rs-btn) {
+		padding-block: 13px;
+	}
+}
+
+/* A state line that was in colour: soft words after a dot of that colour,
+   the dot in a 12 px slot and the words 6 px on, wrapping under themselves. */
+.settings-dialog.settings-look-next :is(.remote-hint-degraded, .web-search-searxng-status.failed, .remote-device-armed, .state-profiles .room-danger-armed) {
+	position: relative;
+	display: block;
+	padding-left: 18px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.remote-hint-degraded, .web-search-searxng-status.failed, .remote-device-armed, .state-profiles .room-danger-armed)::before {
+	content: "";
+	position: absolute;
+	top: 5px;
+	left: 2px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--warning);
+}
+.settings-dialog.settings-look-next :is(.remote-device-armed, .state-profiles .room-danger-armed)::before {
+	background: var(--error);
+}
+
+/* The switch without the browser's checkbox margin, so it ends on the card's
+   padding with the buttons, and sits on its label's line. */
+.settings-dialog.settings-look-next :is(.settings-web-search, .remote-access-shell) .workspaces-tool-switch {
+	margin: 0;
+}
+
+@media (max-width: 760px) {
+	/* "Get Tailscale" under its help from the left, as a phone's row buttons
+	   are, so the help keeps the card's width. */
+	.settings-dialog.settings-look-next .remote-access-shell .settings-row:has(> a.rs-btn) {
+		flex-wrap: wrap;
+	}
+	.settings-dialog.settings-look-next .remote-access-shell .settings-row:has(> a.rs-btn) > .settings-row-main {
+		flex: 1 0 100%;
+	}
+}
+
+/* Web search ----------------------------------------------------------- */
+
+/* The switch in its row's middle, as on the other pages, however many lines
+   its words take. On a phone it stays on its label's line. */
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .settings-web-search .settings-row[data-tall] > .workspaces-tool-switch {
+		align-self: center;
+	}
+}
+
+.settings-dialog.settings-look-next .settings-web-search .group-head .pane-head-text {
+	flex: 1 1 auto;
+}
+.settings-dialog.settings-look-next .web-search-env-note {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+/* SearXNG's address under the radio card: "Address" over the field with Save
+   beside it, the two across the form's column (44), then the way to start
+   one and its line. */
+.settings-dialog.settings-look-next .web-search-searxng {
+	flex-wrap: wrap;
+	gap: 6px 8px;
+	margin-top: 20px;
+}
+.settings-dialog.settings-look-next .web-search-searxng-label {
+	flex: 1 0 100%;
+}
+.settings-dialog.settings-look-next .web-search-searxng-setup {
+	gap: 6px 12px;
+	margin-top: 14px;
+}
+/* On a phone its line drops under the button: 12 below it. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .web-search-searxng-setup {
+		row-gap: 12px;
+	}
+}
+.settings-dialog.settings-look-next .web-search-searxng-status {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* Remote access --------------------------------------------------------- */
+
+/* The devices' card, or the line saying there is none yet, 12 under the
+   pairing panel, which keeps its own layout. */
+.settings-dialog.settings-look-next .remote-pairing-panel + :is(.settings-rows, .settings-empty) {
+	margin-top: 12px;
+}
+/* Room names in the text colour, also while remote access is off: the
+   choices work either way. */
+.settings-dialog.settings-look-next .remote-rooms-off .settings-row-label {
+	color: var(--fg);
+}
+/* One-line room rows are 48; once any room carries its second line, every
+   row takes 64, so the list keeps one height. The height is the row's own,
+   the divider above it on top, as the look's other rows. */
+.settings-dialog.settings-look-next .remote-rooms .settings-row {
+	box-sizing: content-box;
+	min-height: 32px;
+	padding-block: 8px;
+}
+.settings-dialog.settings-look-next .remote-rooms .settings-rows:has(.settings-row-sub) > .settings-row {
+	min-height: 48px;
+}
+.settings-dialog.settings-look-next .remote-rooms .settings-row-label {
+	overflow-wrap: anywhere;
+}
+/* A device's access in the segmented choice's look. */
+.settings-dialog.settings-look-next .remote-capability-seg {
+	display: inline-flex;
+	flex-shrink: 0;
+	height: 32px;
+	padding: 2px;
+	border: 0;
+	border-radius: 8px;
+	background: var(--exx-quiet-fill);
+	overflow: visible;
+}
+.settings-dialog.settings-look-next .remote-capability-seg button {
+	height: 28px;
+	padding: 0 12px;
+	border-radius: 6px;
+	background: none;
+	color: var(--exx-segment-words);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+	transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .remote-capability-seg button:hover:not(:disabled, .on) {
+		color: var(--exx-segment-words-hover);
+	}
+}
+.settings-dialog.settings-look-next .remote-capability-seg button:active:not(:disabled, .on) {
+	background: var(--exx-quiet-fill);
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .remote-capability-seg button.on {
+	background: var(--exx-segment-chosen);
+	box-shadow: var(--exx-shadow-small);
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .remote-capability-seg button:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 0;
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .remote-capability-seg button:disabled {
+	opacity: 0.45;
+}
+/* A device: its name and line, then the access choice and Revoke in columns
+   of their own, so they hold their place while Revoke asks; the question
+   comes under the line, with "Keep it" on its first line under Revoke. */
+.settings-dialog.settings-look-next .remote-device-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	gap: 2px 0;
+	align-items: center;
+}
+.settings-dialog.settings-look-next .remote-device-row > :is(.settings-row-main, .remote-device-actions) {
+	display: contents;
+}
+.settings-dialog.settings-look-next .remote-device-row .settings-row-label {
+	grid-area: 1 / 1;
+	/* A name is the device's own, with or without a space to wrap at. */
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .remote-device-row .settings-row-sub:not(.remote-device-armed) {
+	grid-area: 2 / 1;
+}
+.settings-dialog.settings-look-next .remote-device-row .remote-capability-seg {
+	grid-area: 1 / 2 / 3;
+	margin: 0 calc(12px - var(--look-pull)) 0 24px;
+}
+/* Revoke's words end on the card's padding, as today's quiet buttons in these
+   rows do (35-sidebar-remote.css): moved by the pull, which a negative margin
+   would leave in its column's width. The choice keeps 12 before it. */
+.settings-dialog.settings-look-next .remote-device-row {
+	--look-pull: min(var(--exx-btn-inset-sm), 12px);
+}
+.settings-dialog.settings-look-next .remote-device-row .remote-device-actions > .rs-btn {
+	position: relative;
+	left: var(--look-pull);
+	grid-area: 1 / 3 / 3;
+	justify-self: end;
+}
+.settings-dialog.settings-look-next .remote-device-row .remote-device-armed {
+	grid-area: 3 / 1;
+	align-self: start;
+	margin-top: 12px;
+}
+/* Its middle on the question's first line: 12 down, half the 18 px line. */
+.settings-dialog.settings-look-next .remote-device-row .remote-device-actions > .rs-btn:not(:last-child) {
+	grid-area: 3 / 2 / 4 / 4;
+	align-self: start;
+	margin-top: calc(21px - var(--btn-h) / 2);
+}
+/* On a phone the access choice drops under the name, 12 below its words and
+   44 tall from the name's edge like the rooms' choice, with Revoke ending its
+   line; the question and then "Keep it" come under them. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .remote-device-row {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+	.settings-dialog.settings-look-next .remote-device-row .settings-row-label {
+		grid-area: 1 / 1 / 2 / 3;
+	}
+	.settings-dialog.settings-look-next .remote-device-row .settings-row-sub:not(.remote-device-armed) {
+		grid-area: 2 / 1 / 3 / 3;
+	}
+	.settings-dialog.settings-look-next .remote-device-row .remote-capability-seg {
+		grid-area: 3 / 1;
+		height: 44px;
+		margin: 10px calc(12px - var(--look-pull)) 0 0;
+	}
+	.settings-dialog.settings-look-next .remote-device-row .remote-capability-seg button {
+		flex: 1 1 0;
+		height: 40px;
+	}
+	.settings-dialog.settings-look-next .remote-device-row .remote-device-actions > .rs-btn {
+		grid-area: 3 / 2;
+		margin-top: 10px;
+	}
+	.settings-dialog.settings-look-next .remote-device-row .remote-device-armed {
+		grid-area: 4 / 1 / 5 / 3;
+	}
+	/* Under the question at the name's edge, its words on the padding: in
+	   Revoke's column it would widen that column and move the choice. */
+	.settings-dialog.settings-look-next .remote-device-row .remote-device-actions > .rs-btn:not(:last-child) {
+		grid-area: 5 / 1;
+		justify-self: start;
+		left: calc(-1 * var(--look-pull));
+		margin-top: 10px;
+	}
+	/* The confirming Revoke joins it there, so the two answers share the
+	   question's line, each at its side of the card. */
+	.settings-dialog.settings-look-next .remote-device-row:has(.remote-device-armed) .remote-device-actions > .rs-btn:last-child {
+		grid-area: 5 / 2;
+		margin-top: 10px;
+	}
+}
+.settings-dialog.settings-look-next .remote-pending-name {
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next .remote-capability-seg button {
+		transition: none;
+	}
+}
+
+/* Profiles -------------------------------------------------------------- */
+
+/* One list: a profile a row, its state or its buttons at the right, and "New
+   profile" the last one, its field and Create profile in the same place, a
+   refused name's reason under them. */
+.settings-dialog.settings-look-next .state-profiles:not(.settings-group) > .settings-rows > .settings-row {
+	/* 64 between its lines, with its padding. */
+	box-sizing: content-box;
+	min-height: 40px;
+}
+/* A name, and a question that says it, wraps before its buttons also where it has no space. */
+.settings-dialog.settings-look-next .state-profiles :is(.settings-row-label, .settings-row-sub) {
+	overflow-wrap: anywhere;
+}
+/* The words hold their place beside the field when a reason makes the row taller. */
+.settings-dialog.settings-look-next .state-profiles .state-profile-new > .settings-row-main {
+	align-self: flex-start;
+}
+.settings-dialog.settings-look-next .state-profiles .state-profile-new > .settings-row-value {
+	flex: 0 0 auto;
+	display: grid;
+	grid-template-columns: 160px auto;
+	gap: 6px 8px;
+	/* The grid's columns, so a long reason wraps under them and never widens the field's side. */
+	max-width: max-content;
+	/* Centred on the words (the name, 2, two lines of help) and held there when a reason comes under it. */
+	align-self: flex-start;
+	margin-top: calc((58px - var(--exx-btn-h)) / 2);
+}
+.settings-dialog.settings-look-next .state-profiles .state-profile-new .launcher-path-input {
+	width: 160px;
+}
+.settings-dialog.settings-look-next .state-profiles .state-profile-new .workspaces-error {
+	grid-column: 1 / -1;
+	width: 0;
+	min-width: 100%;
+	box-sizing: border-box;
+	/* A value is one line; a reason is not. */
+	white-space: normal;
+}
+/* At 390 the field, a refused name's reason and Create profile each take a
+   line under the words, in that order. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .state-profiles .state-profile-new {
+		flex-wrap: wrap;
+	}
+	.settings-dialog.settings-look-next .state-profiles .state-profile-new > .settings-row-main {
+		flex: 1 0 100%;
+	}
+	.settings-dialog.settings-look-next .state-profiles .state-profile-new > .settings-row-value {
+		flex: 1 0 100%;
+		grid-template-columns: minmax(0, 1fr);
+		max-width: none;
+		margin: 0;
+	}
+	.settings-dialog.settings-look-next .state-profiles .state-profile-new .launcher-path-input {
+		width: 100%;
+	}
+	.settings-dialog.settings-look-next .state-profiles .state-profile-new .rs-btn {
+		order: 1;
+		justify-self: start;
+	}
+}
+/* Delete asked: the question with a red dot, and no tint on the row; the red
+   stays on the confirming Delete. */
+.settings-dialog.settings-look-next .state-profiles .settings-row.settings-row-armed {
+	padding-inline: 0;
+	background: none;
+}
+
+/* The data folder: a row whose name is the path, in the code face on one
+   line, cut in the middle with its last two parts whole. A row with nothing at
+   its right gives its words the whole width. */
+.settings-dialog.settings-look-next .state-profiles .settings-row > .settings-row-value:empty {
+	display: none;
+}
+.settings-dialog.settings-look-next .state-profiles .settings-row-label:has(> .settings-chip) {
+	display: block;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .state-profiles .settings-chip {
+	display: flex;
+	max-width: 100%;
+	min-width: 0;
+	padding: 0;
+	border-radius: 0;
+	background: none;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 20px;
+	user-select: all;
+}
+/* The head gives way; the tail keeps its width, up to the line's, and only
+   a tail wider than the line is cut, with its own "…". The halves' words are drawn from their data-text and the path
+   selects as one, so a selection takes the whole path from the hidden copy. */
+.settings-dialog.settings-look-next .state-profiles :is(.state-profile-path-head, .state-profile-path-tail) {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.settings-dialog.settings-look-next .state-profiles :is(.state-profile-path-head, .state-profile-path-tail)::before {
+	content: attr(data-text);
+}
+.settings-dialog.settings-look-next .state-profiles .state-profile-path-head {
+	flex: 0 1 auto;
+}
+.settings-dialog.settings-look-next .state-profiles .state-profile-path-tail {
+	flex: 0 0 auto;
+	max-width: 100%;
+}
+.settings-dialog.settings-look-next .state-profiles.settings-group .settings-row-value {
+	gap: 8px;
+}
+/* Move asked: the path and its help keep their width, and the question's
+   two buttons take a line of their own under it, ending on the padding; at
+   390 they start on it, as the page's other questions' do. */
+.settings-dialog.settings-look-next .state-profiles.settings-group .settings-row:has(.state-profile-asking) {
+	flex-wrap: wrap;
+	row-gap: 12px;
+}
+.settings-dialog.settings-look-next .state-profiles.settings-group .settings-row:has(.state-profile-asking) > .settings-row-value {
+	flex: 1 0 100%;
+	justify-content: flex-end;
+}
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .state-profiles.settings-group .settings-row:has(.state-profile-asking) > .settings-row-value {
+		justify-content: flex-start;
+	}
+}

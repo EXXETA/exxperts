@@ -19,16 +19,20 @@ import { isDeepStrictEqual } from "node:util";
 import * as XLSX from "xlsx";
 
 import { roomBoxAvailable } from "../src/room-box/box-available.js";
-import { realPathOf } from "../src/room-box/box-closed.js";
-import { BoxFiles, boxedCommandSinceStart, FILES_STOPPED_LINE, fileProgram, notEnoughSpace } from "../src/room-box/box-files.js";
+import { addAlsoAllowedFolder, saveAlsoAllowedFolders } from "../src/room-box/also-allowed.js";
+import { isInside, realPathOf } from "../src/room-box/box-closed.js";
+import { BoxFiles, boxedCommandSinceStart, FILES_STOPPED_LINE, type FileProgramCall, fileProgram, notEnoughSpace } from "../src/room-box/box-files.js";
 import { BoxFault, BoxProcess, FILE_WORKER } from "../src/room-box/box-process.js";
-import { fileRules } from "../src/room-box/box-rules.js";
+import { CLOSED_TO_WRITES_ASKING_NOTHING, fileRules, NEVER_WRITABLE_FILES, NEVER_WRITABLE_FOLDERS } from "../src/room-box/box-rules.js";
 import { RoomBox, type RoomBoxOptions } from "../src/room-box/box-session.js";
 import { BOX_FAULT_SENTENCE } from "../src/room-box/card-text.js";
+import { unprotectedRoomOnAutoIn } from "../src/persistent-room-bash-settings.js";
+import { PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES } from "../src/persistent-room-tool-policy.js";
 import { createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, persistentAgentRootPath, writePersistentRoomDefaultCapabilityPolicy } from "../src/persistent-room-workspace-policy.js";
-import { createPersistentRoomWorkspaceTools } from "../src/persistent-room-workspace-tools.js";
+import { createPersistentRoomWorkspaceTools, openedWithoutAsking } from "../src/persistent-room-workspace-tools.js";
 import { createRoomCommandTools } from "../src/room-command-tool.js";
-import { fencePath, roomFence } from "../src/room-files.js";
+import { registerServerHooks } from "../src/server-hooks.js";
+import { closedRefusal, type FencedPath, fencePath, type FenceRoot, neverChanged, ownTempRefusal, readOnlyFolder, type RoomFence, roomFence, RoomFilesError } from "../src/room-files.js";
 import { fileProgramPidsIn } from "./smoke-file-programs.js";
 import { freePort, SMOKE_SERVER_AUTH_ENV, smokeHomeEnv, waitForServer } from "./smoke-server-process.js";
 
@@ -63,7 +67,7 @@ function watchListings(standIn?: () => string): ListingCall[] {
 const PROGRAM_ENV = { PATH: "/usr/bin:/bin", OPENSSL_CONF: "/dev/null" };
 
 /** The rules a file call builds for these program files, on one fixed root. */
-const rulesFor = (program: readonly string[]) => fileRules({ roots: [{ path: home, access: "write" }], writes: true, closedBelow: [".env"], program });
+const rulesFor = (program: readonly string[]) => fileRules({ roots: [{ path: home, access: "write" }], writes: true, closedBelow: [".env"], asksNothing: false, program });
 /** What main builds today: the Node and the program, nothing else. */
 const mainProgram = () => [realPathOf(process.execPath), realPathOf(FILE_WORKER)];
 
@@ -158,6 +162,27 @@ async function call(name: string, input: Record<string, unknown>, signal?: Abort
 	} catch (error) {
 		return { text: (error as Error).message, failed: true };
 	}
+}
+
+/** The room's tools with a reader of whether it asks nothing, as room-socket.ts passes one. */
+const stateTools = (asksNothing?: () => boolean) => new Map(createPersistentRoomWorkspaceTools(policy, { box, asksNothing }).map((tool) => [String(tool.name), tool]));
+
+/** A file written, then edited, by the room's tools; one not `made` is there before and is overwritten. */
+async function writtenAndEdited(target: string, made = false): Promise<void> {
+	const file = path.isAbsolute(target) ? target : inRoom(target);
+	const wrote = await call("write", { path: target, content: "changed\n", ...(made ? {} : { overwrite: true }) });
+	assert(!wrote.failed && fs.readFileSync(file, "utf8") === "changed\n", `write ${target}: ${wrote.text}`);
+	const edited = await call("edit", { path: target, edits: [{ oldText: "changed", newText: "edited" }] });
+	assert(!edited.failed && fs.readFileSync(file, "utf8") === "edited\n", `edit ${target}: ${edited.text}`);
+}
+
+/** What the box's program answers a write the fence never judged, in `root`: null when it wrote, else the refusal's code. */
+function programWrite(fence: RoomFence, real: string, root: FenceRoot): Promise<string | null> {
+	const target: FencedPath = { real, root, shown: real, exists: fs.existsSync(real), needsDeck: false };
+	return new BoxFiles(box, fence).write(target, real, "past the fence\n", true).then(
+		() => null,
+		(error: unknown) => (error instanceof RoomFilesError ? error.code : String(error)),
+	);
 }
 
 /** Runs `swap` after the server's check and before the program opens anything: a job left behind, at its moment. */
@@ -458,6 +483,272 @@ async function main(): Promise<void> {
 		assert(secret.failed && !secret.text.includes("TOKEN=secret"), `a closed name: ${secret.text}`);
 	});
 
+	await row("in a room that asks nothing the person's keys in the room's folder open in the box for all six tools, a key's name with no deck in it included; the room's own tools still refuse them", async () => {
+		fs.mkdirSync(inRoom(".ssh"));
+		fs.writeFileSync(inRoom(".ssh", "config"), "Host synthetic\n");
+		fs.writeFileSync(inRoom("server.key"), "KEY synthetic\n");
+		const kept = tools;
+		try {
+			for (const closed of [".env", ".ssh/config", "server.key"]) {
+				const refused = await call("read", { path: closed });
+				assert(refused.failed && refused.text === closedRefusal(closed), `the room's own tools, ${closed}: ${refused.text}`);
+			}
+			tools = new Map(createPersistentRoomWorkspaceTools(policy, { box, asksNothing: () => true }).map((tool) => [String(tool.name), tool]));
+			for (const [file, text] of [[".env", "TOKEN=secret"], [".ssh/config", "Host synthetic"], ["server.key", "KEY synthetic"]] as const) {
+				const read = await call("read", { path: file });
+				assert(!read.failed && read.text.includes(text), `read ${file}: ${read.text}`);
+			}
+			const listed = await call("ls", {});
+			assert(!listed.failed && [".env", ".ssh/", "server.key"].every((entry) => listed.text.split("\n").includes(entry)) && !listed.text.includes("left out"), `ls: ${listed.text}`);
+			const found = await call("find", { pattern: "**/config" });
+			assert(!found.failed && found.text.split("\n").includes(".ssh/config"), `find: ${found.text}`);
+			const searched = await call("grep", { pattern: "TOKEN=secret|synthetic" });
+			assert(!searched.failed && [".env:1: TOKEN=secret", ".ssh/config:1: Host synthetic", "server.key:1: KEY synthetic"].every((line) => searched.text.includes(line)), `grep: ${searched.text}`);
+			const wrote = await call("write", { path: ".env", content: "TOKEN=written\n", overwrite: true });
+			const edited = await call("edit", { path: ".env", edits: [{ oldText: "written", newText: "edited" }] });
+			assert(!wrote.failed && !edited.failed && fs.readFileSync(inRoom(".env"), "utf8") === "TOKEN=edited\n", `write and edit .env: ${wrote.text} / ${edited.text}`);
+		} finally {
+			tools = kept;
+			fs.rmSync(inRoom(".ssh"), { recursive: true, force: true });
+			fs.rmSync(inRoom("server.key"), { force: true });
+			fs.writeFileSync(inRoom(".env"), "TOKEN=secret\n");
+		}
+	});
+
+	await row("in a room that asks nothing the names other programs run from in the room's folder are written and edited in the box, its program writes them past the fence too, and ask_for_folder opens their folder", async () => {
+		const names = [".vscode/tasks.json", ".claude/settings.json", ".husky/pre-commit", "repo/.git/hooks/pre-commit", "repo/.git/config"];
+		const made = "fresh/.git/HEAD";
+		const plant = () => {
+			for (const name of names) {
+				fs.mkdirSync(path.dirname(inRoom(name)), { recursive: true });
+				fs.writeFileSync(inRoom(name), "kept\n");
+			}
+			fs.rmSync(inRoom("fresh"), { recursive: true, force: true });
+		};
+		plant();
+		const kept = tools;
+		try {
+			tools = stateTools(() => true);
+			for (const name of [...names, made]) await writtenAndEdited(name, name === made);
+			// The fence the tools use in this state, and the box's program past it: each write lands.
+			plant();
+			const fence = roomFence(policy, () => [], undefined, true);
+			const files = new BoxFiles(box, fence);
+			for (const name of [...names, made]) {
+				await files.write(fencePath(fence, name, "write"), name, "past the fence\n", true);
+				assert(fs.readFileSync(inRoom(name), "utf8") === "past the fence\n", `the box's program, ${name}`);
+			}
+			// ask_for_folder says the same as the write: the folder can be changed, as an ordinary one beside it can.
+			const asked = (folder: string) => {
+				try {
+					return openedWithoutAsking(policy, folder, "write").real;
+				} catch (error) {
+					return (error as Error).message;
+				}
+			};
+			assert(asked(inRoom(".vscode")) === inRoom(".vscode"), `ask_for_folder for .vscode: ${asked(inRoom(".vscode"))}`);
+			fs.mkdirSync(inRoom("plain-folder"), { recursive: true });
+			assert(asked(inRoom("plain-folder")) === inRoom("plain-folder"), `ask_for_folder for an ordinary folder: ${asked(inRoom("plain-folder"))}`);
+		} finally {
+			tools = kept;
+			for (const place of [".vscode", ".claude", ".husky", "repo", "fresh", "plain-folder"]) fs.rmSync(inRoom(place), { recursive: true, force: true });
+		}
+	});
+
+	// --- A room that asks nothing (Auto with protection off): in the box its file tools change what its commands can, but the one list.
+	await row("in a room that asks nothing the file tools write and edit, in the room's folder and in an Also allowed folder, what its commands can change: .vscode, .claude, .husky, a git hook, .git/config, a new .git/HEAD with its folders, .zshrc, .npmrc, a .code-workspace file and a top-level HEAD", async () => {
+		const also = fs.realpathSync(fs.mkdtempSync(path.join(home, "also-")));
+		addAlsoAllowedFolder(ROOM_ID, also, "write");
+		const there = [".vscode/tasks.json", ".claude/settings.json", ".husky/pre-commit", "repo/.git/hooks/pre-commit", "repo/.git/config", ".zshrc", ".npmrc", "team.code-workspace", "HEAD"];
+		const kept = tools;
+		try {
+			tools = stateTools(() => true);
+			for (const base of [folder, also]) {
+				for (const name of there) {
+					fs.mkdirSync(path.dirname(path.join(base, name)), { recursive: true });
+					fs.writeFileSync(path.join(base, name), "kept\n");
+				}
+				for (const name of there) await writtenAndEdited(path.join(base, name));
+				await writtenAndEdited(path.join(base, "fresh", ".git", "HEAD"), true);
+			}
+		} finally {
+			tools = kept;
+			saveAlsoAllowedFolders(ROOM_ID, []);
+			fs.rmSync(also, { recursive: true, force: true });
+			for (const place of [".vscode", ".claude", ".husky", "repo", "fresh", ".zshrc", ".npmrc", "team.code-workspace", "HEAD"]) fs.rmSync(inRoom(place), { recursive: true, force: true });
+		}
+	});
+
+	await row("in a room that asks nothing .mcp.json, sub/.MCP.JSON and sub/.exxperts/x stay closed to writes, from the fence and from the box's program past it; a file beside each is written both ways", async () => {
+		const closed = [[".mcp.json", neverChanged(".mcp.json")], ["sub/.MCP.JSON", neverChanged("sub/.MCP.JSON")], ["sub/.exxperts/x", closedRefusal("sub/.exxperts/x")]] as const;
+		const beside = ["settings.json", "sub/settings.json", "sub/notes/x"];
+		for (const name of [...closed.map(([name]) => name), ...beside]) {
+			fs.mkdirSync(path.dirname(inRoom(name)), { recursive: true });
+			fs.writeFileSync(inRoom(name), "kept\n");
+		}
+		const kept = tools;
+		try {
+			tools = stateTools(() => true);
+			const fence = roomFence(policy, () => [], undefined, true);
+			for (const [name, line] of closed) {
+				const wrote = await call("write", { path: name, content: "changed\n", overwrite: true });
+				assert(wrote.failed && wrote.text === line, `the fence, ${name}: ${wrote.text}`);
+				const program = await programWrite(fence, inRoom(name), fence.room!);
+				assert(program === "box_refused", `the box's program, ${name}: ${program ?? "written"}`);
+				assert(fs.readFileSync(inRoom(name), "utf8") === "kept\n", `${name} is as it was`);
+			}
+			// Protection is off in this room, so the box's refusal names none.
+			const said = await new BoxFiles(box, fence).write({ real: inRoom(".mcp.json"), root: fence.room!, shown: ".mcp.json", exists: true, needsDeck: false }, inRoom(".mcp.json"), "past the fence\n", true).then(() => "written", (error: Error) => error.message);
+			assert(said === ".mcp.json can't be opened: this room's rules for files refused it, or another program has it locked. Tell the person.", `the box's refusal: ${said}`);
+			for (const name of beside) {
+				await writtenAndEdited(name);
+				const program = await programWrite(fence, inRoom(name), fence.room!);
+				assert(program === null && fs.readFileSync(inRoom(name), "utf8") === "past the fence\n", `the box's program, ${name}: ${program}`);
+			}
+		} finally {
+			tools = kept;
+			for (const place of [".mcp.json", "settings.json", "sub"]) fs.rmSync(inRoom(place), { recursive: true, force: true });
+		}
+	});
+
+	await row("in a room that asks nothing a folder set to Can read takes no write, from the fence or from the box's program past it; the room's folder beside it does", async () => {
+		const readOnly = fs.realpathSync(fs.mkdtempSync(path.join(home, "can-read-")));
+		const inReadOnly = path.join(readOnly, ".vscode", "tasks.json");
+		for (const file of [inReadOnly, inRoom(".vscode", "tasks.json")]) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "kept\n");
+		}
+		addAlsoAllowedFolder(ROOM_ID, readOnly, "read");
+		const kept = tools;
+		try {
+			tools = stateTools(() => true);
+			const wrote = await call("write", { path: inReadOnly, content: "changed\n", overwrite: true });
+			assert(wrote.failed && wrote.text.startsWith(readOnlyFolder(inReadOnly)), `the fence: ${wrote.text}`);
+			const fence = roomFence(policy, () => [], undefined, true);
+			const root = fence.roots().find((each) => each.path === readOnly);
+			assert(root?.access === "read", `the folder's place: ${JSON.stringify(root)}`);
+			const program = await programWrite(fence, inReadOnly, root);
+			assert(program === "box_refused" && fs.readFileSync(inReadOnly, "utf8") === "kept\n", `the box's program: ${program ?? "written"}`);
+			await writtenAndEdited(".vscode/tasks.json");
+			const beside = await programWrite(fence, inRoom(".vscode", "tasks.json"), fence.room!);
+			assert(beside === null, `the box's program in the room's folder: ${beside}`);
+		} finally {
+			tools = kept;
+			saveAlsoAllowedFolders(ROOM_ID, []);
+			fs.rmSync(readOnly, { recursive: true, force: true });
+			fs.rmSync(inRoom(".vscode"), { recursive: true, force: true });
+		}
+	});
+
+	await row("in a room that asks nothing with Can change files off the room has no write or edit tool, and the box's program past the fence writes nothing; with it on the same write lands", async () => {
+		const readOnlyPolicy = createPersistentRoomCapabilityPolicy({ agentId: ROOM_ID, conversationId: "conversation-a", repoRoot, root: folder, workspaceAccessMode: "localFiles", source: "manual", toolSelection: { kind: "custom", allowedToolNames: [...PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES] } });
+		const file = inRoom(".vscode", "tasks.json");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "kept\n");
+		try {
+			const names = createPersistentRoomWorkspaceTools(readOnlyPolicy, { box, asksNothing: () => true }).map((tool) => String(tool.name));
+			assert(names.includes("read") && !names.includes("write") && !names.includes("edit"), `the tools: ${names.join(", ")}`);
+			const fence = roomFence(readOnlyPolicy, () => [], undefined, true);
+			assert(fence.asksNothing && fence.room?.access === "read", `the fence: ${fence.asksNothing} ${fence.room?.access}`);
+			const program = await programWrite(fence, file, fence.room);
+			assert(program === "box_refused" && fs.readFileSync(file, "utf8") === "kept\n", `the box's program: ${program ?? "written"}`);
+			const changing = roomFence(policy, () => [], undefined, true);
+			const lands = await programWrite(changing, file, changing.room!);
+			assert(lands === null && fs.readFileSync(file, "utf8") === "past the fence\n", `with Can change files on: ${lands}`);
+		} finally {
+			fs.rmSync(inRoom(".vscode"), { recursive: true, force: true });
+		}
+	});
+
+	await row("in a room that asks nothing a write swapped between check and open lands nowhere: through a link to a folder outside the room's folders, or into .exxperts; with no swap it lands", async () => {
+		fs.mkdirSync(inRoom(".exxperts"), { recursive: true });
+		const kept = tools;
+		try {
+			tools = stateTools(() => true);
+			for (const [label, target] of [["outside the room's folders", elsewhere], [".exxperts", inRoom(".exxperts")]] as const) {
+				fs.rmSync(inRoom("sub"), { recursive: true, force: true });
+				fs.mkdirSync(inRoom("sub"));
+				const write = await withSwapBeforeOpen(() => {
+					fs.rmSync(inRoom("sub"), { recursive: true });
+					fs.symlinkSync(target, inRoom("sub"));
+				}, () => call("write", { path: "sub/planted.txt", content: "planted" }));
+				assert(write.failed && !fs.existsSync(path.join(target, "planted.txt")), `${label}: ${write.text}`);
+			}
+			fs.rmSync(inRoom("sub"), { recursive: true, force: true });
+			fs.mkdirSync(inRoom("sub"));
+			const plain = await call("write", { path: "sub/planted.txt", content: "planted" });
+			assert(!plain.failed && fs.readFileSync(inRoom("sub", "planted.txt"), "utf8") === "planted", `with no swap: ${plain.text}`);
+		} finally {
+			tools = kept;
+			for (const place of ["sub", ".exxperts"]) fs.rmSync(inRoom(place), { recursive: true, force: true });
+			fs.rmSync(path.join(elsewhere, "planted.txt"), { force: true });
+		}
+	});
+
+	await row("one set of tools in a room that switches: after Auto to Ask the next write of .vscode/tasks.json is refused as before, and after Ask to Auto the next goes through", async () => {
+		let asksNothing = true;
+		fs.mkdirSync(inRoom(".vscode"), { recursive: true });
+		fs.writeFileSync(inRoom(".vscode", "tasks.json"), "kept\n");
+		const kept = tools;
+		try {
+			tools = stateTools(() => asksNothing);
+			await writtenAndEdited(".vscode/tasks.json");
+			asksNothing = false;
+			const refused = await call("write", { path: ".vscode/tasks.json", content: "changed\n", overwrite: true });
+			assert(refused.failed && refused.text === neverChanged(".vscode/tasks.json") && fs.readFileSync(inRoom(".vscode", "tasks.json"), "utf8") === "edited\n", `on Ask: ${refused.text}`);
+			asksNothing = true;
+			await writtenAndEdited(".vscode/tasks.json");
+		} finally {
+			tools = kept;
+			fs.rmSync(inRoom(".vscode"), { recursive: true, force: true });
+		}
+	});
+
+	await row("what stays closed to writes in a room that asks nothing is one list: the box's rules close exactly its names, and the fence refuses a write of each of them and of no other name commands run from", async () => {
+		const rules = fileRules({ roots: [{ path: folder, access: "write" }], writes: true, closedBelow: [], asksNothing: true, program: [] });
+		const named = new Set((rules.filesystem.denyWrite as unknown[]).filter((entry): entry is string => typeof entry === "string").map((pattern) => pattern.replace(`${folder}/`, "").replace(/^\*\*\//, "")));
+		assert(isDeepStrictEqual([...named].sort(), [...CLOSED_TO_WRITES_ASKING_NOTHING].sort()), `the box's rules close: ${[...named].join(", ")}`);
+		const fence = roomFence(policy, () => [], undefined, true);
+		const refused = (name: string): boolean => {
+			try {
+				fencePath(fence, name, "write");
+				return false;
+			} catch (error) {
+				if (error instanceof RoomFilesError) return true;
+				throw error;
+			}
+		};
+		for (const name of [...NEVER_WRITABLE_FILES, ...NEVER_WRITABLE_FOLDERS.map((each) => `${each}/x`)]) {
+			const listed = CLOSED_TO_WRITES_ASKING_NOTHING.some((each) => name === each || name.startsWith(`${each}/`));
+			assert(refused(name) === listed, `the fence ${listed ? "lets through" : "refuses"} ${name}`);
+		}
+	});
+
+	await row("the sandbox library's own write denies sit under the box worker's working folder, which no room's folder is in: those names in the room's folder are written in the box; a box whose worker started in the room's folder refuses them", async () => {
+		const names = [".vscode/tasks.json", ".idea/workspace.xml", ".claude/commands/deploy.md", ".claude/agents/helper.md", "repo/.git/hooks/pre-commit", "repo/.git/config", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile", ".gitconfig", ".gitmodules", ".ripgreprc"];
+		for (const name of names) {
+			fs.mkdirSync(path.dirname(inRoom(name)), { recursive: true });
+			fs.writeFileSync(inRoom(name), "kept\n");
+		}
+		const started = process.cwd();
+		assert(!isInside(folder, started), `the room's folder is in the box worker's working folder ${started}`);
+		try {
+			tools = stateTools(() => true);
+			for (const name of names) await writtenAndEdited(name);
+			// The control: the library's denies are anchored where the worker started.
+			await box.endTurn();
+			process.chdir(folder);
+			bind();
+			tools = stateTools(() => true);
+			const refused = await call("write", { path: ".vscode/tasks.json", content: "changed\n", overwrite: true });
+			assert(refused.failed && refused.text.includes("this room's rules for files refused it") && fs.readFileSync(inRoom(".vscode", "tasks.json"), "utf8") === "edited\n", `a worker started in the room's folder: ${refused.text}`);
+		} finally {
+			process.chdir(started);
+			await nextTurn();
+			for (const place of [".vscode", ".idea", ".claude", "repo", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile", ".gitconfig", ".gitmodules", ".ripgreprc"]) fs.rmSync(inRoom(place), { recursive: true, force: true });
+		}
+	});
+
 	await row("on a boxed Mac the tools open and write nothing by name in the room; the parsers' copies aside", async () => {
 		const opened: string[] = [];
 		const spied = ["open", "readFile", "writeFile", "mkdir", "readdir", "opendir", "rm", "rename", "copyFile", "appendFile"] as const;
@@ -493,7 +784,7 @@ async function main(): Promise<void> {
 			fs.rmSync(inRoom("sub"), { recursive: true });
 			fs.symlinkSync("/etc", inRoom("sub"));
 		}, () => call("read", { path: "sub/hosts" }));
-		assert(system.failed && system.text.includes("protection refused it") && !system.text.includes("localhost"), `a system file through the link: ${system.text}`);
+		assert(system.failed && system.text.includes("this room's rules for files refused it") && !system.text.includes("localhost"), `a system file through the link: ${system.text}`);
 		fs.rmSync(inRoom("sub"));
 		fs.mkdirSync(inRoom(".pi"));
 		fs.writeFileSync(inRoom(".pi", "settings.json"), "{\"key\":\"app data\"}");
@@ -503,7 +794,7 @@ async function main(): Promise<void> {
 			fs.rmSync(inRoom("sub"), { recursive: true });
 			fs.symlinkSync(inRoom(".pi"), inRoom("sub"));
 		}, () => call("read", { path: "sub/settings.json" }));
-		assert(closed.failed && closed.text.includes("protection refused it") && !closed.text.includes("app data"), `a closed name through the link: ${closed.text}`);
+		assert(closed.failed && closed.text.includes("this room's rules for files refused it") && !closed.text.includes("app data"), `a closed name through the link: ${closed.text}`);
 		fs.rmSync(inRoom("sub"));
 		// The allowed neighbour: the same read with no swap.
 		fs.mkdirSync(inRoom("sub"));
@@ -731,6 +1022,24 @@ async function main(): Promise<void> {
 		assert(refused.failed && !refused.text.includes("another file"), `another file: ${refused.text}`);
 	});
 
+	await row("a file a command made under $TMPDIR is refused to the file tools as this answer's temp, with no step for the person", async () => {
+		const commands = createRoomCommandTools(folder, { box, outside: { questions: { ...quietQuestions, askOutside: async () => false } as any, setOffered: () => {} } });
+		const bash = commands.tools.find((tool) => tool.name === "bash");
+		assert(bash, "no bash tool");
+		const made: any = await bash.execute("cmd", { command: 'echo poster > "$TMPDIR/poster.txt"; echo "at:$TMPDIR/poster.txt"' } as any, undefined as any, undefined as any, undefined as any);
+		const poster = /at:(\S+)/.exec((made.content ?? []).map((part: any) => part.text ?? "").join(""))?.[1] ?? "";
+		assert(poster && fs.readFileSync(poster, "utf8") === "poster\n", `the command's file: ${poster}`);
+		const read = await call("read", { path: poster });
+		assert(read.failed && read.text === ownTempRefusal(poster), `the read: ${read.text}`);
+		const beside = path.join(path.dirname(poster), "beside.txt");
+		const wrote = await call("write", { path: beside, content: "x\n" });
+		assert(wrote.failed && wrote.text === ownTempRefusal(beside) && !fs.existsSync(beside), `the write: ${wrote.text}`);
+		// The room's folder beside it takes the same file.
+		const intoRoom = await call("write", { path: "poster.txt", content: "poster\n" });
+		assert(!intoRoom.failed && fs.readFileSync(inRoom("poster.txt"), "utf8") === "poster\n", `the write into the room: ${intoRoom.text}`);
+		fs.rmSync(inRoom("poster.txt"));
+	});
+
 	await row("a file program's read of a folder swapped for a link just before the open is refused", async () => {
 		await nextTurn();
 		// In this turn the Mac blocks a file program's read of a folder outside the room.
@@ -740,7 +1049,7 @@ async function main(): Promise<void> {
 			fs.rmSync(inRoom("sub"), { recursive: true });
 			fs.symlinkSync(elsewhere, inRoom("sub"));
 		}, () => call("read", { path: "sub/private.txt" }));
-		assert(read.failed && read.text.includes("protection refused it"), `the read: ${read.text}`);
+		assert(read.failed && read.text.includes("this room's rules for files refused it"), `the read: ${read.text}`);
 		fs.rmSync(inRoom("sub"));
 	});
 
@@ -970,6 +1279,51 @@ async function main(): Promise<void> {
 			BoxProcess.prototype.request = request;
 		}
 		assert(seen.includes(fileProgram().command) && seen.every((command) => !command.includes("odd")), `commands: ${seen.join(" | ")}`);
+	});
+
+	// Last: the shared-server switch can't be turned off again in this process.
+	await row("outside a room that asks nothing the file program's rules are byte for byte as before: on Ask, in a protected room on Auto, with no reader, with a reader that throws and with the shared-server switch on; in the state only the write denies differ from what it had before", async () => {
+		const recorded: FileProgramCall["rules"][] = [];
+		const original = RoomBox.prototype.runFileProgram;
+		RoomBox.prototype.runFileProgram = function (this: RoomBox, programCall) {
+			recorded.push(programCall.rules);
+			return original.call(this, programCall);
+		};
+		const rulesOf = async (asksNothing?: () => boolean): Promise<string> => {
+			tools = stateTools(asksNothing);
+			recorded.length = 0;
+			const wrote = await call("write", { path: "rules.txt", content: "rules\n", overwrite: true });
+			assert(!wrote.failed && recorded.length === 1, `the write: ${wrote.text}`);
+			return JSON.stringify(recorded[0]);
+		};
+		const kept = tools;
+		try {
+			// What a call built before the state's own write denies: outside the state, and in it, where the person's keys already opened.
+			const rulesBefore = (asksNothing: boolean) => {
+				const fence = roomFence(policy, () => box.spills().map((spill) => ({ path: spill })), undefined, asksNothing);
+				return JSON.stringify(fileRules({ roots: [...fence.roots(), ...fence.dataReads()], writes: true, closedBelow: fence.closedBelow(), asksNothing: false, program: fileProgram().files }));
+			};
+			const asBefore = rulesBefore(false);
+			const stateBefore = JSON.parse(rulesBefore(true));
+			const inState = JSON.parse(await rulesOf(() => true));
+			const readers: Array<[string, (() => boolean) | undefined]> = [
+				["on Ask", () => false],
+				["a protected room on Auto", () => unprotectedRoomOnAutoIn(ROOM_ID, "conversation-a", { state: "on" })],
+				["no reader (a scheduled run)", undefined],
+				["a reader that throws", () => {
+					throw new Error("unreadable");
+				}],
+			];
+			for (const [label, reader] of readers) assert((await rulesOf(reader)) === asBefore, `${label}: the rules differ`);
+			registerServerHooks({});
+			assert((await rulesOf(() => true)) === asBefore, "the shared-server switch on: the rules differ");
+			const sameBut = JSON.stringify({ ...inState, filesystem: { ...inState.filesystem, denyWrite: stateBefore.filesystem.denyWrite } });
+			assert(sameBut === JSON.stringify(stateBefore) && !isDeepStrictEqual(inState.filesystem.denyWrite, stateBefore.filesystem.denyWrite), "in the state more than the write denies differ from before, or nothing does");
+		} finally {
+			RoomBox.prototype.runFileProgram = original;
+			tools = kept;
+			fs.rmSync(inRoom("rules.txt"), { force: true });
+		}
 	});
 
 	await box.endTurn();

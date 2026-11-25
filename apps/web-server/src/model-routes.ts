@@ -2,7 +2,8 @@ import { type ModelRegistry, AuthStorage, listGitHubCopilotModels, defaultModelP
 import { isReservedCustomProfileProvider, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { viewerOf } from "./persistent-agent-status.js";
 import { createRoomModelCatalog, resolveAiDefault, taggedRecommendation, memoryModelTooSmallSentence, writeAiDefaults, type RoomModelTask } from "./room-models.js";
-import { type PersistentAgentModelLock, isPersistentAgentAiProfileId } from "./persistent-agent-ai-profiles.js";
+import { type PersistentAgentModelLock, getAvailablePersistentAgentAiProfiles, isPersistentAgentAiProfileId } from "./persistent-agent-ai-profiles.js";
+import { MODELS_RUN_IN_REFUSAL, savedModelsRunIn, startGatewayProviderId } from "./openai-compatible-gateways.js";
 import { type PersistentAgentAiProfileStateSource, readPersistentAgentAiProfileState, writePersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import { app } from "./server-app.js";
 import { getLoginProviderCatalog } from "./provider-auth-routes.js";
@@ -70,6 +71,7 @@ function roomModelProvidersPayload(registry: ModelRegistry, catalog = createRoom
 			ready: provider.ready,
 			conversation: options(provider.conversation, tagged.conversation),
 			memory: options(provider.memory, tagged.memory),
+			...(isSharedServer() ? { runsIn: provider.runsIn ?? "unknown" } : {}),
 		};
 	});
 }
@@ -103,11 +105,16 @@ app.put("/api/ai/defaults", async (req, reply) => {
 	}
 });
 
-// AI setup's rows. A shared server lists no profile that only a subscription reaches.
+// AI setup's rows. A shared server lists no profile that only a subscription reaches, and gives each row where
+// its models run and whether the install set it up.
 function profileSelectionPayload(status: PersistentAgentAiProfileSelectionStatus) {
 	if (!isSharedServer()) return status;
 	const oauthProviderIds = new Set(AuthStorage.create().getOAuthProviders().map((provider) => provider.id));
-	const profiles = status.profiles.filter((profile) => isApiKeyLoginProvider(profile.provider.id, oauthProviderIds));
+	const runsIn = new Map(getAvailablePersistentAgentAiProfiles().map((profile) => [profile.id, profile.runsIn]));
+	const startProviderId = startGatewayProviderId();
+	const profiles = status.profiles
+		.filter((profile) => isApiKeyLoginProvider(profile.provider.id, oauthProviderIds))
+		.map((profile) => ({ ...profile, runsIn: runsIn.get(profile.id) ?? "unknown", setByInstall: profile.provider.id === startProviderId }));
 	return namesNoProfile(status.state.source) ? { ...status, profiles, activeProfileId: null, activeProfile: null } : { ...status, profiles };
 }
 
@@ -196,8 +203,11 @@ app.put("/api/persistent-agent-ai-profiles/custom", async (req, reply) => {
 	for (const modelId of new Set([...roomModels, learnModel])) {
 		if (!registry.find(providerId, modelId)) return reply.code(400).send({ error: `model not found: ${providerId}/${modelId}` });
 	}
+	// Where its models run is stated only on a shared server; the desktop ignores the field.
+	const runsInSave = isSharedServer() ? savedModelsRunIn(body.runsIn) : { ok: true as const, runsIn: undefined };
+	if (!runsInSave.ok) return reply.code(400).send({ error: MODELS_RUN_IN_REFUSAL });
 	try {
-		writeCustomAiProfile({ providerId, label: typeof body.label === "string" ? body.label : undefined, roomModels, learnModel });
+		writeCustomAiProfile({ providerId, label: typeof body.label === "string" ? body.label : undefined, roomModels, learnModel, runsIn: runsInSave.runsIn });
 	} catch (e) {
 		return reply.code(400).send({ error: (e as Error).message });
 	}

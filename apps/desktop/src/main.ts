@@ -17,6 +17,8 @@ import { checkForUpdate, getAvailableUpdate, getUpdateSnapshot, isNewerVersion, 
 import { checkViaUpdater, downloadUpdate, installPlan, quitAndInstallNow, smokeSetFeed, updaterAvailability } from "./updater";
 import { openUpdatePanel } from "./update-panel";
 import { timeLeftText } from "./update-time-left";
+import { loadPastTakeovers } from "./profile-switch-load";
+import { maskTokens } from "./window-text";
 
 const SMOKE = process.env.EXXPERTS_DESKTOP_SMOKE === "1";
 
@@ -63,12 +65,13 @@ let updaterQuitting = false;
 let smokeFailed = false;
 
 function smokeFail(message: string): never {
-  if (!smokeFailed) console.error(`DESKTOP_SMOKE_FAIL ${message}`);
+  const shown = maskTokens(message);
+  if (!smokeFailed) console.error(`DESKTOP_SMOKE_FAIL ${shown}`);
   smokeFailed = true;
   process.exitCode = 1;
   quitting = true;
   void server.stop().finally(() => app.exit(1));
-  throw new Error(message);
+  throw new Error(shown);
 }
 
 // Enough of the server's log to hold its stop's lines.
@@ -729,8 +732,14 @@ async function handleProfileSwitch(): Promise<void> {
     // The auth token lives inside the profile, so the switch rotated it; the
     // window must sign in again rather than reconnect with the stale cookie.
     authToken = await server.authToken();
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      await mainWindow.loadURL(`${SERVER_ORIGIN}/auth/session?token=${encodeURIComponent(authToken)}`);
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) {
+      const signIn = `${SERVER_ORIGIN}/auth/session?token=${encodeURIComponent(authToken)}`;
+      const settled = () => new Promise<void>((resolve) => {
+        if (win.webContents.isLoading()) win.webContents.once("did-stop-loading", () => resolve());
+        else resolve();
+      });
+      await loadPastTakeovers(() => win.loadURL(signIn), settled);
       showMainWindow();
     }
   } catch (err) {

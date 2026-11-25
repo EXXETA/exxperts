@@ -276,7 +276,7 @@ export async function openFailureRoom() {
 		};
 		// The newest line shows its button in place of where it is; the conversation keeps every word.
 		const returnedSaved = `${MODEL_NAME} could not answer this message. Try again; if it repeats, choose another model in Room settings, Model.`;
-		const stillBusyReturned = `${MODEL_NAME} is still busy after several tries. Try again in a minute.`;
+		const stillBusyReturned = `${MODEL_NAME} is still busy after several tries. Try again later.`;
 		const retryNotes = () => page.getByText(/Trying again…|Retrying…/).count();
 		// Sends a message the model answers, and waits for that answer and the turn's end.
 		const ask = async (text: string) => {

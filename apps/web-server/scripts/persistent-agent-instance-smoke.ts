@@ -151,7 +151,7 @@ try {
 		overflow = error;
 	}
 	assert(overflow && overflow.code === "memory_overflow" && overflow.statusCode === 413, "an oversized boot prompt should refuse with the memory_overflow code and 413");
-	assert(/do not fit the usable window of GPT-5\.5 /.test(overflow.message) && !/Forget/.test(overflow.message) && /open Maintain from Home and run (Memorize|Review)/.test(overflow.message) && /Memory is unchanged/.test(overflow.message), `overflow refusal should name the model as the app shows it, the reachable exit (Maintain, never Forget), the layer-matched run, and that memory is untouched (got ${overflow.message})`);
+	assert(/do not fit the usable window of GPT-5\.5 /.test(overflow.message) && !/Forget/.test(overflow.message) && /open Maintain on its card in Rooms and run (Memorize|Review)/.test(overflow.message) && /Memory is unchanged/.test(overflow.message), `overflow refusal should name the model as the app shows it, the reachable exit (Maintain, never Forget), the layer-matched run, and that memory is untouched (got ${overflow.message})`);
 	assert(/Room settings, Model/.test(overflow.message) && !/Session/.test(overflow.message), `overflow refusal should name the panes as they are called now (got ${overflow.message})`);
 	assert(overflow.bootEstimatedTokens > overflow.promptTokenBudget && overflow.promptTokenBudget === 1000, "overflow refusal should carry the real numbers (min budget floor applies)");
 

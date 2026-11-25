@@ -7,7 +7,7 @@ import { startSearxngSetup, searxngSetupStatus } from "./searxng-setup.js";
 import { REPO_ROOT } from "./server-install-root.js";
 import { app } from "./server-app.js";
 import { remoteRoomExposure } from "./request-checks.js";
-import { serverHooks } from "./server-hooks.js";
+import { isSharedServer, serverHooks } from "./server-hooks.js";
 
 // How the app's own web_search tool runs. Settable, and it takes effect on the
 // next search rather than the next launch: the tool re-reads the file. The
@@ -22,6 +22,7 @@ function webSearchSettingsPayload() {
 		// The provider-side switch is its own answer with no environment
 		// override behind it, so there is nothing to disambiguate here.
 		providerSearch: settings.providerSearch,
+		webPages: settings.webPages,
 		saved: { provider: settings.saved.provider ?? null, baseUrl: settings.saved.baseUrl ?? "" },
 		envProvider: process.env.EXXETA_SEARCH_PROVIDER?.trim() || null,
 		// A broken file is drawn as broken rather than as a set of choices
@@ -114,6 +115,8 @@ app.put("/api/settings/web-search", async (req, reply) => {
 			...("provider" in body ? { provider: body.provider } : {}),
 			...("baseUrl" in body ? { baseUrl: body.baseUrl } : {}),
 			...("providerSearch" in body ? { providerSearch: body.providerSearch } : {}),
+			// The desktop has no web pages switch, so its PUT never stores one.
+			...(isSharedServer() && "webPages" in body ? { webPages: body.webPages } : {}),
 		});
 	} catch (e) {
 		if (e instanceof WebSearchSettingsError) return reply.code(400).send({ error: e.message });

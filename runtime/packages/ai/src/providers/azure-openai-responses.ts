@@ -13,6 +13,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
+import { fetchWithBoundedRetryDelay, untilStopped } from "../utils/request-stop.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { providerErrorFields } from "../utils/provider-error-fields.js";
@@ -97,7 +98,10 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
-			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
+			const { data: openaiStream, response } = await untilStopped(
+				client.responses.create(params, requestOptions).withResponse(),
+				options?.signal,
+			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -231,6 +235,7 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		apiVersion,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: headers,
+		fetch: fetchWithBoundedRetryDelay(options?.maxRetryDelayMs),
 		baseURL: baseUrl,
 	});
 }

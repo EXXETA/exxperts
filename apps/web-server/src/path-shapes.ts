@@ -93,15 +93,46 @@ const partsOf = (text: string): string[] => text.split(path.sep === "\\" ? /[\\/
 // The kernel gives up on a chain this long.
 const LINK_HOPS_LIMIT = 40;
 
-/** `links: "refuse"`: a link anywhere on the way is refused before its text is read, where the walk would follow it. */
+/**
+ * `links: "refuse"`: a link anywhere on the way is refused before its text is
+ * read, where the walk would follow it. `stopAt`: folders where the walk stops,
+ * told by their identity on the disk, not their names (on a Mac
+ * /System/Volumes/Data/Users is /Users): the first folder on the way that is
+ * one of them ends the walk before anything inside it is looked at, so no link
+ * there is read or followed.
+ */
 export interface WalkOptions {
 	links?: "refuse";
+	stopAt?: readonly string[];
 }
 
-/** Where a path really is, and the real folders that held a link on the way. */
+/**
+ * Where a path really is, and the real folders that held a link on the way.
+ * `stoppedAt`: where the way entered a `stopAt` folder, spelled as the way led
+ * there and never resolved; null when a `..` is left on the way past it, since
+ * where that leads can't be told without looking inside. `real` is then the
+ * same path, or the stop folder.
+ */
 export interface WalkedPlace {
 	real: string;
 	linkPlaces: string[];
+	stoppedAt?: string | null;
+}
+
+/** A folder's identity on its disk, or undefined for anything but a folder. */
+function folderIdentity(stat: fs.BigIntStats | undefined): string | undefined {
+	return stat?.isDirectory() ? `${stat.dev}:${stat.ino}` : undefined;
+}
+
+/** The identities of the `stopAt` folders that can be read; one that can't stops nothing, as the walk can't look inside it either. */
+function stopIdentities(folders: readonly string[]): Set<string> {
+	return new Set(folders.flatMap((folder) => {
+		try {
+			return folderIdentity(fs.statSync(folder, { bigint: true, throwIfNoEntry: false })) ?? [];
+		} catch {
+			return [];
+		}
+	}));
 }
 
 /**
@@ -135,6 +166,7 @@ export function walkPlace(target: string, chosen: readonly string[] = [], option
 	refuse(start, chosen);
 	const parts = partsOf(start.slice(path.parse(start).root.length));
 	const linkPlaces: string[] = [];
+	const stops = options.stopAt && stopIdentities(options.stopAt);
 	let at = path.parse(start).root;
 	let hops = 0;
 	while (parts.length > 0) {
@@ -149,7 +181,13 @@ export function walkPlace(target: string, chosen: readonly string[] = [], option
 		let link: string | null = null;
 		let refusedLink = false;
 		try {
-			const isLink = fs.lstatSync(next).isSymbolicLink();
+			const stat = stops ? fs.lstatSync(next, { bigint: true }) : fs.lstatSync(next);
+			if (stops?.has(folderIdentity(stat as fs.BigIntStats) ?? "")) {
+				const stoppedAt = parts.includes("..") ? null : path.join(next, ...parts);
+				refuse(stoppedAt ?? next, chosen);
+				return { real: stoppedAt ?? next, linkPlaces, stoppedAt };
+			}
+			const isLink = stat.isSymbolicLink();
 			refusedLink = isLink && options.links === "refuse";
 			link = isLink && !refusedLink ? fs.readlinkSync(next) : null;
 		} catch {

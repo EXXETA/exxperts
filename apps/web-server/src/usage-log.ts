@@ -38,6 +38,8 @@ export interface UsageRow {
 	tools?: string[];
 	/** Background-run id for runs billed via appendUsageOnce. Absent on older rows. */
 	runId?: string;
+	/** Written without the duplicate check, which could not read the log: the run's rows may hold this one twice. Absent on every other row. */
+	unchecked?: true;
 	/** The model calls a scheduled row sums, each as its session message holds it, so the start-up import can match them. Absent on other rows and on older rows. */
 	calls?: UsageCall[];
 	/** Which Memory model call it was (memory-call-cache.ts), so cache settings can be compared. Absent on older rows. */
@@ -50,6 +52,19 @@ export interface UsageRow {
 const USAGE_DIR = productAppStateRoot();
 const USAGE_FILE = productAppStatePath("usage.jsonl");
 const NEWLINE = 0x0a;
+// A read holds one chunk and one line at a time, however long the log grows.
+const CHUNK_BYTES = 1024 * 1024;
+// A row has no size limit when written (a scheduled row carries every call of its run), so a long line is
+// read whole, never skipped; one past this is no row we write, and the read fails rather than guess.
+const LONGEST_LINE_BYTES = 16 * 1024 * 1024;
+// A run is billed again seconds after its first bill (a cut reported twice), or on the desktop when a run
+// whose lease ran out gets its room back; about 92,000 rows of 364 bytes. A shared server never retries.
+const DUPLICATE_CHECK_BYTES = 32 * 1024 * 1024;
+
+/** The start's operator line when the log could not be read: the session files added nothing. */
+export const USAGE_RECONCILE_SKIPPED = "usage reconcile skipped: the usage log could not be read";
+/** The operator line for a scheduled run's row written without its duplicate check; the row carries `unchecked` and the run's id. */
+export const USAGE_ROW_UNCHECKED = "a scheduled run's usage row was written unchecked: the usage log could not be read";
 
 /** A call that moved no tokens and cost nothing. A failed or stopped one was no turn, so it writes no row. */
 export function usageMovedNothing(usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number }): boolean {
@@ -112,35 +127,135 @@ export function closeTornUsageLine(warn?: (message: string) => void): void {
 
 /**
  * Appends a usage row at most once per (kind, runId): lease recovery can re-execute a background
- * run that crashed after billing, and the retry must never bill the same run's tokens twice.
+ * run that crashed after billing, and the retry must never bill the same run's tokens twice. The
+ * check reads the log's last DUPLICATE_CHECK_BYTES. When it cannot read them the row is written all
+ * the same, marked `unchecked`, and the read's failure is returned for the caller to log.
  */
-export function appendUsageOnce(row: UsageRow & { runId: string }, warn?: (message: string) => void): void {
-	if (loadUsage().some((existing) => existing.runId === row.runId && existing.kind === row.kind)) {
+export function appendUsageOnce(row: UsageRow & { runId: string }, warn?: (message: string) => void): unknown {
+	let recorded = false;
+	try {
+		forEachUsageLine((line) => {
+			if (recorded || !line.includes(row.runId)) return;
+			try {
+				const existing = JSON.parse(line) as UsageRow;
+				recorded = existing?.runId === row.runId && existing.kind === row.kind;
+			} catch {
+				// a damaged line is no row
+			}
+		}, DUPLICATE_CHECK_BYTES);
+	} catch (error) {
+		appendUsage({ ...row, unchecked: true }, warn);
+		return error;
+	}
+	if (recorded) {
 		warn?.(`usage row already recorded for ${row.kind ?? "unknown"} run ${row.runId}; skipped duplicate append`);
-		return;
+		return undefined;
 	}
 	appendUsage(row, warn);
+	return undefined;
 }
 
-export function loadUsage(): UsageRow[] {
-	let raw: string;
-	try {
-		raw = fs.readFileSync(USAGE_FILE, "utf-8");
-	} catch {
-		return [];
+/** Cuts the log's bytes into lines, holding one line at a time. With `cut`, drops up to the first line end. */
+class UsageLineSplitter {
+	private pieces: Buffer[] = [];
+	private pieceBytes = 0;
+	private cut: boolean;
+	private readonly visit: (line: string) => void;
+	constructor(cut: boolean, visit: (line: string) => void) {
+		this.cut = cut;
+		this.visit = visit;
 	}
-	const rows: UsageRow[] = [];
-	// Parse per line: a single truncated append (crash mid-write) must cost
-	// one row, not blank the whole ledger.
-	for (const line of raw.split("\n")) {
-		if (!line) continue;
-		try {
-			const row = JSON.parse(line) as UsageRow;
-			if (row && typeof row.ts === "number") rows.push(row);
-		} catch {
-			// skip the damaged line
+
+	push(bytes: Buffer): void {
+		let start = 0;
+		for (let end = bytes.indexOf(NEWLINE); end !== -1; start = end + 1, end = bytes.indexOf(NEWLINE, start)) {
+			if (this.cut) this.cut = false;
+			else {
+				const line = this.pieces.length === 0 ? bytes.toString("utf8", start, end) : Buffer.concat([...this.pieces, bytes.subarray(start, end)]).toString("utf8");
+				if (line) this.visit(line);
+			}
+			this.pieces = [];
+			this.pieceBytes = 0;
 		}
+		if (this.cut || start === bytes.length) return;
+		this.pieceBytes += bytes.length - start;
+		if (this.pieceBytes > LONGEST_LINE_BYTES) throw Object.assign(new Error(`a usage log line is longer than ${LONGEST_LINE_BYTES} bytes`), { code: "usage_line_too_long" });
+		// The chunk is read into again, so the line's piece is copied out.
+		this.pieces.push(Buffer.from(bytes.subarray(start)));
 	}
+
+	/** The last line, with no line end: a row being appended or a torn one, which fails to parse. */
+	end(): void {
+		if (!this.cut && this.pieces.length > 0) this.visit(Buffer.concat(this.pieces).toString("utf8"));
+	}
+}
+
+// A folder or a device in the log's place can open and give no bytes; it is not an empty log.
+function notAFile(): Error {
+	return Object.assign(new Error("the usage log is not a file"), { code: "usage_log_not_a_file" });
+}
+
+/**
+ * Gives each line of the usage log, read in fixed chunks so a log of any length is read in bounded
+ * memory. With `lastBytes`, only the log's end, less the line cut there. A missing log has no lines.
+ * Any other failure throws, a log that is not a file and a line past LONGEST_LINE_BYTES included: a
+ * log that cannot be read is never taken for an empty one.
+ */
+export function forEachUsageLine(visit: (line: string) => void, lastBytes?: number): void {
+	let fd: number;
+	try {
+		fd = fs.openSync(USAGE_FILE, "r");
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw e;
+	}
+	try {
+		const stat = fs.fstatSync(fd);
+		if (!stat.isFile()) throw notAFile();
+		// Bytes appended while this reads are the next read's.
+		const size = stat.size;
+		let position = lastBytes === undefined ? 0 : Math.max(0, size - lastBytes);
+		// From inside the log, start one byte early and drop up to the first line end: what comes before it is
+		// the end of a line that starts earlier, or nothing when the byte is itself a line end.
+		const cut = position > 0;
+		if (cut) position -= 1;
+		const splitter = new UsageLineSplitter(cut, visit);
+		const chunk = Buffer.alloc(CHUNK_BYTES);
+		while (position < size) {
+			const read = fs.readSync(fd, chunk, 0, Math.min(CHUNK_BYTES, size - position), position);
+			if (read === 0) break;
+			position += read;
+			splitter.push(chunk.subarray(0, read));
+		}
+		splitter.end();
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
+/** A line as a row, or nothing for a damaged line (a crash mid-append), which costs that row, never the log. */
+function usageRowOf(line: string): UsageRow | undefined {
+	let row: UsageRow;
+	try {
+		row = JSON.parse(line) as UsageRow;
+	} catch {
+		return undefined;
+	}
+	return row && typeof row.ts === "number" ? row : undefined;
+}
+
+/** Each row of the usage log in file order. Throws as forEachUsageLine does. */
+export function forEachUsageRow(visit: (row: UsageRow) => void): void {
+	forEachUsageLine((line) => {
+		const row = usageRowOf(line);
+		if (row) visit(row);
+	});
+}
+
+/** Every row, oldest first. Throws when the log cannot be read. */
+export function loadUsage(): UsageRow[] {
+	const rows: UsageRow[] = [];
+	forEachUsageRow((row) => rows.push(row));
 	// Reconciled historical rows are appended after newer live rows, so
 	// consumers get chronological order restored here.
 	return rows.sort((a, b) => a.ts - b.ts);
@@ -162,4 +277,38 @@ export function resolveUsageAuthType(provider: string | undefined, providerConfi
 		// Fall through to the configured check below.
 	}
 	return providerConfigured ? "api_key" : undefined;
+}
+
+/**
+ * Each row of the usage log in file order, read in chunks without holding the event loop: other
+ * requests run between chunks. Throws as forEachUsageLine does; a missing log has no rows.
+ */
+export async function forEachUsageRowYielding(visit: (row: UsageRow) => void): Promise<void> {
+	let file: fs.promises.FileHandle;
+	try {
+		file = await fs.promises.open(USAGE_FILE, "r");
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw e;
+	}
+	try {
+		const stat = await file.stat();
+		if (!stat.isFile()) throw notAFile();
+		const size = stat.size;
+		const splitter = new UsageLineSplitter(false, (line) => {
+			const row = usageRowOf(line);
+			if (row) visit(row);
+		});
+		const chunk = Buffer.alloc(CHUNK_BYTES);
+		let position = 0;
+		while (position < size) {
+			const { bytesRead } = await file.read(chunk, 0, Math.min(CHUNK_BYTES, size - position), position);
+			if (bytesRead === 0) break;
+			position += bytesRead;
+			splitter.push(chunk.subarray(0, bytesRead));
+		}
+		splitter.end();
+	} finally {
+		await file.close();
+	}
 }

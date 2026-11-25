@@ -74,13 +74,16 @@ const HIDDEN_CHARACTER = { key: "synthetic\tkey", line: /hidden character/ };
 const SIGN_IN_TOKEN = { key: "sk-ant-oat01-synthetic", line: /sign-in token/ };
 const DESKTOP = { viewport: { width: 1440, height: 900 } };
 const SHORT_WINDOW = { viewport: { width: 1440, height: 560 } };
+// At 900 high the settings window's 800 px hold a filtered list whole, so its field can't sit on the pane's bottom
+// edge; at 740 the list runs past the pane, as a longer list does at 900.
+const FILTERED_DESKTOP = { viewport: { width: 1440, height: 740 } };
 const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
 const CLAUDE_KEY_ROW = /^Claude API key$/;
 // "end" is where focus leaves the field of a row low in the list: on the pane's
 // bottom edge, the line's place just past it. No row means the list's last one.
 const REFUSAL_CASES = [
-	{ name: "the filter on, hidden character", device: DESKTOP, filter: "claude", row: CLAUDE_KEY_ROW, refusal: HIDDEN_CHARACTER, field: "end" },
-	{ name: "the filter on, sign-in token", device: DESKTOP, filter: "claude", row: CLAUDE_KEY_ROW, refusal: SIGN_IN_TOKEN, field: "end" },
+	{ name: "the filter on, hidden character", device: FILTERED_DESKTOP, filter: "claude", row: CLAUDE_KEY_ROW, refusal: HIDDEN_CHARACTER, field: "end" },
+	{ name: "the filter on, sign-in token", device: FILTERED_DESKTOP, filter: "claude", row: CLAUDE_KEY_ROW, refusal: SIGN_IN_TOKEN, field: "end" },
 	{ name: "the last provider", device: DESKTOP, refusal: HIDDEN_CHARACTER, field: "end" },
 	{ name: "a short window", device: SHORT_WINDOW, filter: "claude", row: CLAUDE_KEY_ROW, refusal: SIGN_IN_TOKEN, field: "end" },
 	{ name: "phone width, the last provider", device: PHONE, refusal: HIDDEN_CHARACTER, field: "end" },

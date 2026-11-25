@@ -49,6 +49,11 @@ export function useSavedAtLabel(iso: string | null | undefined): string | null {
 	return label;
 }
 
+/** Discard and Clear beside Save: quiet in the new settings look, as a page's cancel is. */
+export function instructionsQuietButton(lookNext: boolean): string {
+	return lookNext ? "rs-btn rs-btn-quiet" : "rs-btn";
+}
+
 /**
  * What the pane's foot shows beside the counter. Save and Discard appear only
  * once there is something to save: an edited box, or a stored file that cannot

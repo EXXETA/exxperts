@@ -31,6 +31,7 @@ const ROWS = [
 	"a server where commands don't run in a box: a live turn's file tools work as before, with no box",
 	"a live command's long output reads by its exact path with the read tool",
 	"after a command has run, a box that fails in a live turn stops file tools with the plain line",
+	"a live command and a read of the file it makes, in one message: the read finds it",
 ];
 
 if (process.platform !== "darwin") {
@@ -379,6 +380,18 @@ try {
 			assert(!fs.existsSync(inRoom("after.txt")), "a write went on");
 		} finally {
 			boxStarts = "start";
+			window.close();
+		}
+	});
+
+	await row(ROWS[10], async () => {
+		const window = await openWindow();
+		try {
+			const [ran, got] = await window.turn([[{ name: "bash", args: { command: "sleep 0.5; printf made-in-the-box > made.txt" } }, read("made.txt")]]);
+			assert(fs.readFileSync(inRoom("made.txt"), "utf8") === "made-in-the-box", `the command: ${ran}`);
+			assert(got?.includes("made-in-the-box"), `the read beside it: ${got}`);
+		} finally {
+			fs.rmSync(inRoom("made.txt"), { force: true });
 			window.close();
 		}
 	});

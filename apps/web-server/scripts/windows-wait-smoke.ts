@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 
 import { createPersistentRoomDefaultCapabilityPolicy, persistentAgentRootPath, writePersistentRoomDefaultCapabilityPolicy } from "../src/persistent-room-workspace-policy.js";
 import { createPersistentRoomWorkspaceTools, PersistentRoomWorkspaceToolError, CHANGE_STOPPED } from "../src/persistent-room-workspace-tools.js";
+import { disablePersistentRoomSkill, enablePersistentRoomSkill } from "../src/persistent-room-skill-settings.js";
 import { saveAlsoAllowedFolders } from "../src/room-box/also-allowed.js";
 import { BoxFault } from "../src/room-box/box-process.js";
 import { AnswerFolders } from "../src/room-box/folder-question.js";
@@ -24,6 +25,8 @@ import { BOX_ROOT_NAME } from "../src/room-box/windows/box-root.js";
 import { atOrInside, FolderWait, folderWait, type Holder } from "../src/room-box/windows/folder-wait.js";
 import { type Machine, runStartCheck } from "../src/room-box/windows/start-check.js";
 import { WindowsRoomBox } from "../src/room-box/windows/windows-engine.js";
+import { readLibrarySkill } from "../src/skills-executable.js";
+import { sharedAgentsSkillsDir } from "../src/skills-store.js";
 // @ts-expect-error: plain JavaScript, loaded as the kit in the worker and for its path helpers here.
 import { requestPath } from "./windows-box-stand-in.mjs";
 
@@ -514,6 +517,38 @@ await row("tools: the room's Also allowed and this-time folders are held too", a
 	} finally {
 		given.end();
 		saveAlsoAllowedFolders(filesPolicy.agentId, []);
+	}
+});
+
+await row("tools: a skill on in the room whose real folder lies in another room's folder is held too: a read there waits for that room's command", async () => {
+	const otherRoom = folderAt("other-room");
+	const target = path.join(otherRoom, "team-skill");
+	fs.mkdirSync(target, { recursive: true });
+	fs.writeFileSync(path.join(target, "SKILL.md"), "---\nname: team-skill\ndescription: a team skill\n---\n\nRead reference.md.\n");
+	fs.writeFileSync(path.join(target, "reference.md"), "TEAM\n");
+	const link = path.join(sharedAgentsSkillsDir(), "team-skill");
+	fs.mkdirSync(path.dirname(link), { recursive: true });
+	fs.symlinkSync(target, link, "dir");
+	const reference = path.join(target, "reference.md");
+	try {
+		assert(enablePersistentRoomSkill(filesPolicy.agentId, "team-skill", readLibrarySkill).ok, "team-skill is switched on");
+		// The allowed neighbour: with no command on the other room's folder the read runs at once.
+		assert(text(await toolsOf({ folderWait: new Noting() }).get("read")!.execute("skill-free", { path: reference })).includes("TEAM"), "the skill's file reads");
+		const wait = new Noting();
+		const hold = held(wait, "command", [otherRoom]);
+		await settle();
+		let ended = false;
+		const call = toolsOf({ folderWait: wait }).get("read")!.execute("skill-held", { path: reference }).finally(() => { ended = true; });
+		await Promise.race([wait.fileAsked, call.then(() => {}, () => {})]);
+		await settle();
+		assert(wait.begun === 1 && !ended, "a read of the skill's file ran while the other room's command held its folder");
+		hold.release();
+		assert(text(await call).includes("TEAM"), "the read after the command");
+		assert((wait.begun as number) === 2, `the read didn't wait for the other room's command: ${wait.begun - 1} holds began`);
+		await hold.done;
+	} finally {
+		disablePersistentRoomSkill(filesPolicy.agentId, "team-skill");
+		fs.rmSync(link, { force: true });
 	}
 });
 

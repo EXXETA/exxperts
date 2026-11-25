@@ -2,6 +2,9 @@ import { ROOM_STATE_CUSTOM_TYPE } from "@exxeta/exxperts-runtime";
 import { buildConsultHandoffBlockFromStack, type ConsultHandoffExchange, buildConsultHandoffBlock } from "./consult-handoff.js";
 import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
 import { readSessionPathMessages } from "./session-path-reader.js";
+import { skillNotesAsLines } from "./skill-pick.js";
+import { withoutMessageFromLine } from "./cut-answer-note.js";
+import { messagesWithSenderLine } from "./edit-last-message.js";
 import { type CheckpointTranscriptItem, type CheckpointTranscriptSourceResult, fingerprintL1bSource } from "./persistent-agent-types.js";
 import type { L1bSourceFingerprint } from "./persistent-agent-memory-types.js";
 import { assertPersistentAgentThreadNotInFlight, createPersistentAgentInstance, getPersistentAgentRuntimeState, safeRuntimeThreadId, validatePersistentAgentId } from "./persistent-agent-store.js";
@@ -130,10 +133,13 @@ function normalizeLegacyCheckpointTranscriptItems(rawItems: unknown[]): Checkpoi
 		.filter((item): item is CheckpointTranscriptItem => Boolean(item));
 }
 
-function checkpointTranscriptItemFromAgentMessage(message: any, index: number): CheckpointTranscriptItem | null {
+/** `withSenderLine`: the server sent this message with the line naming who sent it. */
+function checkpointTranscriptItemFromAgentMessage(message: any, index: number, withSenderLine: boolean): CheckpointTranscriptItem | null {
 	const id = `ctx_${String(index + 1).padStart(4, "0")}`;
 	if (message?.role === "user") {
-		const text = checkpointTextFromContent(message.content);
+		// A skill the person picked is one line here: its text is never remembered as theirs. The line naming who sent it is not theirs either.
+		const said = checkpointTextFromContent(message.content);
+		const text = skillNotesAsLines(withSenderLine ? withoutMessageFromLine(said) : said);
 		return text ? { kind: "user", id, text } : null;
 	}
 	if (message?.role === "assistant") {
@@ -197,8 +203,9 @@ export function buildPersistentAgentCheckpointTranscriptSource(input: {
 		const sessionManager = openPersistentAgentPiSessionManager(instance.agentId, thread.runtime, input.runtimeCwd || process.cwd());
 		// The whole session path, pre-compaction messages included and the
 		// compaction summaries left out: the same reader the search index uses.
+		const withSenderLine = messagesWithSenderLine(sessionManager);
 		const items = readSessionPathMessages(sessionManager)
-			.map(checkpointTranscriptItemFromAgentMessage)
+			.map((message, index) => checkpointTranscriptItemFromAgentMessage(message, index, withSenderLine.has(message)))
 			.filter((item): item is CheckpointTranscriptItem => Boolean(item));
 		if (items.length === 0) throw new Error("persistent-agent Pi session has no checkpointable transcript content");
 		return {

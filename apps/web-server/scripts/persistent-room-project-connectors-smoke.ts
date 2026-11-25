@@ -8,6 +8,9 @@
 //  - a web room session start with `.mcp.json` or `.pi/mcp.json` (lifecycle
 //    "eager") in its folder starts nothing;
 //  - a scheduled background run of such a room starts nothing;
+//  - none of a scheduled run's own connectors runs on after the run: one still
+//    starting when the run ends, and one slower to start than a run's end
+//    waits for;
 //  - a folder file naming a GRANTED connector does not replace it: the room's
 //    call reaches the connector from the person's settings;
 //  - a connector from the person's settings still starts in the folder it
@@ -80,15 +83,41 @@ const githubRecorder = http.createServer((_req, res) => {
 	res.writeHead(500).end();
 });
 await new Promise<void>((resolve) => githubRecorder.listen(0, "127.0.0.1", resolve));
-fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({
+// A session start reads them again, so a section can add its own.
+const writePersonalConnectors = (more: Record<string, unknown> = {}): void => fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({
 	mcpServers: {
 		github: { url: `http://127.0.0.1:${(githubRecorder.address() as AddressInfo).port}/mcp` },
 		"cwd-probe": markerCommand("cwd-probe", "folder"),
 		"eager-probe": { ...markerCommand("eager-probe"), lifecycle: "eager" },
+		...more,
 	},
 }, null, 2));
+writePersonalConnectors();
 const EAGER_DONE = "Failed to connect to eager-probe";
-const EAGER_AFTER_SESSION = "MCP initialization failed";
+
+// An eager connector that speaks MCP and answers nothing for `startMs` after it
+// starts; its starts and exits go to one log, with their process ids.
+const standInLog = path.join(markers, "stand-ins.jsonl");
+const eagerStandIn = (name: string, startMs: number) => ({
+	command: process.execPath,
+	args: [path.join(scriptDir, "connector-call-stand-in.mjs")],
+	env: { STAND_IN_LOG: standInLog, STAND_IN_NAME: name, STAND_IN_START_MS: String(startMs) },
+	lifecycle: "eager",
+});
+const isRunning = (pid: number): boolean => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+};
+/** The programs of the stand-in `name` that started, and the ones of them still running. */
+function standIns(name: string): { started: number; running: number[] } {
+	const entries = fs.existsSync(standInLog) ? fs.readFileSync(standInLog, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+	const pids = entries.filter((entry) => entry.name === name && entry.event === "start").map((entry) => Number(entry.pid));
+	return { started: pids.length, running: pids.filter(isRunning) };
+}
 const countLines = (lines: string[], needle: string): number => lines.join("").split("\n").filter((line) => line.includes(needle)).length;
 
 // Synthetic model: a prompt "CONNECT <name>" answers with one `mcp` connect
@@ -180,6 +209,28 @@ async function openRoom(agentId: string, conversationId: string, prompt?: string
 
 const waitUntil = waitEvery(50, 30_000);
 
+/** Schedules one run of "hello" in the room and waits until it has succeeded. */
+async function runScheduled(agentId: string, name: string): Promise<void> {
+	const schedule = await requestJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/schedules`, { method: "POST", body: JSON.stringify({ name, type: "once", schedule: "+3s", prompt: "hello", enabled: true }) });
+	assert(schedule.status === 201, `schedule create: expected 201, got ${schedule.status}: ${JSON.stringify(schedule.body).slice(0, 300)}`);
+	let runStatus = "";
+	const runDeadline = Date.now() + 60_000;
+	while (Date.now() < runDeadline) {
+		await sleep(200);
+		const runs = await requestJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/background-runs`);
+		runStatus = String(runs.body?.runs?.[0]?.status ?? "");
+		if (["succeeded", "failed", "blocked", "cancelled"].includes(runStatus)) break;
+	}
+	assert(runStatus === "succeeded", `${name}: the scheduled run must complete for the check to mean anything, got status "${runStatus}"`);
+}
+
+/** A run's eager stand-in `name` started and has exited since: nothing of the run runs on after it. */
+async function checkEndedWithRun(name: string): Promise<void> {
+	await waitUntil(() => standIns(name).started > 0, `${name} has started`);
+	const ended = await waitUntil(() => standIns(name).running.length === 0, `${name} has exited`, 30_000).then(() => true, () => false);
+	check(ended, `a scheduled run's connector must not run on after the run (${name}: ${JSON.stringify(standIns(name))})`);
+}
+
 const failures: string[] = [];
 const check = (condition: unknown, message: string): void => {
 	if (!condition) failures.push(message);
@@ -244,26 +295,27 @@ try {
 	const startedIn = (markerText("cwd-probe") ?? "").split("\n").filter(Boolean);
 	check(startedIn.length > 0 && startedIn.every((dir) => fs.realpathSync(dir) === fs.realpathSync(webServerDir)), `a connector from the person's settings must start in the server's working folder, got: ${JSON.stringify(startedIn)}`);
 
-	// 4. A scheduled background run of a room with a folder connector file starts nothing.
+	// 4. A scheduled background run of a room with a folder connector file starts nothing, and its own
+	// connectors end with it: `slow-probe` is still starting when the run ends.
+	writePersonalConnectors({ "slow-probe": eagerStandIn("slow-probe", 2_000) });
 	const backgroundRoom = await createRoom("Folder Background", path.join(tempHome, "ws-bg"));
 	writeFolderConnectorFile(path.join(tempHome, "ws-bg"), ".mcp.json", "background");
-	const backgroundStartsBefore = countLines(serverOutput, EAGER_DONE) + countLines(serverOutput, EAGER_AFTER_SESSION);
-	const schedule = await requestJson(`/api/persistent-agents/${encodeURIComponent(backgroundRoom)}/schedules`, { method: "POST", body: JSON.stringify({ name: "folder check", type: "once", schedule: "+3s", prompt: "hello", enabled: true }) });
-	assert(schedule.status === 201, `schedule create: expected 201, got ${schedule.status}: ${JSON.stringify(schedule.body).slice(0, 300)}`);
-	let runStatus = "";
-	const runDeadline = Date.now() + 60_000;
-	while (Date.now() < runDeadline) {
-		await sleep(200);
-		const runs = await requestJson(`/api/persistent-agents/${encodeURIComponent(backgroundRoom)}/background-runs`);
-		runStatus = String(runs.body?.runs?.[0]?.status ?? "");
-		if (["succeeded", "failed", "blocked", "cancelled"].includes(runStatus)) break;
-	}
-	assert(runStatus === "succeeded", `the scheduled run must complete for the check to mean anything, got status "${runStatus}"`);
-	// A scheduled run ends before its eager starts do: the adapter then finds the session gone and logs that
-	// instead, once every start (a folder connector's among them, had it been read) has settled.
-	const backgroundDone = () => countLines(serverOutput, EAGER_DONE) + countLines(serverOutput, EAGER_AFTER_SESSION);
-	await waitUntil(() => backgroundDone() > backgroundStartsBefore, "the scheduled run's eager connectors have started");
-	check(markerText("background") === null, `a scheduled run must not use its folder's .mcp.json (marker: ${markerText("background")})`);
+	const backgroundStartsBefore = countLines(serverOutput, EAGER_DONE);
+	await runScheduled(backgroundRoom, "folder check");
+	// The run's end waits for its connectors' starts, so the adapter logs eager-probe's failed start once every
+	// start (a folder connector's among them, had it been read) has settled.
+	const startsSettled = await waitUntil(() => countLines(serverOutput, EAGER_DONE) > backgroundStartsBefore, "the scheduled run's eager connectors have started").then(() => true, () => false);
+	check(startsSettled, "a scheduled run's end must wait for its connectors' starts: eager-probe's failed start was never logged");
+	if (startsSettled) check(markerText("background") === null, `a scheduled run must not use its folder's .mcp.json (marker: ${markerText("background")})`);
+	await checkEndedWithRun("slow-probe");
+
+	// 4b. One slower to start than a run's end waits for ends once its start completes. Its start is long enough
+	// that a slow run still ends before it, so the end gives up waiting and the failed start's own close is what ends it.
+	writePersonalConnectors({ "stuck-probe": eagerStandIn("stuck-probe", 15_000) });
+	const stuckRoom = await createRoom("Folder Stuck", path.join(tempHome, "ws-stuck"));
+	await runScheduled(stuckRoom, "stuck check");
+	await checkEndedWithRun("stuck-probe");
+	writePersonalConnectors();
 
 	// 5. A bounded room's write tool cannot create a connector file in its folder.
 	const { createPersistentRoomCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");

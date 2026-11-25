@@ -3,11 +3,15 @@
  * connection.
  *
  * Wire protocol (JSON over WS):
- *   client -> server:  { type: "prompt", text: string, id?, shown?: { text, files: [{ name, bytes, extension }] }, effort?: ThinkingLevel, explicit?: true }
+ *   client -> server:  { type: "prompt", text: string, id?, shown?: { text, files: [{ name, bytes, extension }] }, transfers?: string[], effort?: ThinkingLevel, explicit?: true }
  *                        (`id`: the question's id, which keys the turn's items,
  *                        thread-items-by-id.ts; one the conversation already
  *                        used makes the turn old-style. `shown`: the bubble's
- *                        words and file chips, which a landing writes)
+ *                        words and file chips, which a landing writes.
+ *                        `transfers`: on a shared server, the pending transfers
+ *                        the page shows; the server puts in front the stored
+ *                        queue and those of them no message carried yet, and
+ *                        a message without it leaves the queue as it is)
  *                        (`effort` is stored raw for this conversation exactly
  *                        like the effort frame's level; omit it to keep
  *                        whatever the conversation already runs at. This app's
@@ -144,18 +148,18 @@ import { conversationFolder, WindowsRoomBox, windowsSkillFolder } from "./room-b
 import { persistentRoomProtection, protectionJudgesFolder, unprotectedByRoom } from "./persistent-room-protection.js";
 import { addAlsoAllowedFolder, AnswerSites, readAlsoAllowed } from "./room-box/also-allowed.js";
 import { boxModelLine, type FolderAskAccess, FREE_READER_LINE, RUN_OUTSIDE_BOX_TOOL_NAME } from "./room-box/card-text.js";
-import { createRoomCommandTools, type RoomCommandTools } from "./room-command-tool.js";
+import { createRoomCommandTools, type PlainShell, plainShell, type RoomCommandTools } from "./room-command-tool.js";
 import { createWebUiContext } from "./web-ui-context.js";
-import { type AnswerNote, serverStopNote, shownPart, withAnswerNote } from "./cut-answer-note.js";
+import { type AnswerNote, serverStopNote, shownPart, withAnswerNote, withMessageFrom } from "./cut-answer-note.js";
 import { answerPhase, bubbleIdOf, readShownChars, readSteerRequest, steerWay, type SteerRequest, type SteerRouted } from "./steer-route.js";
 import { createTurnFrameCoalescer } from "./turn-frame-coalescer.js";
 import { dropHeldMessages, holdMessages, readHeldMessageList, readHeldMessages } from "./held-messages-store.js";
 import { addTakenSteer, dropKeptLanding, dropTakenSteers, keepAnswerNoteFor, type KeyedLanding, readAnswerNote, readKeptLanding, readTakenSteers, type TakenSteer, writeKeptLanding } from "./turn-pieces-store.js";
 import { STOPPED_BEFORE_ANSWER_SENTENCE, type TurnEndedBy } from "./turn-ended-by.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { createPersistentAgentInstance, parsePersistentAgentL1aMarker, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, assertPersistentAgentAcceptsSession, RECENT_CONTEXT_BLOCK_CAP, getPersistentAgentThread, getPersistentAgentActiveTurnState, clearPersistentAgentUnseenLandedAnswerForBind, clearPersistentAgentUnseenLandedAnswerLoaded, getPersistentAgentUnseenLandedAnswer, markPersistentAgentTurnCancelling, writePersistentAgentThread, recordPersistentAgentUnseenLandedAnswer, switchPersistentAgentThreadModel, createPersistentRoomAutoDeclinedQuestionLog, refreshEmptyPersistentAgentThreadModel, persistentAgentThreadFollowsConversationPick, persistentAgentThreadIsEmpty, refreshEmptyPersistentAgentThreadBootSnapshot, buildPersistentAgentCurrentIdentitySection, fingerprintPersistentAgentBootContextInstructions, buildPersistentRoomCurrentWorkspaceSection, buildPersistentAgentBootContext, readPersistentAgentBootPromptSnapshot, assertPersistentAgentBootPromptFitsWindow, openPersistentAgentPiSessionManager, PersistentAgentMemoryOverflowError, emptyPersistentAgentThreadModelTarget, beginPersistentAgentTurn, clearPersistentAgentThreadPendingHandoffs, finishPersistentAgentTurn, buildConsultAnswer } from "./persistent-agents.js";
+import { createPersistentAgentInstance, parsePersistentAgentL1aMarker, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, assertPersistentAgentAcceptsSession, RECENT_CONTEXT_BLOCK_CAP, getPersistentAgentThread, getPersistentAgentActiveTurnState, clearPersistentAgentUnseenLandedAnswerForBind, clearPersistentAgentUnseenLandedAnswerLoaded, getPersistentAgentUnseenLandedAnswer, markPersistentAgentTurnCancelling, writePersistentAgentThread, recordPersistentAgentUnseenLandedAnswer, switchPersistentAgentThreadModel, createPersistentRoomAutoDeclinedQuestionLog, refreshEmptyPersistentAgentThreadModel, persistentAgentThreadFollowsConversationPick, persistentAgentThreadIsEmpty, refreshEmptyPersistentAgentThreadBootSnapshot, buildPersistentAgentCurrentIdentitySection, fingerprintPersistentAgentBootContextInstructions, buildPersistentRoomCurrentWorkspaceSection, buildPersistentAgentBootContext, readPersistentAgentBootPromptSnapshot, assertPersistentAgentBootPromptFitsWindow, openPersistentAgentPiSessionManager, PersistentAgentMemoryOverflowError, emptyPersistentAgentThreadModelTarget, beginPersistentAgentTurn, clearPersistentAgentThreadPendingHandoffs, finishPersistentAgentTurn, buildConsultAnswer, getPersistentAgentRuntimeState } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
-import { getPersistentRoomToolPolicy, persistentRoomBlockedToolLeaks } from "./persistent-room-tool-policy.js";
+import { getPersistentRoomToolPolicy, PERSISTENT_ROOM_BASH_TOOL_NAME, persistentRoomBlockedToolLeaks } from "./persistent-room-tool-policy.js";
 import { persistentRoomCommandsCanRun, persistentRoomCommandsSwitchedOff, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, resolvePersistentRoomEffectiveWorkspacePolicy, persistentRoomSettingsNotAppliedFrame } from "./persistent-room-workspace-policy.js";
 import { chooseLocalFolder, folderPickerPrompt } from "./local-folder-picker.js";
 import { roomFence } from "./room-files.js";
@@ -170,7 +174,8 @@ import { effectiveConversationEffortChoice, isRoomEffortLevel, settleConversatio
 import { readPersistentRoomInstructionsNow } from "./persistent-room-instructions.js";
 import { nextRoomStateMessage } from "./room-state-message.js";
 import { readPersistentRoomSkillSettings, effectiveEnabledSkills } from "./persistent-room-skill-settings.js";
-import { createReadSkillTool, buildEnabledSkillsIndexSection } from "./persistent-room-skill-tool.js";
+import { createReadSkillTool, buildEnabledSkillsIndexSection, roomSkillFilesView, skillFilesReach, skillFilesSection, type SkillFilesReach, type SkillFilesResolver } from "./persistent-room-skill-tool.js";
+import { resolveSkillPick, skillPickNow, withSkillNote, withSkillNoteAgain } from "./skill-pick.js";
 import { userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
 import { SPECIALISTS_OFF_SENTENCE } from "./room-approval-titles.js";
 import { buildShelfManifestSection } from "./persistent-room-shelf.js";
@@ -178,9 +183,10 @@ import { createPersistentRoomShelfTools } from "./persistent-room-shelf-tools.js
 import { createPersistentRoomMemoryRecallTool } from "./persistent-room-memory-recall-tool.js";
 import { listTaskLedgerRecords, selectTaskLedgerAwayNotices, markTaskLedgerRecordsAwayNoticed } from "./persistent-room-task-ledger.js";
 import { bindSpecialistSink, abortSpecialistTask, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
-import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
+import { createPersistentRoomWorkspaceTools, openedWithoutAsking } from "./persistent-room-workspace-tools.js";
 import type { PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import { gatewayModelFind } from "./gateway-model-find.js";
+import { readGatewayProviderBaseUrl } from "./openai-compatible-gateway-catalog.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
 import { callCacheRetention } from "./memory-call-cache.js";
 import { type PromptDiagnosticsModel, type RedactedPromptComponent, componentFromText, createPromptAssemblyManifest, estimateTextTokens } from "./prompt-diagnostics.js";
@@ -190,42 +196,44 @@ import { createStreamTrace, isStreamTraceEnabled } from "./stream-trace.js";
 import { persistentRoomMcpGrantsFingerprint } from "./persistent-room-mcp-settings.js";
 // Import extension factories directly. This is the most reliable way to
 // register them with the SDK runtime.
-import contentPolicyExt from "../../../pi-package/extensions/content-policy/index.js";
+import { createContentPolicyExtension } from "../../../pi-package/extensions/content-policy/index.js";
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
 import artifactsExt from "../../../pi-package/extensions/artifacts/index.js";
 import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp/index.js";
+import { endCutSession, endRoomSession, endUnderWay } from "./room-session-end.js";
+import { createStopLimit, type StopLimit, TurnEndForced } from "./turn-forced-end.js";
 import { roomLoaderSettings } from "./room-loader-settings.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import { resolveNativeProviderSearchDecision, shouldRegisterClientWebSearch, createNativeProviderSearchExtension } from "../../../pi-package/extensions/web-search/native-provider-search.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import toolResultAgingExt, { readAgedToolResultMarker } from "../../../pi-package/extensions/tool-result-aging/index.js";
-import { agentSkillsDir } from "./skills-store.js";
 import { emptyAnswer, answerlessCallMovedNothing, modelCallMetadata, resolveUsageAuthType } from "./usage-log.js";
-import { keptBeforeNextMessage, markAppPrompt, notEditableMessageId, notUndoneLine, readEditFrame, replacedItemIds, stepBackForEdit, withEditNote, type NotUndoneLine } from "./edit-last-message.js";
+import { keptBeforeNextMessage, markAppPrompt, markMessageAuthor, notEditableMessageId, notUndoneLine, readEditFrame, replacedItemIds, stepBackForEdit, withEditNote, type NotUndoneLine } from "./edit-last-message.js";
 import { keepAppTurnFailure, stepBackFromFailedPrompt, lastShownUserText, returnedPromptOf, type ReturnedPrompt, settleReturnedPrompt } from "./failed-prompt-step-back.js";
-import { clearPersistentRoomSettings, lastUserItemIsScheduledPrompt } from "./persistent-room-background-execution.js";
+import { addMessageUsage, clearPersistentRoomSettings, lastUserItemIsScheduledPrompt, SCHEDULED_QUESTION_DECLINED, scheduledAnswerKey, scheduledAnswerToolNames } from "./persistent-room-background-execution.js";
 import { credentialKeyOf, failureCodesOf, failedTurnCredential, noteKeyOutcome, turnFailureOf, answerStarted, retryFailureOf, failedMessageError, quotaWayOf, compactionFailureOf, notOnAccountLine, notOfferedLine, providerFailureLogFields } from "./model-call-causes.js";
-import { serverHooks, isSharedServer } from "./server-hooks.js";
-import { STOP_CUT_ANSWER_SENTENCE, trackLiveConnection, STOP_QUESTIONS_SENTENCE, answerAlreadyEnded, serverStopping, SERVER_STOPPING_SENTENCE, SERVER_STOPPING_CODE, trackRunningWork } from "./server-stop.js";
+import { composeOutgoingPromptWithHandoffs, readConsultHandoffQueue } from "./consult-handoff.js";
+import { serverHooks, isSharedServer, type LiveSessionJoin } from "./server-hooks.js";
+import { STOP_CUT_ANSWER_SENTENCE, trackLiveConnection, STOP_QUESTIONS_SENTENCE, answerAlreadyEnded, serverStopping, SERVER_STOPPED_REASON, SERVER_STOPPING_SENTENCE, SERVER_STOPPING_CODE, trackRunningWork } from "./server-stop.js";
 import { REPO_ROOT, roomLock, roomLockBusyInstruction, roomLockBusyStatus } from "./server-install-root.js";
 import fs from "node:fs";
 import path from "node:path";
 import { readAppVersion } from "./whats-new.js";
 import { persistentAgentInstallationSection } from "./persistent-agent-constitution.js";
-import { DETACHED_TURN_LIMIT_MS, DETACHED_TURN_SILENCE_MS, detachedCookingRooms, type DetachedCookingTurnHandle, detachedCookingTurnHandles, OVERFLOW_RECOVERY_CEILING_MS, type PersistentRoomLiveSession, persistentRoomLiveSessions, REATTACH_REPLAY_CAP_BYTES, reattachBufferProbe, SWITCH_WHILE_ANSWERING_MESSAGE, TEST_INTROSPECTION_ENABLED } from "./room-live-sessions.js";
+import { answersFor, askedByOf, askerOf, type Asker, authorOfPerson, createRoomSocket, itemsShownTo, DETACHED_TURN_LIMIT_MS, DETACHED_TURN_SILENCE_MS, detachedCookingRooms, type DetachedCookingTurnHandle, detachedCookingTurnHandles, OVERFLOW_RECOVERY_CEILING_MS, type PageFrame, pagePerson, type PersistentRoomLiveSession, persistentRoomLiveSessions, questionFor, REATTACH_REPLAY_CAP_BYTES, reattachBufferProbe, ROOM_HOST_ENDED, roomQuietSpell, SWITCH_WHILE_ANSWERING_MESSAGE, TEST_INTROSPECTION_ENABLED, roomHosts, type RoomHost, type RoomPage, type RoomPerson, type RoomSocket, type ScheduledAnswer, type ScheduledAsk, sendersFrame } from "./room-live-sessions.js";
 import { app } from "./server-app.js";
 import { isLocalPromptDiagnosticsRequest, isPromptDiagnosticsEnabled, remoteRoomExposure } from "./request-checks.js";
 import { recordPersistentRoomPromptDiagnostics, safeDiagnosticIdPart } from "./room-prompt-diagnostics.js";
 import { getPersistentAgentStatusForMaintenance, getUsablePersistentAgentStatusForNormalUse } from "./room-status.js";
 import { threadItemsCarryAssistantText } from "./room-thread-routes.js";
 import { assertPersistentAgentTurnCanBegin, keepRunningTurn, latestTurnKey, recentTurnKeys, rememberRemovedIds, removedIdsOf } from "./persistent-agent-turns.js";
-import { acceptAnswerCut, removeEditedAwayItems } from "./persistent-agent-threads.js";
-import { type AwayLimit, awayLimitLine, cutAnswerPart, endsOnAwayLimitStop, declinedNoticeIdPrefix, failureLineId, isAnswerPartId, isEmptyCut, keyOfId, landTurnItems, partialLineId, readShownPrompt, readTurnKey, type ShownPrompt, type ThreadItem } from "./thread-items-by-id.js";
+import { acceptAnswerCut, removeEditedAwayItems, takePendingTransfersForMessage } from "./persistent-agent-threads.js";
+import { type AwayLimit, awayLimitLine, cutAnswerPart, endsOnAwayLimitStop, declinedNoticeIdPrefix, failureLineId, isAnswerPartId, isEmptyCut, keyOfId, landTurnItems, ofTurn, type MessageAuthor, partialLineId, readMessageAuthor, readShownPrompt, readTurnKey, type ShownPrompt, type ThreadItem, withRunningMessages } from "./thread-items-by-id.js";
 import { requestGetsLocalPaths } from "./room-settings-routes.js";
 import { applyRoomEffortToSession, contextHealthForSession, getWebChatModelRegistry, initialContextHealthForSession, modelContextWindow, modelStatusPayload, recordConversationEffortChoice, roomEffortStatusPayload, roomModelRefusal, webChatModelLabel } from "./ai-models.js";
 import { CONSULT_TRIGGER_PROMPT, consultModelWindow, resolveConsultModel, resolvePersistentAgentBindModel, roomMemoryModelSelection } from "./ai-profile-models.js";
 import { resolveLibrarySkillManifest, skillLibraryFingerprint } from "./skills-library.js";
-import { approvedSkills } from "./skills-executable.js";
+import { roomSkillFolders } from "./skills-executable.js";
 import { logProviderCallFailed, recordUsage, recordWorkerUsage, safeConversationId } from "./usage-recording.js";
 
 // Rooms that were written before the current constitution template keep the
@@ -324,6 +332,19 @@ const lastIndexOfItemId = (items: readonly unknown[], id: string): number => {
 	return -1;
 };
 
+/**
+ * On a shared server, the refusal for a conversation whose model the admin
+ * took away (its key, its provider or the model itself), in the room's words;
+ * null while it can run, and always on the desktop. The conversation keeps its
+ * model: it is refused, never moved to another.
+ */
+function sharedServerConversationModelRefusal(lock: PersistentAgentModelLock | null | undefined): RoomModelUnavailableError | null {
+	if (!lock || !isSharedServer()) return null;
+	const catalog = createRoomModelCatalog();
+	const availability = catalog.availability(lock, "conversation");
+	return availability.ok ? null : roomModelRefusal({ stored: lock, chosen: lock, effective: null, source: "room", reason: availability.reason }, "conversation", catalog);
+}
+
 /** A turn's own prompt in the thread file: a message the room took while it answered (`steered`) is part of that turn, never a prompt of its own. */
 function isPromptItem(item: unknown): boolean {
 	return (item as any)?.kind === "user" && (item as any)?.steered !== true;
@@ -352,7 +373,7 @@ function keyFreeInConversation(agentId: string, threadId: string, key: string, c
 }
 
 /** What the next message needs to know of the last turn that had a prompt. */
-type PromptTurnStart = { anchorItemId: string | null | undefined; earlierPromptsAfterAnchor: number; promptKept: boolean };
+type PromptTurnStart = { anchorItemId: string | null | undefined; earlierPromptsAfterAnchor: number; promptKept: boolean; questionId?: string };
 
 /**
  * How many prompts of earlier turns the thread file still lacks as a message
@@ -449,7 +470,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		const roomFull = status.exists && (status.status === "ready" || status.status === "needs_absorb") && entries >= RECENT_CONTEXT_BLOCK_CAP;
 		const hiddenFromDevice = !!(req as any).exxRemoteDevice && remoteRoomExposure.isHidden(status.id);
 		if (!roomFull || hiddenFromDevice) throw error;
-		const message = `${status.displayName || "This room"} holds ${entries} remembered conversations, as many as it can. Memorize them from Maintain on its Home card to start a new conversation.`;
+		const message = `${status.displayName || "This room"} holds ${entries} remembered conversations, as many as it can. Memorize them from Maintain on its card in Rooms to start a new conversation.`;
 		try { socket.send(JSON.stringify({ type: "error", code: "room_full", message })); } catch {}
 		socket.close();
 		return;
@@ -533,6 +554,67 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// ready" mark, so "seen" means the person has looked.
 	const bindIsSeen = params.get("visible") === "1";
 	let unseenLandingAtBind: ReturnType<typeof getPersistentAgentUnseenLandedAnswer> = null;
+	// On a shared server a room has one live session, its host, which every page on it shares: a page of a room
+	// with a host on this conversation joins it and binds nothing of its own (room-live-sessions.ts, roomHosts).
+	const pageSocket = socket;
+	// A page naming a conversation the room has left (another page made a newer one, Remember or Forget moved it) is
+	// sent to the room's own and binds nothing: the frame says whether the old one was forgotten.
+	if (isSharedServer()) {
+		let roomConversationId: string | null = null;
+		let forgot = false;
+		try {
+			const runtime = getPersistentAgentRuntimeState(persistentAgentIdForSession);
+			roomConversationId = runtime.state === "idle" ? null : runtime.activeThreadId;
+			forgot = persistentAgentThreadForSession?.state === "closed" && persistentAgentThreadForSession.closedReason === "memento";
+		} catch {}
+		if (roomConversationId && roomConversationId !== persistentConversationId) {
+			try { socket.send(JSON.stringify({ type: "room_moved", conversationId: roomConversationId, forgot })); } catch {}
+			try { socket.close(); } catch {}
+			return;
+		}
+	}
+	const joinedHost = isSharedServer() ? roomHosts.get(persistentAgentIdForSession) : undefined;
+	if (joinedHost && joinedHost.conversationId === persistentConversationId) {
+		// Only a page the host lets in has seen the room's landing.
+		const admitted = () => { if (bindIsSeen) try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {} };
+		void joinedHost.join({ socket: pageSocket, req }, { frames: framesBeforeListener, overflowed: () => framesBeforeListenerOverflowed, stopHolding: () => pageSocket.off("message", holdFrameUntilListener) }, admitted).catch((error) => {
+			app.log.warn({ err: error }, "a page could not join the room's live session");
+			try { pageSocket.close(); } catch {}
+		});
+		return;
+	}
+	// Set when this connection's turn was ended by force: its session is gone, so it takes nothing more and its pages open the room again.
+	let retired = false;
+	// The host this connection becomes on a shared server: its room socket, and the join it offers once bound.
+	let roomSocket: RoomSocket | null = null;
+	// Set where this connection becomes the room's host: gives the room up, the lock with it.
+	let letRoomGo: () => void = () => releaseRoomLockNow();
+	// The first page as the room socket holds it: its frames from before the listener name the same page, so a reply finds it.
+	let firstPage: RoomPage | undefined;
+	let offerJoin: (join: RoomHost["join"] | null) => void = () => {};
+	// Set once bound: what the host does when the room's conversation becomes another one.
+	let followRoom: (conversationId: string) => void = () => {};
+	// The room moved on while an answer ran: the host ends once it has settled.
+	let endHostAfterAnswer = false;
+	// When a page last sent something or an answer last ended: a due schedule waits for a quiet spell after it.
+	let roomActiveAt = Date.now();
+	// A due schedule the host runs as its conversation's answer: what refused it, whether it began, what it spent and how it ended.
+	type ScheduledTurn = {
+		ask: ScheduledAsk;
+		refused?: { code: string; message: string };
+		began?: true;
+		usage?: ScheduledAnswer["usage"];
+		ended?: { turnId: string; reason: string; stoppedByServer: boolean; text: string; declined: string[] };
+		/** The tools the session offered before the answer, put back at its end; and the declined questions noted before it. */
+		toolsBefore?: { session: unknown; names: string[] };
+		declinedBefore?: number;
+	};
+	// The scheduled answer running now, from its turn's start to its end.
+	let scheduledTurn: ScheduledTurn | null = null;
+	// Set once bound: runs a due schedule through the prompt branch of this connection's handler.
+	let runScheduledAnswer: (ask: ScheduledAsk) => Promise<ScheduledAnswer> = async () => { throw Object.assign(new Error("The room's live session ended."), { code: ROOM_HOST_ENDED }); };
+	// Who may join the host, asked of the edition once as it opens, with this page's request.
+	let joinAnswer: ((joinReq: typeof req) => LiveSessionJoin | Promise<LiveSessionJoin>) | undefined;
 	{
 		// A detached turn still cooking for THIS conversation no longer bounces
 		// the connection: the session claims it here and adopts it
@@ -571,6 +653,62 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			try { socket.send(JSON.stringify({ type: "error", message: `This room is currently ${busyStatus}${since ? ` (since ${since})` : ""}. ${instruction}` })); } catch {}
 			try { socket.close(); } catch {}
 			return;
+		}
+		// In the lock's own tick, so two pages opening at once make one host. From here the connection's socket is the
+		// room's, so every listener below hears the last page leave, not the first.
+		if (isSharedServer() && !roomHosts.has(persistentAgentIdForSession)) {
+			firstPage = { socket: pageSocket, req };
+			try { joinAnswer = serverHooks().liveSessionJoins?.(req); } catch {}
+			const room = createRoomSocket(firstPage);
+			const offered = new Promise<RoomHost["join"] | null>((resolve) => { offerJoin = resolve; });
+			// Given up before the caller goes on: a delete takes the lock itself, and no heartbeat may write into a room that went.
+			const letGo = () => {
+				if (roomHosts.get(persistentAgentIdForSession) === host) roomHosts.delete(persistentAgentIdForSession);
+				releaseRoomLockNow();
+			};
+			letRoomGo = letGo;
+			const host: RoomHost = {
+				conversationId: persistentConversationId,
+				join: async (page, held, admitted) => {
+					const join = await offered;
+					if (join) return join(page, held, admitted);
+					// The host ended before it could take anyone: the page opens the room again.
+					try { page.socket.close(); } catch {}
+				},
+				roomGone: (how) => {
+					letGo();
+					room.send(JSON.stringify({ type: "room_gone", how }));
+					room.close();
+				},
+				deleteBegins: () => {
+					letGo();
+					// A delete that failed leaves the room as it was: its pages open it again, never told it went.
+					return (landed) => {
+						if (landed) room.send(JSON.stringify({ type: "room_gone", how: "deleted" }));
+						room.close();
+					};
+				},
+				lastActivityAt: () => roomActiveAt,
+				runScheduled: async (ask) => {
+					if (!(await offered)) throw Object.assign(new Error("The room's live session ended."), { code: ROOM_HOST_ENDED });
+					return runScheduledAnswer(ask);
+				},
+				pointerMoved: (conversationId) => {
+					// From now on a page opening the room starts the new conversation's host.
+					if (roomHosts.get(persistentAgentIdForSession) === host) roomHosts.delete(persistentAgentIdForSession);
+					followRoom(conversationId);
+				},
+				pendingTransfersChanged: (blocks) => {
+					room.send(JSON.stringify({ type: "pending_transfers", blocks }));
+				},
+			};
+			roomHosts.set(persistentAgentIdForSession, host);
+			room.on("close", () => {
+				if (roomHosts.get(persistentAgentIdForSession) === host) roomHosts.delete(persistentAgentIdForSession);
+				offerJoin(null);
+			});
+			roomSocket = room;
+			socket = room as unknown as typeof socket;
 		}
 		// The cooking turn's lock record is this connection's now: register who
 		// releases it, so the settle path can free it even if this connection
@@ -626,6 +764,10 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		startedAt?: number;
 		terminalReason?: PersistentWebTurnTerminalReason;
 		abortPromise?: Promise<void>;
+		/** Bounds every stop of the turn, whoever asked for it. */
+		readonly stopLimit: StopLimit;
+		/** The ids of the lines the conversation held as the first stop began. */
+		linesAtStop?: ReadonlySet<string>;
 		promptSettled: boolean;
 		/** Set when a server stop ended the turn: its end events carry it, and a landing after its person left uses the cut answer's sentence. */
 		stoppedByServer?: true;
@@ -635,6 +777,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		shownAtStop?: number;
 		/** Set when an away limit stopped the turn while nobody was in the room: its line names the limit. */
 		awayLimit?: AwayLimit;
+		/** Who answers the turn's questions, when a page's message started it on a room's one session. */
+		asker?: Asker;
 	};
 	let activePersistentWebTurn: ActivePersistentWebTurn | null = null;
 	// From a turn's end until the prompt handler records its finish: a
@@ -700,7 +844,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	let lastPromptTurnStart: PromptTurnStart | null = null;
 	// While the turn cooks detached and a NEW connection adopted it, turn
 	// frames are forwarded there instead of this (closed) socket.
-	let cookingTurnSink: ((frame: string) => void) | null = null;
+	let cookingTurnSink: ((frame: string, perPage?: PageFrame) => void) | null = null;
 	// Every frame belonging to the CURRENT turn, recorded from turn start, so a
 	// session that steps back in mid-turn replays the whole stream and then
 	// continues live with no gap and no duplicated text at the seam. Reset when
@@ -810,10 +954,22 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	let boundNativeProviderSearch: boolean | null = null;
 	/** The provider the live session bound against, so the check above compares the setting and not the model. */
 	let boundSessionProviderId: string | null = null;
+	// A gateway's address as the session bound it: its model keeps that address
+	// while each call reads the saved key, so a save that moves the gateway
+	// rebinds before the next turn, or the new key would go to the old address.
+	let boundGatewayAddress: string | null = null;
 	// The single in-flight rebind: while a rebind runs, `session` is null and
 	// every frame that needs the session awaits THIS promise instead of racing
 	// past the guards onto the disposed session with the old toolset.
 	let workspaceRebindInFlight: Promise<void> | null = null;
+	// A message waits on that rebind: the session it binds is the message's, even when every page has left meanwhile.
+	let messageWaitsOnRebind = false;
+	// Every page left while a message waited on its rebind: the session ends once that message is done with it.
+	const endSessionLeftDuringRebind = () => {
+		if (socket.readyState === socket.OPEN || sessionDisposed || !session) return;
+		sessionDisposed = true;
+		void endRoomSession(session as any);
+	};
 	type PromptDiagnosticsPendingTurn = {
 		turnId: string;
 		turnOrdinal: number;
@@ -844,8 +1000,16 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// key, its question as the bubble shows it, and where its first item
 	// goes. Null after a turn without a key.
 	// `editLine`: the not-undone line of an edit, which the landing puts before its message.
-	type KeyedTurn = { key: string; continued: boolean; shown?: ShownPrompt; strippedText: string; startAnchorId: string | null | undefined; startedAt?: number; steps: ReturnType<typeof createTurnStepLog>; editLine?: NotUndoneLine };
+	// `author`: on a shared server, who sent its question, stamped on it when it lands.
+	type KeyedTurn = { key: string; continued: boolean; shown?: ShownPrompt; strippedText: string; startAnchorId: string | null | undefined; startedAt?: number; steps: ReturnType<typeof createTurnStepLog>; editLine?: NotUndoneLine; author?: MessageAuthor };
 	let keyedTurn: KeyedTurn | null = null;
+	// Who sent the messages the running answer took, by the conversation's id of each, for a page that joins mid-answer.
+	let takenAuthors: Array<readonly [string, MessageAuthor | undefined]> = [];
+	// Who sent the running answer's question and the messages it took, by id.
+	const runningTurnAuthors = (): Array<readonly [string, MessageAuthor | undefined]> => {
+		const keyed = keyedTurn && keyedTurn.steps === turnSteps && !keyedTurn.continued ? keyedTurn : null;
+		return [...(keyed ? [[keyed.key, keyed.author] as const] : []), ...takenAuthors];
+	};
 
 	// Skills MR-5 telemetry (spec §5): bodies read via read_skill, surfaced per
 	// turn. Mutated by the tool, reported + reset when the next turn's trace opens.
@@ -938,6 +1102,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (turn.stoppedByServer) return "server-stop";
 		return turn.terminalReason === "cancelled" ? (turn.stoppedForNext ? "next" : "stop") : turn.terminalReason === "disconnect_cancelled" ? "left" : turn.terminalReason === "failed" ? "failed" : null;
 	};
+	const turnWasStopped = (): boolean => !!activePersistentWebTurn?.terminalReason && activePersistentWebTurn.terminalReason !== "completed";
 	const setActivePersistentWebTurnTerminalReason = (reason: PersistentWebTurnTerminalReason): void => {
 		const turn = activePersistentWebTurn;
 		if (!turn || turn.terminalReason) return;
@@ -955,9 +1120,15 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// abort below would wait for that answer forever.
 		if (reason === "cancelled") uiContext.declineOpenQuestions(STOPPED_BEFORE_ANSWER_SENTENCE);
 		stopOverflowRecovery(true);
+		// The shortening the runtime may do before it asks the model ends with the turn too, whatever it is for.
+		try { (sessionToAbort as any).abortCompaction?.(); } catch (error) { app.log.warn({ err: error }, "stopping the conversation's shortening failed"); }
+		turn.stopLimit.stopBegan();
+		try {
+			turn.linesAtStop ??= new Set(((getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items ?? []) as ThreadItem[]).filter((item) => item.kind === "system").map((item) => String(item.id)));
+		} catch (error) { app.log.warn({ err: error }, "failed to read the conversation a stop began in"); }
 		try { markPersistentAgentTurnCancelling(persistentAgentIdForSession, persistentConversationId, reason); } catch (error) { app.log.warn({ err: error }, "failed to mark persistent-room turn cancelling"); }
 		if (!turn.abortPromise) {
-			turn.abortPromise = (async () => {
+			const aborted = (async () => {
 				try {
 					await (sessionToAbort as any).abort?.();
 					await flushSessionEvents();
@@ -965,6 +1136,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 					app.log.warn({ err: error }, "persistent-room abort failed");
 				}
 			})();
+			turn.abortPromise = Promise.race([aborted, turn.stopLimit.ended]);
 		}
 		return turn.abortPromise;
 	};
@@ -987,11 +1159,11 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	const setAnswerNote = (note: AnswerNote | undefined): void => keepPiece("answer note", () => keepAnswerNoteFor(persistentAgentIdForSession, persistentConversationId, note && !conversationClosed() ? note : undefined));
 	const addTaken = (steer: TakenSteer): void => keepPiece("taken messages", () => addTakenSteer(persistentAgentIdForSession, persistentConversationId, steer, TAKEN_STEERS_KEPT));
 	// What the person saw of an answer their cut or Stop ended, for the next message; any other end leaves no note.
-	const keepAnswerNote = (turn: ActivePersistentWebTurn | null): void => {
+	const keepAnswerNote = (turn: ActivePersistentWebTurn | null, answer?: { role?: string; stopReason?: string; content?: unknown }): void => {
 		setAnswerNote(undefined);
 		// A Stop that names no count says nothing about what was on screen, so it tells the model nothing.
 		if (!turn || turn.terminalReason !== "cancelled" || turn.stoppedByServer || turn.shownAtStop === undefined || !session) return;
-		const last = session.agent.state.messages.at(-1) as { role?: string; stopReason?: string; content?: unknown } | undefined;
+		const last = answer ?? (session.agent.state.messages.at(-1) as { role?: string; stopReason?: string; content?: unknown } | undefined);
 		if (last?.role !== "assistant" || last.stopReason !== "aborted") return;
 		const shown = shownPart(revealedTextOf(last.content), turn.shownAtStop);
 		if (shown) setAnswerNote({ kind: turn.stoppedForNext ? "cut" : "stop", shown });
@@ -1068,12 +1240,16 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	};
 	// Messages the person sent into the running answer, oldest first: the
 	// runtime takes all of them at its next check, in the order they came.
-	let pendingSteers: { id: string; text: string }[] = [];
+	// `page`: the page that sent it, on a room socket.
+	// `who`: on a shared server, the person who sent it, whom the model is told of and the message is stamped with when taken.
+	let pendingSteers: { id: string; text: string; page?: RoomPage; who?: RoomPerson }[] = [];
 	// The provider's own tools (its web search) running inside the message being written: a message sent meanwhile waits for them as for a step.
 	const providerToolsRunning = new Set<string>();
 	// A turn's own message reaches the session as its first user message;
 	// every user message after it in the same run is a steer the runtime took.
 	let turnPromptMessageSeen = false;
+	// Who sent the person's message the session is taking, from its start until the session has written it.
+	let authorToMark: MessageAuthor | undefined;
 	// A steer goes in only while this turn's own run streams: before its first
 	// frame or after its last one the runtime would start a run of its own,
 	// outside the turn's bookkeeping. The recovery prompt is the server's and
@@ -1088,13 +1264,45 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		steerQueueChange = run.catch(() => {});
 		return run;
 	};
+	// What the assistant is told of a skill's files, as read_skill tells it, and the room's answer that fills its folder into its text; set when the session binds.
+	let skillFilesText: (name: string) => { view: ReturnType<SkillFilesResolver>; text: string } = () => ({ view: null, text: "" });
+	// A skill the person picked with "/name", read when their words are handed to the runtime (skill-pick.ts).
+	// The typed text is what waits anywhere; the note goes only to the runtime.
+	// Whether the conversation holds messages of more than one person once `who`'s goes in: its saved messages' authors,
+	// the running answer's question, the messages it took and those it holds. Only a shared server stamps authors.
+	const severalWrote = (who: RoomPerson): boolean => {
+		const people = new Set<string>();
+		const add = (author: MessageAuthor | undefined) => { if (author) people.add(JSON.stringify([author.space, author.person])); };
+		try {
+			for (const item of getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items ?? []) if ((item as { kind?: unknown })?.kind === "user") add(readMessageAuthor((item as { author?: unknown }).author));
+		} catch {}
+		for (const [, author] of runningTurnAuthors()) add(author);
+		for (const steer of pendingSteers) add(authorOfPerson(steer.who));
+		add(authorOfPerson(who));
+		return people.size > 1;
+	};
+	// `who`: the person who sent it, named to the model in front of their words once more than one person wrote here.
+	const withPickedSkill = (text: string, who?: RoomPerson): string => withSkillNote(resolveSkillPick(persistentAgentIdForSession, userAuthoredPromptText(text), skillLibraryFingerprint, skillFilesText), who && severalWrote(who) ? withMessageFrom(who.name, text) : text);
+	// Try again sends the saved message once more: its pick's note is made again, so a skill switched on or off since is read as it is now.
+	// Only the running session's copy changes: the saved conversation keeps the note made when the message was sent.
+	const pickedSkillAgain = (agentSession: NonNullable<typeof session>): void => {
+		const messages = agentSession.agent.state.messages;
+		let at = messages.length - 1;
+		while (at >= 0 && messages[at]!.role !== "user") at--;
+		const last = messages[at];
+		if (!last || last.role !== "user") return;
+		const again = (text: string) => withSkillNoteAgain(text, (name) => skillPickNow(persistentAgentIdForSession, name, skillLibraryFingerprint, skillFilesText));
+		const content = typeof last.content === "string" ? again(last.content) : last.content.map((part) => (part.type === "text" ? { ...part, text: again(part.text) } : part));
+		agentSession.agent.state.messages = messages.map((message, index) => (index === at ? { ...last, content } : message));
+	};
 	// Into the runtime's queue, outside the order below: callers go through steerInOrder, or already hold its turn.
-	const steerActiveTurn = async (id: string, text: string): Promise<boolean> => {
+	const steerActiveTurn = async (id: string, text: string, page?: RoomPage, who: RoomPerson | undefined = page && pagePerson(page.req)): Promise<boolean> => {
 		if (!id || !text.trim() || !turnTakesSteers() || pendingSteers.length >= MAX_WAITING_STEERS) return false;
-		pendingSteers.push({ id, text });
+		const wire = withPickedSkill(text, who);
+		pendingSteers.push({ id, text, ...(page ? { page } : {}), ...(who ? { who } : {}) });
 		try {
 			// prompt, not steer(): it carries the registry's options, so a shared server's "/" text reaches the model as written.
-			await session!.prompt(text, { streamingBehavior: "steer", ...serverHooks().promptOptions?.() });
+			await session!.prompt(wire, { streamingBehavior: "steer", ...serverHooks().promptOptions?.() });
 			return true;
 		} catch (error) {
 			pendingSteers = pendingSteers.filter((steer) => steer.id !== id);
@@ -1103,7 +1311,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		}
 	};
 	/** Resolves false when the steer was not taken in, so the page sends it as its own message once the answer ends. */
-	const steerInOrder = (id: string, text: string): Promise<boolean> => inQueueOrder(() => steerActiveTurn(id, text));
+	const steerInOrder = (id: string, text: string, page?: RoomPage, who?: RoomPerson): Promise<boolean> => inQueueOrder(() => steerActiveTurn(id, text, page, who));
 	// The runtime takes its queued messages in all at once, at a run's start
 	// and after every step, and starts each as a user message within the same
 	// stretch of its loop (agent-loop.ts), before any socket message can be
@@ -1130,7 +1338,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			app.log.warn({ err: error }, "clearing the runtime's message queue failed");
 		}
 		const returned: Array<{ id: string; text: string }> = [];
-		for (const steer of rest) if (!(await steerActiveTurn(steer.id, steer.text))) returned.push(steer);
+		for (const steer of rest) if (!(await steerActiveTurn(steer.id, steer.text, steer.page, steer.who))) returned.push({ id: steer.id, text: steer.text });
 		if (returned.length) sendTurnFrame({ type: "steer_returned", messages: returned });
 		return true;
 	});
@@ -1139,21 +1347,33 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// The runtime keeps steers it has not taken across Stop and into its next
 	// run. They go back to the page after Stop, at the answer's end and when
 	// the turn settles, so none rides silently into a later message.
-	const returnUntakenSteers = (): void => {
+	// `stopped`: the person's Stop sent them back, so on a room socket every page keeps its own in its box.
+	const returnUntakenSteers = (stopped = false): void => {
 		if (!session) return;
 		const returned = pendingSteers;
 		pendingSteers = [];
 		try { session.clearQueue(); } catch (error) { app.log.warn({ err: error }, "clearing the runtime's message queue failed"); }
 		if (returned.length === 0) return;
+		const words = (steers: typeof returned) => steers.map(({ id, text }) => ({ id, text }));
 		// With no window to take them, or the server stopping before a page could send them on, they wait on disk until the person acts.
 		const held = serverStopping() || (detachedFromClient && !detachedCookingHandle?.adopterConnectionId);
-		if (held) {
+		// On a room socket one whose page has left waits there too, so the pages still on the room list it.
+		const room = roomSocket;
+		const pageGone = !held && room ? returned.filter((steer) => steer.page && !room.has(steer.page)) : [];
+		const kept = held ? returned : pageGone;
+		if (kept.length) {
 			try {
-				const refused = holdMessages(persistentAgentIdForSession, persistentConversationId, returned);
+				const refused = holdMessages(persistentAgentIdForSession, persistentConversationId, words(kept));
 				if (refused.length) app.log.warn({ refused: refused.length }, "untaken messages past the held limits stay with the page only");
 			} catch (error) { app.log.warn({ err: error }, "holding the untaken messages failed"); }
 		}
-		sendTurnFrame({ type: "steer_returned", messages: returned, ...(held ? { held: true } : {}) });
+		if (held) {
+			sendTurnFrame({ type: "steer_returned", messages: words(returned), held: true });
+			return;
+		}
+		if (pageGone.length) sendTurnFrame({ type: "steer_returned", messages: words(pageGone), held: true });
+		const back = returned.filter((steer) => !pageGone.includes(steer));
+		if (back.length) sendTurnFrame({ type: "steer_returned", messages: words(back), ...(stopped && room ? { stopped: true } : {}) });
 	};
 	/**
 	 * A message the person sent while the room answers. During a step it goes
@@ -1163,9 +1383,11 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	 * answer. Cmd/Ctrl+Enter stops the answer at the words on screen and the
 	 * message goes next.
 	 */
-	const routeSteer = async (request: SteerRequest): Promise<SteerRouted> => {
+	const routeSteer = async (request: SteerRequest, page?: RoomPage, who: RoomPerson | undefined = page && pagePerson(page.req)): Promise<SteerRouted> => {
 		const refused = { type: "steer_refused" as const, id: request.id };
-		if (!request.id || !request.text.trim() || !turnTakesSteers() || !session) return refused;
+		// A scheduled answer takes no message of the person's: it waits on its page and goes as the next one. Checked here, in the
+		// answer's own connection, so a page that stepped back into it after a reload is refused the same way.
+		if (scheduledTurn || !request.id || !request.text.trim() || !turnTakesSteers() || !session) return refused;
 		roomCommandTools?.personSpoke();
 		roomAsks?.personSpoke();
 		const state = session.agent.state;
@@ -1180,11 +1402,73 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			void abortActivePersistentWebTurn("cancelled");
 			return { type: "steer_cut", id: request.id, quiet: way === "cut-quiet" };
 		}
-		if (!(await steerInOrder(request.id, request.text))) return refused;
+		if (!(await steerInOrder(request.id, request.text, page, who))) return refused;
 		if (way === "steer-then-decline") uiContext.declineOpenQuestionsOnce(DECLINED_FOR_MESSAGE_SENTENCE);
 		// The model already finished its text: the message goes in right after it, not after a step.
 		return { type: "steer_waiting", id: request.id, ...(phase === "ending" ? { afterText: true as const } : {}) };
 	};
+	// What an answer spent, on the usage ledger: the turn's own row, or a scheduled run's when it came after that run's row was written.
+	const recordAnswerUsage = (msg: any, kind: "chat" | "scheduled", model: any): void => {
+		const u = msg.usage;
+		const toolsUsed = turnTrace.toolCalls.map((t) => t.name).filter(Boolean);
+		const turnProvider: string | undefined = model?.provider ?? msg.provider ?? undefined;
+		recordUsage({ ts: Date.now(), agent: activeOwner, persona, model: msg.model, modelLabel: model ? webChatModelLabel(model.provider, model) : undefined, provider: turnProvider, authType: resolveUsageAuthType(turnProvider, true), kind, input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, ...(u.cacheWrite1h ? { cacheWrite1h: u.cacheWrite1h } : {}), cost: u.cost?.total ?? 0, tools: toolsUsed.length ? toolsUsed : undefined });
+	};
+	/**
+	 * The turn is ended by force: its session goes at once, and what it was
+	 * writing is kept as a Stop keeps it, for the same end as any other turn's.
+	 * The session's own copy stays as a restart of the app would leave it.
+	 */
+	const cutActiveTurn = (turn: ActivePersistentWebTurn): void => {
+		const cut = session;
+		if (!cut) return;
+		app.log.warn({ agentId: persistentAgentIdForSession, turnId: turn.turnId, reason: turn.terminalReason }, "a stopped persistent-room turn did not end in time; ended by force");
+		returnUntakenSteers();
+		const writing = cut.agent.state.streamingMessage;
+		if (writing?.role === "assistant") {
+			const answer = { ...writing, stopReason: "aborted" as const };
+			turnSteps.note(answer, { shownAtStop: turn.shownAtStop });
+			const text = turn.shownAtStop !== undefined ? shownPart(revealedTextOf(answer.content), turn.shownAtStop) : textFromParts(answer.content);
+			const landed = landedTextAfter({ text: turnTrace.finalAssistantText, retryFrom: turnTrace.retryFrom }, text, false);
+			turnTrace.finalAssistantText = landed.text;
+			turnTrace.retryFrom = landed.retryFrom;
+			keepAnswerNote(turn, answer);
+		}
+		// A page that stepped back into the turn keeps its own connection, so it is told the turn ended; any other opens the room again.
+		if (detachedFromClient) {
+			const endedBy = turnEndedByOf(turn);
+			sendTurnFrame({ type: "event", event: { type: "agent_end", messages: [], ...(endedBy ? { endedBy } : {}) } });
+		}
+		turnFrameCoalescer.flush();
+		const kind = scheduledTurn ? "scheduled" as const : "chat" as const;
+		const model = (cut as any).model;
+		session = null;
+		sessionDisposed = true;
+		endCutSession(cut as any, {
+			answered: (message: any) => {
+				if (message.usage && !answerlessCallMovedNothing(message)) recordAnswerUsage(message, kind, model);
+			},
+			// A step that went on may have started a command since: its own box ends again, never another answer's.
+			ended: () => {
+				void roomBox?.endTurn();
+				void windowsBox?.endTurn();
+			},
+		});
+	};
+	/** After a turn ended by force: the room is free at once, and its pages open it again on a fresh session. */
+	const retireConnection = (): void => {
+		retired = true;
+		// What waits to be sent stays with the person, as when the server stops: a page that sent it on opening the room
+		// again, before it heard what the room holds, would list it a second time.
+		const held = readHeldMessages(persistentAgentIdForSession, persistentConversationId);
+		if (held.length) send({ type: "steer_returned", messages: held, held: true });
+		releaseLiveConnectionForStop();
+		if (persistentRoomLiveSessions.get(persistentAgentIdForSession) === liveSessionHandle) persistentRoomLiveSessions.delete(persistentAgentIdForSession);
+		letRoomGo();
+		try { socket.close(); } catch {}
+	};
+	// Set while Forget ends this connection's conversation: it tells the pages and closes them itself.
+	let endingForBoundary = false;
 	const disposeSessionAfterAbortIfNeeded = async (reason: "cancelled" | "disconnect_cancelled" = "disconnect_cancelled"): Promise<void> => {
 		if (sessionDisposed) return;
 		const sessionToDispose = session;
@@ -1195,7 +1479,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (sessionDisposed) return;
 		sessionDisposed = true;
 		stopOverflowRecovery(true);
-		try { (sessionToDispose as any).dispose?.(); } catch {}
+		// Not waited for: a program slow to exit never holds up Forget this conversation.
+		void endRoomSession(sessionToDispose as any);
 	};
 
 	// The client is gone but the turn ran to its end —
@@ -1347,8 +1632,21 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (turn.editLine) own.push({ kind: "system", id: turn.editLine.id, text: turn.editLine.text, level: "info" });
 		const question = turn.shown?.text ?? turn.strippedText;
 		const files = turn.shown?.files ?? [];
-		if (!turn.continued && (question.trim() || files.length > 0)) own.push({ kind: "user", id: turn.key, text: question, ...(files.length ? { attachments: files } : {}), ...(typeof turn.startedAt === "number" ? { ts: turn.startedAt } : {}) });
+		if (!turn.continued && (question.trim() || files.length > 0)) own.push({ kind: "user", id: turn.key, text: question, ...(files.length ? { attachments: files } : {}), ...(typeof turn.startedAt === "number" ? { ts: turn.startedAt } : {}), ...(turn.author ? { author: turn.author } : {}) });
 		return own;
+	};
+	/** The current keyed turn's question (none for a Try again) and the messages it took, as the server holds them, for the ready frame of a page that joins while it runs. */
+	const runningMessages = (): ThreadItem[] => {
+		const turn = keyedTurn && keyedTurn.steps === turnSteps ? keyedTurn : null;
+		return turn ? [...keyedTurnFirstItems(turn), ...turn.steps.keyedItems().filter((item) => item.kind === "user").map((item): ThreadItem => ({ ...item }))] : [];
+	};
+	/**
+	 * The keyed turn's running-turn record (turn-pieces-store.ts): what lands first, and on a shared server each message
+	 * the answer took with who sent it, which a kill would otherwise lose (a page's save of it names nobody).
+	 */
+	const keepKeyedTurnRunning = (turn: KeyedTurn, turnId: string, startedAt: number): void => {
+		const taken: ThreadItem[] = turn.steps.keyedItems().filter((item) => item.kind === "user" && "author" in item).map((item) => ({ ...item }));
+		keepRunningTurn(persistentAgentIdForSession, persistentConversationId, { turnId, key: turn.key, startedAt, continued: turn.continued, ...(turn.startAnchorId ? { startAnchorId: turn.startAnchorId } : {}), own: [...keyedTurnFirstItems(turn), ...taken] });
 	};
 	/**
 	 * A keyed turn's landing, by id (thread-items-by-id.ts), built at its
@@ -1358,15 +1656,27 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	 * messages, its declined notices by the card rule, and its lines only when
 	 * nobody watched it end.
 	 */
-	const keyedLandingItemsOf = (turn: KeyedTurn, terminalReason: PersistentWebTurnTerminalReason, options: { watched: boolean; stopCut: boolean; awayLimit?: AwayLimit }): KeyedLanding => {
+	/**
+	 * A stop ended by force that no page saw end says so as a restart would
+	 * have: the page draws its own line at that end, so one that went before it
+	 * left none, unless it saved one as it left (a line, or a part marked cut).
+	 * A page's own line has no name of its turn, and none is drawn before the
+	 * Stop, so one the conversation held by then is an earlier answer's.
+	 */
+	const cutLeftUntold = (key: string, linesAtStop: ReadonlySet<string> | undefined, seen: boolean): boolean => {
+		if (seen) return false;
+		const items = (getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items ?? []) as ThreadItem[];
+		return !items.some((item) => (item.kind === "system" && !linesAtStop?.has(String(item.id))) || (ofTurn(item, key) && item.stoppedAt !== undefined));
+	};
+	const keyedLandingItemsOf = (turn: KeyedTurn, terminalReason: PersistentWebTurnTerminalReason, options: { watched: boolean; stopCut: boolean; awayLimit?: AwayLimit; cutUntold?: boolean }): KeyedLanding => {
 		const { key } = turn;
 		const own: ThreadItem[] = keyedTurnFirstItems(turn);
 		const made: ThreadItem[] = turn.steps.keyedItems().map((item) => ({ ...item }));
 		own.push(...made);
-		if (terminalReason === "failed" && !options.watched) {
+		if ((terminalReason === "failed" && !options.watched) || options.cutUntold) {
 			const answered = made.some((item) => item.kind === "assistant" && String(item.text ?? "").trim());
 			const id = answered ? partialLineId(key) : failureLineId(key);
-			own.push(options.awayLimit ? awayLimitLine(id, options.awayLimit, answered || made.some((item) => item.kind === "tool")) : { kind: "system", id, text: options.stopCut ? STOP_CUT_ANSWER_SENTENCE : answered ? AWAY_PARTIAL_SENTENCE : AWAY_FAILURE_SENTENCE, level: "error" });
+			own.push(options.awayLimit ? awayLimitLine(id, options.awayLimit, answered || made.some((item) => item.kind === "tool")) : { kind: "system", id, text: options.stopCut || options.cutUntold ? STOP_CUT_ANSWER_SENTENCE : answered ? AWAY_PARTIAL_SENTENCE : AWAY_FAILURE_SENTENCE, level: "error" });
 		}
 		try {
 			own.push(...autoDeclinedQuestions.noticeItems(declinedNoticeIdPrefix(key)));
@@ -1414,6 +1724,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// closure; quiescing this session must stop that turn too, or Memento
 		// would dispose an idle session while the room keeps cooking.
 		quiesceForBoundary: async () => {
+			endingForBoundary = true;
 			const cooking = claimedCookingTurn;
 			if (cooking && !cooking.settled) { try { await cooking.stop(connectionId); } catch {} }
 			await disposeSessionAfterAbortIfNeeded("cancelled");
@@ -1429,11 +1740,13 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			let noticeId = "";
 			let replaces: string | null = null;
 			const rebind = (async () => {
+				const ending = session;
+				session = null;
 				if (!sessionDisposed) {
 					sessionDisposed = true;
-					try { (session as any)?.dispose?.(); } catch {}
+					// Waited for before the next binds: its end lets go of what the model's provider keeps for this conversation, which the next one shares.
+					await endRoomSession(ending as any);
 				}
-				session = null;
 				const switched = switchPersistentAgentThreadModel(persistentAgentIdForSession, persistentConversationId, lock, { notice, runtimeCwd });
 				persistentAgentThreadForSession = switched.thread;
 				const last = switched.thread.items[switched.thread.items.length - 1] as { id?: string } | undefined;
@@ -1652,9 +1965,11 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	};
 	// Every socket traces what it writes, as `send` does; a frame is parsed back only while tracing is on.
 	const tracesFrames = isStreamTraceEnabled();
-	const sendSerialised = (text: string) => {
+	// `perPage`: a frame each page of a room's one session is shown its own way.
+	const sendSerialised = (text: string, perPage?: PageFrame) => {
 		if (tracesFrames) { try { streamTrace.frameOut(JSON.parse(text)); } catch {} }
-		try { socket.send(text); } catch {}
+		if (perPage && roomSocket) roomSocket.sendEach(perPage);
+		else try { socket.send(text); } catch {}
 	};
 	// Delivery-honest variant for frames whose "was the user told?" answer is
 	// persisted (away-notice stamping, the specialist sink's `noticed` signal):
@@ -1667,16 +1982,16 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		return true;
 	};
 	// Whoever watches this connection's turn: the adopter while one is inside, else this socket.
-	const sendToWatcher = (msg: unknown) => {
+	const sendToWatcher = (msg: unknown, perPage?: PageFrame) => {
+		turnFrameCoalescer.flush();
+		let text: string;
+		try { text = JSON.stringify(msg); } catch { return; }
 		const sink = cookingTurnSink;
 		if (sink) {
-			turnFrameCoalescer.flush();
-			let text: string;
-			try { text = JSON.stringify(msg); } catch { return; }
-			try { sink(text); } catch {}
+			try { sink(text, perPage); } catch {}
 			return;
 		}
-		send(msg);
+		sendSerialised(text, perPage);
 	};
 	// Turn-scoped frames (the event family, usage, the turn's error
 	// frame) go through sendTurnFrame, which merges small ones, and then here
@@ -1714,6 +2029,15 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	};
 	const turnFrameCoalescer = createTurnFrameCoalescer(deliverTurnFrame);
 	const sendTurnFrame = (msg: unknown) => turnFrameCoalescer.push(msg);
+	// What the conversation holds now, for the page's context meter. The usage frame without usage numbers: it counts no turn and no cost.
+	const sendContextReading = () => {
+		if (session) sendTurnFrame({ type: "usage_turn", agent: activeOwner, contextHealth: contextHealthForSession(session) });
+	};
+	// Who sent these messages, by id, to every page each its own way, after the frames before it; nothing where no message has an author.
+	const sendSenders = (authors: ReadonlyArray<readonly [string, MessageAuthor | undefined]>): void => {
+		const frame = sendersFrame(authors);
+		if (frame) sendToWatcher(frame(req), (page) => JSON.stringify(frame(page.req)));
+	};
 	// Questions the detached bridge answered for the user. The landing writes
 	// them into the transcript: a decline the user never saw must not depend on
 	// the answer mentioning it.
@@ -1721,7 +2045,12 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// The stop tells the model its own sentence; the away log is for a person who left, before the stop or during it.
 	let declinedByStop = false;
 	// Questions follow the turn to whoever watches it, so a person who came back answers them.
-	const uiContext = createWebUiContext(sendToWatcher, (question) => { if (!declinedByStop) autoDeclinedQuestions.note(question); }, remoteDeviceForSession ? "phone" : "computer");
+	// A question in a person's answer reaches every page, and on anyone else's it waits for that person.
+	const sendQuestionFrame = (msg: unknown) => {
+		const asker = activePersistentWebTurn?.asker;
+		sendToWatcher(msg, asker ? (page) => questionFor(page, msg, asker) : undefined);
+	};
+	const uiContext = createWebUiContext(sendQuestionFrame, (question) => { if (!declinedByStop) autoDeclinedQuestions.note(question); }, remoteDeviceForSession ? "phone" : "computer", { closesAnsweredCards: isSharedServer() });
 	// Whether the room's own folder ask is offered here, for the box and the file tools; each also checks that someone is there to answer it.
 	const folderAskOffered = () => roomAsks !== null && roomAsksOffered(!remoteDeviceForSession);
 	// The folders the running answer was given this time: a new holder as each answer starts, ended with it, Stop included. A message sent mid-answer joins the answer, and so keeps them; a page that leaves and comes back doesn't end the answer.
@@ -1737,10 +2066,10 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	const runningAnswerFree = () => answerFree;
 	// The turn's box lives with the connection, not the session: a rebind inside a turn keeps it. Never built where commands don't run in a box.
 	// The Mac's serves the file tools too; Windows' is built at the first bind that finds it (`commandBoxForBind`), for commands alone.
-	/** What the room allows its boxed commands right now, read at each command: changing files, and its approved skills' folders. */
+	/** What the room allows its boxed commands right now, read at each command: changing files, and its skills' folders (`roomSkillFolders`). */
 	const boxRights = () => {
 		const names = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentIdForSession, persistentConversationId)?.allowedToolNames ?? [];
-		return { canChangeFiles: names.includes("write") || names.includes("edit"), skillFolders: approvedSkills(persistentAgentIdForSession).map((skill) => skill.skillDir) };
+		return { canChangeFiles: names.includes("write") || names.includes("edit"), skillFolders: roomSkillFolders(persistentAgentIdForSession).map((skill) => skill.skillDir) };
 	};
 	const roomBox = roomBoxComputer() === "mac" ? new RoomBox({
 		roomId: persistentAgentIdForSession,
@@ -1844,6 +2173,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 
 	const bindSession = async () => {
 		const persistentAgentId = persistentAgentIdForSession;
+		// The record as it is now: a page saves its conversation after the room's connection opened.
+		try { persistentAgentThreadForSession = getPersistentAgentThread(persistentAgentId, persistentConversationId) ?? persistentAgentThreadForSession; } catch {}
 		// An empty conversation (the one Remember or Forget prepared) boots on
 		// the room's conversation model as it is now, and while that cannot run
 		// it waits with the room's refusal instead of booting on the lock it was
@@ -1866,12 +2197,17 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			}
 			if (waits) throw waits;
 		}
+		// A model no longer offered is refused here; a key gone, by the resolver below, in its own words.
+		const modelGone = sharedServerConversationModelRefusal(persistentAgentThreadForSession?.model);
+		if (modelGone?.reason === "not-offered") throw modelGone;
 		const webChatModelRegistry = getWebChatModelRegistry();
 		const webChatModel = resolvePersistentAgentBindModel(webChatModelRegistry, params, { agentId: persistentAgentId, conversationId: persistentConversationId });
 		if (!webChatModel) throw new Error("persistent-agent model could not be resolved");
+		// Read with the model, before any wait, so a save during the bind is still a change.
+		const resolvedGatewayAddress = readGatewayProviderBaseUrl(webChatModel.provider);
 		const persistentRoomModel = { provider: webChatModel.provider, model: webChatModel.id, label: webChatModelLabel(webChatModel.provider, webChatModel) };
 		promptDiagnosticsCurrentModel = persistentRoomModel;
-		// On Windows the check at start may still run: a bind waits for its answer, so no command runs in Git Bash first.
+		// On Windows the check at start may still run: a bind waits for its answer, so no command runs without the box first.
 		await roomBoxSettled();
 		boundProtection = persistentRoomProtection(persistentAgentId, { folder: conversationFolderNow() });
 		boundCommandBox = commandBoxForBind();
@@ -1896,6 +2232,11 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			outsideToolOffered: boundBox !== null && !remoteDeviceForSession && persistentRoomEffectiveWorkspacePolicy?.bashEnabled === true,
 			asks: { folder: asksOffered, commands: commandsAskOffered },
 		});
+		// The tool that would run commands without protection in this bind: beside a box, the way out of it.
+		const plainToolName = boundBox ? RUN_OUTSIDE_BOX_TOOL_NAME : PERSISTENT_ROOM_BASH_TOOL_NAME;
+		// Asked once, and only for that tool, since the lookup starts programs: its text, the shell it runs in and a skill's text agree until the next bind, and commands can't come on without the tool before one.
+		const plain: PlainShell = persistentRoomToolPolicy.allowedToolNames.includes(plainToolName) ? plainShell() : { kind: "bash" };
+		const powerShellCommands = windowsBoxed || plain.kind === "powershell";
 		// Full access with the terminal on right now, the pair the bash tool's own
 		// gate reads; asked on every call, so turning either off closes the next one.
 		const persistentRoomTerminalOn = (): boolean => {
@@ -1915,10 +2256,11 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 				// On Windows the file tools run in the server, behind the fence, and wait for boxed commands on the same folders, another room's included. No shared server gets the wait.
 				folderWait: fileToolsWait(),
 				localFilesCwd: persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT),
-				skillsFolder: () => (persistentRoomTerminalOn() ? agentSkillsDir() : null),
 				terminalOn: persistentRoomTerminalOn,
 				answer: runningAnswerFolders,
 				asks: () => folderAskOffered() && uiContext.watcher() !== "none",
+				asksNothing: unprotectedAutoLetsThrough,
+				commandsTemp: () => windowsBox?.ownTemp(),
 			})
 			: [];
 		if (persistentRoomWorkspaceToolsEnabled) {
@@ -1952,28 +2294,27 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			}
 		}
 		const persistentRoomThreadRuntime = persistentAgentThreadForSession?.runtime;
-		// Skills MR-5 (spec §5): the room's EFFECTIVE enabled set — hash-pinned and
-		// verified by effectiveEnabledSkills, so drifted/deleted skills never reach
-		// the session. Resolved FRESH for every turn (the per-turn prompt assembly
-		// below calls this), so enabling a skill mid-session lands on the very
-		// next message; the read_skill tool re-verifies the live set + hash pin
-		// on every call regardless.
-		const resolvePersistentRoomEnabledSkillEntries = (): { name: string; description: string }[] => {
+		// Skills: the room's EFFECTIVE enabled set (effectiveEnabledSkills),
+		// so deleted and unreadable skills never reach the session. Resolved FRESH for
+		// every turn (the per-turn prompt assembly below calls this), so enabling a
+		// skill mid-session lands on the very next message; the read_skill tool
+		// re-checks the live set on every call regardless.
+		const resolvePersistentRoomEnabledSkillEntries = (): { name: string; description: string; manifest: string }[] => {
 			try {
 				const skillSettings = readPersistentRoomSkillSettings(persistentAgentId);
 				const effective = effectiveEnabledSkills(skillSettings.enabledSkills, skillLibraryFingerprint);
 				if (effective.length === 0) return [];
-				// Description comes from the SAME manifest the fingerprint pins, so the
-				// index can never surface a description whose change was not re-reviewed.
+				// Description comes from the skill's current manifest.
 				// A skill whose author disabled model invocation is withheld from the
 				// index entirely: the model is never told about it, so it cannot
-				// auto-invoke it. (Rooms have no manual trigger yet; when one exists it
-				// will reach these by an explicit user path, not this autonomous index.)
-				const entries: { name: string; description: string }[] = [];
+				// auto-invoke it. It reaches the model only with a message the person
+				// starts with its name (skill-pick.ts).
+				// Its manifest gives its line the version a conversation compares with what read_skill gave it.
+				const entries: { name: string; description: string; manifest: string }[] = [];
 				for (const skill of effective) {
 					const manifest = resolveLibrarySkillManifest(skill.name);
 					if (!manifest || manifest.disableModelInvocation) continue;
-					entries.push({ name: skill.name, description: manifest.description });
+					entries.push({ name: skill.name, description: manifest.description, manifest: manifest.manifest });
 				}
 				return entries;
 			} catch (error) {
@@ -1986,42 +2327,41 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		// had no tool for a skill enabled mid-session — the index now reaches it
 		// per turn, so the tool must be there to follow through. The security
 		// floor was never registration: the tool itself refuses anything outside
-		// the room's LIVE enabled set (hash-verified) on every call.
+		// the room's LIVE enabled set on every call.
+		// What the room can do with its skills' files right now, from the same
+		// effective policy as the bash tool's own gate: re-read at every read_skill
+		// and every pick, so turning commands or the folder off shows on the next one.
+		const skillFilesReachNow = (): SkillFilesReach => {
+			try {
+				return skillFilesReach(resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId), isSharedServer());
+			} catch {
+				return "none";
+			}
+		};
+		// Only this live session at the room's tools builds this: background,
+		// scheduled and specialist sessions never register read_skill, so never
+		// see a skill's folder. It must NOT be re-derived from
+		// EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT, which is set only while
+		// extensions install, so a read at call time would always find it unset.
+		const skillFilesView: SkillFilesResolver = (name) => {
+			const view = roomSkillFilesView(persistentAgentId, name, skillFilesReachNow(), !isSharedServer());
+			// A protected Windows room's commands run a skill's files only from a folder its protection was given.
+			return view?.kind === "open" && view.reach === "run" && powerShellCommands ? { ...view, windowsRuns: !windowsBoxed || windowsSkillFolder(view.skillDir) !== undefined } : view;
+		};
+		// A picked skill's note tells of its files as read_skill does.
+		skillFilesText = (name) => {
+			const view = skillFilesView(name);
+			return { view, text: view ? skillFilesSection(view, powerShellCommands) : "" };
+		};
 		const persistentRoomSkillTools = [createReadSkillTool({
 			agentId: persistentAgentId,
-			// A protected Windows room's commands run a skill's files only from a folder its protection was given, so its text says how, or that they can't.
-			windowsBox: windowsBoxed,
-			// The tool verifies the pinned manifest hash and returns the defanged
-			// body; both come from one manifest read, so verified and served bytes
-			// can never diverge.
-			lookupSkill: (name) => {
-				const resolved = resolveLibrarySkillManifest(name);
-				return resolved ? { manifest: resolved.manifest, body: resolved.body, description: resolved.description, disableModelInvocation: resolved.disableModelInvocation } : null;
-			},
+			// PowerShell's commands run a skill's files their own way, a protected room's only from a folder its protection was given, so the text says how, or that they can't.
+			windowsBox: powerShellCommands,
+			// The tool checks the identity and returns the defanged body; both come
+			// from one library read, so checked and served bytes can never diverge.
+			lookupSkill: skillLibraryFingerprint,
 			telemetry: persistentRoomSkillTelemetry,
-			// The executable-skills gate chain, re-evaluated on EVERY read, so a
-			// gate that closes mid-session closes exposure on the next call. Every
-			// check is a hard boolean; any miss serves the body path-free, exactly
-			// as before the feature existed.
-			resolveExecutionExposure: (name) => {
-				// Only a live manual turn — background and scheduled runs never see
-				// a path. That holds by construction: this closure is built only in
-				// the live WS session (the manual surface); background, scheduled,
-				// and specialist sessions never register read_skill at all, matching
-				// bash itself (which they also never get). It must NOT be re-derived
-				// from EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT here: that env var
-				// exists only inside the extension-install bracket (set, snapshotted
-				// by the permissions extension, cleared on install completion), so a
-				// live read at tool-call time always saw it unset and the gate could
-				// never open.
-				if (!persistentRoomTerminalOn()) return null;
-				// The room must hold an execution approval for this skill, pinned
-				// to the EXACT files on disk right now — a drifted file set is an
-				// approval that no longer exists.
-				const approved = approvedSkills(persistentAgentId).find((skill) => skill.name === name);
-				if (!approved) return null;
-				return { skillDir: approved.skillDir, files: approved.files, ...(windowsBoxed ? { windowsRuns: windowsSkillFolder(approved.skillDir) !== undefined } : {}) };
-			},
+			resolveSkillFiles: skillFilesView,
 		})];
 		// The shelf pair (files core slice): default-on for every room, fenced to
 		// the room's own files/ folder by the tools themselves — deliberately
@@ -2079,7 +2419,7 @@ ${lines.join("\n")}`;
 					const livePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId);
 					const free = runningAnswerFree();
 					const boxLine = boundBox && livePolicy.workspaceToolsEnabled && livePolicy.capability?.bashEnabled ? (windowsBoxed ? windowsBoxModelLine : boxModelLine)(readAlsoAllowed(persistentAgentId), asksOffered, free) : "";
-					workspace = `${buildPersistentRoomCurrentWorkspaceSection(livePolicy, asksOffered ? { asks: { commands: roomAskView().commands } } : {})}${boxLine}${pagesOpenFreely() ? FREE_READER_LINE : ""}`;
+					workspace = `${buildPersistentRoomCurrentWorkspaceSection(livePolicy, { ...(asksOffered ? { asks: { commands: roomAskView().commands } } : {}), asksNothing: unprotectedOnAutoNow() })}${boxLine}${pagesOpenFreely() ? FREE_READER_LINE : ""}`;
 				} catch (error) {
 					app.log.warn({ err: (error as Error).message }, "current workspace section build failed");
 				}
@@ -2210,7 +2550,7 @@ ${lines.join("\n")}`;
 		const extensionFactories = [
 			// First, so no other extension, listener or save sees the room's reason on an ask.
 			reasonKeeper.extension as any,
-			contentPolicyExt as any,
+			createContentPolicyExtension({ asksNothing: unprotectedAutoLetsThrough }) as any,
 			permissionsExtForSession as any,
 			// Per-command bash approval (workspace reshape slice e): a live
 			// Full-access session pauses every bash call on a question in the
@@ -2236,13 +2576,13 @@ ${lines.join("\n")}`;
 				boxed: () => boundBox !== null,
 				runsWhileAway: unprotectedAutoLetsThrough,
 			}), (toolCallId) => roomCommandTools?.started(toolCallId) ?? true) as any,
-			// A command that finds no shell (Windows without Git) answers the
+			// A command that finds no shell (Windows with neither Git nor PowerShell) answers the
 			// person and the model with one plain line; the raw text is logged.
 			createPersistentRoomShellMissingExtension((raw) => app.log.warn({ detail: raw }, "shell commands: no shell found")) as any,
 			artifactsExt as any,
 			// Per-room MCP: the session's connector surface goes through the shared
 			// room-scope wrapper, keyed to this room.
-			createRoomScopedMcpExtension(persistentAgentId, { onBoundGrants: (fingerprint) => { mcpGrantsFingerprintAtBind = fingerprint; } }) as any,
+			createRoomScopedMcpExtension(persistentAgentId, { onBoundGrants: (fingerprint) => { mcpGrantsFingerprintAtBind = fingerprint; }, asksNothing: unprotectedAutoLetsThrough }) as any,
 			// The room's own web search and the provider's own are the same name
 			// on the wire, so exactly one of them is offered per session. When the
 			// model searches for itself the local tool stands down; fetch_url is
@@ -2274,7 +2614,7 @@ ${lines.join("\n")}`;
 				},
 				notNow: roomNotNow,
 			},
-		} : undefined, commandsOffLine);
+		} : undefined, commandsOffLine, plain, (raw) => app.log.warn({ detail: raw }, "shell commands: Windows PowerShell could not be started"));
 		const asks = createRoomAsks({
 			roomId: persistentAgentId,
 			reasonOf: reasonKeeper.take,
@@ -2285,6 +2625,7 @@ ${lines.join("\n")}`;
 			turnOnCommands: () => setRoomCommands(persistentAgentId, persistentConversationId, true),
 			notNow: roomNotNow,
 			answer: runningAnswerFolders,
+			opensWithoutAsking: () => (persistentRoomWorkspaceToolsEnabled && persistentRoomCapabilityPolicy && unprotectedAutoLetsThrough() ? (folder, access) => openedWithoutAsking(persistentRoomCapabilityPolicy, folder, access, runningAnswerFolders()).real : null),
 		});
 		roomAsks = asks;
 		const loader = new DefaultResourceLoader({
@@ -2329,10 +2670,23 @@ ${lines.join("\n")}`;
 		// not through setSteeringMode, which would write the person's settings.json.
 		session.agent.steeringMode = "all";
 		steerIntake = { runtime: 0, heard: 0 };
-		session.agent.subscribe((event) => {
+		const boundAgent = session.agent;
+		boundAgent.subscribe((event) => {
 			if (event.type === "message_start" && event.message.role === "user") steerIntake.runtime++;
+			// A turn stopped before the model was asked stops as soon as the runtime starts asking it.
+			if (event.type === "agent_start" && turnWasStopped()) boundAgent.abort();
 		});
 		sessionDisposed = false;
+		// Every page left while this bound (a rebind first waits for the old session's end): their close found no session to
+		// end, so this one ends here, before its extensions start anything. A room socket stays open while any page is on it.
+		// A message waiting on this bind keeps it, and it ends once that message is done with it.
+		if (socket.readyState !== socket.OPEN && !messageWaitsOnRebind) {
+			const unwatched = session;
+			session = null;
+			sessionDisposed = true;
+			void endRoomSession(unwatched as any);
+			return;
+		}
 		// Recorded only once the session EXISTS: a rebind that throws above must
 		// leave the old fingerprint in place, so the next prompt frame still sees
 		// the mismatch and retries instead of prompting a disposed session forever.
@@ -2342,6 +2696,7 @@ ${lines.join("\n")}`;
 		boundMcpGrantsFingerprint = mcpGrantsFingerprintAtBind ?? persistentRoomMcpGrantsFingerprint(persistentAgentId);
 		boundNativeProviderSearch = nativeProviderSearchAtBind;
 		boundSessionProviderId = webChatModel.provider;
+		boundGatewayAddress = resolvedGatewayAddress;
 		await session.bindExtensions({ uiContext });
 		// The blocked list was only ever computed until here; check it against the
 		// session's actual registered tools (extensions included, so after bind)
@@ -2385,13 +2740,33 @@ ${lines.join("\n")}`;
 			else if (providerTool?.type === "server_tool_end") providerToolsRunning.delete(String(providerTool.id));
 			else if (event?.type === "message_end" || event?.type === "agent_end") providerToolsRunning.clear();
 			if (event?.type === "message_start" && event.message?.role === "user") steerIntake.heard++;
+			// The session writes a message right after this listener, in the same step: the mark goes in just after it, where an edit reads it.
+			if (event?.type === "message_end" && event.message?.role === "user" && authorToMark) {
+				const author = authorToMark;
+				const message = event.message;
+				authorToMark = undefined;
+				queueMicrotask(() => {
+					try {
+						if (!markMessageAuthor(session as any, message, author)) app.log.warn({ agentId: persistentAgentIdForSession }, "a message's sender could not be marked in the session; any page may edit it");
+					} catch (error) {
+						app.log.warn({ err: error, agentId: persistentAgentIdForSession }, "a message's sender could not be marked in the session; any page may edit it");
+					}
+				});
+			}
 			if (event?.type === "message_start" && event.message?.role === "user" && activePersistentWebTurn && !autoSummaryRunning) {
 				const taken = turnPromptMessageSeen ? pendingSteers.shift() : undefined;
+				// The turn's own prompt is the asker's; a taken message its sender's.
+				const sender = taken ? taken.who : turnPromptMessageSeen ? undefined : activePersistentWebTurn.asker?.kind === "person" ? activePersistentWebTurn.asker.who : undefined;
 				turnPromptMessageSeen = true;
+				authorToMark = sender ? authorOfPerson(sender) : undefined;
 				if (taken) {
-					turnSteps.tookMessage(bubbleIdOf(taken.id), taken.text);
+					const author = authorOfPerson(taken.who);
+					turnSteps.tookMessage(bubbleIdOf(taken.id), taken.text, author);
 					addTaken({ id: taken.id });
 					sendTurnFrame({ type: "steer_taken", id: taken.id, text: taken.text });
+					takenAuthors.push([bubbleIdOf(taken.id), author]);
+					sendSenders([[bubbleIdOf(taken.id), author]]);
+					if (author && keyedSteps && keyedTurn && activePersistentWebTurn) keepKeyedTurnRunning(keyedTurn, activePersistentWebTurn.turnId, activePersistentWebTurn.startedAt ?? keyedTurn.startedAt ?? Date.now());
 				}
 			}
 			// Turn frames route through the reattach-aware sender, so a
@@ -2462,6 +2837,8 @@ ${lines.join("\n")}`;
 					return;
 				}
 			}
+			// A shortening the stop ended says nothing: the turn's own line says it was stopped.
+			if (event.type === "compaction_end" && turnWasStopped()) return;
 			if (event.type === "compaction_end" && (event as any).errorMessage) {
 				const compactionError = String((event as any).errorMessage);
 				const compactionModel = (session as any)?.model;
@@ -2509,12 +2886,12 @@ ${lines.join("\n")}`;
 					}
 				}
 				const u = msg.usage;
+				// A scheduled answer's spend goes on the run's own usage row, never a chat row.
+				if (scheduledTurn) scheduledTurn.usage = addMessageUsage(scheduledTurn.usage, msg);
 				if (u && !answerlessCallMovedNothing(msg)) {
-					const toolsUsed = turnTrace.toolCalls.map((t) => t.name).filter(Boolean);
 					const currentModel = (session as any)?.model;
 					const modelLabel = currentModel ? webChatModelLabel(currentModel.provider, currentModel) : undefined;
-					const turnProvider: string | undefined = currentModel?.provider ?? msg.provider ?? undefined;
-					recordUsage({ ts: Date.now(), agent: activeOwner, persona, model: msg.model, modelLabel, provider: turnProvider, authType: resolveUsageAuthType(turnProvider, true), kind: "chat", input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, ...(u.cacheWrite1h ? { cacheWrite1h: u.cacheWrite1h } : {}), cost: u.cost?.total ?? 0, tools: toolsUsed.length ? toolsUsed : undefined });
+					if (!scheduledTurn) recordAnswerUsage(msg, "chat", currentModel);
 					sendTurnFrame({ type: "usage_turn", agent: activeOwner, model: msg.model, modelProvider: msg.provider, modelLabel, input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost?.total ?? 0, totalTokens: u.totalTokens ?? 0, contextTokens: u.contextTokens ?? null, contextHealth: contextHealthForSession(session) });
 				}
 			}
@@ -2643,19 +3020,29 @@ ${lines.join("\n")}`;
 		}
 	};
 
+	// The ready frame, the first page's and a joining page's alike. On a shared server it carries the conversation and its
+	// pending transfers as the server holds them, which the page shows in place of the copy it read before its socket opened.
+	// `reader`: the request of the page it goes to, whose person the conversation is shown to.
+	// `running`: a running answer's messages (runningMessages), which stand over a copy a page saved under their ids.
+	const readyFrame = (open: { returnedPrompt?: ReturnedPrompt; notEditable?: string; waiting: Array<{ id: string; text: string }>; reattaching: boolean; items: unknown[] | undefined; running?: readonly ThreadItem[]; pendingHandoffs: unknown }, reader: typeof req) => {
+		const taken = readTakenSteers(persistentAgentIdForSession, persistentConversationId);
+		return { type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, persistentConversationId, session), ...(open.returnedPrompt ? { returnedPrompt: open.returnedPrompt } : {}), ...(open.notEditable ? { notEditable: open.notEditable } : {}), waiting: open.waiting, taken: taken.map((steer) => steer.id), withdrawn: taken.filter((steer) => steer.withdrawn).map((steer) => steer.id), reattaching: open.reattaching, held: readHeldMessages(persistentAgentIdForSession, persistentConversationId), ...(isSharedServer() ? { items: itemsShownTo(reader, withRunningMessages(open.items ?? [], open.running ?? [])), pendingTransfers: readConsultHandoffQueue(open.pendingHandoffs) } : {}) };
+	};
 	try {
 		await bindSession();
+		// The page left while the session bound: bindSession ended it, and nothing is left to open.
+		if (!session) return;
 		// A message left unanswered while the app was not running (it stopped mid-retry) goes back too.
 		// A scheduled run that failed before its turns were marked is told by its item id.
-		const threadItemsAtOpen = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items;
+		const threadAtOpen = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
+		const threadItemsAtOpen = threadAtOpen?.items;
 		// One an away limit stopped stays above under its line.
 		const returnedAtOpen = (getPersistentAgentActiveTurnState(persistentAgentIdForSession, persistentConversationId).state === "idle" && !lastUserItemIsScheduledPrompt(threadItemsAtOpen) && !endsOnAwayLimitStop(threadItemsAtOpen) ? await stepBackFromFailedPrompt(session as any, { shown: lastShownUserText(threadItemsAtOpen) }) : undefined) ?? returnedPromptOf(session as any);
 		// A new connection holds no messages of its own yet: what waits is the running answer's it steps back into.
 		const reattachingTurn = claimedCookingTurn;
 		// The newest message's bubble, when it cannot be edited: the page shows no pencil on it.
 		const notEditable = notEditableMessageId(session as any, threadItemsAtOpen, !!returnedAtOpen || lastUserItemIsScheduledPrompt(threadItemsAtOpen));
-		const takenAtOpen = readTakenSteers(persistentAgentIdForSession, persistentConversationId);
-		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, persistentConversationId, session), ...(returnedAtOpen ? { returnedPrompt: returnedAtOpen } : {}), ...(notEditable ? { notEditable } : {}), waiting: reattachingTurn?.waiting(connectionId) ?? [], taken: takenAtOpen.map((steer) => steer.id), withdrawn: takenAtOpen.filter((steer) => steer.withdrawn).map((steer) => steer.id), reattaching: reattachingTurn !== null, held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) });
+		send(readyFrame({ returnedPrompt: returnedAtOpen, notEditable, waiting: reattachingTurn?.waiting(connectionId) ?? [], reattaching: reattachingTurn !== null, items: threadItemsAtOpen, running: reattachingTurn?.messages() ?? [], pendingHandoffs: threadAtOpen?.pendingHandoffs }, req));
 	} catch (e) {
 		if (e instanceof PersistentAgentMemoryOverflowError || e instanceof RoomModelUnavailableError || (e as { code?: unknown })?.code === "provider_signed_out") {
 			// Named so the client can stand its reconnect loop down: redialing
@@ -2666,7 +3053,7 @@ ${lines.join("\n")}`;
 			const provider = (e as { provider?: unknown }).provider;
 			// A key connection's state, so the page names the key without the sign-in list.
 			const credentialKey = (e as { code?: unknown }).code === "provider_signed_out" && typeof provider === "string" ? credentialKeyOf("signed-out", provider) : undefined;
-			send({ type: "error", code: (e as { code: string }).code, message: (e as Error).message, ...(typeof provider === "string" ? { provider } : {}), ...(credentialKey ? { credentialKey } : {}) });
+			send({ type: "error", code: (e as { code: string }).code, message: (e as Error).message, ...(typeof provider === "string" ? { provider } : {}), ...(credentialKey ? { credentialKey } : {}), ...(e instanceof RoomModelUnavailableError && e.model ? { model: e.model } : {}) });
 		} else {
 			send({ type: "error", message: `failed to create session: ${(e as Error).message}` });
 		}
@@ -2690,17 +3077,19 @@ ${lines.join("\n")}`;
 			app.log.warn({ err: error }, "persistent room rebind failed");
 			return;
 		}
-		send({ type: "error", code: error.code, message: error.message, ...(error instanceof RoomModelUnavailableError ? { provider: error.provider } : {}) });
+		send({ type: "error", code: error.code, message: error.message, ...(error instanceof RoomModelUnavailableError ? { provider: error.provider, ...(error.model ? { model: error.model } : {}) } : {}) });
 		try { socket.close(); } catch {}
 	};
 
 	const scheduleAdoptedSessionRebind = (): void => {
 		const rebind = (async () => {
+			const ending = session;
+			session = null;
 			if (!sessionDisposed) {
 				sessionDisposed = true;
-				try { (session as any)?.dispose?.(); } catch {}
+				// Waited for before the next binds: its end lets go of what the model's provider keeps for this conversation, which the next one shares.
+				await endRoomSession(ending as any);
 			}
-			session = null;
 			await bindSession();
 		})();
 		workspaceRebindInFlight = rebind;
@@ -2786,6 +3175,8 @@ ${lines.join("\n")}`;
 			// instantly instead of re-animating the caught-up text at reading
 			// pace, and only post-seam live tokens reveal paced.
 			send({ type: "turn_reattach_replay_done", turnId: cooking.turnId });
+			const senders = sendersFrame(cooking.authors());
+			if (senders) send(senders(req));
 			if (adopted) {
 				// After the replay window, so a question asked again shows as a live card.
 				cooking.attachQuestions(connectionId, !remoteReadOnlySession, remoteDeviceForSession ? "phone" : "computer");
@@ -2844,17 +3235,40 @@ ${lines.join("\n")}`;
 	// terminal frame sent while this socket is closing reports undelivered.
 	bindSpecialistSink(persistentAgentIdForSession, sendChecked);
 
-	const handleSocketMessage = async (raw: Buffer) => {
+	// `from`: the page that sent the message, on a room socket; its own answers go to it alone, and it is judged by its
+	// own request. Without one, this connection's.
+	// `fromSchedule`: a due schedule's prompt the host runs (runScheduledAnswer), never a frame; what would answer a sender is kept on it.
+	const handleSocketMessage = async (raw: Buffer, from?: RoomPage, fromSchedule?: ScheduledTurn) => {
 		let msg: any;
 		try { msg = JSON.parse(raw.toString()); } catch { return; }
 		streamTrace.frameIn(msg);
-		if (serverHooks().frameRefusal?.(req, persistentAgentIdForSession, msg, socket)) return;
+		const fromReq = from?.req ?? req;
+		const reply = fromSchedule
+			? (frame: any) => {
+				if (frame?.type === "error") fromSchedule.refused ??= { code: String(frame.code ?? "refused"), message: String(frame.message ?? "") };
+			}
+			: from
+			? (frame: unknown) => {
+				turnFrameCoalescer.flush();
+				streamTrace.frameOut(frame);
+				try { from.socket.send(JSON.stringify(frame)); } catch {}
+			}
+			: send;
+		if (retired) return;
+		if (!fromSchedule && serverHooks().frameRefusal?.(fromReq, persistentAgentIdForSession, msg, (from?.socket ?? socket) as Parameters<NonNullable<ReturnType<typeof serverHooks>["frameRefusal"]>>[3])) return;
+		// What a page sends starts the room's quiet spell again; an open page that sends nothing does not.
+		if (from && (msg.type === "prompt" || msg.type === "continue" || msg.type === "steer")) roomActiveAt = Date.now();
 		// The page came into view on this conversation: it clears the "Response
 		// ready" mark it loaded as it bound, for this conversation only; a
 		// landing after the bind came from another window, which this page never
 		// showed. Looking is no interaction, so a viewing-only device says it too.
 		if (msg.type === "conversation_seen") {
 			if (unseenLandingAtBind) try { clearPersistentAgentUnseenLandedAnswerLoaded(persistentAgentIdForSession, persistentConversationId, unseenLandingAtBind); } catch {}
+			// On a room's one session every landing in its conversation reached every page, so a page in view has seen it.
+			if (roomSocket) try {
+				const landed = getPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession);
+				if (landed) clearPersistentAgentUnseenLandedAnswerLoaded(persistentAgentIdForSession, persistentConversationId, landed);
+			} catch {}
 			return;
 		}
 		// A read-only device's socket is observe-only: EVERY inbound frame is
@@ -2897,6 +3311,12 @@ ${lines.join("\n")}`;
 		const adoptedAtArrival = msg.type === "prompt" && claimedCookingTurn && !claimedCookingTurn.settled && claimedCookingTurn.claimantConnectionId === connectionId ? claimedCookingTurn : null;
 		if (testPromptStartDelayMs > 0 && (msg.type === "prompt" || msg.type === "continue")) await new Promise((resolve) => setTimeout(resolve, testPromptStartDelayMs));
 		if (msg.type === "ui_response") {
+			// Only the asker's pages answer a question of their answer; another person's page is told whose it is, and nothing else happens.
+			const asker = claimedCookingTurn ? claimedCookingTurn.asker : activePersistentWebTurn?.asker;
+			if (from && asker && !answersFor(from, asker)) {
+				reply({ type: "ui_request_refused", id: msg.id, waitingFor: askedByOf(asker) });
+				return;
+			}
 			// A turn this connection took over asked the question, not this connection's own session.
 			const answeredBy = remoteDeviceForSession ? "phone" : "computer";
 			if (claimedCookingTurn) claimedCookingTurn.answerQuestion(connectionId, msg.id, msg.value, answeredBy);
@@ -2910,17 +3330,17 @@ ${lines.join("\n")}`;
 				const folder = typeof msg.path === "string" ? msg.path : "";
 				const access = folder !== "" ? removeAskedFolder(persistentAgentIdForSession, folder, answerFolders) : null;
 				if (access) removedHere.set(folder, access);
-				send({ type: "room_folder_removed", path: folder, removed: access !== null });
+				reply({ type: "room_folder_removed", path: folder, removed: access !== null });
 			} else if (msg.type === "room_folder_restore") {
 				// Undo puts back only a folder this connection removed, with the access it had: a path from the page alone adds nothing.
 				const folder = typeof msg.path === "string" ? msg.path : "";
 				const access = removedHere.get(folder);
 				removedHere.delete(folder);
 				if (access) addAlsoAllowedFolder(persistentAgentIdForSession, folder, access);
-				send({ type: "room_folder_restored", path: folder, restored: access !== undefined });
+				reply({ type: "room_folder_restored", path: folder, restored: access !== undefined });
 			} else {
 				setRoomCommands(persistentAgentIdForSession, persistentConversationId, false);
-				send({ type: "room_commands_turned_off" });
+				reply({ type: "room_commands_turned_off" });
 			}
 			return;
 		}
@@ -2962,6 +3382,8 @@ ${lines.join("\n")}`;
 			} catch (error) {
 				app.log.warn({ err: error }, "changing the held messages failed");
 			}
+			// Every page on the room lists what is held now.
+			if (roomSocket) try { send({ type: "held_changed", held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) }); } catch {}
 			return;
 		}
 		// Stop on a named part reaches the turn that wrote it, also from a window whose session is not bound yet.
@@ -2979,6 +3401,8 @@ ${lines.join("\n")}`;
 		// a second time (AgentSession.continueAfterFailure).
 		if (msg.type === "prompt" || msg.type === "continue") {
 			const continuing = msg.type === "continue";
+			// What the model is sent: the frame's text, with the transfers it carries once the turn takes them.
+			let promptText = String(msg.text ?? "");
 			// A second run inside the same turn (the recovery prompt) can hold it longer: past the cap the guard below answers as before.
 			const windingDown = windingDownForThisWindow();
 			if (windingDown) {
@@ -2990,6 +3414,13 @@ ${lines.join("\n")}`;
 				// The connection closed while it waited: its close gave the room up, so nothing starts from it.
 				if (socket.readyState !== socket.OPEN || sessionDisposed) return;
 			}
+			// An earlier session of this conversation still ending (its window closed, a program slow to exit) closes what the
+			// model's provider keeps under the conversation's id once it ends: the message asks the model after that.
+			const earlierEnd = endUnderWay((session as any)?.sessionId);
+			if (earlierEnd) {
+				await earlierEnd;
+				if (socket.readyState !== socket.OPEN || sessionDisposed) return;
+			}
 			// The adopted turn landed its prompt and answer meanwhile: this message starts right after what that landing wrote.
 			// Never after the file's last item: the page may have saved this very message, and it would become its own anchor.
 			const adoptedLanding = continuing ? undefined : adoptedAtArrival?.landedItemId();
@@ -2999,7 +3430,7 @@ ${lines.join("\n")}`;
 				serverStopNoteAtArrival = null;
 			}
 			if (serverStopping()) {
-				send({ type: "error", code: SERVER_STOPPING_CODE, message: SERVER_STOPPING_SENTENCE });
+				reply({ type: "error", code: SERVER_STOPPING_CODE, message: SERVER_STOPPING_SENTENCE });
 				return;
 			}
 			// Workspace settings apply from the next message: when the room's
@@ -3049,14 +3480,20 @@ ${lines.join("\n")}`;
 					const modelBeforeRebind = promptDiagnosticsCurrentModel;
 					// `!session` here means an earlier rebind failed after disposing
 					// the old session; retry rather than bricking the connection.
-					if (!session || emptyConversationMoves || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint || liveMcpGrantsFingerprint !== boundMcpGrantsFingerprint || liveNativeProviderSearch !== boundNativeProviderSearch) {
+					// An address it cannot read is no move: the bound one stands, as the search setting does above.
+					const liveGatewayAddress = (boundSessionProviderId ? readGatewayProviderBaseUrl(boundSessionProviderId) : "") || boundGatewayAddress;
+					// On a shared server, a model taken away since the bind: the rebind refuses with the room's line.
+					const boundModelGone = sharedServerConversationModelRefusal(promptDiagnosticsCurrentModel) !== null;
+					if (!session || emptyConversationMoves || boundModelGone || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint || liveMcpGrantsFingerprint !== boundMcpGrantsFingerprint || liveNativeProviderSearch !== boundNativeProviderSearch || liveGatewayAddress !== boundGatewayAddress) {
 						if (!workspaceRebindInFlight) {
 							const rebind = (async () => {
+								const ending = session;
+								session = null;
 								if (!sessionDisposed) {
 									sessionDisposed = true;
-									try { (session as any)?.dispose?.(); } catch {}
+									// Waited for before the next binds: its end lets go of what the model's provider keeps for this conversation, which the next one shares.
+									await endRoomSession(ending as any);
 								}
-								session = null;
 								await bindSession();
 							})();
 							workspaceRebindInFlight = rebind;
@@ -3064,7 +3501,8 @@ ${lines.join("\n")}`;
 								if (workspaceRebindInFlight === rebind) workspaceRebindInFlight = null;
 							});
 						}
-						await workspaceRebindInFlight;
+						messageWaitsOnRebind = true;
+						try { await workspaceRebindInFlight; } finally { messageWaitsOnRebind = false; }
 						// The room shows the model the conversation now runs on: the
 						// same frame a switch sends, without a line (nothing was said
 						// on the old model, so nothing continues).
@@ -3074,24 +3512,28 @@ ${lines.join("\n")}`;
 						}
 					}
 				} catch (e) {
+					// A bind that failed after its session was installed leaves that session to the message, which goes no further.
+					endSessionLeftDuringRebind();
 					if (e instanceof PersistentAgentMemoryOverflowError || e instanceof RoomModelUnavailableError) {
 						reportRebindRefusal(e);
 						return;
 					}
 					app.log.warn({ err: e }, "persistent room settings rebind failed");
-					send({ type: "error", ...persistentRoomSettingsNotAppliedFrame(e, isSharedServer(), requestGetsLocalPaths(req)) });
+					reply({ type: "error", ...persistentRoomSettingsNotAppliedFrame(e, isSharedServer(), requestGetsLocalPaths(fromReq)) });
 					return;
 				}
 			}
 			if (!session) return;
 			// The rebind awaits, and a stop can begin meanwhile.
 			if (serverStopping()) {
-				send({ type: "error", code: SERVER_STOPPING_CODE, message: SERVER_STOPPING_SENTENCE });
+				reply({ type: "error", code: SERVER_STOPPING_CODE, message: SERVER_STOPPING_SENTENCE });
+				endSessionLeftDuringRebind();
 				return;
 			}
 			// The conversation moved on from the failed answer (another window, or a step back this page never showed): the page sends the message again instead.
 			if (continuing && !session.canContinueAfterFailure()) {
-				send({ type: "error", code: "nothing_to_continue" });
+				reply({ type: "error", code: "nothing_to_continue" });
+				endSessionLeftDuringRebind();
 				return;
 			}
 			// An edit steps the conversation back before the turn begins, so a refused edit begins no turn and lands nothing.
@@ -3103,21 +3545,29 @@ ${lines.join("\n")}`;
 			if (edit) {
 				// Whatever would refuse the turn (a Remember reading, a running answer) refuses the edit before it changes anything.
 				let canBegin = !autoSummaryRunning;
-				// A scheduled run's prompt was the app's, not the person's.
+				// A scheduled run's prompt was the app's, not the person's. The saved message the edit names, which it takes out of the
+				// conversation, must not be another person's either (the session's own mark decides the message stepped back).
 				let scheduled = false;
+				let namesAnothers = false;
+				const editor = authorOfPerson(from ? pagePerson(from.req) : undefined);
 				try {
 					if (canBegin) {
 						assertPersistentAgentTurnCanBegin(persistentAgentIdForSession, persistentConversationId);
-						scheduled = lastUserItemIsScheduledPrompt(getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items);
+						const items = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items;
+						scheduled = lastUserItemIsScheduledPrompt(items);
+						const named = readMessageAuthor((items?.find((item) => (item as { id?: unknown } | null)?.id === edit.replaces) as { author?: unknown } | undefined)?.author);
+						namesAnothers = !!named && (named.person !== editor?.person || named.space !== editor?.space);
 					}
 				} catch { canBegin = false; }
 				// A held message waits to go after the newest one: the edit would go before it.
 				const stepped = !canBegin ? { ok: false as const, refused: "running" as const }
 					: readHeldMessages(persistentAgentIdForSession, persistentConversationId).length > 0 ? { ok: false as const, refused: "held" as const }
 					: scheduled ? { ok: false as const, refused: "not-typed" as const }
-					: await stepBackForEdit(session as any, edit.text);
+					: namesAnothers ? { ok: false as const, refused: "not-yours" as const }
+					: await stepBackForEdit(session as any, edit.text, editor);
 				if (!stepped.ok) {
-					send({ type: "edit_refused", replaces: edit.replaces, reason: stepped.refused, held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) });
+					reply({ type: "edit_refused", replaces: edit.replaces, reason: stepped.refused, held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) });
+					endSessionLeftDuringRebind();
 					return;
 				}
 				editTaken = true;
@@ -3128,6 +3578,8 @@ ${lines.join("\n")}`;
 				setAnswerNote(undefined);
 			}
 			let persistentTurnId: string | undefined;
+			const stopLimit = createStopLimit();
+			let endedByForce = false;
 			let returnedPrompt: ReturnedPrompt | undefined;
 			let leafBeforePrompt: string | null | undefined;
 			// The note this message carries, kept for it should the message go back to the box.
@@ -3138,9 +3590,20 @@ ${lines.join("\n")}`;
 				const startedTurn = beginPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { connectionId, key: turnKey });
 				if (!startedTurn.turnId) throw new Error("persistent-agent turn id was not created");
 				persistentTurnId = startedTurn.turnId;
+				if (fromSchedule) {
+					fromSchedule.began = true;
+					scheduledTurn = fromSchedule;
+					// A scheduled run's own tools for this answer, and its questions declined once the quiet spell passes unanswered.
+					fromSchedule.toolsBefore = { session, names: session!.getActiveToolNames() };
+					session!.setActiveToolsByName(scheduledAnswerToolNames(fromSchedule.toolsBefore.names));
+					fromSchedule.declinedBefore = autoDeclinedQuestions.titles().length;
+					uiContext.declineUnansweredAfter(roomQuietSpell(), SCHEDULED_QUESTION_DECLINED);
+				}
 				// Out of the saved conversation now, and out of every later write, however late an older copy of the page's arrives.
 				if (editedAwayIds.length) try { removeEditedAwayItems(persistentAgentIdForSession, persistentConversationId, editedAwayIds); } catch {}
-				activePersistentWebTurn = { turnId: persistentTurnId, promptSettled: false, ...(typeof startedTurn.startedAt === "number" ? { startedAt: startedTurn.startedAt } : {}) };
+				// A scheduled answer is no person's: any page answers it.
+				const asker = from && !fromSchedule ? askerOf(from) : undefined;
+				activePersistentWebTurn = { turnId: persistentTurnId, stopLimit, promptSettled: false, ...(typeof startedTurn.startedAt === "number" ? { startedAt: startedTurn.startedAt } : {}), ...(asker ? { asker } : {}) };
 				turnProgress.toolsRunning.clear();
 				// The last turn's Stop answered its questions; this turn asks again.
 				uiContext.reopen();
@@ -3151,8 +3614,11 @@ ${lines.join("\n")}`;
 				} catch {
 					answerFree = false;
 				}
-				roomCommandTools?.personSpoke();
-				roomAsks?.personSpoke();
+				// A scheduled prompt is the app's, not the person's.
+				if (!fromSchedule) {
+					roomCommandTools?.personSpoke();
+					roomAsks?.personSpoke();
+				}
 				// A new turn owns the anchor from here on: the previous turn's
 				// post-stream landing snapshot must not fire against it.
 				settledTurnLandingSnapshot = null;
@@ -3161,6 +3627,7 @@ ${lines.join("\n")}`;
 				resetTurnTrace();
 				turnSteps = createTurnStepLog(turnKey);
 				pendingSteers = [];
+				takenAuthors = [];
 				// The last turn's pieces end here: its taken messages, and a landing the page never answered for.
 				keepPiece("taken messages", () => dropTakenSteers(persistentAgentIdForSession, persistentConversationId));
 				keepPiece("kept landing", () => dropKeptLanding(persistentAgentIdForSession, persistentConversationId));
@@ -3187,12 +3654,21 @@ ${lines.join("\n")}`;
 				} else {
 					turnStartAnchorItemId = lastItemIdAtArrival;
 					turnStartEarlierPrompts = earlierPromptsAtArrival;
-					lastPromptTurnStart = { anchorItemId: turnStartAnchorItemId, earlierPromptsAfterAnchor: earlierPromptsAtArrival, promptKept: true };
+					lastPromptTurnStart = { anchorItemId: turnStartAnchorItemId, earlierPromptsAfterAnchor: earlierPromptsAtArrival, promptKept: true, ...(turnKey ? { questionId: turnKey } : {}) };
 				}
+				const author = asker?.kind === "person" ? authorOfPerson(asker.who) : undefined;
 				keyedTurn = turnKey
-					? { key: turnKey, continued: continuing, ...(continuing ? {} : { shown: readShownPrompt(msg.shown) }), strippedText: continuing ? "" : userAuthoredPromptText(String(msg.text ?? "")), startAnchorId: turnStartAnchorItemId, ...(typeof startedTurn.startedAt === "number" ? { startedAt: startedTurn.startedAt } : {}), steps: turnSteps, ...(editLine ? { editLine } : {}) }
+					? { key: turnKey, continued: continuing, ...(continuing ? {} : { shown: readShownPrompt(msg.shown) }), strippedText: continuing ? "" : userAuthoredPromptText(String(msg.text ?? "")), startAnchorId: turnStartAnchorItemId, ...(typeof startedTurn.startedAt === "number" ? { startedAt: startedTurn.startedAt } : {}), steps: turnSteps, ...(editLine ? { editLine } : {}), ...(author ? { author } : {}) }
 					: null;
-				if (keyedTurn) keepRunningTurn(persistentAgentIdForSession, persistentConversationId, { turnId: persistentTurnId, key: keyedTurn.key, startedAt: startedTurn.startedAt ?? Date.now(), continued: keyedTurn.continued, ...(keyedTurn.startAnchorId ? { startAnchorId: keyedTurn.startAnchorId } : {}), own: keyedTurnFirstItems(keyedTurn) });
+				if (keyedTurn) keepKeyedTurnRunning(keyedTurn, persistentTurnId, startedTurn.startedAt ?? Date.now());
+				// Every other page on the room is shown the question and how its parts are named before the answer's first
+				// frame, marked as a new answer's start, not a catch-up into one it already shows.
+				if (roomSocket) {
+					const question = continuing ? "" : keyedTurn ? keyedTurn.shown?.text ?? keyedTurn.strippedText : userAuthoredPromptText(String(msg.text ?? ""));
+					roomSocket.sendToOthers(JSON.stringify({ type: "turn_reattach", turnId: persistentTurnId, conversationId: persistentConversationId, settled: false, startsAnswer: true, ...(keyedTurn && !continuing ? { promptId: keyedTurn.key, promptFiles: keyedTurn.shown?.files ?? [] } : {}), ...(fromSchedule && keyedTurn ? { notEditable: keyedTurn.key } : {}), ...(question ? { userText: question } : {}), ...(turnStartAnchorItemId !== undefined ? { anchorItemId: turnStartAnchorItemId } : {}), ...(typeof startedTurn.startedAt === "number" ? { startedAt: startedTurn.startedAt } : {}), now: Date.now(), waiting: [] }), from);
+					roomSocket.sendToOthers(JSON.stringify({ type: "turn_reattach_replay_done", turnId: persistentTurnId }), from);
+				}
+				if (keyedTurn && !continuing) sendSenders([[keyedTurn.key, keyedTurn.author]]);
 				const sessionAtPromptStart = session;
 				// Reasoning effort for this turn. `effort` on a prompt frame behaves
 				// exactly like the effort frame: the raw level is stored for this
@@ -3217,16 +3693,26 @@ ${lines.join("\n")}`;
 					if (turnEffortChoice) applyRoomEffortToSession(session, turnEffortChoice);
 				}
 				// A continued turn has no new text: no prompt to land, nothing to hand back.
-				const userText = continuing ? "" : String(msg.text ?? "");
+				// On a shared server the page lists its transfers beside its text (`transfers`), and the server puts them in
+				// front, from the stored queue and the page's own not yet saved, in the same step that takes them: a
+				// transfer another page's message carried, or one a page names again, is never sent twice.
+				const listsTransfers = !continuing && !fromSchedule && isSharedServer() && Array.isArray(msg.transfers);
+				if (listsTransfers) {
+					try { promptText = composeOutgoingPromptWithHandoffs(takePendingTransfersForMessage(persistentAgentIdForSession, persistentConversationId, msg.transfers), promptText); } catch (error) { app.log.warn({ err: error }, "failed to take the consult pending-transfer queue on prompt"); }
+				}
+				const userText = continuing ? "" : promptText;
 				// Only what the person typed lands: never the model-written handoff
 				// blocks or app-written attachment notes the client prepends.
 				currentTurnUserTextForLanding = userAuthoredPromptText(userText);
 				// Consult MR-5 hardening: this prompt has consumed any queued handoff
-				// blocks (the client prepended them to userText). Clear the persisted
+				// blocks (the client prepended them to userText; a message that lists
+				// them apart took them above). Clear the persisted
 				// queue now, atomically with the consume, so a crash or a reordered
 				// client save can never re-queue an already-sent block. Best-effort:
 				// never let it break the turn.
-				if (!continuing) try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
+				// A scheduled prompt carries none of them: they wait for the person's next message.
+				// On a shared server only a message that lists its transfers takes them: one the box did not send leaves the queue for the next.
+				if (!continuing && !fromSchedule && !isSharedServer()) try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
 				preparePromptDiagnosticsTurn("user");
 				// The session read the sign-ins when it bound; one made since (after
 				// a turn failed on a key that no longer worked) is read now, so this
@@ -3235,7 +3721,10 @@ ${lines.join("\n")}`;
 				leafBeforePrompt = (session as any).sessionManager?.getLeafId?.();
 				// The sites the person names count from this message on; a carried-on turn's first message is already in, so its last one alone counts.
 				if (!continuing && leafBeforePrompt !== undefined) answerSites.startsAfter(leafBeforePrompt);
-				if (continuing) await session!.continueAfterFailure();
+				if (continuing) {
+					pickedSkillAgain(session!);
+					await stopLimit.race(session!.continueAfterFailure());
+				}
 				else {
 					// The note goes only to the model: the consent text above and the bubble keep the person's words.
 					// After a server stop, only while the model was told nothing since: its own history still ends on the stopped answer,
@@ -3246,7 +3735,8 @@ ${lines.join("\n")}`;
 					// Before the answer's first frame: the page takes the replaced message and answer out, and says what was not undone.
 					if (edit && editTaken) sendTurnFrame({ type: "edit_applied", replaces: edit.replaces, ...(editLine ? { line: editLine } : {}) });
 					// What an edit's step back left done, for the edited message and for the same text sent again after a failed attempt.
-					await session!.prompt(withPersistentRoomRestoredLiveThreadContext(withAnswerNote(sentNote, withEditNote(continuing ? [] : keptBeforeNextMessage(session as any), userText))), serverHooks().promptOptions?.());
+					// A scheduled prompt is the app's text, not the person's: a "/name" at its start is never read for a pick.
+					await stopLimit.race(session!.prompt(withPersistentRoomRestoredLiveThreadContext(withAnswerNote(sentNote, withEditNote(continuing ? [] : keptBeforeNextMessage(session as any), fromSchedule ? userText : withPickedSkill(userText, asker?.kind === "person" ? asker.who : undefined)))), serverHooks().promptOptions?.()));
 				}
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("completed");
 				await flushSessionEvents();
@@ -3254,10 +3744,11 @@ ${lines.join("\n")}`;
 				if (session === sessionAtPromptStart) keepAnswerNote(activePersistentWebTurn?.turnId === persistentTurnId ? activePersistentWebTurn : null);
 				// A message the model could not answer goes back to the person (failed-prompt-step-back.ts); after Stop, only one no attempt answered.
 				// A message the runtime is about to ask again, once it shortened the conversation, stays where it is.
-				const askedAgain = overflowRecovery ? await overflowRecovery : false;
+				const askedAgain = overflowRecovery ? await stopLimit.race(overflowRecovery) : false;
 				overflowRecovery = undefined;
 				// A turn an away limit stopped, even in a wait to ask again, keeps its message above under the stop's line.
-				if (session === sessionAtPromptStart && !askedAgain && !activePersistentWebTurn?.awayLimit) returnedPrompt = await stepBackFromFailedPrompt(session as any, { stopped: activePersistentWebTurn?.terminalReason === "cancelled" || activePersistentWebTurn?.stoppedByServer === true, shown: userText });
+				// A scheduled prompt was the app's: it is never handed to anyone.
+				if (!fromSchedule && session === sessionAtPromptStart && !askedAgain && !activePersistentWebTurn?.awayLimit) returnedPrompt = await stopLimit.race(stepBackFromFailedPrompt(session as any, { stopped: activePersistentWebTurn?.terminalReason === "cancelled" || activePersistentWebTurn?.stoppedByServer === true, shown: userText }));
 				// A message handed back to the box got no answer, and a turn whose last attempt failed did not finish, whatever stayed above:
 				// either ends failed, never as a finished response.
 				const lastMessage = sessionAtPromptStart?.agent.state.messages.at(-1);
@@ -3270,20 +3761,28 @@ ${lines.join("\n")}`;
 				// recovery would start a fresh paid turn the user just declined. So
 				// does one the runtime asks again itself, which would race it.
 				if (!detachedFromClient && !askedAgain && session === sessionAtPromptStart && activePersistentWebTurn?.terminalReason === "completed") {
-					await maybeAutoSummarizeToolTurn();
+					await stopLimit.race(maybeAutoSummarizeToolTurn());
 				}
+				// Every answer's end, also one that failed or was stopped and so sent no usage: after the step back, which takes a message handed back out of the conversation.
+				sendContextReading();
 			} catch (e) {
 				// The turn was refused after the edit's guard passed: the saved conversation still holds the message and its answer.
 				if (edit && !persistentTurnId) {
-					send({ type: "edit_refused", replaces: edit.replaces, reason: "running", held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) });
+					reply({ type: "edit_refused", replaces: edit.replaces, reason: "running", held: readHeldMessages(persistentAgentIdForSession, persistentConversationId) });
 					return;
 				}
 				// Sent while an answer is still running: only this window hears of it, and the running turn is left alone.
 				if ((e as any)?.code === "turn_running" && !persistentTurnId) {
-					send({ type: "error", code: "turn_running", message: (e as Error).message });
+					// While a scheduled answer runs the page keeps the message queued, to go next, instead of in its box.
+					reply({ type: "error", code: "turn_running", message: (e as Error).message, ...(scheduledTurn ? { scheduledAnswer: true } : {}) });
 					return;
 				}
 				promptDiagnosticsPendingTurn = undefined;
+				if (e instanceof TurnEndForced) {
+					endedByForce = true;
+					if (activePersistentWebTurn) cutActiveTurn(activePersistentWebTurn);
+					return;
+				}
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("failed");
 				// A room that can't read its own files says so with its code, so the page can put the message back.
 				if ((e as any)?.code === "room_files_unreadable") {
@@ -3299,12 +3798,22 @@ ${lines.join("\n")}`;
 				sendTurnFrame({ type: "error", message: (e as Error).message, ...(credentialKey ? { credentialKey } : {}), ...((e as any)?.code === "conversation_moved" ? { code: "conversation_moved" } : {}) });
 				// Refused before the message reached the conversation (no key at all): the room said why, and only typed text goes back in the box.
 				const typedOnly = userAuthoredPromptText(String(msg.text ?? ""));
-				if ((e as any)?.code !== "conversation_moved" && leafBeforePrompt !== undefined && (session as any)?.sessionManager?.getLeafId?.() === leafBeforePrompt && typedOnly.trim() && typedOnly.trim() === String(msg.text ?? "").trim()) returnedPrompt = { text: typedOnly.trim(), notice: true };
+				if (!fromSchedule && (e as any)?.code !== "conversation_moved" && leafBeforePrompt !== undefined && (session as any)?.sessionManager?.getLeafId?.() === leafBeforePrompt && typedOnly.trim() && typedOnly.trim() === promptText.trim()) returnedPrompt = { text: typedOnly.trim(), notice: true };
+				sendContextReading();
 			} finally {
+				// Refused before its turn began: no settle comes to end a session bound for it.
+				if (!persistentTurnId) endSessionLeftDuringRebind();
 				if (persistentTurnId) {
 					returnUntakenSteers();
 					const turn = activePersistentWebTurn?.turnId === persistentTurnId ? activePersistentWebTurn : null;
 					if (turn) turn.promptSettled = true;
+					roomActiveAt = Date.now();
+					if (fromSchedule && scheduledTurn === fromSchedule) {
+						scheduledTurn = null;
+						uiContext.declineUnansweredAfter(null, "");
+						if (fromSchedule.toolsBefore && session === fromSchedule.toolsBefore.session) session?.setActiveToolsByName(fromSchedule.toolsBefore.names);
+						fromSchedule.ended = { turnId: persistentTurnId, reason: turn?.terminalReason ?? "failed", stoppedByServer: turn?.stoppedByServer === true, text: turnTrace.finalAssistantText ?? "", declined: autoDeclinedQuestions.titles().slice(fromSchedule.declinedBefore ?? 0) };
+					}
 					try { finishPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { turnId: persistentTurnId, terminalReason: turn?.terminalReason ?? "failed" }); } catch {}
 					answerFolders.end();
 					answerSites.end();
@@ -3312,10 +3821,16 @@ ${lines.join("\n")}`;
 					void roomBox?.endTurn();
 					void windowsBox?.endTurn();
 					if (turnWindingDown?.turnId === persistentTurnId) { turnWindingDown.finish(); turnWindingDown = null; }
+					if (endHostAfterAnswer) {
+						endHostAfterAnswer = false;
+						try { socket.close(); } catch {}
+					}
 					// Handed back unanswered, the message carries its note again when it is sent again.
 					if (returnedPrompt && sentNote) setAnswerNote(sentNote);
 					// After the finish, so the message it hands back can be sent at once.
-					if (returnedPrompt) sendTurnFrame({ type: "prompt_returned", ...returnedPrompt });
+					// On a room socket it goes back into its sender's box alone, while that page is there.
+					if (returnedPrompt && roomSocket && from && roomSocket.has(from)) reply({ type: "prompt_returned", ...returnedPrompt });
+					else if (returnedPrompt) sendTurnFrame({ type: "prompt_returned", ...returnedPrompt });
 					if (returnedPrompt && lastPromptTurnStart) lastPromptTurnStart.promptKept = false;
 					// Land the detached outcome right after the turn-state finish:
 					// writePersistentAgentThread asserts no turn is in flight (the
@@ -3361,7 +3876,9 @@ ${lines.join("\n")}`;
 								const stopCut = turn?.stoppedByServer === true;
 								const watched = (!detachedFromClient && !stopCut) || watchedByAdopter;
 								const terminalReason = turn?.terminalReason ?? "failed";
-								landKeyed(keyedLandingItemsOf(keyedSettle, terminalReason, { watched, stopCut, awayLimit: turn?.awayLimit }), watched ? null : { turnId: persistentTurnId, terminalReason });
+								const stopped = terminalReason === "cancelled" || terminalReason === "disconnect_cancelled";
+								const cutUntold = endedByForce && stopped && !stopCut && cutLeftUntold(keyedSettle.key, turn?.linesAtStop, detachedFromClient ? watchedByAdopter : socket.readyState === socket.OPEN);
+								landKeyed(keyedLandingItemsOf(keyedSettle, terminalReason, { watched, stopCut, awayLimit: turn?.awayLimit, cutUntold }), watched ? null : { turnId: persistentTurnId, terminalReason });
 							}
 						} catch (error) {
 							app.log.warn({ err: error }, "failed to land keyed persistent-room turn");
@@ -3393,6 +3910,8 @@ ${lines.join("\n")}`;
 					}
 					revealCutAtSettle = undefined;
 					if (activePersistentWebTurn?.turnId === persistentTurnId) activePersistentWebTurn = null;
+					// The message is done, so a session bound for it after every page left ends with it.
+					if (!detachedFromClient) endSessionLeftDuringRebind();
 					// Detached settle: this connection's ownership ends here — the
 					// away limits, the cooking flag, this closure's own lock record
 					// (owner-checked, so inert after an adoption takeover) and the
@@ -3423,7 +3942,7 @@ ${lines.join("\n")}`;
 						adopterOnDisplaced = null;
 						if (!sessionDisposed) {
 							sessionDisposed = true;
-							try { (session as any)?.dispose?.(); } catch {}
+							void endRoomSession(session as any);
 						}
 					}
 					// Buffer lifecycle: the replay buffer dies with
@@ -3434,9 +3953,21 @@ ${lines.join("\n")}`;
 					// replaying (and its disconnect drops the closure either way).
 					const keepReplayBufferForPendingClaim = !!(cookingHandle && cookingHandle.claimantConnectionId && !adoptedByLiveSession);
 					if (!keepReplayBufferForPendingClaim) releaseTurnFrameBuffer();
+					stopLimit.turnEnded();
+					if (endedByForce) {
+						// Nobody is there any more to answer what a step that went on still asks.
+						uiContext.detach(LEFT_ROOM_QUESTIONS_SENTENCE);
+						if (!detachedFromClient && !endingForBoundary) retireConnection();
+					}
 				}
 			}
 		} else if (msg.type === "returned_prompt_handled") {
+			const outcome = { type: "returned_prompt_outcome", kept: msg.kept === true, ...(lastPromptTurnStart?.questionId ? { id: lastPromptTurnStart.questionId } : {}) };
+			// On a room socket the sender took the question back into its box: every page takes it away now, and it is still offered until the box is cleared.
+			if (roomSocket && msg.kept !== true && msg.stillOffered === true) {
+				send(outcome);
+				return;
+			}
 			// The page keeps the message where it was when the box holds other text.
 			if (msg.kept === true && lastPromptTurnStart) lastPromptTurnStart.promptKept = true;
 			// The offer is answered, kept or not: its landing ends here. It lands before it goes, and lands alike if a kill makes it land twice.
@@ -3447,7 +3978,13 @@ ${lines.join("\n")}`;
 					dropKeptLanding(persistentAgentIdForSession, persistentConversationId);
 				} catch (error) { app.log.warn({ err: error }, "failed to land the kept persistent-room turn"); }
 			}
-			if (session && getPersistentAgentActiveTurnState(persistentAgentIdForSession, persistentConversationId).state === "idle") await settleReturnedPrompt(session as any, msg.kept === true);
+			if (session && getPersistentAgentActiveTurnState(persistentAgentIdForSession, persistentConversationId).state === "idle") {
+				await settleReturnedPrompt(session as any, msg.kept === true);
+				// Kept, the message is in the conversation again.
+				if (msg.kept === true) sendContextReading();
+			}
+			// The sender's box decided: every page keeps the question, or takes it away.
+			if (roomSocket) send(outcome);
 		} else if (msg.type === "abort") {
 			// Stop after a reattach cancels the ADOPTED turn, which runs in
 			// the detaching connection's closure, through the same cancelling
@@ -3459,7 +3996,7 @@ ${lines.join("\n")}`;
 			if (cooking && !cooking.settled && cooking.claimantConnectionId === connectionId) {
 				await cooking.stop(connectionId, shown, msg.forNext === true);
 			} else {
-				returnUntakenSteers();
+				returnUntakenSteers(msg.forNext !== true);
 				markStop(msg.forNext === true, shown);
 				await abortActivePersistentWebTurn("cancelled");
 			}
@@ -3467,18 +4004,21 @@ ${lines.join("\n")}`;
 			// A message sent while the room answers. An adopted answer runs in
 			// the detaching connection's closure, so its steer goes through the
 			// handle, claimant-checked like its Stop.
-			const request = readSteerRequest(msg);
+			const read = readSteerRequest(msg);
 			const cooking = claimedCookingTurn;
-			send(cooking && !cooking.settled && cooking.claimantConnectionId === connectionId
-				? await cooking.steerTurn(connectionId, request)
-				: await routeSteer(request));
+			// Another person's message goes in as any message does, and declines no question of the asker's.
+			const asker = cooking ? cooking.asker : activePersistentWebTurn?.asker;
+			const request = from && asker && !answersFor(from, asker) ? { ...read, declines: false } : read;
+			reply(cooking && !cooking.settled && cooking.claimantConnectionId === connectionId
+				? await cooking.steerTurn(connectionId, request, from && pagePerson(from.req))
+				: await routeSteer(request, from));
 		} else if (msg.type === "steer_withdraw") {
 			const id = typeof msg.id === "string" ? msg.id : "";
 			const cooking = claimedCookingTurn;
 			const out = cooking && !cooking.settled && cooking.claimantConnectionId === connectionId
 				? await cooking.withdrawSteer(connectionId, id)
 				: await withdrawSteer(id);
-			send(out ? { type: "steer_withdrawn", id, edit: msg.edit === true } : { type: "steer_withdraw_refused", id });
+			reply(out ? { type: "steer_withdrawn", id, edit: msg.edit === true } : { type: "steer_withdraw_refused", id });
 		} else if (msg.type === "stop_reveal") {
 			// Stop after the model finished, while the page still showed the rest: the page's frozen copy is the record.
 			stopReveal(readShownChars(msg.shown));
@@ -3489,9 +4029,9 @@ ${lines.join("\n")}`;
 			// machine-readable `code`), so the card can render the "no longer fits"
 			// state without string-matching the message. The stop's refusal carries
 			// its own code; other errors carry none.
-			const consultError = (message: string, code?: string) => send({ type: "consult_error", consultId, message, ...(code ? { code } : {}) });
+			const consultError = (message: string, code?: string) => reply({ type: "consult_error", consultId, message, ...(code ? { code } : {}) });
 			// Awaited only when it answers later, so that a Stop read with its consult still finds it.
-			const answer = serverHooks().roomRefusal?.(req, String(msg.targetRoomId ?? "").trim());
+			const answer = serverHooks().roomRefusal?.(fromReq, String(msg.targetRoomId ?? "").trim());
 			const refused = answer instanceof Promise ? await answer : answer;
 			if (refused) return consultError(refused.message, refused.code);
 			// A consult queued behind the answer is sent the moment it ends: it waits for that turn to wind down, as a message does.
@@ -3523,7 +4063,7 @@ ${lines.join("\n")}`;
 				const targetStatus = getPersistentAgentStatusForMaintenance(String(msg.targetRoomId ?? "").trim());
 				const selection = roomMemoryModelSelection(targetStatus.id, targetStatus.displayName || targetStatus.id);
 				consulted = { room: targetStatus.displayName || targetStatus.id, model: selection.modelLock };
-				send({ type: "consult_started", consultId, targetRoomId: targetStatus.id, targetDisplayName: targetStatus.displayName ?? targetStatus.id, model: selection.modelLock });
+				reply({ type: "consult_started", consultId, targetRoomId: targetStatus.id, targetDisplayName: targetStatus.displayName ?? targetStatus.id, model: selection.modelLock });
 				const response = await buildConsultAnswer(
 					// §8.1: the client holds the conversation; `priorExchanges` re-feeds
 					// B's own earlier Q/A. The server stays stateless — buildConsultAnswer
@@ -3548,7 +4088,7 @@ ${lines.join("\n")}`;
 								if (event?.type !== "message_update") return;
 								const update = event.assistantMessageEvent;
 								if (update?.type === "text_delta" && typeof update.delta === "string") {
-									send({ type: "consult_delta", consultId, delta: update.delta });
+									reply({ type: "consult_delta", consultId, delta: update.delta });
 								}
 							},
 						});
@@ -3561,7 +4101,7 @@ ${lines.join("\n")}`;
 				if (consult.abortController.signal.aborted) {
 					consultError(consult.stoppedByUser ? "Consult stopped by you." : "The consult was cancelled.");
 				} else {
-					send({
+					reply({
 						type: "consult_end",
 						consultId,
 						text: response.answerMarkdown,
@@ -3605,12 +4145,12 @@ ${lines.join("\n")}`;
 			abortSpecialistTask(persistentAgentIdForSession, taskId);
 		} else if (msg.type === "task_iterate") {
 			if (serverStopping()) {
-				send({ type: "task_iterate_result", ok: false, reason: SERVER_STOPPING_SENTENCE, code: SERVER_STOPPING_CODE });
+				reply({ type: "task_iterate_result", ok: false, reason: SERVER_STOPPING_SENTENCE, code: SERVER_STOPPING_CODE });
 				return;
 			}
 			// Specialists are switched off: a page from before still sending a
 			// change request is told so, after the stop's own refusal above.
-			send({ type: "task_iterate_result", ok: false, reason: SPECIALISTS_OFF_SENTENCE });
+			reply({ type: "task_iterate_result", ok: false, reason: SPECIALISTS_OFF_SENTENCE });
 		}
 	};
 
@@ -3620,17 +4160,151 @@ ${lines.join("\n")}`;
 	// rather than lost. A client that overran the bound is told so, because a
 	// connection that silently ate some of its frames is worse than one that
 	// says it could not keep them.
-	socket.off("message", holdFrameUntilListener);
-	socket.on("message", handleSocketMessage);
-	if (framesBeforeListenerOverflowed) {
-		send({ type: "error", message: "too many messages arrived before the room finished opening; reload the room and send that again" });
-	}
-	if (framesBeforeListener.length > 0) {
-		const held = framesBeforeListener.splice(0, framesBeforeListener.length);
-		void held.reduce(
-			(chain, raw) => chain.then(() => handleSocketMessage(raw)).catch((e) => { app.log.warn({ err: e }, "failed to replay a frame received before the room finished opening"); }),
-			Promise.resolve(),
-		);
+	pageSocket.off("message", holdFrameUntilListener);
+	if (roomSocket) roomSocket.on("message", handleSocketMessage);
+	else socket.on("message", (raw: Buffer) => handleSocketMessage(raw));
+	const replayHeldFrames = (frames: Buffer[], overflowed: boolean, from: RoomPage | undefined, to: (frame: unknown) => void) => {
+		if (overflowed) {
+			to({ type: "error", message: "too many messages arrived before the room finished opening; reload the room and send that again" });
+		}
+		if (frames.length > 0) {
+			const held = frames.splice(0, frames.length);
+			void held.reduce(
+				(chain, raw) => chain.then(() => handleSocketMessage(raw, from)).catch((e) => { app.log.warn({ err: e }, "failed to replay a frame received before the room finished opening"); }),
+				Promise.resolve(),
+			);
+		}
+	};
+	replayHeldFrames(framesBeforeListener, framesBeforeListenerOverflowed, firstPage, send);
+
+	// A page joining this room's live session (shared server): another person's is refused before any frame; one
+	// joining mid-answer gets, in one synchronous block, the ready frame, the answer so far, the answered and waiting
+	// questions, and only then the live frames, so none is missed and none comes twice.
+	if (roomSocket) {
+		const room = roomSocket;
+		runScheduledAnswer = async (ask) => {
+			if (ask.signal?.aborted) throw ask.signal.reason;
+			const turn: ScheduledTurn = { ask };
+			// The time limit cuts the answer as Stop does; the run then ends with the limit's own line.
+			const cut = () => {
+				if (scheduledTurn === turn) void abortActivePersistentWebTurn("cancelled");
+			};
+			ask.signal?.addEventListener("abort", cut, { once: true });
+			try {
+				await handleSocketMessage(Buffer.from(JSON.stringify({ type: "prompt", id: scheduledAnswerKey(ask.runId), text: ask.prompt })), undefined, turn);
+			} finally {
+				ask.signal?.removeEventListener("abort", cut);
+			}
+			if (!turn.began) throw Object.assign(new Error(turn.refused?.message || "The room was answering."), { code: turn.refused?.code ?? "turn_running" });
+			const model = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.model;
+			const spent = { model: model ? { provider: model.provider, model: model.model } : { provider: "", model: "" }, ...(turn.usage ? { usage: turn.usage } : {}) };
+			if (ask.signal?.aborted) {
+				ask.onCut?.(spent);
+				throw ask.signal.reason;
+			}
+			if (turn.ended?.stoppedByServer) {
+				ask.onCut?.(spent);
+				throw Object.assign(new Error("The server stopped."), { code: SERVER_STOPPED_REASON });
+			}
+			const text = turn.ended?.text.trim() ?? "";
+			if (turn.ended?.reason !== "completed" || !text) {
+				// Stopped from a page or failed after it began: what it spent is still the run's.
+				ask.onCut?.(spent);
+				throw new Error(turn.refused?.message || "the scheduled answer did not finish");
+			}
+			// "Response ready" until a page in view has seen it: every page is told it landed, and one in view says so.
+			try {
+				recordPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession, { threadId: persistentConversationId, turnId: turn.ended.turnId, terminalReason: "completed", origin: "scheduled-run" });
+			} catch (error) {
+				app.log.warn({ err: error }, "failed to mark a scheduled answer through the room as not yet seen");
+			}
+			room.send(JSON.stringify({ type: "scheduled_landed", conversationId: persistentConversationId }));
+			return { threadId: persistentConversationId, model: spent.model, assistantText: text, ...(turn.usage ? { usage: turn.usage } : {}), ...(turn.ended.declined.length ? { declinedQuestions: turn.ended.declined } : {}) };
+		};
+		offerJoin(async (page, held, admitted) => {
+			const toPage = (frame: unknown) => { try { page.socket.send(JSON.stringify(frame)); } catch {} };
+			let answer: LiveSessionJoin | undefined;
+			try { answer = await joinAnswer?.(page.req); } catch {}
+			if (answer !== "admit") {
+				// The edition's refusal, or none: no slot, a throw and a rejection close the page with no frame.
+				const refusal = typeof answer === "object" && answer !== null ? answer : undefined;
+				if (refusal) toPage({ type: "error", code: refusal.code, message: refusal.message });
+				try { page.socket.close(refusal?.close.code, refusal?.close.reason); } catch { try { page.socket.close(); } catch {} }
+				return;
+			}
+			// A model taken away since the host bound: a joining page gets the line a page's own bind would. An empty
+			// conversation that a bind would move to the room's pick is let in: its first message moves it.
+			let gone: RoomModelUnavailableError | null = null;
+			try {
+				gone = sharedServerConversationModelRefusal(getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.model);
+				if (gone && emptyPersistentAgentThreadModelTarget(persistentAgentIdForSession, persistentConversationId, () => resolveRoomModel(persistentAgentIdForSession, "conversation").effective) !== null) gone = null;
+			} catch {}
+			if (gone?.reason === "not-offered") {
+				toPage({ type: "error", code: gone.code, message: gone.message, provider: gone.provider, ...(gone.model ? { model: gone.model } : {}) });
+				try { page.socket.close(); } catch {}
+				return;
+			}
+			admitted();
+			if (workspaceRebindInFlight) {
+				try { await workspaceRebindInFlight; } catch {}
+			}
+			if (page.socket.readyState !== page.socket.OPEN) return;
+			if (retired) {
+				try { page.socket.close(); } catch {}
+				return;
+			}
+			const cooking = claimedCookingTurn && !claimedCookingTurn.settled && claimedCookingTurn.claimantConnectionId === connectionId ? claimedCookingTurn : null;
+			const running = cooking !== null || (activePersistentWebTurn !== null && !activePersistentWebTurn.promptSettled);
+			if (running && (cooking ? cooking.replayUnavailable() : turnReplayOverflowed)) {
+				toPage({ type: "error", code: "room_cooking", message: "This room is currently finishing a response in the background. The answer is saved into the conversation when it is done; open the room again then." });
+				try { page.socket.close(); } catch {}
+				return;
+			}
+			turnFrameCoalescer.flush();
+			let thread: ReturnType<typeof getPersistentAgentThread> | undefined;
+			try { thread = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId); } catch {}
+			const items: unknown[] | undefined = thread?.items;
+			toPage(readyFrame({ notEditable: notEditableMessageId(session as any, items, lastUserItemIsScheduledPrompt(items)), waiting: cooking ? cooking.waiting(connectionId) : running ? waitingSteers() : [], reattaching: running, items, running: cooking ? cooking.messages() : running ? runningMessages() : [], pendingHandoffs: thread?.pendingHandoffs }, page.req));
+			if (running) {
+				const keyedPrompt = keyedTurn && keyedTurn.steps === turnSteps && !keyedTurn.continued ? keyedTurn : null;
+				const turnId = cooking?.turnId ?? activePersistentWebTurn?.turnId ?? "";
+				const userText = cooking ? cooking.userText : keyedPrompt ? keyedPrompt.shown?.text ?? keyedPrompt.strippedText : currentTurnUserTextForLanding;
+				const prompt = cooking ? (cooking.promptId !== undefined ? { promptId: cooking.promptId, promptFiles: cooking.promptFiles ?? [] } : {}) : keyedPrompt ? { promptId: keyedPrompt.key, promptFiles: keyedPrompt.shown?.files ?? [] } : {};
+				let anchorItemId = cooking ? cooking.anchorItemId : turnStartAnchorItemId;
+				try { anchorItemId = earlierTurnsAnchorItemId(items ?? [], anchorItemId, cooking ? cooking.earlierPromptsAfterAnchor : turnStartEarlierPrompts); } catch {}
+				const startedAt = cooking ? cooking.startedAt : activePersistentWebTurn?.startedAt;
+				toPage({ type: "turn_reattach", turnId, conversationId: persistentConversationId, settled: false, ...prompt, ...(userText ? { userText } : {}), ...(anchorItemId !== undefined ? { anchorItemId } : {}), ...(typeof startedAt === "number" ? { startedAt } : {}), now: Date.now(), waiting: cooking ? cooking.waiting(connectionId) : waitingSteers() });
+				for (const frame of cooking ? cooking.bufferedTurnFrames() : turnFrameBuffer) {
+					try { page.socket.send(frame); } catch {}
+				}
+				toPage({ type: "turn_reattach_replay_done", turnId });
+				const senders = sendersFrame(cooking ? cooking.authors() : runningTurnAuthors());
+				if (senders) toPage(senders(page.req));
+				const sendText = (text: string) => { try { page.socket.send(text); } catch {} };
+				const asker = activePersistentWebTurn?.asker;
+				if (cooking) cooking.catchUpQuestions(connectionId, page, sendText);
+				else uiContext.catchUp((frame) => sendText(asker ? questionFor(page, frame, asker) : JSON.stringify(frame)));
+			}
+			held.stopHolding();
+			if (!room.add(page)) {
+				try { page.socket.close(); } catch {}
+				return;
+			}
+			replayHeldFrames(held.frames, held.overflowed(), page, toPage);
+		});
+		followRoom = (conversationId) => {
+			// After the whole move is written: a Forget has closed the old conversation, with its reason, by then.
+			setImmediate(() => {
+				let forgot = false;
+				try {
+					const old = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
+					forgot = old?.state === "closed" && old.closedReason === "memento";
+				} catch {}
+				send({ type: "room_moved", conversationId, forgot });
+				if (activePersistentWebTurn && !activePersistentWebTurn.promptSettled) endHostAfterAnswer = true;
+				else room.close();
+			});
+		};
 	}
 
 	// Only a newer session on THIS conversation is watching a landing (a
@@ -3706,6 +4380,7 @@ ${lines.join("\n")}`;
 				anchorItemId: turnStartAnchorItemId,
 				earlierPromptsAfterAnchor: turnStartEarlierPrompts,
 				...(typeof activePersistentWebTurn?.startedAt === "number" ? { startedAt: activePersistentWebTurn.startedAt } : {}),
+				...(activePersistentWebTurn?.asker ? { asker: activePersistentWebTurn.asker } : {}),
 				settled: false,
 				claimantConnectionId: null,
 				adopterConnectionId: null,
@@ -3774,9 +4449,16 @@ ${lines.join("\n")}`;
 					if (canAnswer || !unprotectedOnAutoNow()) clearAwayLimits();
 					else if (awayTotalTimer === null) armAwayLimits();
 					if (serverStopping()) return;
-					// Every frame a viewing-only device sends is dropped, so a card there would wait for nobody.
-					if (canAnswer) uiContext.attach(authority);
+					// Every frame a viewing-only device sends is dropped, so a card there would wait for nobody. Nor can any page
+					// answer an answer that only its own page, gone with everyone, could: its questions are declined, the room's own too.
+					if (canAnswer && handle.asker?.kind !== "page") uiContext.attach(authority);
 					else uiContext.detach(LEFT_ROOM_QUESTIONS_SENTENCE);
+					if (handle.asker?.kind === "page") uiContext.declineOpenQuestionsOnce(LEFT_ROOM_QUESTIONS_SENTENCE);
+				},
+				catchUpQuestions: (claimant, page, sendTo) => {
+					if (handle.settled || handle.adopterConnectionId !== claimant) return;
+					const asker = activePersistentWebTurn?.asker;
+					uiContext.catchUp((frame) => sendTo(asker ? questionFor(page, frame, asker) : JSON.stringify(frame)));
 				},
 				answerQuestion: (claimant, id, value, answeredBy) => {
 					if (handle.adopterConnectionId !== claimant) return;
@@ -3787,7 +4469,7 @@ ${lines.join("\n")}`;
 					// connection's Stop must never abort the stream the CURRENT
 					// adopter is watching.
 					if (handle.settled || handle.claimantConnectionId !== claimant) return Promise.resolve();
-					returnUntakenSteers();
+					returnUntakenSteers(!forNext);
 					markStop(forNext, shown);
 					return abortActivePersistentWebTurn("cancelled");
 				},
@@ -3798,11 +4480,13 @@ ${lines.join("\n")}`;
 				windingDown: windingDownOfThisTurn,
 				landedItemId: () => landedThroughItemId,
 				waiting: (claimant) => (handle.settled || handle.claimantConnectionId !== claimant ? [] : waitingSteers()),
-				steerTurn: (claimant, request) => {
+				steerTurn: (claimant, request, who) => {
 					if (handle.settled || handle.claimantConnectionId !== claimant) return Promise.resolve({ type: "steer_refused" as const, id: request.id });
-					return routeSteer(request);
+					return routeSteer(request, undefined, who);
 				},
 				withdrawSteer: (claimant, id) => (handle.settled || handle.claimantConnectionId !== claimant ? Promise.resolve(false) : withdrawSteer(id)),
+				authors: runningTurnAuthors,
+				messages: runningMessages,
 			};
 			detachedCookingHandle = handle;
 			detachedCookingTurnHandles.set(persistentAgentIdForSession, handle);
@@ -3829,7 +4513,7 @@ ${lines.join("\n")}`;
 			app.log.warn({ err: error }, "persistent-room disconnect cleanup failed");
 			if (!sessionDisposed && session) {
 				sessionDisposed = true;
-				try { (session as any)?.dispose?.(); } catch {}
+				void endRoomSession(session as any);
 			}
 		});
 	});

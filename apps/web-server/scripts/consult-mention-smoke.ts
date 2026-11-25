@@ -4,7 +4,8 @@
 // Covers: where the list opens (only at the message's start, staying open
 // on the space after a word two rooms fit), filtering and ordering, which
 // room a word names (exact name or id first, else one that starts with it,
-// never one of two), the label at the first space, the line for a later '@'
+// never one of two; an id only whole until the server has said it is this
+// computer, since a shared server's ids are random), the label at the first space, the line for a later '@'
 // word, a consult as the server keeps it and as it goes back into the box.
 // Then the picker and the consult card rendered from their components, the
 // message box in a JSDOM window as a person types into it, and the box in a
@@ -60,7 +61,8 @@ const rooms: MentionCandidateRoom[] = [
 	{ id: "zeta", displayName: "Zeta", status: "ready", lastCheckpointAt: null },
 ];
 
-// Rooms as a shared server names them: each id carries a random tail, which no person ever sees.
+// Rooms as a shared server named them before its ids held no name: each id
+// carries a random tail, which no person ever sees.
 const TAIL = "7f3a2c9d";
 const HERE = `pricing-notes-${TAIL}`;
 const BID_X = { id: `bid-for-client-x-${TAIL}`, displayName: "Bid for Client X" };
@@ -71,6 +73,17 @@ const tailed: MentionCandidateRoom[] = [
 	{ id: `budget-review-5e6f7a8b`, displayName: "Budget review" },
 	{ id: HERE, displayName: "Pricing notes" },
 	{ id: `old-bid-0c0c0c0c`, displayName: "Old bid", archived: true },
+];
+
+// Rooms as a shared server names them now: 32 random hex characters, nothing of
+// the name, and Budget's id starts with an "a" that no name of it has.
+const HEX_HERE = "e0".repeat(16);
+const BUDGET_HEX = { id: `a3f${"0".repeat(29)}`, displayName: "Budget" };
+const hexed: MentionCandidateRoom[] = [
+	{ id: `c4${"1".repeat(30)}`, displayName: "Angebot" },
+	BUDGET_HEX,
+	{ id: `d5${"2".repeat(30)}`, displayName: "Archive notes" },
+	{ id: HEX_HERE, displayName: "Pricing notes" },
 ];
 
 try {
@@ -134,6 +147,18 @@ try {
 	assert(fits("nobody") === null && fits("") === null, "a word no room fits names none");
 	assert(fits("pricing") === null && fits("old") === null, "this room and an archived room are never named");
 	assert(fits("bid", [...tailed, { id: "bid-9e9e9e9e", displayName: "bid" }]) === null, "two rooms with the exact name: none is named");
+
+	// ---- ids that hold no name: an id counts only whole ------------------------
+	const listed = (query: string, idsByStart: boolean) => filterMentionCandidates(hexed, query, HEX_HERE, idsByStart).map((room) => room.displayName).join("|");
+	assert(listed("a", false) === "Angebot|Archive notes", `ids only whole: "a" lists the rooms whose names start with A, got ${listed("a", false)}`);
+	assert(listed("a", true) === "Angebot|Archive notes|Budget", `the control, ids by their start: "a" lists Budget too, got ${listed("a", true)}`);
+	assert(listed("a3f", false) === "" && listed("a3f", true) === "Budget", `the start of an id lists nothing, its control lists Budget, got ${listed("a3f", false)} and ${listed("a3f", true)}`);
+	assert(listed(BUDGET_HEX.id.toUpperCase(), false) === "Budget", `a whole id lists its room, in any case, got ${listed(BUDGET_HEX.id.toUpperCase(), false)}`);
+	assert(fitRoom("a3f", hexed, HEX_HERE, false) === null && fitRoom("a3f", hexed, HEX_HERE, true)?.displayName === "Budget", "the start of an id names no room; its control names Budget");
+	assert(fitRoom(BUDGET_HEX.id, hexed, HEX_HERE, false)?.displayName === "Budget" && fitRoom("ang", hexed, HEX_HERE, false)?.displayName === "Angebot", "a whole id, and a name's start, still name their room");
+	const hexLabel = labelAtFirstSpace("", `@${BUDGET_HEX.id} when?`, hexed, HEX_HERE, false);
+	assert(hexLabel?.room.displayName === "Budget" && hexLabel.rest === "when?" && labelAtFirstSpace("", "@a3f when?", hexed, HEX_HERE, false) === null, `the label forms for a whole id, never for its start, got ${hexLabel?.room.displayName}`);
+	assert(laterMentionRoom(`hi @${BUDGET_HEX.id}`, hexed, HEX_HERE, false)?.displayName === "Budget" && laterMentionRoom("hi @a3f", hexed, HEX_HERE, false) === null, "the later line names a room by its whole id, never by its start");
 
 	// The label forms at the first space, typed or pasted with the rest; never again in text already written.
 	const labelled = (previous: string, next: string) => {
@@ -322,6 +347,19 @@ try {
 		const { act } = pageRequire("react");
 		const { createRoot } = pageRequire("react-dom/client");
 		const { ComposerInput } = await component("in-room-chat.tsx");
+		// The page's question of which server it is on, held by this smoke: each read
+		// takes the next of `reads`, "hold" keeping it out until `held` settles it.
+		const clientContext = await import("../../web-ui/src/remote-client-context.js");
+		const pageFetch = globalThis.fetch;
+		const reads: (Record<string, unknown> | "hold")[] = [];
+		let held: { resolve: (response: Response) => void; reject: (error: Error) => void } | null = null;
+		globals.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+			if (!String(input).endsWith("/api/remote/client-context")) return pageFetch(input, init);
+			const read = reads.shift();
+			assert(read !== undefined, "a client-context read the smoke did not plan");
+			if (read === "hold") return new Promise<Response>((resolve, reject) => (held = { resolve, reject }));
+			return Promise.resolve(new Response(JSON.stringify(read), { status: 200, headers: { "content-type": "application/json" } }));
+		};
 		const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value")!.set!;
 		const sent: string[] = [];
 		const asked: string[] = [];
@@ -370,6 +408,37 @@ try {
 			assert(!seen.includes(TAIL) && !seen.includes(BID.id), `${when}: no room id shows: ${seen}`);
 		};
 		try {
+			// Ids count by their start only once the server has said it is this
+			// computer. While its answer is out, after a failed read and on a
+			// shared server, "@a" lists the rooms whose names start with A.
+			const hexMention = { mention: mentionWith({ candidates: hexed, currentRoomId: HEX_HERE }) };
+			const listsForA = async () => {
+				await mount(hexMention);
+				await typeOn("@a");
+				return rows().join("|");
+			};
+			reads.push("hold");
+			assert(await listsForA() === "Angebot|Archive notes" && held !== null && clientContext.knownRemoteClientContext() === null, `while the answer is out, "@a" lists only names that start with A: ${shows()}`);
+			await act(async () => {
+				held!.reject(new TypeError("no answer"));
+				await clientContext.fetchRemoteClientContext();
+			});
+			assert(clientContext.mayBeOnSharedServer() && await listsForA() === "Angebot|Archive notes", `after a failed read, "@a" lists only names that start with A: ${shows()}`);
+			let refreshed = "";
+			const answerNext = (answer: Record<string, unknown>) => {
+				reads.push(answer);
+				return act(async () => void (refreshed = await clientContext.refreshRemoteClientContext()));
+			};
+			await answerNext({ sharedServer: true });
+			assert(refreshed === "answered" && clientContext.knownRemoteClientContext()?.sharedServer === true, `the page has heard it is on a shared server: ${refreshed}`);
+			assert(await listsForA() === "Angebot|Archive notes", `on a shared server, "@a" lists only names that start with A: ${shows()}`);
+			await mount(hexMention);
+			await typeOn(`@${BUDGET_HEX.id} `);
+			assert(label() === askingWords("Budget") && box().value === "", `on a shared server, a whole id typed puts its room on the box: ${shows()}`);
+			await answerNext({ sharedServer: false });
+			assert(refreshed === "answered" && !clientContext.mayBeOnSharedServer() && await listsForA() === "Angebot|Archive notes|Budget", `the control, once the server has said it is this computer: "@a" lists Budget by its id too: ${shows()}`);
+			assert(reads.length === 0, `every planned read was asked: ${reads.length} left`);
+
 			// Picked from the list: the room is a label on the box and the draft holds only the question.
 			await mount();
 			await typeOn("@bi");
@@ -550,6 +619,7 @@ try {
 			if (root) await act(async () => root.unmount());
 			// Removing the box queues a selectionchange on a zero timer; let it land while the window still exists.
 			await new Promise((resolve) => setTimeout(resolve, 0));
+			globals.fetch = pageFetch;
 			delete globals.window;
 			delete globals.document;
 			delete globals.HTMLElement;
@@ -648,8 +718,8 @@ async function checkMessageBox(chromium: BrowserType): Promise<void> {
 		fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "custom-fake-gpt" }, null, 2), { mode: 0o600 });
 		const { createPersistentAgentFromScaffoldInput } = await import("../src/persistent-agent-create.js");
 		const roomModels = await import("../src/room-models.js");
-		const create = (displayName: string, idTail?: () => string) => {
-			const agentId = createPersistentAgentFromScaffoldInput({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }, idTail ? { idTail } : {}).agent.agentId;
+		const create = (displayName: string, id?: string) => {
+			const agentId = createPersistentAgentFromScaffoldInput({ displayName, userName: "Synthetic User", preferredUserAddress: "Synthetic User" }, id ? { newId: () => id } : {}).agent.agentId;
 			roomModels.writeRoomModels(agentId, { conversation: { provider: "fake-gpt", model: "gpt-fake" } });
 			return agentId;
 		};
@@ -657,18 +727,18 @@ async function checkMessageBox(chromium: BrowserType): Promise<void> {
 		const PASSES = [[1280, "light"], [1280, "dark"], [390, "light"], [390, "dark"]] as const;
 		for (const [width, theme] of PASSES) create(`Desk ${width} ${theme}`);
 		create("Desk flow");
-		const target = create("Bid for Client X", () => TAIL);
+		const target = create("Bid for Client X", `bid-for-client-x-${TAIL}`);
 		assert(target === `bid-for-client-x-${TAIL}`, `the room to ask carries a tail, got ${target}`);
 		const NAME = "Bid for Client X";
 		// Rooms that go while their label is on the box, at each width: one archived, one deleted.
 		const goneAt = {
 			1280: [
-				{ id: create("Old pricing", () => TAIL), name: "Old pricing", word: "@old", way: "archive", confirm: (id: string) => `DELETE ${id}` },
-				{ id: create("Scratch notes", () => TAIL), name: "Scratch notes", word: "@scr", way: "purge", confirm: (id: string) => `DELETE ${id} FOREVER` },
+				{ id: create("Old pricing", `old-pricing-${TAIL}`), name: "Old pricing", word: "@old", way: "archive", confirm: (id: string) => `DELETE ${id}` },
+				{ id: create("Scratch notes", `scratch-notes-${TAIL}`), name: "Scratch notes", word: "@scr", way: "purge", confirm: (id: string) => `DELETE ${id} FOREVER` },
 			],
 			390: [
-				{ id: create("Past offers", () => TAIL), name: "Past offers", word: "@pas", way: "archive", confirm: (id: string) => `DELETE ${id}` },
-				{ id: create("Draft ideas", () => TAIL), name: "Draft ideas", word: "@dra", way: "purge", confirm: (id: string) => `DELETE ${id} FOREVER` },
+				{ id: create("Past offers", `past-offers-${TAIL}`), name: "Past offers", word: "@pas", way: "archive", confirm: (id: string) => `DELETE ${id}` },
+				{ id: create("Draft ideas", `draft-ideas-${TAIL}`), name: "Draft ideas", word: "@dra", way: "purge", confirm: (id: string) => `DELETE ${id} FOREVER` },
 			],
 		};
 		// The room archived or deleted as another window does it.
@@ -679,9 +749,9 @@ async function checkMessageBox(chromium: BrowserType): Promise<void> {
 			if (refresh) await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 		};
 		// A room asked from the queue, archived before the answer here ends.
-		const spare = create("Spare notes", () => TAIL);
+		const spare = create("Spare notes", `spare-notes-${TAIL}`);
 		// The same, while this window can't read the room list.
-		const last = create("Last notes", () => TAIL);
+		const last = create("Last notes", `last-notes-${TAIL}`);
 
 		const port = await freePort();
 		const baseUrl = `http://127.0.0.1:${port}`;
@@ -793,7 +863,7 @@ async function checkMessageBox(chromium: BrowserType): Promise<void> {
 				await waitUntil(async () => (await asking(page)) === askingWords(NAME), "flow: the room is on the box");
 
 				// Leaving the room and coming back.
-				await page.getByRole("button", { name: "Home", exact: true }).first().click();
+				await page.getByRole("button", { name: "Rooms", exact: true }).first().click();
 				await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
 				composer = await enterRoom(page, baseUrl, "Desk flow", false);
 				await waitUntil(async () => (await asking(page)) === askingWords(NAME) && (await composer.inputValue()) === "what is the deadline?", "back in the room, the label and the question are there");

@@ -594,7 +594,7 @@ try {
 		const toRooms = async () => {
 			const back = mp.getByRole("button", { name: "Back to rooms" });
 			if (await back.count()) await back.first().click();
-			else await mp.getByText("Home", { exact: true }).first().click();
+			else await mp.getByRole("button", { name: "Rooms", exact: true }).first().click();
 			await mp.locator(".persistent-agent-card").first().waitFor({ timeout: 15_000 });
 		};
 		const openCard = async (room: string, button: RegExp) => {

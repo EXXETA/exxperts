@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-app",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -46,6 +46,7 @@
     "apps/web-ui/src/model-names.ts",
     "apps/web-ui/src/reveal-cut.ts",
     "apps/web-ui/src/sign-in-failure.ts",
+    "apps/web-ui/src/skill-source-copy.ts",
     "apps/web-ui/src/turn-failure-line.ts",
     "runtime/packages/ai/dist",
     "runtime/packages/ai/package.json",
@@ -70,7 +71,7 @@
     "smoke:package": "node bin/exxperts-web.cjs --help",
     "postinstall": "node scripts/patch-mcp-adapter.mjs && node scripts/install-chromium.mjs",
     "smokes": "node scripts/run-smokes.mjs",
-    "test:scripts": "node --test scripts/bundle-release.test.mjs scripts/bundle-server.test.mjs scripts/payload-lock-check.test.mjs apps/desktop/scripts/prune-payload.test.mjs",
+    "test:scripts": "node --test --import tsx scripts/bundle-release.test.mjs scripts/bundle-server.test.mjs scripts/payload-lock-check.test.mjs apps/desktop/scripts/prune-payload.test.mjs pi-package/extensions/content-policy/content-policy.test.ts pi-package/extensions/content-policy/content-policy-values.test.ts",
     "typecheck:scripts": "tsc --noEmit -p apps/web-server/tsconfig.scripts.json"
   },
   "dependencies": {

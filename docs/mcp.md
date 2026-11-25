@@ -41,8 +41,8 @@ The previous config location, `~/.exxperts/app/mcp.json`, is no longer
 read; move server entries into one of the files above.
 
 In the app, the **Connectors** page (Settings, Connectors) shows the
-same merged server list (each server's transport, which config file it
-came from, its cached tools, and OAuth credential state) and manages it:
+same merged server list (each connector's status, address or command,
+sign-in or key, tools and rooms) and manages it:
 add/remove servers (saved to the exxperts user config), change a custom
 web connector's address, check a connection, and run OAuth sign-ins (the
 sign-in opens a browser on this machine, since the server runs locally).
@@ -53,15 +53,24 @@ it differs from that key. A new address on the same site keeps the sign-in,
 key and extra headers; another site drops them all and asks for the key
 again. Rooms keep their access either way. Backed by `GET /api/mcp/status`
 and the `/api/mcp/servers` routes. Because sessions read MCP config at
-session start, changes apply the next time a room is entered or resumed.
+session start, most changes apply the next time a room is entered or
+resumed. Removing a connector applies at once: its running calls stop, its
+waiting questions close with nothing sent, and its connection and program
+end in every conversation. A tool a connector adds while connected shows up
+without reopening the room.
+
+A program on this computer is added from the command you paste from its
+setup instructions. exxperts reads that command itself, as one program and
+its words, so a line with `|`, `&&` or `;` outside quotes is refused;
+settings written in front of it, or under **Settings it needs (optional)**,
+are handed to the program when it starts. They are kept, with the keys you
+type, in `~/.exxperts/agent/mcp.json`, which on a Mac and on Linux only your
+own account can read.
 
 The page also includes a **directory** of verified connectors
 (`apps/web-ui/src/connector-catalog.ts`): open servers that work with no
 login, one-click OAuth servers (dynamic client registration verified),
-token-based servers (GitHub: paste an API token once), OAuth-app servers
-(HubSpot: create an app in the provider's developer settings, then the
-card opens the custom form with the Your own sign-in app fields prefilled),
-and guided entries for providers that require your own credentials.
+and token-based servers (GitHub: paste an API token once).
 
 Servers that expect their key in a header of their own (for example
 `X-Api-Key`) are added under **Extra headers** in the add-connector form,
@@ -115,8 +124,8 @@ to a config file as:
 - All configured servers are exposed through a single `mcp` proxy tool
   (search / describe / call), so the model's tool surface stays small no
   matter how many servers are configured.
-- Servers connect lazily on first use and disconnect after an idle
-  timeout; reconnects are automatic.
+- Servers connect on first use, or as a room opens, and disconnect after
+  an idle timeout; reconnects are automatic.
 - Room tool policy and the permissions extension allow the `mcp` proxy tool;
   which servers it can reach is governed entirely by the config files
   above.
@@ -129,32 +138,68 @@ to a config file as:
   proxy; pinned entries are ignored harmlessly.
 - Existing outbound content-policy scanning still runs before MCP tool
   calls.
-- A tool runs without asking when the connector marks it read-only
-  (`readOnlyHint: true`, and not `destructiveHint: true`), when it is a
-  plain resource read, or when you allowed it for the room. Anything
-  else asks first, in the panel above the message box, and shows what
+- Each tool of a connector has a choice of three, on the connector's own
+  page in Settings, Connectors: **Always allow** runs it without asking,
+  **Ask first** asks every time, and **Blocked** never runs it. A choice
+  counts in every room where the connector is on, also when you're away.
+  The page lists the tools that read the connector's resources too, and a
+  tool switched off by hand in the connector's file (`excludeTools`) shows
+  as Blocked. Over remote access the page shows the choices without
+  changing them.
+- A tool with nothing chosen goes by what the connector says about it: it
+  runs without asking when the connector marks it read-only
+  (`readOnlyHint: true`, and not `destructiveHint: true`) or when it is a
+  plain resource read, and asks first otherwise. **Use default** in the
+  tool's menu clears a choice. Nothing changes for a tool until you pick
+  something.
+- Asking first happens in the panel above the message box, and shows what
   the room would send, with hidden characters written out. **Allow this
-  time** runs it once. At the computer, a web connector's tool that
-  isn't marked destructive also offers **Allow for this room**: the room
-  then uses that tool without asking, also in a scheduled task and when
-  you're away. It isn't offered on a phone, or for a connector that is a
-  program on this computer. Room settings, Connectors lists the tools
-  you allowed, each with Remove. A room on **Semi** or **Auto** gets the
-  question too: those modes are about commands and websites.
+  time** runs it once. At the computer, **Always allow** sets that tool's
+  choice, for every room where the connector is on; on a phone it counts
+  as this time.
+- Always allow is kept for where the connector is: its web address, or for
+  a program its command, arguments, working folder and settings. When that
+  changes, the tool asks again, and so does one that was read-only when
+  you allowed it and no longer is. Changing a connector's address takes
+  its Always allows back; Ask first and Blocked stay. Removing a connector
+  removes its choices, so one added later under the same name starts with
+  none.
+- A tool allowed for one room before these choices existed still runs
+  without asking in that room, until you pick a choice for it; picking one
+  takes that room's yes back. Room settings, Connectors lists those that
+  are left, each with Remove.
+- A room on **Auto** with protection off doesn't ask first: a tool set to
+  Ask first runs there too, and only Blocked stops it. A room on **Semi**,
+  or on Auto with protection on, gets the question as any other.
 - With nobody there to answer, as in a scheduled run, when the person
-  left, or when a view-only phone takes over, a tool you haven't allowed
-  for the room is refused, and a note stays in the conversation.
-- This goes by what each connector says about its own tools, and a
+  left, or when a view-only phone takes over, a tool that would ask is
+  refused, and a note stays in the conversation. A blocked tool is refused
+  with no note, and its step says it didn't run.
+- If the file with your choices can't be read, every tool asks first, a
+  read-only one too, no connector can be removed, and the connector's page
+  says so. **Reset choices** there, after you confirm, keeps that file
+  beside it under another name and puts every tool of every connector back
+  to its default, so a tool you blocked is no longer blocked. A file
+  written by a newer version of exxperts is never reset: update exxperts.
+- These marks are the connector's own word about its own tools, and a
   connector you added by hand counts the same as one from the directory.
-  A connector that marks nothing asks every time, unless you allowed
-  that tool for the room. The marks guard against a fooled model, not a
-  dishonest connector.
-- A connector's own app page, once opened, calls its tools outside the
-  room's card.
+  They guard against a fooled model, not a dishonest connector.
 - Connectors run outside a room's protection, with your rights
   ([Folders, commands and protection](workspace-and-bash.md#what-protection-doesnt-cover)).
   A local connector whose program, package or working folder sits where a
   room can change files doesn't start.
-- MCP sampling (a server asking the model to complete text) stays
-  disabled in headless sessions unless explicitly auto-approved in
-  config.
+- **Stop** stops a running connector call at once: the connector is asked to
+  stop, and may already have done part of the work. A call is also stopped
+  when the connector sends nothing for 5 minutes, or once it has run for an
+  hour, and its step says so.
+- When a connector asks for details while one of its tools runs, the room
+  shows one card with every field, **Send** and **Not now**, and the line
+  "What you send goes to" the connector. If the connector stops waiting,
+  nothing is sent.
+- MCP sampling (a server asking the model to complete text) is off.
+  exxperts doesn't offer it to a connector, and a request a connector
+  sends anyway is refused.
+- A connector may give instructions for its use when it connects. The
+  assistant gets them, cut at 4,096 characters, for the connectors that are
+  on in its room, so they go to your AI provider with the conversation. A
+  room may connect its connectors as it opens, to read them.

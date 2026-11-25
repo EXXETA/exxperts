@@ -34,6 +34,7 @@ import { addCitation, webLink } from "../utils/citation-offsets.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+import { fetchWithBoundedRetryDelay, untilStopped } from "../utils/request-stop.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
@@ -502,6 +503,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					shouldUseFineGrainedToolStreamingBeta(model, context),
 					options?.headers,
 					copilotDynamicHeaders,
+					options?.maxRetryDelayMs,
 				);
 				client = created.client;
 				isOAuth = created.isOAuthToken;
@@ -516,6 +518,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
+			const ask = (asked: MessageCreateParamsStreaming) =>
+				untilStopped(client.messages.create({ ...asked, stream: true }, requestOptions).asResponse(), options?.signal);
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
 
@@ -581,7 +585,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			for (;;) {
 				let response: Response;
 				try {
-					response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+					response = await ask(params);
 				} catch (requestError) {
 					// The last line of defense against the provider's validation of
 					// the history we resend. The verbatim resend above is supposed
@@ -607,7 +611,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						recoveredThinkingValidation = true;
 						appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("anthropic-history-validation-recovery", requestError, { model: model.id }));
 						params = stripValidatedHistoryFromParams(params, { keepThinking: supportsAdaptiveThinking(model) });
-						response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+						response = await ask(params);
 					} else if (
 						!recoveredThinkingOff &&
 						(params.thinking as { type?: string } | undefined)?.type === "disabled" &&
@@ -626,7 +630,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						recoveredThinkingOff = true;
 						appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("anthropic-thinking-off-unsupported", requestError, { model: model.id }));
 						params = withLowestAdaptiveThinking(params, model);
-						response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+						response = await ask(params);
 					} else {
 						throw requestError;
 					}
@@ -1165,6 +1169,7 @@ function createClient(
 	useFineGrainedToolStreamingBeta: boolean,
 	optionsHeaders?: Record<string, string>,
 	dynamicHeaders?: Record<string, string>,
+	maxRetryDelayMs?: number,
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
 	// The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
@@ -1182,12 +1187,14 @@ function createClient(
 		betaFeatures.push(THINKING_BINDING_CONTROLS_BETA);
 	}
 
+	const fetch = fetchWithBoundedRetryDelay(maxRetryDelayMs);
 	if (model.provider === "cloudflare-ai-gateway") {
 		const client = new Anthropic({
 			apiKey: null,
 			authToken: null,
 			baseURL: resolveCloudflareBaseUrl(model),
 			dangerouslyAllowBrowser: true,
+			fetch,
 			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
@@ -1212,6 +1219,7 @@ function createClient(
 			authToken: apiKey,
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
+			fetch,
 			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
@@ -1234,6 +1242,7 @@ function createClient(
 			authToken: apiKey,
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
+			fetch,
 			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
@@ -1255,6 +1264,7 @@ function createClient(
 		apiKey,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
+		fetch,
 		defaultHeaders: mergeHeaders(
 			{
 				accept: "application/json",

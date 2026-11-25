@@ -14,12 +14,13 @@ import {
 	type OAuthProviderId,
 } from "@exxeta/exxperts-ai";
 import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@exxeta/exxperts-ai/oauth";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.js";
 import { acquireLockSyncWithRetry, ownedLockFs } from "./owned-lock.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
+import { writeFileAtomic } from "./safe-write.js";
 
 export type ApiKeyCredential = {
 	type: "api_key";
@@ -50,6 +51,28 @@ export interface AuthStorageBackend {
 	withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }
 
+/**
+ * How auth.json's text is read and written when the process's start says so:
+ * open turns the text on disk into the file's JSON, seal turns the JSON into
+ * the text that goes on disk. Without it, the JSON is the text.
+ */
+export type StoredTextCodec = { readonly open: (stored: string) => string; readonly seal: (text: string) => string };
+let storedTextCodec: StoredTextCodec | undefined;
+
+function storageText(data: AuthStorageData): string {
+	const text = JSON.stringify(data, null, 2);
+	return storedTextCodec ? storedTextCodec.seal(text) : text;
+}
+
+// The file's real path when it exists, so an auth.json that is a link is written through it and stays a link.
+function realPathOf(file: string): string {
+	try {
+		return realpathSync(file);
+	} catch {
+		return file;
+	}
+}
+
 export class FileAuthStorageBackend implements AuthStorageBackend {
 	constructor(private authPath: string = join(getAgentDir(), "auth.json")) {}
 
@@ -76,10 +99,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			release = acquireLockSyncWithRetry(this.authPath);
 			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
 			const { result, next } = fn(current);
-			if (next !== undefined) {
-				writeFileSync(this.authPath, next, "utf-8");
-				chmodSync(this.authPath, 0o600);
-			}
+			if (next !== undefined) writeFileAtomic(realPathOf(this.authPath), next);
 			return result;
 		} finally {
 			if (release) {
@@ -124,10 +144,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
 			const { result, next } = await fn(current);
 			throwIfCompromised();
-			if (next !== undefined) {
-				writeFileSync(this.authPath, next, "utf-8");
-				chmodSync(this.authPath, 0o600);
-			}
+			if (next !== undefined) writeFileAtomic(realPathOf(this.authPath), next);
 			throwIfCompromised();
 			return result;
 		} finally {
@@ -168,6 +185,23 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
 let processKey: { readonly providerId: string; readonly key: string } | undefined;
 
 /**
+ * A credential change not saved, so it is never dropped in silence: at "read",
+ * auth.json could not be read (not JSON, or a value its stored text codec
+ * could not open) and is never written over; at "write", its lock or its write
+ * failed, leaving the file as it was. cause is the failure's own error; its
+ * message may quote the file, so it is not for showing.
+ */
+export class AuthStorageNotSavedError extends Error {
+	constructor(
+		readonly stage: "read" | "write",
+		cause: unknown,
+	) {
+		super(`auth.json could not be ${stage === "read" ? "read" : "written"}, so the credential change was not saved`, { cause });
+		this.name = "AuthStorageNotSavedError";
+	}
+}
+
+/**
  * Credential storage backed by a JSON file.
  */
 export class AuthStorage {
@@ -191,7 +225,7 @@ export class AuthStorage {
 
 	static inMemory(data: AuthStorageData = {}): AuthStorage {
 		const storage = new InMemoryAuthStorageBackend();
-		storage.withLock(() => ({ result: undefined, next: JSON.stringify(data, null, 2) }));
+		storage.withLock(() => ({ result: undefined, next: storageText(data) }));
 		return AuthStorage.fromStorage(storage);
 	}
 
@@ -204,6 +238,12 @@ export class AuthStorage {
 		if (processKey) throw new Error("the process key is already set");
 		if (!providerId || !key) throw new Error("the process key needs a provider id and a key");
 		processKey = Object.freeze({ providerId, key });
+	}
+
+	/** Set how auth.json's text is opened and sealed, once, before any reader asks. A second call throws. */
+	static setStoredTextCodec(codec: StoredTextCodec): void {
+		if (storedTextCodec) throw new Error("the stored text codec is already set");
+		storedTextCodec = codec;
 	}
 
 	/**
@@ -238,7 +278,7 @@ export class AuthStorage {
 		if (!content) {
 			return {};
 		}
-		return JSON.parse(content) as AuthStorageData;
+		return JSON.parse(storedTextCodec ? storedTextCodec.open(content) : content) as AuthStorageData;
 	}
 
 	/**
@@ -260,23 +300,27 @@ export class AuthStorage {
 	}
 
 	private persistProviderChange(provider: string, credential: AuthCredential | undefined): void {
-		if (this.loadError) {
-			return;
-		}
+		if (this.loadError) throw new AuthStorageNotSavedError("read", this.loadError);
 
 		try {
 			this.storage.withLock((current) => {
-				const currentData = this.parseStorageData(current);
+				let currentData: AuthStorageData;
+				try {
+					currentData = this.parseStorageData(current);
+				} catch (error) {
+					throw new AuthStorageNotSavedError("read", error);
+				}
 				const merged: AuthStorageData = { ...currentData };
 				if (credential) {
 					merged[provider] = credential;
 				} else {
 					delete merged[provider];
 				}
-				return { result: undefined, next: JSON.stringify(merged, null, 2) };
+				return { result: undefined, next: storageText(merged) };
 			});
 		} catch (error) {
 			this.recordError(error);
+			throw error instanceof AuthStorageNotSavedError ? error : new AuthStorageNotSavedError("write", error);
 		}
 	}
 
@@ -288,19 +332,21 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Set credential for a provider.
+	 * Set credential for a provider. Throws AuthStorageNotSavedError, changing
+	 * nothing, when auth.json cannot be read or written.
 	 */
 	set(provider: string, credential: AuthCredential): void {
-		this.data[provider] = credential;
 		this.persistProviderChange(provider, credential);
+		this.data[provider] = credential;
 	}
 
 	/**
-	 * Remove credential for a provider.
+	 * Remove credential for a provider. Throws AuthStorageNotSavedError,
+	 * changing nothing, when auth.json cannot be read or written.
 	 */
 	remove(provider: string): void {
-		delete this.data[provider];
 		this.persistProviderChange(provider, undefined);
+		delete this.data[provider];
 	}
 
 	/**
@@ -435,7 +481,7 @@ export class AuthStorage {
 			};
 			this.data = merged;
 			this.loadError = null;
-			return { result: refreshed, next: JSON.stringify(merged, null, 2) };
+			return { result: refreshed, next: storageText(merged) };
 		});
 
 		return result;

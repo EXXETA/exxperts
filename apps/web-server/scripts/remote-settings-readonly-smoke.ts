@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { CONNECTOR_WORDS, lineText } from "../../web-ui/src/connector-rows.js";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-remote-readonly-"));
@@ -38,6 +39,8 @@ fs.writeFileSync(path.join(agentDir, "mcp-connector-checks.json"), JSON.stringif
 
 let server: ChildProcessWithoutNullStreams | null = null;
 
+// What a connector's page changes with: fixes, Change address, Check connection, a sign-in step, Remove.
+const PAGE_WAYS = ".connector-slot-btn, .pane-check-link, .connector-way, .rs-btn-danger, .connector-edit-input, .connector-remove-group";
 const SECTIONS: Array<{ tab: string; honest: string; absent: string[] }> = [
 	{
 		tab: "AI setup",
@@ -53,7 +56,7 @@ const SECTIONS: Array<{ tab: string; honest: string; absent: string[] }> = [
 	{
 		tab: "Connectors",
 		honest: "Connectors are set up and signed in on the computer itself.",
-		absent: [".connector-item-slot button", "button.connector-item-more", ".pane-head-actions button", ".connector-dir-search", ".connector-dir-row button"],
+		absent: [".connector-item-slot button", ".pane-head-actions button", ".connector-dir-search", ".connector-dir-row button"],
 	},
 	{
 		tab: "Skills",
@@ -116,13 +119,17 @@ try {
 				assert(count === 0, `${section.tab}: local-only control still renders remotely (${selector}, ${count} found)`);
 			}
 			if (section.tab === "Connectors") {
-				// The row is there and opens, but offers no way to change it.
+				// The row is there and opens its page, but the page offers no way to change it:
+				// no fix, Change address, Check connection, sign-in step or Remove.
 				const rows = page.locator(".settings-overlay .connector-item");
 				assert((await rows.count()) === 1, `Connectors: expected the one added connector's row, saw ${await rows.count()}`);
 				await rows.first().locator(".connector-item-hit").click();
-				await page.locator(".settings-overlay .connector-details").waitFor({ timeout: 10000 });
-				const ways = await page.locator(".settings-overlay .connector-way").count();
-				assert(ways === 0, `Connectors: an opened row offers a change remotely (${ways} found)`);
+				await page.locator(".settings-overlay .connector-page").waitFor({ timeout: 10000 });
+				await page.locator(".settings-overlay .connector-status-words").getByText(lineText(CONNECTOR_WORDS.wentWrong.addressNotFound, true), { exact: true }).waitFor({ timeout: 10000 });
+				const ways = await page.locator(".settings-overlay .connector-page").locator(PAGE_WAYS).count();
+				assert(ways === 0, `Connectors: a connector's page offers a change remotely (${ways} found)`);
+				await page.locator(".settings-overlay .connector-page-back").click();
+				await page.locator(".settings-overlay .connector-list").waitFor({ timeout: 10000 });
 			}
 			const back = page.locator(".settings-dialog-back");
 			if (await back.count()) await back.click();
@@ -169,7 +176,15 @@ try {
 		assert((await localPage.locator(".add-provider-toggle").count()) === 1, "loopback: Add another provider must render");
 		assert((await localPage.locator(".settings-overlay").getByText(SECTIONS[0].honest, { exact: true }).count()) === 0, "loopback: the remote honest line must not render");
 		await localPage.locator(".settings-dialog-nav button").filter({ hasText: "Connectors" }).first().click();
-		await localPage.locator(".settings-overlay button.connector-item-more").waitFor({ timeout: 10000 });
+		// On the computer itself the failed connector's row offers its fix.
+		await localPage.locator(".settings-overlay .connector-item-slot button").waitFor({ timeout: 10000 });
+		// And its page offers the changes the remote page leaves out.
+		await localPage.locator(".settings-overlay .connector-item-hit").first().click();
+		await localPage.locator(".settings-overlay .connector-status-words").getByText(lineText(CONNECTOR_WORDS.wentWrong.addressNotFound, false), { exact: true }).waitFor({ timeout: 10000 });
+		assert((await localPage.locator(".settings-overlay .connector-page .pane-check-link").count()) === 1, "loopback: Check connection must follow the words");
+		const localWays = await localPage.locator(".settings-overlay .connector-page").locator(PAGE_WAYS).count();
+		assert(localWays > 0, "loopback: a connector's page offers its changes");
+		await localPage.locator(".settings-overlay .connector-page-back").click();
 		assert((await localPage.locator(".settings-overlay .pane-head-actions button").count()) === 1, "loopback: the Connectors title-row button must render");
 		await localCtx.close();
 		// Loopback Remote access with a tunnel found and remote access off: the

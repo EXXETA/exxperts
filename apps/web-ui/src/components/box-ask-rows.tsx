@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { CARD_DECLINE, COMMANDS_ASK_LINES, NOT_NOW, SITE_ALLOW_ONCE, SITE_ALLOW_ROOM, TURN_ON_ANYWAY, TURN_ON_COMMANDS, COMMANDS_OFF_LINE, COMMANDS_ON_LINE, folderAlreadyLine, folderPickedLine, folderPickedThisTimeLine, folderRemovedLine, FOLDER_PANEL_PRESSES, type FolderPanelPress, REMOVE, TURN_OFF, UNDO } from "../../../web-server/src/room-box/card-text";
+import { CONNECTOR_CHOICE_WORDS } from "../../../web-server/src/room-approval-titles";
+import { FORM_SEND, readConnectorFormFields } from "../../../web-server/src/connector-form-ask";
 import { useRemoteClientContext } from "../remote-client-context";
 import type { RoomAskGiven } from "../work-look";
 import type { ChatItem } from "../types";
@@ -37,6 +39,8 @@ export interface RoomAsks {
 	takenBack: (stepId: string, takenBack: boolean) => void;
 	/** Whether this connection removed the folder, so its Undo can put it back: the server keeps that per connection. */
 	removedHere: (path: string) => boolean;
+	/** Opens Settings, Connectors on this connector's own page, and checks it there as Check connection does. */
+	openConnector: (connectorId: string) => void;
 }
 export const RoomAsksContext = createContext<RoomAsks | null>(null);
 /** The ids of the steps in the answer the room is running, for the line under a yes for this answer only. */
@@ -135,14 +139,23 @@ export function roomAskReplies(post: (frame: object) => boolean) {
 
 const COMMANDS_LINE_KEYS = new Set(Object.keys(COMMANDS_ASK_LINES));
 
-type RoomAskFrame = { kind?: unknown; access?: unknown; roomHasFolder?: unknown; canChoose?: unknown; line?: unknown; anyway?: unknown; choosing?: unknown; failure?: unknown; suggested?: unknown; connector?: unknown; sent?: unknown; cut?: unknown };
+type RoomAskFrame = { kind?: unknown; access?: unknown; roomHasFolder?: unknown; canChoose?: unknown; line?: unknown; anyway?: unknown; choosing?: unknown; failure?: unknown; suggested?: unknown; connector?: unknown; sent?: unknown; cut?: unknown; readOnly?: unknown; destructive?: unknown; toolCallId?: unknown; fields?: unknown; fieldLines?: unknown };
+
+/** A form's lines from the server, by field: each a line of words, read where it enters. */
+function fieldLinesOf(value: unknown): Record<string, string> | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const lines = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+	return lines.length > 0 ? Object.fromEntries(lines) : undefined;
+}
 
 const FOLDER_PANEL_PRESS_VALUES: ReadonlySet<unknown> = new Set(Object.values(FOLDER_PANEL_PRESSES));
-/** The folder a card shows, only whole: a name, a path and whether one click may give it. */
+/** The folder a card shows, only whole: a name, a path, whether one click may give it and the file named in it; or the room's own words for a place, which no press gives. */
 function suggestedFolder(value: unknown): ApprovalItem["suggested"] {
 	if (typeof value !== "object" || value === null) return undefined;
-	const { name, path, once } = value as Record<string, unknown>;
-	return typeof name === "string" && typeof path === "string" && typeof once === "boolean" ? { name, path, once } : undefined;
+	const { name, path, once, file, named } = value as Record<string, unknown>;
+	if (typeof named === "string" && named !== "") return { named, once: false };
+	if (typeof name !== "string" || typeof path !== "string" || typeof once !== "boolean") return undefined;
+	return { name, path, once, ...(typeof file === "string" && file !== "" ? { file } : {}) };
 }
 
 /** What a room's card may change while it stays open, from a frame that carries it: a field the frame leaves out stays as it was. */
@@ -153,6 +166,7 @@ export function roomAskState(frame: RoomAskFrame): Partial<ApprovalItem> {
 		...("choosing" in frame ? { choosing: FOLDER_PANEL_PRESS_VALUES.has(frame.choosing) ? frame.choosing as FolderPanelPress : null } : {}),
 		...("suggested" in frame ? { suggested: suggestedFolder(frame.suggested) } : {}),
 		...("failure" in frame ? { failure: typeof frame.failure === "string" ? frame.failure : undefined } : {}),
+		...("fieldLines" in frame ? { fieldLines: fieldLinesOf(frame.fieldLines) } : {}),
 	};
 }
 
@@ -163,13 +177,32 @@ export function roomAskFields(frame: RoomAskFrame): Partial<ApprovalItem> {
 	if (frame.kind === "folder") return { access: frame.access === "write" ? "write" : "read", roomHasFolder: frame.roomHasFolder === true, canChoose: frame.canChoose !== false, line, suggested: suggestedFolder(frame.suggested), choosing: roomAskState({ choosing: frame.choosing }).choosing ?? null };
 	if (frame.kind === "commands") return { commandsLine: line && COMMANDS_LINE_KEYS.has(line) ? line as ApprovalItem["commandsLine"] : undefined, anyway: frame.anyway === true, ...failure };
 	if (frame.kind === "site") return failure;
-	if (frame.kind === "connector") return { connector: typeof frame.connector === "string" ? frame.connector : "", sent: typeof frame.sent === "string" ? frame.sent : "", cut: typeof frame.cut === "number" && frame.cut > 0 ? frame.cut : 0, ...failure };
+	if (frame.kind === "form") {
+		return {
+			connector: typeof frame.connector === "string" ? frame.connector : "",
+			fields: readConnectorFormFields(frame.fields),
+			fieldLines: fieldLinesOf(frame.fieldLines),
+			...(typeof frame.toolCallId === "string" && frame.toolCallId ? { toolCallId: frame.toolCallId } : {}),
+		};
+	}
+	if (frame.kind === "connector") {
+		return {
+			connector: typeof frame.connector === "string" ? frame.connector : "",
+			sent: typeof frame.sent === "string" ? frame.sent : "",
+			cut: typeof frame.cut === "number" && frame.cut > 0 ? frame.cut : 0,
+			...(frame.readOnly === true ? { readOnly: true as const } : frame.destructive === false ? { destructive: false as const } : {}),
+			...(typeof frame.toolCallId === "string" && frame.toolCallId ? { toolCallId: frame.toolCallId } : {}),
+			...failure,
+		};
+	}
 	return {};
 }
 
 /** The answer a card reads as once the server took it, from what the server says it took: the same words its buttons give. */
 export function answeredLabel(ask: ApprovalItem, taken: unknown): string {
-	if (ask.uiKind === "site" || ask.uiKind === "connector") return taken === "room" ? SITE_ALLOW_ROOM : taken === "once" ? SITE_ALLOW_ONCE : CARD_DECLINE;
+	if (ask.uiKind === "connector") return taken === "room" ? CONNECTOR_CHOICE_WORDS.allow : taken === "once" ? SITE_ALLOW_ONCE : CARD_DECLINE;
+	if (ask.uiKind === "form") return taken === "sent" ? FORM_SEND : CARD_DECLINE;
+	if (ask.uiKind === "site") return taken === "room" ? SITE_ALLOW_ROOM : taken === "once" ? SITE_ALLOW_ONCE : CARD_DECLINE;
 	if (ask.uiKind === "commands" && taken === true) return ask.anyway ? TURN_ON_ANYWAY : TURN_ON_COMMANDS;
 	return NOT_NOW;
 }

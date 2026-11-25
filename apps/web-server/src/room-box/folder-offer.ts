@@ -86,11 +86,11 @@ function looksLikeGitDir(folder: string, options: GrantOptions = {}): boolean {
  * for reading and for changing, since a yes for reading can be widened to one
  * for changing, and reading such a place is no reach a card should grant.
  */
-function runsOthersPrograms(folder: string, options: GrantOptions): boolean {
+function runsOthersPrograms(folder: string, options: GrantOptions, against: JudgedAgainst): boolean {
 	if (namesClosedPlace(folder)) return true;
 	const real = realPathOf(folder);
 	// A program folder, a folder inside one, or a folder that holds one: a yes on the parent still lets a command plant a program in the search path.
-	if (programFolders().some((place) => isInside(real, place) || isInside(place, real))) return true;
+	if (against.programs().some((place) => isInside(real, place) || isInside(place, real))) return true;
 	if (looksLikeGitDir(real, options)) return true;
 	return foldedName(path.basename(real)) === "hooks" && looksLikeGitDir(path.dirname(real), options);
 }
@@ -103,10 +103,41 @@ function windowsPlacesHere(answer: string): WindowsPlaces {
 	return withRealPaths(windowsPlaces(answer, process.env, { homes: homeFolders(), appData: appDataPlaces(), toolNames: HOME_TOOL_PLACES }), realPathOf);
 }
 
+/** What a folder is judged against, the same whichever room asks: each read from the disk when a judgement first needs it, then kept. */
+export interface JudgedAgainst {
+	homes(): string[];
+	programs(): string[];
+	closed(): { never: string[]; broad: string[]; shared: string[] };
+	windows(answer: string): WindowsPlaces;
+}
+
+/**
+ * For one judgement, or for one pass over many rooms, which hands it down to
+ * each and drops it at its end. Never kept longer: what is closed, and where a
+ * link of it leads, can change at any time, and the next pass reads it again.
+ */
+export function judgedAgainst(): JudgedAgainst {
+	let homes: string[] | undefined;
+	let programs: string[] | undefined;
+	let closed: ReturnType<JudgedAgainst["closed"]> | undefined;
+	let windows: { answer: string; places: WindowsPlaces } | undefined;
+	return {
+		homes: () => (homes ??= homeFolders()),
+		programs: () => (programs ??= programFolders()),
+		closed: () => {
+			if (closed) return closed;
+			const read = closedForReading();
+			return (closed = { never: neverOpened(read), broad: read.broad, shared: read.shared });
+		},
+		// By the answer too: one that couldn't be read yet can be, later in the pass.
+		windows: (answer) => (windows?.answer === answer ? windows : (windows = { answer, places: windowsPlacesHere(answer) })).places,
+	};
+}
+
 /** Whether Windows' rules refuse the folder; before a click only by an answer already read, and none refuses. */
-function windowsRefusesHere(folder: string, beforeClick: boolean): boolean {
+function windowsRefusesHere(folder: string, beforeClick: boolean, against: JudgedAgainst): boolean {
 	const answer = beforeClick ? keptWindowsAnswer() : windowsAnswer(process.env);
-	return answer === undefined || windowsRefuses(folder, windowsPlacesHere(answer));
+	return answer === undefined || windowsRefuses(folder, against.windows(answer));
 }
 
 const XATTR = "/usr/bin/xattr";
@@ -159,9 +190,9 @@ function unshowable(target: string): boolean {
  * Windows, never one of Windows' own places either (`windows/windows-places.ts`).
  * A name that isn't the folder's real name has moved or never was it.
  */
-export function folderGrantable(folder: string, access: Access, writable: readonly string[], room: string, options: GrantOptions = {}): boolean {
+export function folderGrantable(folder: string, access: Access, writable: readonly string[], room: string, options: GrantOptions = {}, against?: JudgedAgainst): boolean {
 	if (realPlace(folder, options) === null || unshowable(folder)) return false;
-	return placeGrantable(folder, writable, room, options);
+	return placeGrantable(folder, writable, room, options, against);
 }
 
 /**
@@ -170,23 +201,22 @@ export function folderGrantable(folder: string, access: Access, writable: readon
  * person's choice, so a room on a share keeps working, as the file fence lets
  * it, and no card draws it, so a name a card can't show, as an emoji's, is fine.
  */
-export function roomFolderGrantable(folder: string): boolean {
-	return placeGrantable(folder, [], "");
+export function roomFolderGrantable(folder: string, against?: JudgedAgainst): boolean {
+	return placeGrantable(folder, [], "", {}, against);
 }
 
-function placeGrantable(folder: string, writable: readonly string[], room: string, options: GrantOptions = {}): boolean {
+function placeGrantable(folder: string, writable: readonly string[], room: string, options: GrantOptions, against: JudgedAgainst = judgedAgainst()): boolean {
 	if (realPathOf(folder) !== folder) return false;
 	if (isInside(room, folder)) return false;
-	if (ON_WINDOWS && windowsRefusesHere(folder, options.beforeClick === true)) return false;
-	if (runsOthersPrograms(folder, options)) return false;
+	if (ON_WINDOWS && windowsRefusesHere(folder, options.beforeClick === true, against)) return false;
+	if (runsOthersPrograms(folder, options, against)) return false;
 	// Before a click, telling a cloud drive needs xattr: a folder in Library waits for the window.
-	if (homeFolders().some((home) => isInside(folder, path.join(home, "Library")) && (options.beforeClick === true || !inCloudDrive(folder, home)))) return false;
-	const closed = neverOpened();
-	const { broad, shared } = closedForReading();
-	if ([...closed, ...broad].some((place) => isInside(place, folder))) return false;
-	if (closed.some((place) => isInside(folder, place))) return false;
+	if (against.homes().some((home) => isInside(folder, path.join(home, "Library")) && (options.beforeClick === true || !inCloudDrive(folder, home)))) return false;
+	const { never, broad, shared } = against.closed();
+	if ([...never, ...broad].some((place) => isInside(place, folder))) return false;
+	if (never.some((place) => isInside(folder, place))) return false;
 	// A home that sits in a shared folder is still the person's.
-	if (shared.some((place) => isInside(folder, place)) && !homeFolders().some((home) => isInside(folder, home))) return false;
+	if (shared.some((place) => isInside(folder, place)) && !against.homes().some((home) => isInside(folder, home))) return false;
 	if (writable.some((place) => place !== folder && isInside(folder, place))) return false;
 	return true;
 }
@@ -215,7 +245,7 @@ export function unsoundForEveryone(folders: readonly AlsoAllowedFolder[]): AlsoA
 }
 
 /** The entries a room's list may keep: each one judged against the room and the list's other writable folders. */
-export function soundFolders(folders: readonly AlsoAllowedFolder[], room: string): AlsoAllowedFolder[] {
+export function soundFolders(folders: readonly AlsoAllowedFolder[], room: string, against?: JudgedAgainst): AlsoAllowedFolder[] {
 	const writable = [room, ...writeEntries(folders)];
-	return folders.filter((entry) => folderGrantable(entry.path, entry.access, writable, room));
+	return folders.filter((entry) => folderGrantable(entry.path, entry.access, writable, room, {}, against));
 }

@@ -132,6 +132,8 @@ try {
 			files: { command: "node", args: ["server.js"] },
 		},
 	}, null, 2));
+	// Written as an older version left it: readable to every account on the computer.
+	fs.chmodSync(configFile, 0o644);
 	// No update-day migration: every room below has its own grants file.
 	fs.mkdirSync(agentsRoot, { recursive: true });
 	fs.writeFileSync(path.join(agentsRoot, ".mcp-grants-migration.json"), "{}");
@@ -152,6 +154,9 @@ try {
 	assert(teamWiki.status === 200 && teamWiki.body.name === "cafe-notes", `D1 a typed name makes a fixed name, got ${JSON.stringify(teamWiki)}`);
 	assert(entries()["cafe-notes"].displayName === "Café notes", `D1 the typed name is kept, got ${JSON.stringify(entries()["cafe-notes"])}`);
 	assert((await statusOf("cafe-notes")).displayName === "Café notes", "D1 the status carries the typed name");
+	// M: the connector file can hold a key as typed, so each write leaves it private; Windows keeps no such mode.
+	const modeOf = () => fs.statSync(configFile).mode & 0o777; // portability-ok: read only off Windows
+	if (process.platform !== "win32") assert(modeOf() === 0o600, `M1 an add to a file at 644 leaves it at 600, got ${modeOf().toString(8)}`);
 	const taken = await send("POST", "/api/mcp/servers", { name: "team WIKI", url: here("/other") });
 	assert(taken.status === 409 && taken.body.error === CONNECTOR_FORM_LINES.nameTaken("Team wiki"), `D2 a name shown already is refused without case, got ${JSON.stringify(taken)}`);
 	const takenDirectory = await send("POST", "/api/mcp/servers", { name: "My_tool", url: here("/other") });
@@ -271,15 +276,17 @@ try {
 	const spaced = await changeAddress("spaced-key", { url: here("/spaced"), key: "new-value" });
 	assert(spaced.status === 200 && entries()["spaced-key"].headers?.["X-Api-Key"] === "new-value", `K7 a key header other than Authorization takes the key as typed, got ${JSON.stringify(entries()["spaced-key"])}`);
 	const unplaced = fs.readFileSync(configFile, "utf-8");
-	for (const name of ["two-keys", "tenant-only"]) {
-		const refusedKey = await changeAddress(name, { url: entries()[name].url, key: "new-key" });
-		assert(refusedKey.status === 400 && refusedKey.body.error === CONNECTOR_FORM_LINES.keyNotChangeable, `K4 ${name}'s key can't be changed here, got ${JSON.stringify(refusedKey)}`);
-	}
+	const refusedKey = await changeAddress("two-keys", { url: entries()["two-keys"].url, key: "new-key" });
+	assert(refusedKey.status === 400 && refusedKey.body.error === CONNECTOR_FORM_LINES.keyNotChangeable, `K4 two-keys' key can't be changed here, got ${JSON.stringify(refusedKey)}`);
 	for (const name of ["header-key", "app-and-key", "odd-header"]) {
 		const stays = await changeAddress(name, { url: elsewhere(`/${name}`), key: "new-key" });
 		assert(stays.status === 400 && stays.body.error === CONNECTOR_FORM_LINES.cantMoveSite, `K5 ${name} would lose its sign-in app or a header on another site, so it can't move there, got ${JSON.stringify(stays)}`);
 	}
 	assert(fs.readFileSync(configFile, "utf-8") === unplaced, "K4 K5 a refused change writes nothing");
+	// One with no key takes a first one where Add puts a key, its other headers kept, as on this computer.
+	const firstKey = await changeAddress("tenant-only", { url: entries()["tenant-only"].url, key: "first-key" });
+	const tenantOnly = entries()["tenant-only"];
+	assert(firstKey.status === 200 && tenantOnly.auth === "bearer" && tenantOnly.bearerToken === "first-key" && JSON.stringify(tenantOnly.headers) === JSON.stringify({ "X-Tenant": "acme" }), `K4 a first key is kept as a bearer key beside its tenant header, got the fields ${JSON.stringify(Object.keys(tenantOnly))}`);
 
 	const before = fs.readFileSync(configFile, "utf-8");
 	const imported = await changeAddress("from-cursor", { url: here("/elsewhere") });
@@ -292,11 +299,48 @@ try {
 	assert(malformed.status === 400 && malformed.body.error === CONNECTOR_FORM_LINES.addressNotWeb, `A7 a malformed address, got ${JSON.stringify(malformed)}`);
 	assert(fs.readFileSync(configFile, "utf-8") === before, "A7 a refused change writes nothing");
 
+	if (process.platform !== "win32") {
+		// M: a change and a removal leave it private too, and so does an add to a home with no connector file yet.
+		fs.chmodSync(configFile, 0o644);
+		const moved = await changeAddress("linear", { url: here("/linear-2") });
+		assert(moved.status === 200 && modeOf() === 0o600, `M2 a changed address leaves the file at 600, got ${moved.status} ${modeOf().toString(8)}`);
+		const added = await send("POST", "/api/mcp/servers", { name: "Gone soon", url: here("/gone") });
+		assert(added.status === 200, `M3 an add to remove, got ${JSON.stringify(added)}`);
+		fs.chmodSync(configFile, 0o644);
+		const removed = await requestJson(`/api/mcp/servers/${added.body.name}`, { method: "DELETE" });
+		assert(removed.status === 200 && modeOf() === 0o600, `M3 a removal leaves the file at 600, got ${JSON.stringify(removed)} ${modeOf().toString(8)}`);
+		fs.chmodSync(configFile, 0o400); // portability-ok: only the mode is checked, as a write replaces the file whoever runs it
+		const tighter = await send("POST", "/api/mcp/servers", { name: "Read only file", url: here("/tight") });
+		assert(tighter.status === 200 && modeOf() === 0o400, `M4 a file tighter than 600 stays as tight, got ${tighter.status} ${modeOf().toString(8)}`);
+		fs.chmodSync(configFile, 0o600);
+	}
+
 	// D8: names are unique as people see them, a directory connector's own name included.
 	const customHf = await send("POST", "/api/mcp/servers", { name: "Hugging Face", url: here("/hf") });
 	assert(customHf.status === 200 && customHf.body.name === "hugging-face", `D8 a custom connector may take a directory connector's name while that one isn't added, got ${JSON.stringify(customHf)}`);
 	const directoryHf = await send("POST", "/api/mcp/servers", { name: "huggingface", url: here("/hf-directory") });
 	assert(directoryHf.status === 409 && directoryHf.body.error === CONNECTOR_FORM_LINES.nameTaken("Hugging Face"), `D8 the directory's Hugging Face would show the same name, got ${JSON.stringify(directoryHf)}`);
+
+	if (process.platform !== "win32") {
+		const kept = fs.readFileSync(configFile, "utf-8");
+		fs.rmSync(configFile);
+		const fresh = await send("POST", "/api/mcp/servers", { name: "First one", url: here("/first") });
+		assert(fresh.status === 200 && modeOf() === 0o600, `M5 the first add in a home with no connector file writes it at 600, got ${fresh.status} ${modeOf().toString(8)}`);
+		fs.writeFileSync(configFile, kept, { mode: 0o600 });
+	}
+
+	// F: a connector file that is there but can't be read as one is never replaced by an add: its connectors and keys stay.
+	{
+		const kept = fs.readFileSync(configFile, "utf-8");
+		for (const [what, text] of [["cut short", kept.slice(0, Math.floor(kept.length / 2))], ["its connectors not a list of them", JSON.stringify({ mcpServers: ["linear"] })]] as const) {
+			fs.writeFileSync(configFile, text);
+			const refused = await send("POST", "/api/mcp/servers", { name: "Kept out", url: here("/kept-out") });
+			assert(refused.status === 409 && refused.body.error === CONNECTOR_REQUEST_LINES.loadFailed && fs.readFileSync(configFile, "utf-8") === text, `F1 an add to a file ${what} is refused and writes nothing, got ${JSON.stringify(refused)}`);
+		}
+		fs.writeFileSync(configFile, kept);
+		const allowed = await send("POST", "/api/mcp/servers", { name: "Let in", url: here("/let-in") });
+		assert(allowed.status === 200 && Object.keys(entries()).includes(allowed.body.name) && Object.keys(entries()).includes("cafe-notes"), `F1 the same add to the file as it was goes through, its other connectors kept, got ${JSON.stringify(allowed)}`);
+	}
 
 	console.log("mcp-connector-edit-smoke: OK");
 } catch (error) {

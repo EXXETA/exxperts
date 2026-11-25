@@ -6,20 +6,32 @@ const path = require("node:path");
 const { ensureProductAppUserDirs } = require("./product-state-paths.cjs");
 const stateProfiles = require("./state-profiles.cjs");
 const { serverLaunchArgs } = require("./server-entry.cjs");
+const { containerStartLines, looksLikeContainer, openContainerListeners } = require("./container-forward.cjs");
 
-// --port and --no-open work but stay out of the help: tests, CI and a home
-// computer serving a phone use them; a person never needs them.
-const HELP = "Usage: exxperts\nOpens exxperts in your browser. Everything else is in the app.";
+// What the command takes: parseArgs here and the words bin/exxperts.cjs
+// handles before it. `web` works but stays unlisted.
+const HELP = `Usage: exxperts [options]
+Opens exxperts in your browser. Everything else is in the app.
+
+  --port <number>          Use this port instead of 8787.
+  --no-open                Don't open the browser.
+  --container              Inside a Linux container: also listen on the container's own address.
+  --version                Print the version.
+  exxperts doctor          Check this install and say how to fix what's wrong.
+  exxperts setup chromium  Download the headless browser for pages that need one (about 150 MB, once).`;
+const NOT_LINUX = "--container is for running exxperts inside a Linux container. On this computer, start it with: exxperts";
 const REMOVED = "The terminal app and its commands were removed in exxperts 0.15. Run `exxperts` to open the app; everything else is in the app.";
 
 // Any word this command does not know gets REMOVED: it is either one of the
 // terminal app's commands or a typo, and both are answered by the app.
 function parseArgs(argv) {
-  const opts = { port: process.env.PORT || "8787", open: true, help: false, unknown: null };
+  const opts = { port: process.env.PORT || "8787", open: true, container: false, help: false, unknown: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") opts.help = true;
     else if (arg === "--no-open") opts.open = false;
+    // A container has no browser of its own: the sign-in link is printed instead.
+    else if (arg === "--container") opts.container = true;
     else if (arg === "--port") {
       const value = argv[++i];
       if (!value || value.startsWith("-")) throw new Error("--port requires a value");
@@ -29,6 +41,7 @@ function parseArgs(argv) {
     }
   }
   if (!/^\d+$/.test(String(opts.port))) throw new Error(`Invalid port: ${opts.port}`);
+  if (opts.container) opts.open = false;
   return opts;
 }
 
@@ -132,7 +145,7 @@ function portHeldMessage(command, port, portState) {
     ? `Port ${port} is already in use. Most likely an exxperts web server from an earlier launch is still running (this can happen after an update, or when a previous session did not shut down).`
     : `Port ${port} is held by a process that is not responding; most likely an earlier exxperts web server that got stuck.`;
   const reuse = portState === "responding"
-    ? `\n  - Or, to keep using the already-running server, open http://localhost:${port} in your browser.`
+    ? `\n  - Or, to keep using the already-running server, open http://localhost:${port} in your browser.\n    A browser that isn't signed in needs the sign-in link its terminal printed.`
     : "";
   return `${cause}
 
@@ -179,7 +192,7 @@ function openBrowser(url) {
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   // A missing opener (a Linux without xdg-open) fails after the spawn, as an
   // error event; unheard, it would end the launcher and leave the server.
-  const failed = () => console.error(`Could not open the browser. Open this link once to sign the browser in:\n${url}\n`);
+  const failed = () => console.error("Could not open the browser. Open the link above.\n");
   try {
     const opener = spawn(command, args, { detached: true, stdio: "ignore" });
     opener.on("error", failed);
@@ -215,6 +228,15 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
   if (opts.help) {
     console.log(HELP);
     return;
+  }
+  // Containers run Linux; on a Mac or Windows the listeners could only open
+  // the app to a network. On Linux there is no test for "am I in a container"
+  // that refuses: the marks differ between runtimes and are missing in sandbox
+  // products that are small virtual machines, so they only choose whether the
+  // start lines warn.
+  if (opts.container && process.platform !== "linux") {
+    console.error(NOT_LINUX);
+    process.exit(1);
   }
 
   // Complete a move a dying run left behind, then point this process at the
@@ -266,8 +288,12 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
     let server = null;
     let stopping = false;
     let firstLeg = true;
+    // The container's listeners, opened once the first leg answers; they stay
+    // across a profile switch, which restarts the server on the same port.
+    let forwarding = null;
     function stop() {
       stopping = true;
+      if (forwarding) forwarding.close();
       if (server && !server.killed) server.kill("SIGTERM");
     }
     process.on("SIGINT", stop);
@@ -342,18 +368,35 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
           if (!ready) await new Promise((r) => setTimeout(r, 1000));
         }
       }
+      if (running() && opts.container && !forwarding) {
+        // Fail closed: without its listeners the app can't be reached from
+        // outside the container, so the server this launcher started stops.
+        try {
+          forwarding = await openContainerListeners(Number(opts.port));
+        } catch (err) {
+          passStderrThrough();
+          console.error(err.message);
+          stop();
+          await exited;
+          process.exit(1);
+        }
+      }
       if (running()) {
         passStderrThrough();
         // The token is re-read per leg: it lives inside the profile, so a
-        // switch rotates it. The browser only opens on the first leg: after
-        // a switch the already-open page signs itself into the new profile,
-        // and a second tab would just be litter; the link is still printed
-        // for anyone who closed that page.
+        // switch rotates it. The link is printed on every leg, to the
+        // terminal only, so a second browser can be signed in later. The
+        // browser only opens on the first leg: after a switch the
+        // already-open page signs itself into the new profile, and a second
+        // tab would just be litter.
         const token = readAuthToken(home);
         const signInUrl = token ? `${url}/auth/session?token=${encodeURIComponent(token)}` : url;
-        console.error(`\nexxperts running at ${url}\nPress Ctrl+C to stop.\n`);
+        if (forwarding) console.error(containerStartLines(url, opts.port, forwarding.addresses, token ? signInUrl : null, looksLikeContainer()));
+        else {
+          console.error(`\nexxperts running at ${url}\nPress Ctrl+C to stop.\n`);
+          if (token) console.error(`Open this link once to sign a browser in:\n${signInUrl}\n`);
+        }
         if (opts.open && firstLeg) openBrowser(signInUrl);
-        else if (token) console.error(`Open this link once to sign the browser in:\n${signInUrl}\n`);
       }
       const startedLeg = ready;
       firstLeg = false;

@@ -95,6 +95,12 @@ export interface ProjectAssetRowsInput {
 	 * so a slow fetch never blanks the panel.
 	 */
 	shelfTruth?: ReadonlySet<string>;
+	/**
+	 * On a shared server the room's AI writes and edits these files too, and a
+	 * file's time is its last change, so a person's file reads "updated"; the
+	 * desktop keeps "attached".
+	 */
+	sharedServer?: boolean;
 	now: Date;
 }
 
@@ -249,6 +255,7 @@ function shortDate(ms: number, now: Date): string {
  * `userFileName` routes the viewer to the room-files endpoint.
  */
 function projectUserFileRows(shelfFiles: ShelfFileRowInput[], input: ProjectAssetRowsInput, revisingNames: ReadonlySet<string>): AssetRowView[] {
+	const resting = input.sharedServer ? "updated" : "attached";
 	return shelfFiles
 		.filter((file) => file.origin === "user")
 		.map((file) => {
@@ -262,7 +269,7 @@ function projectUserFileRows(shelfFiles: ShelfFileRowInput[], input: ProjectAsse
 				iconLabel: file.extension.replace(/^\./, "").toUpperCase().slice(0, 4) || "TXT",
 				running: updating,
 				orphan: false,
-				subline: updating ? "updating…" : when ? `attached · ${when}` : "attached",
+				subline: updating ? "updating…" : when ? `${resting} · ${when}` : resting,
 				unread: false,
 				failed: false,
 				inConversation: false,

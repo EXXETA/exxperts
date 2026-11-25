@@ -17,7 +17,7 @@
 	min-height: 0;
 }
 :root[data-theme="light"] .product-sidebar {
-	background: var(--exx-surface);
+	background: var(--exx-surface-side);
 	color: var(--fg);
 	border-right-color: var(--exx-divider);
 }

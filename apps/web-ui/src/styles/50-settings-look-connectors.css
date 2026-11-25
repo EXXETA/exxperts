@@ -1,0 +1,525 @@
+/* The settings windows' new look: Settings' Connectors list ------------------
+   Loaded after the look's other page files, and built while the switch is off
+   as they are: every rule starts with .settings-dialog.settings-look-next, so
+   with the switch off nothing here applies. A connector's own page, a room's
+   Connectors and AI setup share some of these classes (the dot, the tile, the
+   tag, the row's button), so each rule names one of this page's own holders:
+   the list (.connector-list) and its section, the Directory
+   (.connector-directory), the foot (.connector-waiting-foot) and Add connector
+   (.connector-add-btn). The strip, the tag and the caret carry the same
+   numbers as the Skills list's own, for a later step to fold into one part. */
+
+/* On the parts that use them, not the list's section, so an add form opened there inherits nothing new. */
+.settings-dialog.settings-look-next :is(.connector-list, .connector-list-section > :is(.connector-notice, .connector-load-error), .connector-directory, .connector-waiting-foot) {
+	/* Tiles and strips: 5 % of the text colour on the page; one step above the card in dark. */
+	--look-connectors-tile: color-mix(in srgb, var(--fg) 5%, var(--exx-surface-page));
+	/* The status dots: green works, amber needs the person, red broken, grey nothing to report. */
+	--look-connectors-ok: var(--exx-success);
+	--look-connectors-warn: var(--exx-warning);
+	--look-connectors-err: var(--error);
+	--look-connectors-grey: var(--exx-icon-quiet);
+}
+.settings-dialog.settings-look-next:where(:root:not([data-theme="light"]) *) :is(.connector-list, .connector-list-section > :is(.connector-notice, .connector-load-error), .connector-directory, .connector-waiting-foot) {
+	--look-connectors-tile: var(--exx-surface-hover);
+}
+
+/* Add connector: its caret 6 px after its words at 70 %. */
+.settings-dialog.settings-look-next .connector-add-btn > .connector-add-caret {
+	display: inline-flex;
+	margin-left: 6px;
+	vertical-align: -1px;
+	opacity: 0.7;
+}
+
+/* The list: one card, rows 64 tall with no padding of the card's own, lines
+   between rows that stop 16 px short of its sides. */
+.settings-dialog.settings-look-next .connector-list {
+	padding: 0;
+	background: var(--exx-surface-card);
+}
+.settings-dialog.settings-look-next .connector-list > .connector-item {
+	position: relative;
+	margin: 0;
+	border-radius: 0;
+}
+.settings-dialog.settings-look-next .connector-list > .connector-item + .connector-item::before {
+	content: "";
+	position: absolute;
+	z-index: 1;
+	top: 0;
+	right: 16px;
+	left: 16px;
+	height: 1px;
+	background: var(--exx-hairline);
+	pointer-events: none;
+}
+/* A focused row's ring stays whole: the lines above and under it give way. */
+.settings-dialog.settings-look-next .connector-list > .connector-item:has(.connector-item-hit:focus-visible)::before,
+.settings-dialog.settings-look-next .connector-list > .connector-item:has(.connector-item-hit:focus-visible) + .connector-item::before {
+	visibility: hidden;
+}
+/* A row (44's pattern): tile 32 | 12 | name over one status line, which ends
+   with how many rooms have it on | the button's column | chevron 16. The
+   button stands in the chevron's place on the right edge: its column is as
+   wide as it and 12 more, and nothing on a row with none, which shows the
+   chevron. The row measures its button into --connector-slot-now. */
+.settings-dialog.settings-look-next .connector-list .connector-item-row {
+	--look-connectors-slot: min(var(--connector-slot-now, 0px) * 1000, var(--connector-slot-now, 0px) + 12px);
+	display: block;
+	padding: 0;
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-hit {
+	grid-template-columns: 32px 12px minmax(0, 1fr) var(--look-connectors-slot) 16px;
+	grid-template-rows: 64px;
+	align-items: center;
+	gap: 0;
+	width: 100%;
+	height: 64px;
+	padding: 0 16px;
+	border-radius: 0;
+	transition: background-color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .connector-list .connector-item-hit:hover {
+		background: var(--exx-row-hover);
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-hit:hover .disclosure-chevron {
+		color: var(--muted);
+	}
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-hit:active {
+	background: var(--exx-row-press);
+}
+/* Inside the row, so the card never cuts it. */
+.settings-dialog.settings-look-next .connector-list .connector-item-hit:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+	border-radius: 8px;
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-hit > .connector-avatar {
+	grid-column: 1;
+	grid-row: 1;
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-text {
+	grid-column: 3;
+	grid-row: 1;
+	gap: 2px;
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-name {
+	flex-wrap: nowrap;
+	height: 20px;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-name-text {
+	flex: 0 1 auto;
+	min-width: 0;
+}
+/* The tag never gives way to the name. Only a row too narrow for any of the
+   name beside it would cut the tag, leaving the name its first letter and "…"
+   (20 px, and the tag's 8 before it), with the tag whole in its tip. */
+.settings-dialog.settings-look-next .connector-list .connector-item-name > .connector-dir-kind {
+	display: block;
+	max-width: calc(100% - 28px);
+	overflow: hidden;
+	line-height: 20px;
+	text-overflow: ellipsis;
+}
+/* The chevron sits in its own column. */
+.settings-dialog.settings-look-next .connector-list .connector-rooms-link {
+	display: contents;
+}
+.settings-dialog.settings-look-next .connector-list .connector-rooms-link .disclosure-chevron {
+	grid-column: 5;
+	grid-row: 1;
+	justify-self: center;
+	width: 16px;
+	height: 16px;
+	color: var(--exx-icon-quiet);
+	transition: color 100ms ease;
+}
+/* The row's button: outside the row's open target, as wide as its words, its
+   right edge where the other rows' chevron ends. */
+.settings-dialog.settings-look-next .connector-list .connector-item-side {
+	position: absolute;
+	z-index: 2;
+	top: 50%;
+	right: 16px;
+	margin: 0;
+	transform: translateY(-50%);
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-slot {
+	width: auto;
+}
+.settings-dialog.settings-look-next .connector-list .connector-slot-btn {
+	min-width: 0;
+}
+/* While its check runs, the row's second line holds the one spinner: the
+   pressed button keeps its words, dimmed as a disabled button is. */
+.settings-dialog.settings-look-next .connector-list .connector-slot-btn.is-busy .connector-slot-label {
+	visibility: visible;
+}
+.settings-dialog.settings-look-next .connector-list .connector-slot-btn.is-busy .spinner {
+	visibility: hidden;
+}
+
+/* The second line: a 12 px slot holding the dot, 6 px, one line of 13/18,
+   cut with "…" and whole in its tip. A reason, and a failure, in soft text. */
+.settings-dialog.settings-look-next :is(.connector-list, .connector-waiting-foot) .connector-item-state {
+	gap: 6px;
+	height: 18px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-state.is-broken {
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next .connector-list .connector-item-status {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The status mark: an 8 px dot in a 12 px slot, or a 12 px spinner that keeps
+   turning with reduced motion too. Today's names for two swap here: "ring" is
+   a program on this computer, a grey dot; "wait" is not connected, a hollow
+   ring. */
+.settings-dialog.settings-look-next :is(.connector-list, .connector-waiting-foot) .connector-dot {
+	width: 12px;
+	height: 12px;
+}
+.settings-dialog.settings-look-next :is(.connector-list, .connector-waiting-foot) .connector-dot::before {
+	box-sizing: border-box;
+	width: 8px;
+	height: 8px;
+	border: 0;
+	background: var(--look-connectors-grey);
+	animation: none;
+}
+.settings-dialog.settings-look-next .connector-list .connector-dot-ok::before {
+	background: var(--look-connectors-ok);
+}
+.settings-dialog.settings-look-next .connector-list .connector-dot-warn::before {
+	background: var(--look-connectors-warn);
+}
+.settings-dialog.settings-look-next .connector-list .connector-dot-err::before {
+	background: var(--look-connectors-err);
+}
+.settings-dialog.settings-look-next .connector-list .connector-dot-wait::before {
+	background: none;
+	border: 1.5px solid var(--muted);
+}
+.settings-dialog.settings-look-next :is(.connector-list, .connector-waiting-foot) .connector-dot-busy::before {
+	width: 12px;
+	height: 12px;
+	background: none;
+	border: 1.5px solid color-mix(in srgb, var(--fg) 25%, transparent);
+	border-top-color: var(--fg);
+	/* It keeps turning with reduced motion, whole (26-connectors.css fades it there). */
+	opacity: 1;
+	animation: spin 800ms linear infinite;
+}
+
+/* The tile: 32, radius 8; a service's mark at 20, else two initials 12/16 at 700 in soft text. */
+.settings-dialog.settings-look-next :is(.connector-list, .connector-directory) .connector-avatar {
+	width: 32px;
+	height: 32px;
+	border-radius: 8px;
+	background: var(--look-connectors-tile);
+	color: var(--fg-soft);
+	font-size: 12px;
+	line-height: 16px;
+	font-weight: 700;
+}
+.settings-dialog.settings-look-next :is(.connector-list, .connector-directory) .connector-avatar > svg {
+	width: 20px;
+	height: 20px;
+	color: var(--fg);
+}
+
+/* The tag: 44's look, 20 tall, 8 px after the name. It never gives way; the
+   name does. */
+.settings-dialog.settings-look-next :is(.connector-list, .connector-directory) .connector-dir-kind {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	box-sizing: border-box;
+	height: 20px;
+	margin-left: 8px;
+	white-space: nowrap;
+}
+
+/* Phone: the name with its tag, the second line, then "On in …"; tile and
+   chevron on the middle of those lines. A row with a button grows by a line of
+   its own under them, the button on the text's left edge, so the name is cut
+   only at the row's edge and its tag never. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .connector-list .connector-item-hit {
+		grid-template-columns: 32px 12px minmax(0, 1fr) 12px 16px;
+		grid-template-rows: 20px minmax(18px, auto);
+		row-gap: 2px;
+		height: auto;
+		padding: 12px 16px;
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-row:has(.connector-item-side :is(button, a)) .connector-item-hit {
+		padding-bottom: calc(12px + 8px + var(--exx-btn-h));
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-hit > .connector-avatar {
+		grid-row: 1 / -1;
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-text {
+		display: contents;
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-name {
+		grid-column: 3;
+		grid-row: 1;
+		/* 26-connectors.css keeps a margin under it and room for a button beside it. */
+		margin: 0;
+		padding-right: 0;
+	}
+	/* A phone has no tip to read the rest: the status line wraps whole, its words under themselves. */
+	.settings-dialog.settings-look-next .connector-list .connector-item-state {
+		grid-column: 3;
+		grid-row: 2;
+		align-items: flex-start;
+		min-width: 0;
+		height: auto;
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-state > .connector-dot {
+		flex: none;
+		margin-top: 3px;
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-status {
+		white-space: normal;
+	}
+	/* It wraps between its parts: one part is never cut in two, unless it alone is wider than the line. */
+	.settings-dialog.settings-look-next .connector-list .connector-item-part {
+		display: inline-block;
+		max-width: 100%;
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-rooms-link .disclosure-chevron {
+		grid-column: 5;
+		grid-row: 1 / -1;
+	}
+	.settings-dialog.settings-look-next .connector-list .connector-item-side {
+		top: auto;
+		right: auto;
+		bottom: 12px;
+		left: calc(16px + 32px + 12px);
+		transform: none;
+	}
+}
+
+/* The foot: what is under way and can be stopped, a sign-in waiting in the
+   browser or a program getting ready, one strip each, newest last. It stays
+   at the pane's bottom, across its whole width as the header is, with a
+   hairline above; the list scrolls above it, and at the end nothing is under it. */
+.settings-dialog.settings-look-next .connector-waiting-foot {
+	/* Wider than the page's column (26-connectors.css gives its children the column's width). */
+	width: auto;
+	position: sticky;
+	z-index: 5;
+	bottom: calc(-1 * var(--settings-pad));
+	margin: 0 calc(var(--settings-scrollbar) - var(--settings-pad)) calc(-1 * var(--settings-pad)) calc(-1 * var(--settings-pad));
+	padding: 0 calc(var(--settings-pad) - var(--settings-scrollbar)) 0 var(--settings-pad);
+	border-top: 1px solid var(--exx-hairline);
+	background: var(--exx-surface-page);
+}
+.settings-dialog.settings-look-next .connector-waiting-foot > .connector-waiting {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-height: 64px;
+	box-sizing: border-box;
+	padding: 12px 0;
+}
+.settings-dialog.settings-look-next .connector-waiting-foot > .connector-waiting + .connector-waiting {
+	border-top: 1px solid var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .connector-waiting-foot .connector-waiting-text {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .connector-waiting-foot .connector-waiting-name {
+	overflow: hidden;
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .connector-waiting-foot .connector-waiting-line {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-waiting-foot .connector-slot-btn {
+	flex: none;
+	width: auto;
+	min-width: 0;
+}
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .connector-waiting-foot {
+		bottom: -24px;
+		margin: 0 -16px -24px;
+		padding: 0 16px;
+	}
+}
+
+/* The lines of the list's section: a strip each, the tile's fill, radius 12,
+   an 8 px dot in a 12 px slot, 6 px, 13/18 in the text colour. The line after
+   an add is green, 12 px above the list (the section's own gap); a list that
+   couldn't load is red, in the list's place, with Try again at its end. */
+.settings-dialog.settings-look-next .connector-list-section > :is(.connector-notice, .connector-load-error) {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	box-sizing: border-box;
+	min-height: 40px;
+	max-width: none;
+	margin: 0;
+	padding: 6px 8px 6px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: var(--look-connectors-tile);
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .connector-list-section > :is(.connector-notice, .connector-load-error)::before {
+	content: "";
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin: 0 2px;
+	border-radius: 50%;
+	background: var(--look-connectors-ok);
+}
+.settings-dialog.settings-look-next .connector-list-section > .connector-load-error::before {
+	background: var(--look-connectors-err);
+}
+.settings-dialog.settings-look-next .connector-list-section > .connector-load-error > span {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+/* No connectors is 44's empty line, with its link. Loading: a muted line. */
+.settings-dialog.settings-look-next .connector-list-section > .ai-setup-copy {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* The Directory: the search on the title's line, 240 wide, ending on the
+   card's edge; on a phone its own full-width line under the title. Rows 64:
+   the tile, the name with its tag over one line of description (whole in its
+   tip), and Add, or "Added", at the row's right padding. */
+.settings-dialog.settings-look-next .connector-directory > .group-head {
+	align-items: flex-end;
+}
+.settings-dialog.settings-look-next .connector-directory .connector-dir-search {
+	width: 240px;
+}
+.settings-dialog.settings-look-next .connector-directory .settings-rows {
+	padding: 0 16px;
+	background: var(--exx-surface-card);
+}
+.settings-dialog.settings-look-next .connector-directory .connector-dir-row {
+	align-items: center;
+	gap: 12px;
+	box-sizing: border-box;
+	min-height: 64px;
+	height: 64px;
+	padding: 0;
+}
+.settings-dialog.settings-look-next .connector-directory .connector-dir-row > .settings-row-main {
+	flex: 1 1 auto;
+	gap: 2px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .connector-directory .connector-dir-row .settings-row-label {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .connector-directory .connector-dir-row .settings-row-sub {
+	display: block;
+	overflow: hidden;
+	color: var(--muted);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	-webkit-line-clamp: none;
+	line-clamp: none;
+}
+.settings-dialog.settings-look-next .connector-directory .connector-dir-row > :is(.rs-btn, .settings-row-value) {
+	flex: none;
+	margin-left: auto;
+}
+.settings-dialog.settings-look-next .connector-directory .connector-dir-row > .settings-row-value {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+/* The key row under its entry, at the name's edge: the field, Add, and where to get one. */
+.settings-dialog.settings-look-next .connector-directory .connector-dir-token-row {
+	gap: 8px;
+	padding: 0 0 16px 44px;
+}
+.settings-dialog.settings-look-next .connector-directory > .cli-note {
+	margin: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .connector-directory > .group-head {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 8px;
+	}
+	.settings-dialog.settings-look-next .connector-directory > .group-head > .pane-head-actions {
+		width: 100%;
+	}
+	.settings-dialog.settings-look-next .connector-directory .connector-dir-search {
+		width: 100%;
+	}
+	/* A description runs to two lines, then "…", whole in its tip; the row grows
+	   by it. 10 above and under keeps a row of one line, or of Add's 44, at 64. */
+	.settings-dialog.settings-look-next .connector-directory .connector-dir-row {
+		height: auto;
+		padding: 10px 0;
+	}
+	.settings-dialog.settings-look-next .connector-directory .connector-dir-row .settings-row-sub {
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		white-space: normal;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+	}
+	/* The field and Add on one line, where to get one under them, its words
+	   on the field's edge (a quiet button pulled out by its inset, 01-base.css). */
+	.settings-dialog.settings-look-next .connector-directory .connector-dir-token-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		padding-left: 0;
+	}
+	.settings-dialog.settings-look-next .connector-directory .connector-dir-token-row > a.rs-btn {
+		grid-column: 1 / -1;
+		width: max-content;
+		margin-left: calc(-1 * var(--exx-btn-inset-sm));
+	}
+}

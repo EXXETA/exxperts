@@ -8,6 +8,7 @@
 // On any other computer each row says it was skipped, by name, and the rows that
 // hold the other computers' behaviour still run.
 import { spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import fs from "node:fs";
 import http from "node:http";
@@ -16,7 +17,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { addAlsoAllowedFolder, addAlsoAllowedSite, AnswerSites, readAlsoAllowed, removeAlsoAllowedEntry, saveAlsoAllowedFolders, writeRoomJson } from "../src/room-box/also-allowed.js";
-import { realPathOf } from "../src/room-box/box-closed.js";
+import { appDataPlaces, neverOpened, realPathOf } from "../src/room-box/box-closed.js";
+import { boxRules } from "../src/room-box/box-rules.js";
 import { BoxProcess, COMMAND_FOLDER_MOVED } from "../src/room-box/box-process.js";
 import { BOX_FAULT_SENTENCE, BOX_GIT_CLAUSE, boxModelLine, BOX_FILE_HOMES_LINE, CLOSED_ON_PURPOSE, FREE_PRIVATE_REFUSAL } from "../src/room-box/card-text.js";
 import { RoomBox, roomBoxAvailable, type BoxWatcher } from "../src/room-box/box-session.js";
@@ -30,8 +32,13 @@ import { createWebUiContext, QuestionDeclined } from "../src/web-ui-context.js";
 import { createRoomWebReaderExtension } from "../src/room-web-reader.js";
 import { moveSpill } from "../src/room-box/spill.js";
 import { getPersistentRoomToolPolicy } from "../src/persistent-room-tool-policy.js";
-import { createPersistentRoomDefaultCapabilityPolicy, persistentAgentRootPath, writePersistentRoomDefaultCapabilityPolicy } from "../src/persistent-room-workspace-policy.js";
+import { createPersistentRoomDefaultCapabilityPolicy, persistentAgentRootPath, resolvePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "../src/persistent-room-workspace-policy.js";
+import { createPersistentRoomWorkspaceTools } from "../src/persistent-room-workspace-tools.js";
+import { ROOM_FOLDER_REFUSED } from "../src/room-files.js";
 import { createRoomCommandTools, type RoomCommandTools } from "../src/room-command-tool.js";
+import { persistentRoomSkillSettingsPath } from "../src/persistent-room-skill-settings.js";
+import { roomSkillFolders } from "../src/skills-executable.js";
+import { agentSkillsDir, sha256, writeSkillProvenance } from "../src/skills-store.js";
 
 const home = fs.realpathSync(os.homedir());
 const sharedTemp = fs.realpathSync(os.tmpdir());
@@ -161,6 +168,43 @@ async function call(tools: RoomCommandTools, name: string, input: Record<string,
 const outsideRoom = (name: string) => path.join(elsewhere, name);
 const inRoom = (...names: string[]) => path.join(folder, ...names);
 const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+
+/**
+ * Shared-folder skills linked from ~/.agents/skills to their real folders and on
+ * in `room`; `body` runs commands in that room's box with the folders the room
+ * opens by skill name. Everything made is removed after.
+ */
+async function withSharedSkills(room: string, roomFolder: string, skills: readonly (readonly [string, string])[], canChangeFiles: boolean, body: (run: (command: string) => ReturnType<typeof call>, opened: Map<string, string>) => Promise<void>, afterRights: () => void = () => {}): Promise<void> {
+	const skillsAt = path.join(home, ".agents", "skills");
+	fs.mkdirSync(skillsAt, { recursive: true });
+	for (const [real, name] of skills) {
+		fs.mkdirSync(path.join(real, "scripts"), { recursive: true });
+		fs.writeFileSync(path.join(real, "SKILL.md"), `---\nname: ${name}\ndescription: a shared test skill\n---\n\nRun scripts/run.sh.\n`);
+		// portability-ok: only macRows call this, each skipped by name on any other computer
+		fs.writeFileSync(path.join(real, "scripts", "run.sh"), `#!/bin/sh\necho ${name}-ran\n`, { mode: 0o755 });
+		fs.symlinkSync(real, path.join(skillsAt, name), "dir");
+	}
+	const settingsFile = persistentRoomSkillSettingsPath(room);
+	fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+	fs.writeFileSync(settingsFile, `${JSON.stringify({ schemaVersion: 1, enabledSkills: skills.map(([, name]) => ({ name })), updatedAt: "2026-11-21T10:00:00.000Z" }, null, 2)}\n`);
+	// `afterRights`: what a job left running could do once the next command's rights are read and before its box starts.
+	const rights = () => {
+		const now = { canChangeFiles, skillFolders: roomSkillFolders(room).map((skill) => skill.skillDir) };
+		afterRights();
+		return now;
+	};
+	const box = new RoomBox({ roomId: room, conversationId: () => `conversation-${room}`, questions: questions as any, rights, warn: () => {} });
+	const tools = createRoomCommandTools(roomFolder, { box, outside: { questions: questions as any, setOffered: () => {} } });
+	try {
+		await body((command) => call(tools, "bash", { command }), new Map(roomSkillFolders(room).map((skill) => [skill.name, skill.skillDir])));
+	} finally {
+		await box.endTurn();
+		fs.rmSync(settingsFile, { force: true });
+		fs.rmSync(path.join(home, ".agents"), { recursive: true, force: true });
+		for (const [real] of skills) fs.rmSync(real, { recursive: true, force: true });
+	}
+}
+
 const git = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "user.name=s", "-c", "user.email=s@s", ...args], { cwd, encoding: "utf8" });
 
 let tools: RoomCommandTools;
@@ -659,10 +703,11 @@ async function main(): Promise<void> {
 		}
 	});
 
-	await macRow("the way out runs on its own: no boxed command runs beside it in one batch", () => {
+	await macRow("the way out and a boxed command each run their message's calls in order: nothing runs beside them in one batch", () => {
 		const way = tools.tools.find((candidate) => candidate.name === "run_outside_box");
 		assert(way?.executionMode === "sequential", `the way out's mode: ${way?.executionMode}`);
-		assert(tools.tools.find((candidate) => candidate.name === "bash")?.executionMode !== "sequential", "bash stays parallel");
+		const boxed = tools.tools.find((candidate) => candidate.name === "bash");
+		assert(boxed?.executionMode === "sequential", `the boxed command's mode: ${boxed?.executionMode}`);
 	});
 
 	const repository = inRoom("repo");
@@ -813,7 +858,7 @@ async function main(): Promise<void> {
 		}
 	});
 
-	await macRow("skills: an approved folder reads and runs, never writes; another stays closed; a withdrawn one drops", async () => {
+	await macRow("skills: an approved folder reads and runs, never writes outside the room; one inside the room keeps the room's writes; another stays closed; a withdrawn one drops", async () => {
 		const skills = path.join(home, "skills");
 		const approved = path.join(skills, "approved");
 		const other = path.join(skills, "other");
@@ -831,7 +876,7 @@ async function main(): Promise<void> {
 			fs.mkdirSync(insideRoom);
 			person.skillFolders = [approved, insideRoom];
 			const plantedInRoom = await bash("echo x > skill-in-room/planted");
-			assert(plantedInRoom.failed && !fs.existsSync(path.join(insideRoom, "planted")), "a skill folder inside the room took a write");
+			assert(!plantedInRoom.failed && fs.existsSync(path.join(insideRoom, "planted")), `a skill folder inside the room took the room's write away: ${plantedInRoom.text}`);
 			person.skillFolders = [approved];
 			const closed = await bash(`/bin/cat ${quoted(path.join(other, "secret"))}`);
 			assert(closed.failed, "another skill was read");
@@ -840,6 +885,307 @@ async function main(): Promise<void> {
 			assert(withdrawn.failed, "a withdrawn skill ran");
 		} finally {
 			person.skillFolders = [];
+		}
+	});
+
+	await macRow("skills: a skill on in the room's library, never approved, runs as it now is, never takes a write or a link, and reads no closed file through a link; one left off reads nothing", async () => {
+		const store = agentSkillsDir();
+		/** A skill as the Skills page leaves it in the library: SKILL.md, one script and its record. */
+		const plantSkill = (name: string): { dir: string; identity: string } => {
+			const dir = path.join(store, name);
+			const manifest = `---\nname: ${name}\ndescription: a test skill\n---\n\nRun scripts/run.sh.\n`;
+			fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
+			fs.writeFileSync(path.join(dir, "SKILL.md"), manifest);
+			// portability-ok: a macRow, skipped by name on any other computer
+			fs.writeFileSync(path.join(dir, "scripts", "run.sh"), `#!/bin/sh\necho ${name}-ran\n`, { mode: 0o755 });
+			const identity = crypto.randomUUID();
+			writeSkillProvenance(dir, { source: "local", importedAt: new Date().toISOString(), license: null, sha256: sha256(manifest), identity });
+			return { dir, identity };
+		};
+		const on = plantSkill("on-tool");
+		const old = plantSkill("old-tool");
+		const off = plantSkill("off-tool");
+		// One entry as this app writes it, one as an older app left it: a stale hash and a run approval.
+		const settingsFile = persistentRoomSkillSettingsPath(ROOM_ID);
+		fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+		const stored = `${JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "old-tool", sha256: sha256("the text it had"), identity: old.identity, executeApproval: { filesSha256: sha256("the files it had"), approvedAt: "2026-11-01T10:00:00.000Z" } }, { name: "on-tool", identity: on.identity }], updatedAt: "2026-11-01T10:00:00.000Z" }, null, 2)}\n`;
+		fs.writeFileSync(settingsFile, stored);
+		assert(roomSkillFolders(ROOM_ID).map((skill) => skill.name).join() === "old-tool,on-tool", "the two skills that are on");
+		const skillBox = new RoomBox({ roomId: ROOM_ID, conversationId: () => "conversation-skills", questions: questions as any, rights: () => ({ canChangeFiles: true, skillFolders: roomSkillFolders(ROOM_ID).map((skill) => skill.skillDir) }), warn: () => {} });
+		const skillTools = createRoomCommandTools(folder, { box: skillBox, outside: { questions: questions as any, setOffered: () => {} } });
+		const run = (command: string) => call(skillTools, "bash", { command });
+		const script = path.join(on.dir, "scripts", "run.sh");
+		const closedFile = path.join(home, "skills-closed-secret.txt");
+		fs.writeFileSync(closedFile, "CLOSED-NEEDLE\n");
+		try {
+			for (const skill of [on, old]) {
+				const ran = await run(quoted(path.join(skill.dir, "scripts", "run.sh")));
+				assert(!ran.failed && ran.text.includes(`${path.basename(skill.dir)}-ran`), `run ${path.basename(skill.dir)}: ${ran.text}`);
+			}
+			const planted = await run(`echo x > ${quoted(path.join(on.dir, "planted"))}`);
+			assert(planted.failed && !fs.existsSync(path.join(on.dir, "planted")), "a skill folder took a write");
+			const offRead = await run(`/bin/cat ${quoted(path.join(off.dir, "SKILL.md"))}`);
+			assert(offRead.failed && !offRead.text.includes("name: off-tool"), `a skill left off was read: ${offRead.text}`);
+			// One byte of the script changes: the next command runs it as it now is.
+			// portability-ok: a macRow, skipped by name on any other computer
+			fs.writeFileSync(script, "#!/bin/sh\necho on-tool-changed\n", { mode: 0o755 });
+			const changed = await run(quoted(script));
+			assert(!changed.failed && changed.text.includes("on-tool-changed"), `the changed script: ${changed.text}`);
+
+			// A link inside the skill's folder to a closed file: the file stays closed, its neighbour in the folder reads.
+			fs.symlinkSync(closedFile, path.join(on.dir, "link-to-secret"));
+			const throughLink = await run(`/bin/cat ${quoted(path.join(on.dir, "link-to-secret"))}`);
+			assert(throughLink.failed && !throughLink.text.includes("CLOSED-NEEDLE"), `a closed file was read through a link in a skill's folder: ${throughLink.text}`);
+			const direct = await run(`/bin/cat ${quoted(closedFile)}`);
+			assert(direct.failed && !direct.text.includes("CLOSED-NEEDLE"), `the closed file itself was read: ${direct.text}`);
+			const neighbour = await run(`/bin/cat ${quoted(path.join(on.dir, "SKILL.md"))}`);
+			assert(!neighbour.failed && neighbour.text.includes("name: on-tool"), `the skill's SKILL.md: ${neighbour.text}`);
+
+			// A hard link into the room, and an append through a symbolic link: both refused, the file as it was.
+			const before = { text: fs.readFileSync(script, "utf8"), links: fs.statSync(script).nlink };
+			const hard = await run(`ln ${quoted(script)} ./hard-linked-skill-script`);
+			assert(hard.failed && !fs.existsSync(inRoom("hard-linked-skill-script")), `a hard link of a skill's file was made in the room: ${hard.text}`);
+			const appended = await run(`ln -s ${quoted(script)} ./linked-skill-script && echo appended >> ./linked-skill-script`);
+			assert(appended.failed, `an append through a link to a skill's file: ${appended.text}`);
+			assert(fs.readFileSync(script, "utf8") === before.text && fs.statSync(script).nlink === before.links, "the skill's file changed");
+			// The allowed neighbour: a hard link of the room's own file.
+			fs.writeFileSync(inRoom("own-file.txt"), "own\n");
+			const ownLink = await run("ln ./own-file.txt ./own-file-link.txt");
+			assert(!ownLink.failed && fs.statSync(inRoom("own-file.txt")).nlink === 2, `a hard link of the room's own file: ${ownLink.text}`);
+			assert(fs.readFileSync(settingsFile, "utf8") === stored, "a boxed command wrote the room's skill settings");
+		} finally {
+			await skillBox.endTurn();
+			for (const made of ["linked-skill-script", "own-file.txt", "own-file-link.txt"]) fs.rmSync(inRoom(made), { force: true });
+			fs.rmSync(closedFile, { force: true });
+			fs.rmSync(settingsFile, { force: true });
+			for (const skill of [on, old, off]) fs.rmSync(skill.dir, { recursive: true, force: true });
+		}
+	});
+
+	await macRow("skills: a shared-folder skill linked to a real folder inside ~/.agents reads and runs there, never takes a write, and a link inside it to a folder outside reads nothing", async () => {
+		const real = path.join(home, ".agents", "kept", "shared-run");
+		const linkedAt = path.join(home, ".agents", "skills", "shared-run");
+		const outsideFolder = path.join(home, "shared-run-outside");
+		fs.mkdirSync(path.join(real, "scripts"), { recursive: true });
+		fs.mkdirSync(path.dirname(linkedAt), { recursive: true });
+		fs.mkdirSync(outsideFolder, { recursive: true });
+		fs.writeFileSync(path.join(real, "SKILL.md"), "---\nname: shared-run\ndescription: a shared test skill\n---\n\nRun scripts/run.sh.\n");
+		// portability-ok: a macRow, skipped by name on any other computer
+		fs.writeFileSync(path.join(real, "scripts", "run.sh"), "#!/bin/sh\necho shared-ran\n", { mode: 0o755 });
+		fs.writeFileSync(path.join(outsideFolder, "secret.txt"), "OUTSIDE-NEEDLE\n");
+		fs.symlinkSync(real, linkedAt, "dir");
+		fs.symlinkSync(outsideFolder, path.join(real, "outside-link"), "dir");
+		const settingsFile = persistentRoomSkillSettingsPath(ROOM_ID);
+		fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+		fs.writeFileSync(settingsFile, `${JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "shared-run" }], updatedAt: "2026-11-21T10:00:00.000Z" }, null, 2)}\n`);
+		const opened = roomSkillFolders(ROOM_ID);
+		assert(opened.length === 1 && opened[0].skillDir === fs.realpathSync(real), `the room opens the shared skill at its real folder, got ${JSON.stringify(opened)}`);
+		const sharedBox = new RoomBox({ roomId: ROOM_ID, conversationId: () => "conversation-shared-skill", questions: questions as any, rights: () => ({ canChangeFiles: true, skillFolders: roomSkillFolders(ROOM_ID).map((skill) => skill.skillDir) }), warn: () => {} });
+		const sharedTools = createRoomCommandTools(folder, { box: sharedBox, outside: { questions: questions as any, setOffered: () => {} } });
+		const run = (command: string) => call(sharedTools, "bash", { command });
+		try {
+			const ran = await run(quoted(path.join(opened[0].skillDir, "scripts", "run.sh")));
+			assert(!ran.failed && ran.text.includes("shared-ran"), `run the shared skill's script: ${ran.text}`);
+			const read = await run(`/bin/cat ${quoted(path.join(opened[0].skillDir, "SKILL.md"))}`);
+			assert(!read.failed && read.text.includes("name: shared-run"), `read its SKILL.md: ${read.text}`);
+			const planted = await run(`echo x > ${quoted(path.join(opened[0].skillDir, "planted"))}`);
+			assert(planted.failed && !fs.existsSync(path.join(real, "planted")), "the shared skill's folder took a write");
+			const throughLink = await run(`/bin/cat ${quoted(path.join(opened[0].skillDir, "outside-link", "secret.txt"))}`);
+			assert(throughLink.failed && !throughLink.text.includes("OUTSIDE-NEEDLE"), `a folder outside was read through a link in the shared skill's folder: ${throughLink.text}`);
+		} finally {
+			await sharedBox.endTurn();
+			fs.rmSync(settingsFile, { force: true });
+			fs.rmSync(path.join(home, ".agents"), { recursive: true, force: true });
+			fs.rmSync(outsideFolder, { recursive: true, force: true });
+		}
+	});
+
+	await macRow("skills: a shared-folder skill linked to a real folder outside ~/.agents reads and runs there and never takes a write", async () => {
+		const away = path.join(home, "team-skills", "away-run");
+		await withSharedSkills(ROOM_ID, folder, [[away, "away-run"]], true, async (run, opened) => {
+			assert(opened.get("away-run") === fs.realpathSync(away), `the room opens the skill at its real folder outside ~/.agents, got ${JSON.stringify([...opened])}`);
+			const ran = await run(quoted(path.join(away, "scripts", "run.sh")));
+			assert(!ran.failed && ran.text.includes("away-run-ran"), `run the skill's script outside ~/.agents: ${ran.text}`);
+			const read = await run(`/bin/cat ${quoted(path.join(away, "SKILL.md"))}`);
+			assert(!read.failed && read.text.includes("name: away-run"), `read its SKILL.md: ${read.text}`);
+			const planted = await run(`echo x > ${quoted(path.join(away, "planted"))}`);
+			assert(planted.failed && !fs.existsSync(path.join(away, "planted")), "the skill's folder outside ~/.agents took a write");
+		});
+	});
+
+	await macRow("skills: a shared-folder skill whose real folder is in the room's own folder reads and runs there by the room's own rights, and the room's writes land there", async () => {
+		const inRoom = path.join(folder, "team-skills", "room-run");
+		await withSharedSkills(ROOM_ID, folder, [[inRoom, "room-run"]], true, async (run, opened) => {
+			assert(!opened.has("room-run"), `the server opens nothing for a skill in the room's own folder, got ${JSON.stringify([...opened])}`);
+			const ran = await run(quoted(path.join(inRoom, "scripts", "run.sh")));
+			assert(!ran.failed && ran.text.includes("room-run-ran"), `run the skill's script in the room's folder: ${ran.text}`);
+			const changed = await run(`echo kept > ${quoted(path.join(inRoom, "notes.txt"))}`);
+			assert(!changed.failed && fs.readFileSync(path.join(inRoom, "notes.txt"), "utf8") === "kept\n", `the room lost its write in its own folder where a skill's folder is: ${changed.text}`);
+		});
+	});
+
+	await macRow("skills: a shared-folder skill whose real folder is in the room's own folder, swapped by the room's command for a link to a folder outside, opens nothing in that room: a file there stays closed", async () => {
+		const inRoom = path.join(folder, "team-skills", "swap-run");
+		const swappedTo = path.join(home, "private-notes");
+		fs.mkdirSync(swappedTo, { recursive: true });
+		fs.writeFileSync(path.join(swappedTo, "SKILL.md"), "---\nname: swap-run\ndescription: a folder of notes\n---\n\nNotes.\n");
+		fs.writeFileSync(path.join(swappedTo, "notes.txt"), "swapped-secret\n");
+		const secret = quoted(path.join(swappedTo, "notes.txt"));
+		try {
+			await withSharedSkills(ROOM_ID, folder, [[inRoom, "swap-run"]], true, async (run, opened) => {
+				assert(!opened.has("swap-run"), `the server opens nothing for a skill in the room's own folder, got ${JSON.stringify([...opened])}`);
+				const ran = await run(quoted(path.join(inRoom, "scripts", "run.sh")));
+				assert(!ran.failed && ran.text.includes("swap-run-ran"), `before the swap, run the skill's script: ${ran.text}`);
+				const before = await run(`/bin/cat ${secret}`);
+				assert(before.failed && !before.text.includes("swapped-secret"), `the folder outside read before any swap: ${before.text}`);
+				const swapped = await run(`mv ${quoted(inRoom)} ${quoted(`${inRoom}-old`)} && ln -s ${quoted(swappedTo)} ${quoted(inRoom)}`);
+				assert(!swapped.failed && fs.lstatSync(inRoom).isSymbolicLink(), `the room's command swaps the skill's folder for a link: ${swapped.text}`);
+				const read = await run(`/bin/cat ${secret}`);
+				assert(read.failed && !read.text.includes("swapped-secret"), `a command read the folder a link the room left leads to: ${read.text}`);
+				assert(!roomSkillFolders(ROOM_ID).some((skill) => skill.name === "swap-run"), `the room opens the skill through the link it left, got ${JSON.stringify(roomSkillFolders(ROOM_ID))}`);
+			});
+		} finally {
+			fs.rmSync(swappedTo, { recursive: true, force: true });
+			fs.rmSync(`${inRoom}-old`, { recursive: true, force: true });
+		}
+	});
+
+	await macRow("skills: a shared-folder skill whose real folder is in the room's own folder: a folder above it swapped by the room for a link to a folder outside, as a job could just as the next command starts, opens nothing outside", async () => {
+		const above = path.join(folder, "team-above");
+		const inRoom = path.join(above, "above-run");
+		const outside = path.join(home, "above-outside");
+		fs.mkdirSync(path.join(outside, "above-run"), { recursive: true });
+		fs.writeFileSync(path.join(outside, "above-run", "SKILL.md"), "---\nname: above-run\ndescription: a folder of notes\n---\n\nNotes.\n");
+		fs.writeFileSync(path.join(outside, "above-run", "notes.txt"), "above-secret\n");
+		let swapNext = false;
+		const swap = () => {
+			if (!swapNext) return;
+			swapNext = false;
+			fs.renameSync(above, `${above}-old`);
+			fs.symlinkSync(outside, above, "dir");
+		};
+		try {
+			await withSharedSkills(ROOM_ID, folder, [[inRoom, "above-run"]], true, async (run) => {
+				const ran = await run(quoted(path.join(inRoom, "scripts", "run.sh")));
+				assert(!ran.failed && ran.text.includes("above-run-ran"), `before the swap, run the skill's script: ${ran.text}`);
+				swapNext = true;
+				const read = await run(`/bin/cat ${quoted(path.join(outside, "above-run", "notes.txt"))}`);
+				assert(!swapNext && fs.lstatSync(above).isSymbolicLink(), "the folder above the skill's folder was never swapped");
+				assert(read.failed && !read.text.includes("above-secret"), `a command read the folder outside a link above the skill's folder leads to: ${read.text}`);
+			}, swap);
+		} finally {
+			fs.rmSync(above, { recursive: true, force: true });
+			fs.rmSync(`${above}-old`, { recursive: true, force: true });
+			fs.rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	await macRow("skills: in a room that can't change files, a shared-folder skill linked to a real folder outside ~/.agents and outside the room reads and runs there and never takes a write", async () => {
+		const away = path.join(home, "team-skills", "away-still");
+		await withSharedSkills(ROOM_ID, folder, [[away, "away-still"]], false, async (run, opened) => {
+			assert(opened.get("away-still") === fs.realpathSync(away), `the room opens the skill at its real folder, got ${JSON.stringify([...opened])}`);
+			const ran = await run(quoted(path.join(away, "scripts", "run.sh")));
+			assert(!ran.failed && ran.text.includes("away-still-ran"), `run the skill's script: ${ran.text}`);
+			const planted = await run(`echo x > ${quoted(path.join(away, "planted"))}`);
+			assert(planted.failed && !fs.existsSync(path.join(away, "planted")), "the skill's folder took a write");
+		});
+	});
+
+	await macRow("skills: a shared-folder skill whose real folder holds the room's folder: the room writes in its own folder, and not in the skill's folder outside it", async () => {
+		const holder = fs.realpathSync(fs.mkdtempSync(path.join(home, "skill-holder-")));
+		const inner = path.join(holder, "room-inner");
+		fs.mkdirSync(inner);
+		const holdRoom = "box-smoke-holding-room";
+		fs.mkdirSync(persistentAgentRootPath(holdRoom), { recursive: true });
+		chooseFolder(holdRoom, inner);
+		await withSharedSkills(holdRoom, inner, [[holder, "hold-run"]], true, async (run, opened) => {
+			assert(opened.get("hold-run") === holder, `the room opens the skill at the folder holding its own, got ${JSON.stringify([...opened])}`);
+			const ran = await run(quoted(path.join(holder, "scripts", "run.sh")));
+			assert(!ran.failed && ran.text.includes("hold-run-ran"), `run the skill's script around the room's folder: ${ran.text}`);
+			const changed = await run(`echo kept > ${quoted(path.join(inner, "notes.txt"))}`);
+			assert(!changed.failed && fs.readFileSync(path.join(inner, "notes.txt"), "utf8") === "kept\n", `the room lost its write in its own folder inside a skill's folder: ${changed.text}`);
+			const planted = await run(`echo x > ${quoted(path.join(holder, "planted"))}`);
+			assert(planted.failed && !fs.existsSync(path.join(holder, "planted")), "the skill's folder outside the room's folder took a write");
+		});
+	});
+
+	await macRow("skills: in a room that can't change files, a shared-folder skill in its folder reads and runs, and takes no write", async () => {
+		const inRoom = path.join(folder, "team-skills", "still-run");
+		await withSharedSkills(ROOM_ID, folder, [[inRoom, "still-run"]], false, async (run, opened) => {
+			assert(!opened.has("still-run"), `the server opens nothing for a skill in the room's own folder, got ${JSON.stringify([...opened])}`);
+			const ran = await run(quoted(path.join(inRoom, "scripts", "run.sh")));
+			assert(!ran.failed && ran.text.includes("still-run-ran"), `run the skill's script: ${ran.text}`);
+			const planted = await run(`echo x > ${quoted(path.join(inRoom, "planted"))}`);
+			assert(planted.failed && !fs.existsSync(path.join(inRoom, "planted")), "a room that can't change files wrote in a skill's folder");
+		});
+	});
+
+	await macRow("skills: a shared-folder skill at the room's .agents/skills takes no write there, by the room's closed names", async () => {
+		const inAgents = path.join(folder, ".agents", "skills", "named-run");
+		await withSharedSkills(ROOM_ID, folder, [[inAgents, "named-run"]], true, async (run) => {
+			const planted = await run(`echo x > ${quoted(path.join(inAgents, "planted"))}`);
+			assert(planted.failed && !fs.existsSync(path.join(inAgents, "planted")), "a skill's folder under the room's .agents took a write");
+		});
+		fs.rmSync(path.join(folder, ".agents"), { recursive: true, force: true });
+	});
+
+	await macRow("skills: a skill marked to start only when picked, on in the room, reads and runs from its folder; switched off, reads nothing", async () => {
+		const dir = path.join(agentSkillsDir(), "picked-tool");
+		const manifest = "---\nname: picked-tool\ndescription: a test skill\ndisable-model-invocation: true\n---\n\nRun scripts/run.sh.\n";
+		fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "SKILL.md"), manifest);
+		// portability-ok: a macRow, skipped by name on any other computer
+		fs.writeFileSync(path.join(dir, "scripts", "run.sh"), "#!/bin/sh\necho picked-tool-ran\n", { mode: 0o755 });
+		const identity = crypto.randomUUID();
+		writeSkillProvenance(dir, { source: "local", importedAt: new Date().toISOString(), license: null, sha256: sha256(manifest), identity });
+		const settingsFile = persistentRoomSkillSettingsPath(ROOM_ID);
+		fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+		const switched = (on: boolean) => fs.writeFileSync(settingsFile, `${JSON.stringify({ schemaVersion: 1, enabledSkills: on ? [{ name: "picked-tool", identity }] : [], updatedAt: "2026-11-19T10:00:00.000Z" }, null, 2)}\n`);
+		const pickedBox = new RoomBox({ roomId: ROOM_ID, conversationId: () => "conversation-picked", questions: questions as any, rights: () => ({ canChangeFiles: true, skillFolders: roomSkillFolders(ROOM_ID).map((skill) => skill.skillDir) }), warn: () => {} });
+		const run = (command: string) => call(createRoomCommandTools(folder, { box: pickedBox, outside: { questions: questions as any, setOffered: () => {} } }), "bash", { command });
+		try {
+			switched(true);
+			const read = await run(`/bin/cat ${quoted(path.join(dir, "SKILL.md"))}`);
+			assert(!read.failed && read.text.includes("name: picked-tool"), `the on skill's SKILL.md: ${read.text}`);
+			const ran = await run(quoted(path.join(dir, "scripts", "run.sh")));
+			assert(!ran.failed && ran.text.includes("picked-tool-ran"), `the on skill's script: ${ran.text}`);
+			switched(false);
+			const offRead = await run(`/bin/cat ${quoted(path.join(dir, "SKILL.md"))}`);
+			assert(offRead.failed && !offRead.text.includes("name: picked-tool"), `a skill switched off was read: ${offRead.text}`);
+		} finally {
+			await pickedBox.endTurn();
+			fs.rmSync(settingsFile, { force: true });
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	await macRow("skills: a library skill folder that is a link into the room's own folder opens as no skill's folder, and the room's commands change it as the room's own", async () => {
+		const target = inRoom("linked-skill-target");
+		const manifest = "---\nname: linked-into-room\ndescription: a test skill\n---\n\nRun nothing.\n";
+		fs.mkdirSync(target, { recursive: true });
+		fs.writeFileSync(path.join(target, "SKILL.md"), manifest);
+		const identity = crypto.randomUUID();
+		writeSkillProvenance(target, { source: "local", importedAt: new Date().toISOString(), license: null, sha256: sha256(manifest), identity });
+		const link = path.join(agentSkillsDir(), "linked-into-room");
+		fs.mkdirSync(path.dirname(link), { recursive: true });
+		fs.symlinkSync(target, link);
+		const settingsFile = persistentRoomSkillSettingsPath(ROOM_ID);
+		fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+		fs.writeFileSync(settingsFile, JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "linked-into-room", identity }], updatedAt: "" }));
+		const skillBox = new RoomBox({ roomId: ROOM_ID, conversationId: () => "conversation-linked-skill", questions: questions as any, rights: () => ({ canChangeFiles: true, skillFolders: roomSkillFolders(ROOM_ID).map((skill) => skill.skillDir) }), warn: () => {} });
+		const skillTools = createRoomCommandTools(folder, { box: skillBox, outside: { questions: questions as any, setOffered: () => {} } });
+		const run = (command: string) => call(skillTools, "bash", { command });
+		try {
+			assert(roomSkillFolders(ROOM_ID).length === 0, "a linked skill folder opened as a skill's folder");
+			const edited = await run("echo edited-by-the-room >> linked-skill-target/SKILL.md");
+			assert(!edited.failed && fs.readFileSync(path.join(target, "SKILL.md"), "utf8").includes("edited-by-the-room"), `the room's own folder: ${edited.text}`);
+			const throughLibrary = await run(`/bin/cat ${quoted(path.join(link, "SKILL.md"))}`);
+			console.log(`  note: reading its SKILL.md by the library's path ${throughLibrary.failed ? "fails" : "reads"} in the box`);
+		} finally {
+			await skillBox.endTurn();
+			fs.rmSync(link, { force: true });
+			fs.rmSync(settingsFile, { force: true });
+			fs.rmSync(target, { recursive: true, force: true });
 		}
 	});
 
@@ -2018,6 +2364,146 @@ async function main(): Promise<void> {
 			await swapped.box.endTurn();
 			fs.rmSync(namedRooms, { recursive: true, force: true });
 			fs.rmSync(target, { recursive: true, force: true });
+		}
+	});
+
+	// A developer setting can move the agent folder out of the app's data: the sign-in file and the library go with it.
+	const movedCode = path.join(home, "code");
+	const movedAgent = path.join(movedCode, "agent");
+	const movedSkill = path.join(movedAgent, "skills", "report");
+	const fileTools = (roomId: string, roomBox: RoomBox, asksNothing = false) => {
+		const { policy } = resolvePersistentRoomCapabilityPolicy(roomId, "conversation-a");
+		assert(policy, `no policy for ${roomId}`);
+		return new Map(createPersistentRoomWorkspaceTools(policy, { box: roomBox, asksNothing: () => asksNothing }).map((tool) => [String(tool.name), tool]));
+	};
+	const fileCall = async (named: Map<string, any>, name: string, input: Record<string, unknown>) => {
+		try {
+			const result = await named.get(name).execute("call", input, undefined, undefined, undefined);
+			return { text: (result.content ?? []).map((part: any) => part.text ?? "").join(""), failed: false };
+		} catch (error) {
+			return { text: (error as Error).message, failed: true };
+		}
+	};
+
+	await row("the ordinary set-up: an agent folder inside the app's data adds no place, and none is listed twice", () => {
+		delete process.env.EXXPERTS_CODING_AGENT_DIR;
+		const ordinary = appDataPlaces();
+		process.env.EXXPERTS_CODING_AGENT_DIR = path.join(home, ".exxperts", "agent");
+		try {
+			const inside = appDataPlaces();
+			assert(JSON.stringify(inside) === JSON.stringify(ordinary) && new Set(inside).size === inside.length && !inside.includes(realPathOf(path.join(home, ".exxperts", "agent"))), `with the agent folder inside: ${JSON.stringify(inside)}, without: ${JSON.stringify(ordinary)}`);
+		} finally {
+			delete process.env.EXXPERTS_CODING_AGENT_DIR;
+		}
+	});
+
+	await macRow("an agent folder a setting moved out of the app's data: a room beside it reads and writes nothing in it, by command or file tool, also asking nothing; the box keeps it closed to writes; a yes can't open it, and a folder beside it can be", async () => {
+		fs.mkdirSync(movedSkill, { recursive: true });
+		fs.mkdirSync(path.join(movedCode, "project"), { recursive: true });
+		// Planted empty, by the sign-in file's name: never a real one.
+		fs.writeFileSync(path.join(movedAgent, "auth.json"), "");
+		fs.writeFileSync(path.join(movedSkill, "SKILL.md"), "library-skill-words");
+		process.env.EXXPERTS_CODING_AGENT_DIR = movedAgent;
+		await nextTurn();
+		try {
+			for (const command of [`/bin/cat ${quoted(path.join(movedAgent, "auth.json"))} && echo read-it`, `/bin/cat ${quoted(path.join(movedSkill, "SKILL.md"))}`]) {
+				const read = await bash(command);
+				assert(read.failed && !read.text.includes("read-it") && !read.text.includes("library-skill-words"), `${command}: ${read.text}`);
+			}
+			const wrote = await bash(`echo changed > ${quoted(path.join(movedSkill, "SKILL.md"))}; echo planted > ${quoted(path.join(movedAgent, "planted.txt"))}`);
+			assert(wrote.failed && fs.readFileSync(path.join(movedSkill, "SKILL.md"), "utf8") === "library-skill-words" && !fs.existsSync(path.join(movedAgent, "planted.txt")), `a write: ${wrote.text}`);
+			for (const asksNothing of [false, true]) {
+				const named = fileTools(ROOM_ID, box, asksNothing);
+				const read = await fileCall(named, "read", { path: path.join(movedSkill, "SKILL.md") });
+				assert(read.failed && !read.text.includes("library-skill-words"), `file tool read${asksNothing ? ", asking nothing" : ""}: ${read.text}`);
+				const write = await fileCall(named, "write", { path: path.join(movedAgent, "planted.txt"), content: "planted" });
+				assert(write.failed && !fs.existsSync(path.join(movedAgent, "planted.txt")), `file tool write${asksNothing ? ", asking nothing" : ""}: ${write.text}`);
+			}
+			const temp = path.join(persistentAgentRootPath(ROOM_ID), "runtime", "box", "temp-row");
+			const rules = boxRules({ folder, canChangeFiles: true, alsoAllowed: [], skillFolders: [], places: { temp, caches: path.join(path.dirname(temp), "caches"), shim: path.join(path.dirname(temp), "bin"), gitTemplate: path.join(path.dirname(temp), "git-template") } });
+			const denyWrite = (rules.filesystem.denyWrite as { path: string }[]).map((entry) => entry.path);
+			assert(denyWrite.includes(realPathOf(movedAgent)), `not closed to writes: ${JSON.stringify(denyWrite)}`);
+			assert(neverOpened().includes(realPathOf(movedAgent)), "a yes could open it");
+			for (const access of ["read", "write"] as const) {
+				for (const place of [movedAgent, movedSkill, movedCode]) assert(!folderGrantable(place, access, [folder], folder), `${access}: ${place} can be granted`);
+				assert(folderGrantable(path.join(movedCode, "project"), access, [folder], folder), `${access}: the folder beside it can't be granted`);
+			}
+		} finally {
+			delete process.env.EXXPERTS_CODING_AGENT_DIR;
+			fs.rmSync(movedCode, { recursive: true, force: true });
+		}
+	});
+
+	await macRow("an agent folder a setting moved out of the app's data: a room that asks nothing still reads and writes beyond its folders as before, and reads a skill on in the moved library, but nothing else there", async () => {
+		fs.mkdirSync(movedAgent, { recursive: true });
+		fs.writeFileSync(path.join(movedAgent, "auth.json"), "");
+		process.env.EXXPERTS_CODING_AGENT_DIR = movedAgent;
+		const settingsFile = persistentRoomSkillSettingsPath(ROOM_ID);
+		const settingsBefore = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile, "utf8") : null;
+		const beyond = outsideRoom("beyond-asking-nothing");
+		fs.mkdirSync(beyond, { recursive: true });
+		fs.writeFileSync(path.join(beyond, "note.txt"), "beyond-words");
+		try {
+			// A skill as the Skills page leaves it in the library, which now sits in the moved folder, on in this room; another left off.
+			const plant = (name: string) => {
+				const dir = path.join(agentSkillsDir(), name);
+				const manifest = `---\nname: ${name}\ndescription: a test skill\n---\n\n${name}-words\n`;
+				fs.mkdirSync(dir, { recursive: true });
+				fs.writeFileSync(path.join(dir, "SKILL.md"), manifest);
+				const identity = crypto.randomUUID();
+				writeSkillProvenance(dir, { source: "local", importedAt: new Date().toISOString(), license: null, sha256: sha256(manifest), identity });
+				return { dir, identity };
+			};
+			const on = plant("moved-on");
+			const off = plant("moved-off");
+			fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+			fs.writeFileSync(settingsFile, `${JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "moved-on", identity: on.identity }], updatedAt: new Date().toISOString() })}\n`);
+			assert(path.relative(movedAgent, on.dir) === path.join("skills", "moved-on"), `the library is not in the moved folder: ${on.dir}`);
+			await nextTurn();
+			const named = fileTools(ROOM_ID, box, true);
+			const read = await fileCall(named, "read", { path: path.join(beyond, "note.txt") });
+			assert(!read.failed && read.text.includes("beyond-words"), `a read beyond the room's folders: ${read.text}`);
+			const write = await fileCall(named, "write", { path: path.join(beyond, "new.txt"), content: "written" });
+			assert(!write.failed && fs.readFileSync(path.join(beyond, "new.txt"), "utf8") === "written", `a write beyond the room's folders: ${write.text}`);
+			const skill = await fileCall(named, "read", { path: path.join(on.dir, "SKILL.md") });
+			assert(!skill.failed && skill.text.includes("moved-on-words"), `the skill on in the room: ${skill.text}`);
+			for (const closed of [path.join(off.dir, "SKILL.md"), path.join(movedAgent, "auth.json")]) {
+				const refused = await fileCall(named, "read", { path: closed });
+				assert(refused.failed && !refused.text.includes("moved-off-words"), `${closed}: ${refused.text}`);
+			}
+		} finally {
+			if (settingsBefore === null) fs.rmSync(settingsFile, { force: true });
+			else fs.writeFileSync(settingsFile, settingsBefore);
+			delete process.env.EXXPERTS_CODING_AGENT_DIR;
+			fs.rmSync(movedCode, { recursive: true, force: true });
+			fs.rmSync(beyond, { recursive: true, force: true });
+		}
+	});
+
+	await macRow("an agent folder a setting moved out of the app's data: a room whose folder, or Also allowed folder, held it before runs no command in it and opens no file from its next call", async () => {
+		fs.mkdirSync(movedSkill, { recursive: true });
+		fs.writeFileSync(path.join(movedAgent, "auth.json"), "");
+		fs.writeFileSync(path.join(movedSkill, "SKILL.md"), "library-skill-words");
+		// Chosen while the agent folder was still in the app's data.
+		const heldId = "box-smoke-held-agent";
+		chooseFolder(heldId, movedCode);
+		saveAlsoAllowedFolders(ROOM_ID, [{ path: realPathOf(movedCode), access: "write" }]);
+		process.env.EXXPERTS_CODING_AGENT_DIR = movedAgent;
+		await nextTurn();
+		const held = boxFor(heldId, movedCode);
+		try {
+			const run = await call(held.tools, "bash", { command: "/bin/cat agent/skills/report/SKILL.md; echo planted > agent/planted.txt" });
+			assert(run.failed && run.text === ROOM_FOLDER_REFUSED && !held.tools.started(run.id) && !fs.existsSync(path.join(movedAgent, "planted.txt")), `the room's folder: ${run.text}`);
+			const opened = await fileCall(fileTools(heldId, held.box), "read", { path: path.join(movedSkill, "SKILL.md") });
+			assert(opened.failed && opened.text === ROOM_FOLDER_REFUSED, `the room's file tool: ${opened.text}`);
+			const listed = await bash(`/bin/cat ${quoted(path.join(movedSkill, "SKILL.md"))}; echo planted > ${quoted(path.join(movedAgent, "planted.txt"))}`);
+			assert(listed.failed && !listed.text.includes("library-skill-words") && !fs.existsSync(path.join(movedAgent, "planted.txt")), `an Also allowed folder: ${listed.text}`);
+			assert(!readAlsoAllowed(ROOM_ID).folders.some((entry) => entry.path === realPathOf(movedCode)), "the Also allowed folder is still on the list");
+		} finally {
+			await held.box.endTurn();
+			saveAlsoAllowedFolders(ROOM_ID, []);
+			delete process.env.EXXPERTS_CODING_AGENT_DIR;
+			fs.rmSync(movedCode, { recursive: true, force: true });
 		}
 	});
 

@@ -1392,6 +1392,37 @@ await row("a refused pick is refused the same under either button; a pick throug
 	}
 });
 
+await row("a yes never opens an agent folder a setting moved out of the app's data: a pick of it, of a folder in it or of one that holds it is refused, for reading and for changing; a folder beside it is given", async () => {
+	const roomFolder = newFolder("moved-agent-room");
+	const moved = newFolder("Code/agent");
+	const library = newFolder("Code/agent/skills/report");
+	const beside = newFolder("Code/project");
+	process.env.EXXPERTS_CODING_AGENT_DIR = moved;
+	try {
+		for (const access of ["read", "change"] as const) {
+			for (const picked of [moved, library, path.dirname(moved)]) {
+				const bench = askBench({ room: { folder: roomFolder }, picks: [pickOf(picked)] });
+				const asked = bench.askFolder(access);
+				await settle();
+				bench.answer(PRESSES.choose);
+				await waitUntil(() => bench.frames.some((frame) => frame.type === "ui_request_update"), `${access} ${picked}: the window's answer`);
+				const line = bench.frames.find((frame) => frame.type === "ui_request_update")?.line;
+				assert(line === cards.FOLDER_PICK_REFUSED_IN_PANEL && readAlsoAllowed(bench.roomId).folders.length === 0 && bench.answerFolders().over([]).length === 0, `${access} ${picked}: ${json2({ line, list: readAlsoAllowed(bench.roomId).folders })}`);
+				bench.answer(false);
+				await asked;
+			}
+			const bench = askBench({ room: { folder: roomFolder }, picks: [pickOf(beside)] });
+			const asked = bench.askFolder(access);
+			await settle();
+			await bench.give("answer");
+			const result = await asked;
+			assert(result.includes(`The person chose ${beside}`), `${access}, the folder beside it: ${result}`);
+		}
+	} finally {
+		process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
+	}
+});
+
 await row("inside a folder given this time to change, Allow for this room… and Choose folder say the room can already use it and the card stays; inside one given this time to read, the pick goes on the list", async () => {
 	const roomFolder = newFolder("usable-this-time-room");
 	const changed = newFolder("Changed This Time");
@@ -1898,13 +1929,13 @@ await row("Allow for this room on a suggestion whose folder is replaced by a new
 	assert((await keptAsk).startsWith(`The person chose ${kept}.`) && JSON.stringify(listed(neighbour)) === JSON.stringify([{ path: kept, access: "read" }]), `the same folder untouched: ${JSON.stringify(listed(neighbour))}`);
 });
 
-await row("with the folder shown only at the press, the card shows none, waits the same, and Choose folder opens the window at the folder or the home", async () => {
+await row("with the folder shown only at the press, the card shows only the room's words for it, waits the same, and Choose folder opens the window at the folder or the home", async () => {
 	const once = newFolder("Shown Late");
 	homeFolder("Projects/late");
 	for (const [guess, startAt] of [[once, once], ["~/Projects/late", home]] as const) {
 		const bench = askBench({ room: { folder: newFolder(`shown-late-${path.basename(guess)}`) }, show: false, picks: [pickOf(once)] });
 		const { asked, shown } = await suggest(bench, guess);
-		assert(shown === undefined && JSON.stringify(bench.waits) === JSON.stringify([SUGGESTION_JUDGE_MS]), `${guess}: ${JSON.stringify(cardOf(bench))}`);
+		assert(JSON.stringify(shown) === JSON.stringify({ named: cards.pathAsShown(guess, home, false), once: false }) && JSON.stringify(bench.waits) === JSON.stringify([SUGGESTION_JUDGE_MS]), `${guess}: ${JSON.stringify(cardOf(bench))}`);
 		const held = await press(bench, PRESSES.choose);
 		assert(JSON.stringify(bench.starts) === JSON.stringify([startAt]) && (held.suggested as Shown | null)?.name === "Shown Late" && listed(bench).length === 0, `${guess}: ${JSON.stringify(bench.starts)} ${JSON.stringify(held)}`);
 		bench.answer(false);
@@ -1912,7 +1943,7 @@ await row("with the folder shown only at the press, the card shows none, waits t
 	}
 });
 
-await row("a suggestion with access change on a folder the list holds to read: Allow this time changes files there for this answer and the list stays; inside a folder given this time to change, nothing is shown", async () => {
+await row("a suggestion with access change on a folder the list holds to read: Allow this time changes files there for this answer and the list stays; inside a folder given this time to change, only the room's words show", async () => {
 	const listedRead = newFolder("Suggested Listed Read");
 	const bench = askBench({ room: { folder: newFolder("suggested-change-room") } });
 	addAlsoAllowedFolder(bench.roomId, listedRead, "read");
@@ -1926,9 +1957,159 @@ await row("a suggestion with access change on a folder the list holds to read: A
 	const within = askBench({ room: { folder: newFolder("suggested-within-room") } });
 	within.answerFolders().give(changed, "write");
 	const withinAsk = await suggest(within, inside);
-	assert(withinAsk.shown === undefined, `inside a folder given this time to change: ${JSON.stringify(withinAsk.shown)}`);
+	assert(JSON.stringify(withinAsk.shown) === JSON.stringify({ named: "~/Documents/Suggested Changed This Time/April", once: false }), `inside a folder given this time to change: ${JSON.stringify(withinAsk.shown)}`);
 	within.answer(false);
 	await withinAsk.asked;
+});
+
+// --- The place the room names, whatever the judge makes of it: the card says which, and gives no more than before.
+type Named = { named: string; once: false };
+/** Allow this time and Allow for this room on a card that holds no folder: the first counts for nothing, the second only opens the window, at no place of the room's, and nothing is given. */
+async function noOneClick(bench: Bench, label: string): Promise<void> {
+	const from = bench.frames.length;
+	bench.answer(PRESSES.thisTime);
+	await settle();
+	const again = oneFrame(bench, from, `${label}: Allow this time`);
+	assert(again.type === "ui_request" && again.again === true, `${label}: Allow this time was taken: ${JSON.stringify(again)}`);
+	const reply = await press(bench, PRESSES.room);
+	assert(JSON.stringify(bench.starts) === JSON.stringify([undefined]) && reply.type === "ui_request_update", `${label}: Allow for this room: ${JSON.stringify(bench.starts)} ${JSON.stringify(reply)}`);
+	assert(listed(bench).length === 0 && bench.answerFolders().over([]).length === 0, `${label}: given ${JSON.stringify(listed(bench))}`);
+}
+
+await row("a path the judge refuses shows on the card as the room's words, with Choose folder and no one click: hidden, outside the home, a link, too deep, another disk, not there", async () => {
+	homeFolder(".config/tools");
+	const target = newFolder("Link Target");
+	fs.symlinkSync(target, path.join(folders, "Linked Scripts"));
+	const deep = `~/Documents/${Array.from({ length: 8 }, (_, at) => `d${at}`).join("/")}`;
+	fs.mkdirSync(path.join(home, deep.slice(2)), { recursive: true });
+	const outsideHome = fs.realpathSync(fs.mkdtempSync(path.join(tempRoot, "outside-")));
+	for (const [label, guess, drawn] of [
+		["hidden", "~/.config/tools", "~/.config/tools"],
+		["outside the home", outsideHome, outsideHome],
+		["a link", path.join(folders, "Linked Scripts"), "~/Documents/Linked Scripts"],
+		["too deep", deep, deep],
+		["another disk", "/Volumes/Backup/Scripts", "/Volumes/Backup/Scripts"],
+		["not there", "~/Documents/Nowhere Yet", "~/Documents/Nowhere Yet"],
+	] as const) {
+		const bench = askBench({ room: { folder: newFolder(`named-${label.replace(/ /g, "-")}`) } });
+		const { asked, shown } = await suggest(bench, guess);
+		assert(JSON.stringify(shown) === JSON.stringify({ named: drawn, once: false }), `${label}: the card shows ${JSON.stringify(shown)}`);
+		await noOneClick(bench, label);
+		bench.answer(false);
+		assert((await asked) === asks.FOLDER_NOT_NOW, `${label}: Not now`);
+	}
+	// The neighbour the judge passes shows by its own name and path, with one click.
+	const bench = askBench({ room: { folder: newFolder("named-neighbour") } });
+	const { asked, shown } = await suggest(bench, newFolder("Named Neighbour"));
+	assert(JSON.stringify(shown) === JSON.stringify({ name: "Named Neighbour", path: "~/Documents/Named Neighbour", once: true }), `the neighbour: ${JSON.stringify(shown)}`);
+	bench.answer(false);
+	await asked;
+});
+
+await row("the room's words on the card are one line with every hidden character written out: a direction change or a line break can't change what the person reads", async () => {
+	for (const [label, guess] of [["a direction change", "~/Documents/Invoices/‮fdp.exe"], ["a line break", "~/Documents/Invoices\n~/Documents/Safe"], ["a zero-width space", "~/Docu​ments/Invoices"]] as const) {
+		const bench = askBench({ room: { folder: newFolder(`hidden-${label.replace(/ /g, "-")}`) } });
+		const { asked, shown } = await suggest(bench, guess);
+		const named = (shown as Named | undefined)?.named ?? "";
+		assert(named === cards.namedPathAsShown(guess, home, false) && !/[‮\n​]/.test(named) && /⟦U\+(202E|000A|200B)⟧/.test(named), `${label}: ${JSON.stringify(shown)}`);
+		assert(!JSON.stringify(bench.frames).includes(JSON.stringify(guess).slice(1, -1)), `${label}: a frame carries the room's raw words`);
+		bench.answer(false);
+		await asked;
+	}
+	assert(cards.namedPathAsShown("~/Documents/a‮b", home, false) === "~/Documents/a⟦U+202E⟧b" && cards.namedPathAsShown("~/a\tb", home, false) === "~/a⟦U+0009⟧b", "each written out by its code");
+});
+
+await row("a long path the room names is cut in the middle at its slashes, keeping its start and its last names whole; one that fits is whole", async () => {
+	const long = `~/Documents/${Array.from({ length: 30 }, (_, at) => `Folder number ${at}`).join("/")}/fetch_transcript.py`;
+	const shown = cards.namedPathAsShown(long, home, false);
+	assert([...shown].length <= cards.NAMED_PATH_MAX_CHARS && shown.startsWith("~/Documents/Folder number 0/") && shown.endsWith("/Folder number 29/fetch_transcript.py") && shown.split("…").length === 2, `cut: ${shown}`);
+	// No name shows in part: each one beside the cut is one of the path's own.
+	const names = new Set(long.split("/"));
+	assert(shown.includes("/…/") && shown.split("/").every((name) => name === "…" || names.has(name)), `a name cut in part: ${shown}`);
+	const oneName = cards.namedPathAsShown(`~/${"x".repeat(200)}`, home, false);
+	assert([...oneName].length <= cards.NAMED_PATH_MAX_CHARS && oneName.startsWith("~/…x") && oneName.split("…").length === 2, `a name longer than the row is cut by characters: ${oneName}`);
+	const fits = `~/Documents/${"x".repeat(cards.NAMED_PATH_MAX_CHARS - 12)}`;
+	assert(cards.namedPathAsShown(fits, home, false) === fits && [...fits].length === cards.NAMED_PATH_MAX_CHARS, "one that fits is cut");
+	// A cut never splits a character: the emoji at the cut stays whole or goes whole.
+	const emoji = cards.namedPathAsShown(`~/${"😀".repeat(200)}`, home, false);
+	assert(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(emoji), "a character split by the cut");
+	const bench = askBench({ room: { folder: newFolder("long-named") } });
+	const card = await suggest(bench, long);
+	assert(JSON.stringify(card.shown) === JSON.stringify({ named: shown, once: false }), `the card: ${JSON.stringify(card.shown)}`);
+	bench.answer(false);
+	await card.asked;
+});
+
+await row("a file's path: the card names the file and the folder that holds it, with one click exactly where that folder would have it, and a press gives the whole folder", async () => {
+	const scripts = newFolder("Scripts");
+	fs.writeFileSync(path.join(scripts, "fetch_transcript.py"), "print(1)\n");
+	const bench = askBench({ room: { folder: newFolder("file-once-room") } });
+	const { asked, shown } = await suggest(bench, path.join(scripts, "fetch_transcript.py"));
+	assert(JSON.stringify(shown) === JSON.stringify({ name: "Scripts", path: "~/Documents/Scripts", once: true, file: "fetch_transcript.py" }), `the card: ${JSON.stringify(shown)}`);
+	bench.answer(PRESSES.thisTime);
+	const said = await asked;
+	assert(said.includes(`The person chose ${scripts} for this answer only.`) && JSON.stringify(bench.answerFolders().over([])) === JSON.stringify([{ path: scripts, access: "read" }]), `the whole folder: ${said}`);
+	// Outside Desktop, Documents and Downloads the folder shows without one click, as it would by its own path.
+	const tools = homeFolder("Projects/tools");
+	fs.writeFileSync(path.join(tools, "run.sh"), "echo\n");
+	const noOnce = askBench({ room: { folder: newFolder("file-no-once-room") } });
+	const card = await suggest(noOnce, "~/Projects/tools/run.sh");
+	assert(JSON.stringify(card.shown) === JSON.stringify({ name: "tools", path: "~/Projects/tools", once: false, file: "run.sh" }), `without one click: ${JSON.stringify(card.shown)}`);
+	const from = noOnce.frames.length;
+	noOnce.answer(PRESSES.thisTime);
+	await settle();
+	assert(oneFrame(noOnce, from, "Allow this time without one click").again === true && noOnce.answerFolders().over([]).length === 0, "Allow this time was taken without one click");
+	noOnce.answer(false);
+	await card.asked;
+});
+
+await row("a file's path whose folder the judge refuses, or that isn't a plain file, shows as the room's words with no one click", async () => {
+	const hidden = homeFolder(".local/bin");
+	fs.writeFileSync(path.join(hidden, "fetch_transcript.py"), "x");
+	fs.writeFileSync(path.join(home, "loose.py"), "x");
+	const holder = newFolder("Link Holder");
+	fs.writeFileSync(path.join(newFolder("Link Real"), "real.py"), "x");
+	fs.symlinkSync(path.join(folders, "Link Real", "real.py"), path.join(holder, "linked.py"));
+	for (const [label, guess] of [
+		["in a hidden folder", "~/.local/bin/fetch_transcript.py"],
+		["right in the home, which no room is given", "~/loose.py"],
+		["a link to a file", "~/Documents/Link Holder/linked.py"],
+		["no file there", "~/Documents/Link Holder/missing.py"],
+	] as const) {
+		const bench = askBench({ room: { folder: newFolder(`file-refused-${label.split(" ").slice(0, 2).join("-")}`) } });
+		const { asked, shown } = await suggest(bench, guess);
+		assert(JSON.stringify(shown) === JSON.stringify({ named: guess, once: false }), `${label}: ${JSON.stringify(shown)}`);
+		await noOneClick(bench, label);
+		bench.answer(false);
+		await asked;
+	}
+});
+
+await row("ask_for_folder refuses an empty reason with a line the room can act on, and asks with any other", async () => {
+	for (const reason of ["", "   ", "\n"]) {
+		const bench = askBench({ room: { folder: newFolder(`no-reason-${reason.length}`) } });
+		let answered = false;
+		const asked = bench.askFolder("read", reason, "~/Documents/Reports").finally(() => { answered = true; });
+		// Answered at once, or a card shows: a card is answered so the row ends.
+		await waitUntil(() => answered || bench.requests().length > 0, "the answer or a card");
+		if (!answered) bench.answer(false);
+		const said = await asked;
+		assert(said === asks.FOLDER_REASON_MISSING && bench.details()[cards.ASK_OUTCOME] === "not-asked" && bench.requests().length === 0 && bench.waits.length === 0, `${JSON.stringify(reason)}: ${said}`);
+	}
+	assert(asks.FOLDER_REASON_MISSING.includes(cards.ASK_FOR_FOLDER_TOOL_NAME) && asks.FOLDER_REASON_MISSING.includes("the folder that holds fetch_transcript.py"), "the line names the tool and how to say it");
+	const bench = askBench({ room: { folder: newFolder("with-reason") } });
+	const asked = bench.askFolder("read", "The folder that holds fetch_transcript.py.");
+	await waitUntil(() => bench.requests().length > 0, "the card");
+	bench.answer(false);
+	assert((await asked) === asks.FOLDER_NOT_NOW, "a reason asks");
+});
+
+await row("ask_for_folder's instructions: the reason names the file or folder by name and holds no path, a file's path counts, and the room names a folder it knows in its own message", () => {
+	const [folderTool] = asks.createRoomAsks({ roomId: "instructions", reasonOf: () => "", questions: {} as never, room: () => ({ folder: null, canChangeFiles: true, commands: "may-ask", boxed: true }), pickFolder: async () => ({ ok: true, supported: true, cancelled: true, path: null }), turnOnCommands: () => {}, notNow: new asks.NotNowCount(), answer: () => new asks.AnswerFolders() }).tools;
+	const fields = (folderTool.parameters as any).properties;
+	assert(String(fields.reason.description).includes('Name the file or folder by its name, as "the folder that holds fetch_transcript.py"') && String(fields.reason.description).includes("No paths."), `the reason: ${fields.reason.description}`);
+	assert(String(fields.folder.description).includes("or of the one file the job needs"), `the folder: ${fields.folder.description}`);
+	assert(folderTool.description.includes("Say in it what you're looking for, by name.") && folderTool.description.includes("When you know the folder, also name it in your own message."), `the tool: ${folderTool.description}`);
 });
 
 await row("a one-click yes is given only after the look, while the card is open: Not now or Stop during the look gives nothing", async () => {

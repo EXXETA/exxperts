@@ -16,7 +16,7 @@
 import * as path from "node:path";
 import { installConnectorStartCheck } from "../../../apps/web-server/src/connector-start-check.js";
 import { stateHome } from "../../product-state-paths.js";
-import { type ConnectorPlaces, connectorPlacesReader, ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomConnectorConfigCwd, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
+import { type ConnectorFormNotes, connectorFormNotes, type ConnectorPlaces, connectorPlacesReader, ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomConnectorConfigCwd, roomFormAsk, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
 
 // Kept non-literal so tsc never resolves the specifiers into raw .ts sources,
 // and so no tsconfig `paths` remap is needed — a remap would also be applied
@@ -25,15 +25,41 @@ const PI_MCP_ADAPTER_SPECIFIER = "pi-mcp-adapter" as string;
 
 type EventHandlerLike = (event: unknown, ctx: unknown) => unknown;
 
+type FormUi = Parameters<typeof roomFormAsk>[0];
+
+/**
+ * The runtime's UI as one session's adapter sees it in a room: the same,
+ * except that a connector's form (scripts/patch-mcp-adapter.mjs, patch 28)
+ * goes through the room's form ask, which names the connector and tells the
+ * call that asked it how the form ended, from this session's `notes`. A UI
+ * that draws no form (a scheduled run's) is left as it is, and the adapter
+ * asks field by field there. One room UI per runtime UI, so the adapter keeps
+ * one object for as long as the runtime does; per session, since a window
+ * keeps its UI when the room's session is built again.
+ */
+function roomFormUis(notes: ConnectorFormNotes): (ui: unknown) => unknown {
+	const made = new WeakMap<object, unknown>();
+	return (ui) => {
+		if (!ui || typeof ui !== "object" || typeof (ui as Partial<FormUi>).askForm !== "function") return ui;
+		let roomUi = made.get(ui);
+		if (!roomUi) {
+			roomUi = Object.create(ui, { askForm: { value: roomFormAsk(ui as FormUi, notes) } });
+			made.set(ui, roomUi);
+		}
+		return roomUi;
+	};
+}
+
 /**
  * The session context a room's adapter sees: everything as the runtime made it,
- * except `cwd`, which is the room connector folder. The adapter reads `cwd`
- * only to find config files, so a room's connectors come from the person's
- * settings while each connector still starts where it always did. The guarded
- * getters are carried over as getters, never read eagerly. `onCwdRead` runs
- * each time `cwd` is read, right before the adapter's read that uses it.
+ * except `cwd`, which is the room connector folder, and `ui`, which asks a
+ * connector's form as the room does. The adapter reads `cwd` only to find
+ * config files, so a room's connectors come from the person's settings while
+ * each connector still starts where it always did. The guarded getters are
+ * carried over as getters, never read eagerly. `onCwdRead` runs each time
+ * `cwd` is read, right before the adapter's read that uses it.
  */
-function withRoomConnectorConfigCwd(ctx: unknown, onCwdRead?: () => void): unknown {
+function withRoomConnectorConfigCwd(ctx: unknown, roomUi: (ui: unknown) => unknown, onCwdRead?: () => void): unknown {
 	if (!ctx || typeof ctx !== "object") return ctx;
 	const descriptors = Object.getOwnPropertyDescriptors(ctx);
 	descriptors.cwd = {
@@ -44,6 +70,8 @@ function withRoomConnectorConfigCwd(ctx: unknown, onCwdRead?: () => void): unkno
 		enumerable: true,
 		configurable: true,
 	};
+	const ui = descriptors.ui;
+	if (ui) descriptors.ui = { get: () => roomUi(ui.get ? ui.get.call(ctx) : ui.value), enumerable: true, configurable: true };
 	return Object.create(Object.getPrototypeOf(ctx), descriptors);
 }
 
@@ -115,6 +143,9 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string, scopeOptio
 	// newest session start: the gate offers a lasting yes only while a
 	// connector is still where this session connected it.
 	const readConnectorPlaces = await connectorPlacesReader();
+	// This session's connector calls, for the line a connector's form leaves for the model on the call it belongs to.
+	const formNotes = connectorFormNotes();
+	const roomUi = roomFormUis(formNotes);
 	const flags = pi as { getFlag?: (name: string) => unknown };
 	let sessionStarts = 0;
 	let placesAtSessionStart: ConnectorPlaces | undefined;
@@ -122,10 +153,10 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string, scopeOptio
 	if (originalOn) {
 		api.on = (event: string, handler: EventHandlerLike) => {
 			originalOn(event, (eventValue: unknown, ctx: unknown) => {
-				if (event !== "session_start") return handler(eventValue, withRoomConnectorConfigCwd(ctx));
+				if (event !== "session_start") return handler(eventValue, withRoomConnectorConfigCwd(ctx, roomUi));
 				const started = ++sessionStarts;
 				placesAtSessionStart = undefined;
-				return handler(eventValue, withRoomConnectorConfigCwd(ctx, () => {
+				return handler(eventValue, withRoomConnectorConfigCwd(ctx, roomUi, () => {
 					if (started === sessionStarts) placesAtSessionStart = readConnectorPlaces(flags.getFlag?.("mcp-config") as string | undefined);
 				}));
 			});
@@ -149,6 +180,7 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string, scopeOptio
 			...scopeOptions,
 			...(getAllTools ? { getAllTools } : {}),
 			connectedPlaces: () => placesAtSessionStart,
+			formNotes,
 		};
 		for (const tool of deferredRoomScopedTools) {
 			const scoped = await roomScopedMcpToolRegistration(roomScopeId, tool, registrationOptions);

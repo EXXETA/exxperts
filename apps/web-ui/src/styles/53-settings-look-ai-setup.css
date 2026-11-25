@@ -1,0 +1,449 @@
+/* The settings windows' new look: Settings' AI setup -------------------------
+   Loaded after the look's other page files, and built while the switch is off
+   as they are: every rule starts with .settings-dialog.settings-look-next and
+   names AI setup's own section (.ai-profile-switcher-section), since
+   .ai-setup-section alone also holds Web search and Remote access. The lines
+   under the list use app-wide classes (.cli-note, .settings-help,
+   .checkpoint-proposal-error), so they are reached only as this section's
+   children. The ··· menu is the look's own (44-settings-look.css). */
+
+.settings-dialog.settings-look-next .ai-profile-switcher-section {
+	/* Strips: 5 % of the text colour on the page; one step above the card in dark. */
+	--look-ai-tile: color-mix(in srgb, var(--fg) 5%, var(--exx-surface-page));
+	--look-ai-fill: color-mix(in srgb, var(--fg) 8%, transparent);
+	/* The family's small size, 44 where a finger taps (01-base.css). */
+	--look-ai-control: 28px;
+}
+.settings-dialog.settings-look-next:where([data-theme="dark"] *) .ai-profile-switcher-section {
+	--look-ai-tile: var(--exx-surface-hover);
+}
+@media (hover: none), (max-width: 760px) {
+	.settings-dialog.settings-look-next .ai-profile-switcher-section {
+		--look-ai-control: var(--exx-btn-h);
+	}
+}
+
+/* The providers' card: white, 16 px inside its sides, so the lines between
+   rows stop 16 px short of them. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-card {
+	padding: 0 16px;
+	background: var(--exx-surface-card);
+}
+
+/* A provider: one list row (44's pattern), 64 tall. Its name over one status
+   line, the state then "N room models"; at the right edge ···, which holds
+   Remove in every state, and before it, 12 px apart, the fix button while the
+   row needs one. Everything right of the button is fixed, so its right edge
+   is at one x. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto minmax(var(--look-ai-control), auto);
+	grid-template-rows: 20px 18px;
+	align-content: center;
+	align-items: center;
+	gap: 2px 12px;
+	box-sizing: border-box;
+	height: 64px;
+	padding: 0;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section :is(.ai-profile-main, .ai-profile-text, .ai-profile-side) {
+	display: contents;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-name {
+	grid-column: 1;
+	grid-row: 1;
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-name-text {
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* A shared server's "where its models run" keeps its place after the name, which gives way first. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-name > .models-run-in {
+	flex: none;
+	margin-left: 8px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-side > .rs-btn {
+	grid-column: 2;
+	grid-row: 1 / -1;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-side > .ai-profile-menu-anchor {
+	grid-column: 3;
+	grid-row: 1 / -1;
+	justify-self: end;
+}
+/* The status line: the state gives way first, so the count stays whole. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-line {
+	grid-column: 1;
+	grid-row: 2;
+	display: flex;
+	align-items: flex-start;
+	min-width: 0;
+}
+
+/* The second line: a 12 px slot holding the 8 px dot, 6 px, the state in
+   muted words, never coloured; one that needs the person in soft text. A
+   block, so words too long for the row end in "…". */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub {
+	flex: 0 1 auto;
+	display: block;
+	min-width: 0;
+	margin: 0;
+	overflow: hidden;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub::before {
+	content: "";
+	display: inline-block;
+	flex: none;
+	vertical-align: top;
+	box-sizing: border-box;
+	width: 8px;
+	height: 8px;
+	margin: 5px 8px 0 2px;
+	border-radius: 50%;
+	background: var(--exx-success);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub[data-status="signed-out"]::before {
+	background: none;
+	border: 1.5px solid var(--muted);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub:is([data-status="setup-needed"], [data-status="refused"], [data-status="refused-no-workspace"]) {
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub:is([data-status="setup-needed"], [data-status="refused"], [data-status="refused-no-workspace"])::before {
+	background: var(--exx-warning);
+}
+/* Waiting in the browser: the 12 px spinner, which keeps turning with reduced motion too. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub[data-status="signing-in"]::before {
+	width: 12px;
+	height: 12px;
+	margin: 3px 6px 0 0;
+	background: none;
+	border: 1.5px solid color-mix(in srgb, var(--fg) 25%, transparent);
+	border-top-color: var(--fg);
+	animation: spin 800ms linear infinite;
+}
+
+/* Under a finger, or on a phone, "N room models" has a 44 px target reaching over the lines around it. */
+@media (max-width: 760px), (hover: none) {
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle {
+		position: relative;
+		z-index: 1;
+	}
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle::after {
+		content: "";
+		position: absolute;
+		inset: -13px 0;
+	}
+}
+/* "· N room models" ends the status line in its words: the line's muted
+   13/18, the full text colour under the pointer, the chevron pointing down
+   while shut and up while open. Kept out of the button family
+   (buttons-look-ui-smoke.ts). */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	box-sizing: border-box;
+	height: 18px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: none;
+	color: var(--muted);
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+	white-space: nowrap;
+	cursor: pointer;
+	transition: color 100ms ease;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle::before {
+	content: "·";
+	margin: 0 2px 0 4px;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle:hover {
+		color: var(--fg);
+	}
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle:active {
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 1px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle > .disclosure-chevron {
+	top: 0;
+	background-color: var(--exx-icon-quiet);
+	transform: rotate(90deg);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle[aria-expanded="true"] > .disclosure-chevron {
+	transform: rotate(-90deg);
+}
+
+/* The opened models: their names under the row's line, on its left edge, a
+   name never broken in two; then, quiet, where a sign-in the app doesn't
+   hold comes from. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models {
+	/* Into the row's own padding, so the names stand 4 under its line. */
+	margin: -8px 0 0;
+	padding: 0 0 16px;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models > p {
+	margin: 0;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-names {
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-names > span {
+	display: inline-block;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-source {
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-names + .ai-profile-models-source {
+	margin-top: 4px;
+}
+
+/* A row's own form (a key, Copilot's address) and a sign-in's code: under the
+   row, on the name's edge, with no fill of their own. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-row-group.key-open {
+	border-radius: 0;
+	background: none;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-key-form {
+	gap: 8px;
+	padding: 0 0 16px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-signin-instructions {
+	overflow-wrap: anywhere;
+	padding: 0 0 16px;
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* Copilot's form and a key form's refusal, here and in the panel: the
+   field's label a row title's (44-settings-look.css), its help and its red line 13/18. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-key-form :is(.copilot-address-hint, .add-provider-key-error) {
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* Loading: the card with three rows of grey bars, no shimmer (the page shows
+   them only after 300 ms); the sentence stays for a screen reader. */
+/* Until the bars are due, the card keeps their room with no edge, so nothing flashes or jumps. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-card-loading:not(:has(> .ai-profile-loading-row)) {
+	box-sizing: border-box;
+	height: calc(3 * 64px + 2px);
+	border-color: transparent;
+	background: none;
+}
+/* The dialog's own padding for the line (36-settings-dialog.css) would give the hidden sentence a size. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-card-loading > .ai-profile-card-empty {
+	padding: 0;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-loading-row {
+	display: grid;
+	grid-template-rows: 20px 18px;
+	align-content: center;
+	align-items: center;
+	gap: 2px;
+	box-sizing: border-box;
+	height: 64px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-loading-row + .ai-profile-loading-row {
+	border-top: 1px solid var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-loading-row > span {
+	display: block;
+	width: 120px;
+	height: 10px;
+	border-radius: 5px;
+	background: var(--look-ai-fill);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-loading-row > span + span {
+	width: 180px;
+	height: 8px;
+	border-radius: 4px;
+}
+/* A settled empty list (a shared server's first start): its one muted line, and no card. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-card:not(.ai-profile-card-loading):has(> .ai-profile-card-empty) {
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-card:not(.ai-profile-card-loading) > .ai-profile-card-empty {
+	padding: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* The lines under the list. The error and a key's notice are strips: the
+   tile's fill, radius 12, an 8 px dot in a 12 px slot, 6 px, 13/18 in the
+   text colour; red for the error, ink for the notice. The others are muted
+   lines. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section > :is(.checkpoint-proposal-error, .settings-help[role="status"]),
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-block > .checkpoint-proposal-error {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	box-sizing: border-box;
+	min-height: 40px;
+	max-width: none;
+	margin: 0;
+	padding: 6px 8px 6px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: var(--look-ai-tile);
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section > :is(.checkpoint-proposal-error, .settings-help[role="status"])::before,
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-block > .checkpoint-proposal-error::before {
+	content: "";
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin: 0 2px;
+	border-radius: 50%;
+	background: var(--error);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section > .settings-help[role="status"]::before {
+	background: var(--fg);
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section > .cli-note,
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-panel > .add-provider-added-note,
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-block > :is(.cli-note, .settings-help) {
+	margin: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* A provider's name without a space wraps in its row, a sign-in's words and
+   the question before a key is removed too. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-panel :is(.settings-row-label, .add-provider-instructions, .add-provider-remove-confirm, .add-provider-added-note) {
+	overflow-wrap: anywhere;
+}
+/* A saved key's buttons go under its provider's name where they would leave it too little. */
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-row-group .settings-row:has(> .settings-row-value > .rs-btn ~ .rs-btn) {
+		flex-wrap: wrap;
+		row-gap: 8px;
+	}
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-row-group .settings-row:has(> .settings-row-value > .rs-btn ~ .rs-btn) > .settings-row-main {
+		flex-basis: 180px;
+	}
+}
+/* Add provider's panel: its rows are the look's form rows already; a key
+   form opened under one sits on the name's edge, 16 above the next line. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-panel {
+	grid-template-columns: minmax(0, 1fr);
+	gap: 12px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-row-key-form {
+	gap: 8px;
+	padding: 0 0 16px;
+}
+/* A provider's note under its key form: 6 px under the field, 12 above the next line. */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-row-key-form:has(+ .add-provider-key-note) {
+	padding-bottom: 6px;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-key-note {
+	margin: 0 0 12px;
+	padding: 0;
+}
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-instructions:not(.ai-profile-signin-instructions) {
+	padding: 0 0 16px;
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* Phone: the name, the status line 2 px under it, "N room models" going
+   under the state when the line is full (its 44 px target reaching over the
+   lines around it). The button sits at the right of the two lines, ··· on
+   the middle of the row; a long reason wraps, and its row grows by it. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-row {
+		grid-template-columns: minmax(0, 1fr) auto var(--exx-btn-h);
+		grid-template-rows: 20px minmax(18px, auto);
+		align-content: start;
+		height: auto;
+		padding: 12px 0 14px;
+	}
+	/* The name's column, clear of the button; its words keep their own column beside the dot as they
+	   wrap, the count's too: the "·" then ends the state's line. */
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-line {
+		flex-wrap: wrap;
+		column-gap: 6px;
+		padding-left: 18px;
+	}
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub {
+		grid-column: 1;
+		margin-left: -18px;
+		padding-left: 18px;
+		text-indent: -18px;
+		white-space: normal;
+	}
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-sub:has(+ .ai-profile-models-toggle)::after {
+		content: "\a0·";
+	}
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-models-toggle::before {
+		content: none;
+	}
+	/* 44 tall over the two lines' 40: their margins give back the 4 px, so the lines keep their places. */
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-side > :is(.rs-btn, .ai-profile-menu-anchor) {
+		grid-row: 1 / 3;
+		margin-block: -2px;
+	}
+	.settings-dialog.settings-look-next .ai-profile-switcher-section .ai-profile-side > .ai-profile-menu-anchor {
+		grid-column: 3;
+	}
+}
+
+/* A refused key's line under a provider's note: scrolled in far enough that
+   the card's end clears the window's bottom by 16. Below the line: the form's
+   6, the note's two lines (38), its 12 and the card's edge (1). */
+.settings-dialog.settings-look-next .ai-profile-switcher-section .add-provider-row-group:has(.add-provider-key-note) .add-provider-key-error {
+	scroll-margin-bottom: calc(74px + var(--phone-keyboard-lift, 0px));
+}
+/* The phone keyboard covers the pane's bottom without shrinking it: while a
+   refused key's line shows, the section ends with the keyboard's height more
+   room, so the last row's line can scroll clear of it. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .ai-profile-switcher-section:has(.add-provider-key-error) {
+		padding-bottom: var(--phone-keyboard-lift, 0px);
+	}
+}

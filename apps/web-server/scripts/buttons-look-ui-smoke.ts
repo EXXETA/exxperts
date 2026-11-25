@@ -86,7 +86,6 @@ const NOT_YET: string[] = [];
 const STYLE_EXCEPTIONS: { file: string; selector: string; why: string }[] = [
 	{ file: "40-room-arrange.css", selector: ".persistent-agent-card.arranging .card-gear-btn", why: "while rooms are arranged the gear dims with the card's other controls; it is inert there, not disabled" },
 	{ file: "33-assets.css", selector: ".att-more-holder", why: "a surface under a button that sits over a picture: a file card's ⋯ over its preview, shown with it" },
-	{ file: "26-connectors.css", selector: "span.connector-item-more", why: "a connector row with no menu holds an empty span the size of \"⋯\", so the rows' sides line up; it is not a button" },
 ];
 
 // Where a family button sits is an area file's business; how it looks is not.
@@ -487,7 +486,8 @@ async function sweep(page: Page, where: string): Promise<Sweep> {
 type TouchPlace = { selector: string; old: [number, number]; pulled?: string; across?: false; down?: false };
 const TOUCH_PLACES: TouchPlace[] = [
 	{ selector: ".persistent-agent-card .card-gear-btn", old: [28, 28], pulled: ".persistent-agent-header-end" },
-	{ selector: ".settings-dialog-close", old: [32, 32] },
+	// The settings window's phone bar sizes its close at 44 inside it, its mark matched to back's across the bar (the look's own smoke pins where).
+	{ selector: ".settings-dialog-close", old: [32, 32], across: false },
 	{ selector: ".artifact-viewer-close", old: [28, 28] },
 	{ selector: ".artifact-viewer-back", old: [30, 30] },
 	{ selector: ".whats-new-close", old: [30, 30], down: false },
@@ -651,9 +651,12 @@ const take = (one: Sweep) => { checked += one.checked; bad.push(...one.bad); one
 // Quiet and red-words buttons off their text edge, and the rows seen pulled, by device.
 const edgesOff: string[] = [];
 const pulled = new Map<string, Set<string>>();
+// The settings windows' new look, where a button sits off that edge, by place and width in both themes.
+const lookPlaced = new Set<string>();
 async function edges(page: Page, where: string): Promise<void> {
 	const one = await checkTextEdges(page, where);
 	edgesOff.push(...one.bad);
+	for (const line of one.look) lookPlaced.add(line.replace(/ (light|dark)\b/, ""));
 	for (const row of one.rows) pulled.set(row, (pulled.get(row) ?? new Set()).add(where.split(" ")[0]));
 }
 
@@ -979,7 +982,31 @@ async function checkOpenLook(page: Page, where: string): Promise<void> {
 // The rows that pull a quiet or red-words button out by its inset, so its
 // words keep the text edge (01-base.css, --exx-btn-inset). The first that
 // holds a button names it.
-const PULLED_ROWS = [".memory-entry-tools", ".memory-entry-actions", ".memory-entry-confirm", ".room-schedules-delete-confirm", ".room-schedules-job-actions", ".memory-history-row", ".room-danger-zone", ".remote-device-actions", ".create-room-actions", ".asset-viewer-footer-row", ".room-toast", ".room-model-row"];
+const PULLED_ROWS = [".connector-remove-group", ".connector-tech-body", ".memory-entry-tools", ".memory-entry-actions", ".memory-entry-confirm", ".room-schedules-delete-confirm", ".memory-history-row", ".room-danger-zone", ".remote-device-actions", ".create-room-actions", ".asset-viewer-footer-row", ".room-toast", ".room-model-row"];
+
+// Where the settings windows' new look sets a quiet or red-words button in
+// from the text edge, as its pages were built: a card's own buttons keep its
+// padding, a section's small actions their own inset. Pinned so none moves
+// unseen; the look's page smokes pin the rest of each page.
+const LOOK_PLACED = [
+	"desktop Room settings, Archive or delete: \"Delete room\" ends a row 15.0 px from the text edge, not 3.0",
+	"desktop Room settings, Conversation: \"Forget\" ends a row 15.0 px from the text edge, not 3.0",
+	"desktop Room settings, Memory: \"Hide\" starts a line 11.0 px from the text edge, not 0.0",
+	"desktop Room settings, a note's delete confirm: \"Hide\" starts a line 11.0 px from the text edge, not 0.0",
+	"desktop Room settings, a task's delete confirm: \"Cancel\" starts a line 5.0 px from the text edge, not 3.0",
+	"desktop Room settings, an archived note's delete confirm: \"Hide\" starts a line 11.0 px from the text edge, not 0.0",
+	"desktop Settings, a connector's page: \"Copy\" ends a row 11.0 px from the text edge, not 0.0",
+	"desktop Settings, a connector's page: \"Remove\" ends a row 15.0 px from the text edge, not 3.0",
+	"desktop at 760 px Room settings, Memory: \"Hide\" starts a line 12.0 px from the text edge, not 0.0",
+	"phone Room settings, Archive or delete: \"Delete room\" starts a line 17.0 px from the text edge, not 5.0",
+	"phone Room settings, Conversation: \"Forget\" starts a line 17.0 px from the text edge, not 5.0",
+	"phone Room settings, Memory: \"Hide\" starts a line 12.0 px from the text edge, not 0.0",
+	"phone Room settings, a note's delete confirm: \"Hide\" starts a line 12.0 px from the text edge, not 0.0",
+	"phone Room settings, a task's delete confirm: \"Cancel\" starts a line 11.0 px from the text edge, not 9.0",
+	"phone Room settings, an archived note's delete confirm: \"Hide\" starts a line 12.0 px from the text edge, not 0.0",
+	"phone Settings, a connector's page: \"Copy\" ends a row 17.0 px from the text edge, not 5.0",
+	"phone Settings, a connector's page: \"Remove\" ends a row 17.0 px from the text edge, not 5.0",
+];
 
 // A quiet or red-words button that starts a line under text, or ends a row at
 // its right edge, is pulled out by its inset where the nearest box with a side
@@ -990,10 +1017,9 @@ const PULLED_ROWS = [".memory-entry-tools", ".memory-entry-actions", ".memory-en
 // clips, and the screen. The model picker's inset is its own padding (on a
 // phone, as small as its pull), and it sits alone in its row's value: its
 // line is the row.
-async function checkTextEdges(page: Page, where: string): Promise<{ bad: string[]; rows: string[] }> {
+async function checkTextEdges(page: Page, where: string): Promise<{ bad: string[]; rows: string[]; look: string[] }> {
 	const read = await page.evaluate((rowNames) => {
-		const root = getComputedStyle(document.documentElement);
-		const out = { bad: [] as string[], rows: [] as string[] };
+		const out = { bad: [] as string[], rows: [] as string[], look: [] as string[] };
 		const words = (button: Element) => {
 			const range = document.createRange();
 			range.selectNodeContents(button);
@@ -1025,17 +1051,16 @@ async function checkTextEdges(page: Page, where: string): Promise<{ bad: string[
 			// Under an open dialog the page is out of reach: it is read with its own screen.
 			const modal = document.querySelector("[aria-modal=true]");
 			if (modal && !modal.contains(button)) continue;
-			// Rename sits right after the room's name in a row only as wide as the two: no text edge lies past it.
-			if (button.matches(".settings-dialog-title-action")) continue;
 			// Memory's "Show all" is a bar as wide as its list, its words in the middle: no text edge to keep.
 			if (button.matches(".mem-hist-more")) continue;
 			const box = button.getBoundingClientRect();
 			const text = words(button);
 			if (!text) continue;
 			// The model picker's inset is its own side's padding: on a phone its
-			// words start on the label's edge (41-room-model.css).
+			// words start on the label's edge (41-room-model.css). Any other
+			// button's is the inset it sees, which a row may set smaller.
 			const own = getComputedStyle(button);
-			const insetOf = (side: "Left" | "Right") => button.matches(".room-model-pick") ? parseFloat(own[`padding${side}`]) + parseFloat(own[`border${side}Width`]) : parseFloat(root.getPropertyValue(button.matches(".rs-btn-sm") ? "--exx-btn-inset-sm" : "--exx-btn-inset"));
+			const insetOf = (side: "Left" | "Right") => button.matches(".room-model-pick") ? parseFloat(own[`padding${side}`]) + parseFloat(own[`border${side}Width`]) : parseFloat(own.getPropertyValue(button.matches(".rs-btn-sm") ? "--exx-btn-inset-sm" : "--exx-btn-inset"));
 			const insetLeft = insetOf("Left");
 			const insetRight = insetOf("Right");
 			const unit = button.closest(".room-model-row > .settings-row-value") ?? button;
@@ -1060,8 +1085,10 @@ async function checkTextEdges(page: Page, where: string): Promise<{ bad: string[
 			while (edge.parentElement && !edged(edge)) edge = edge.parentElement;
 			const room = inside(edge);
 			const want = (inset: number, space: number) => inset - Math.max(0, Math.min(inset, space - ring));
-			if (starts && Math.abs(text.left - left - want(insetLeft, left - room.left)) > 1) out.bad.push(`${name} starts a line ${(text.left - left).toFixed(1)} px from the text edge, not ${want(insetLeft, left - room.left).toFixed(1)}`);
-			if (ends && Math.abs(right - text.right - want(insetRight, room.right - right)) > 1) out.bad.push(`${name} ends a row ${(right - text.right).toFixed(1)} px from the text edge, not ${want(insetRight, room.right - right).toFixed(1)}`);
+			// The settings windows' new look sets some buttons in from that edge (a card's own buttons, a section's small actions): those are read as where they sit.
+			const off = button.closest(".settings-dialog.settings-look-next") ? out.look : out.bad;
+			if (starts && Math.abs(text.left - left - want(insetLeft, left - room.left)) > 1) off.push(`${name} starts a line ${(text.left - left).toFixed(1)} px from the text edge, not ${want(insetLeft, left - room.left).toFixed(1)}`);
+			if (ends && Math.abs(right - text.right - want(insetRight, room.right - right)) > 1) off.push(`${name} ends a row ${(right - text.right).toFixed(1)} px from the text edge, not ${want(insetRight, room.right - right).toFixed(1)}`);
 			const reach = { left: box.left - ring, right: box.right + ring };
 			if (reach.left < room.left - 0.5 || reach.right > room.right + 0.5) out.bad.push(`${name}'s fill or focus ring crosses the edge of .${String(edge.className).split(" ")[0]}`);
 			if (reach.left < 0 || reach.right > window.innerWidth) out.bad.push(`${name}'s focus ring runs off the screen`);
@@ -1073,7 +1100,7 @@ async function checkTextEdges(page: Page, where: string): Promise<{ bad: string[
 		}
 		return out;
 	}, PULLED_ROWS);
-	return { bad: read.bad.map((line) => `${where}: ${line}`), rows: read.rows };
+	return { bad: read.bad.map((line) => `${where}: ${line}`), rows: read.rows, look: read.look.map((line) => `${where}: ${line}`) };
 }
 
 // An icon that forgets or removes looks like any icon at rest; hovered (with
@@ -1266,15 +1293,11 @@ async function sweepEveryScreen(browser: Browser): Promise<void> {
 				await edges(page, `${where} Room settings, ${pane}`);
 				// The room picks its conversation model; Memory follows the default.
 				if (pane === "Model") same(await checkModelPick(page, `${where} Room settings, Model`), 1, `${where}: Room settings, Model's pickers that follow the default`);
-				// A second skill and connector wait, so each pane's picker opens, with its ✕.
-				const picker = { Skills: ["Enable skills", "Close skill picker"], Connectors: ["Enable connectors", "Close connector picker"] }[pane as "Skills" | "Connectors"];
-				if (picker) {
-					await page.locator(".settings-dialog-pane").getByRole("button", { name: picker[0] }).click();
-					const close = page.getByRole("button", { name: picker[1] });
-					await close.waitFor({ timeout: 5000 });
-					take(await sweep(page, `${where} Room settings, ${pane}'s picker`));
-					await close.click();
-					await close.waitFor({ state: "detached", timeout: 5000 });
+				// A second connector waits: like every skill, it is a row with its switch, so neither pane has a picker to open.
+				if (pane === "Connectors") {
+					const section = page.locator(".settings-dialog-pane .room-connectors-section");
+					assert(await section.locator(".room-skills-row input[role=switch]").count() >= 2, `${where}: Room settings, Connectors: the waiting connector has its row and switch`);
+					same(await section.getByRole("button", { name: "Enable connectors" }).count(), 0, `${where}: Room settings, Connectors: a picker to open`);
 				}
 				if (pane === "Memory" && device === "phone") await checkHistoryRowFit(page, where);
 				if (pane === "Memory") {
@@ -1347,10 +1370,16 @@ async function sweepEveryScreen(browser: Browser): Promise<void> {
 					await remove.waitFor({ state: "detached", timeout: 5000 });
 				}
 				if (pane === "Connectors") {
-					// A connector row opened: its own buttons on the row's wash.
+					// A connector's own page: its fact rows' buttons, Check connection and Remove.
 					await page.locator(".connector-item", { hasText: "notes-server" }).locator(".connector-item-hit").click();
-					await page.locator(".connector-item.is-open").first().waitFor({ timeout: 5000 });
-					take(await sweep(page, `${where} Settings, an open connector`));
+					await page.locator(".connector-page").first().waitFor({ timeout: 5000 });
+					// It can't connect (its address refuses): Technical details opened, so its Copy is read too.
+					await page.locator(".connector-page .connector-tech summary").click();
+					await page.locator(".connector-page .connector-tech-body .rs-btn").waitFor({ timeout: 5000 });
+					take(await sweep(page, `${where} Settings, a connector's page`));
+					await edges(page, `${where} Settings, a connector's page`);
+					await page.locator(".connector-page-back").click();
+					await page.locator(".connector-list").first().waitFor({ timeout: 5000 });
 				}
 			}
 			await closeDialog(page);
@@ -1390,18 +1419,22 @@ async function sweepEveryScreen(browser: Browser): Promise<void> {
 	same([...unknown].sort(), [], "buttons that are neither family, kept out, nor not yet converted");
 	same(bad, [], "family buttons off their kind's look");
 	same(edgesOff, [], "quiet and red-words buttons off the text edge, or cut");
+	same([...lookPlaced].sort(), [...LOOK_PLACED].sort(), "the new look's buttons set in from the text edge, where");
 	same(Object.fromEntries([...pulled].map(([row, seen]) => [row, [...seen].sort()]).sort()), {
+		"\"Forget\" in settings-row": ["desktop", "phone"],
+		"\"Hide\" in pane-head-actions": ["desktop", "phone"],
 		".asset-viewer-footer-row": ["desktop", "phone"],
+		".connector-remove-group": ["desktop", "phone"],
+		".connector-tech-body": ["desktop", "phone"],
 		".create-room-actions": ["desktop", "phone"],
 		".memory-entry-actions": ["desktop", "phone"],
 		".memory-entry-confirm": ["desktop", "phone"],
 		".memory-entry-tools": ["desktop", "phone"],
 		".memory-history-row": ["desktop", "phone"],
-		".remote-device-actions": ["desktop"],
+		".remote-device-actions": ["desktop", "phone"],
 		".room-danger-zone": ["desktop", "phone"],
 		".room-model-row": ["desktop", "phone"],
 		".room-schedules-delete-confirm": ["desktop", "phone"],
-		".room-schedules-job-actions": ["desktop", "phone"],
 		".room-toast": ["desktop", "phone"],
 	}, "the rows whose quiet or red-words buttons meet a text edge, where");
 	assert(checked > 150, `the sweep checked ${checked} family buttons`);

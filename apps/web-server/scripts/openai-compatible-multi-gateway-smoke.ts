@@ -597,6 +597,51 @@ try {
 	assertStatusOk(movedWithKey, "save to another server with a key of its own");
 	assert(movedWithKey.body.gateway.baseUrl === foreignGatewayBaseUrl && readJsonFile(authPath)[again.providerId]?.key === "synthetic-new-address-key", "the new address is saved with its own key");
 
+	// A gateway made again under the first gateway's ids never takes a key left
+	// under them. A delete whose key removal failed leaves exactly this: the
+	// gateway gone, its key still on file. Making it again at another server
+	// with no key of its own is refused, on the single-gateway route and the
+	// newer one alike, and writes nothing; with a key, or with no key left
+	// behind, it is made as before.
+	const firstRemoved = await requestJson("/api/persistent-agent-ai-profiles/openai-compatible", { method: "DELETE" });
+	assertStatusOk(firstRemoved, "delete the first gateway");
+	const leftKey = "synthetic-left-behind-key";
+	fs.writeFileSync(authPath, JSON.stringify({ ...readJsonFile(authPath), "openai-compatible": { type: "api_key", key: leftKey } }, null, 2), { mode: 0o600 });
+	const makeFirst = (route: string, body: Record<string, unknown>) => requestJson(route, {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ baseUrl: foreignGatewayBaseUrl, roomModels: [{ modelId: "plain-model" }], maintenanceModel: "plain-model", ...body }),
+	});
+	const modelsBeforeRemake = fs.readFileSync(modelsPath, "utf-8");
+	const storesBeforeRemake = fs.readFileSync(path.join(productAppRoot, "openai-compatible-gateways.json"), "utf-8");
+	for (const route of ["/api/persistent-agent-ai-profiles/openai-compatible", "/api/persistent-agent-ai-profiles/gateways/openai-compatible"]) {
+		const remadeKeyless = await makeFirst(route, {});
+		assert(remadeKeyless.status === 400 && remadeKeyless.body?.code === "gateway_key_for_new_address", `${route}: a keyless remake over a key left behind must be refused with the new-address code, got ${remadeKeyless.status}: ${JSON.stringify(remadeKeyless.body)}`);
+		assert(fs.readFileSync(modelsPath, "utf-8") === modelsBeforeRemake && fs.readFileSync(path.join(productAppRoot, "openai-compatible-gateways.json"), "utf-8") === storesBeforeRemake, `${route}: a refused remake writes no gateway`);
+		assert(readJsonFile(authPath)["openai-compatible"]?.key === leftKey, `${route}: a refused remake leaves the stored key in place`);
+	}
+	// A key store that cannot be read while another live process holds its lock
+	// may still hold the key: refused the same way, never read as no key.
+	const authLockPath = `${authPath}.lock`;
+	fs.writeFileSync(authLockPath, JSON.stringify({ pid: process.pid, host: os.hostname(), run: "smoke-holder", note: "smoke-holder" }), { mode: 0o600 });
+	try {
+		const remadeWhileLocked = await makeFirst("/api/persistent-agent-ai-profiles/openai-compatible", {});
+		assert(remadeWhileLocked.status === 400 && remadeWhileLocked.body?.code === "gateway_key_for_new_address", `a keyless remake while the key store cannot be read must be refused with the new-address code, got ${remadeWhileLocked.status}: ${JSON.stringify(remadeWhileLocked.body)}`);
+	} finally {
+		fs.rmSync(authLockPath, { force: true });
+	}
+	assert(fs.readFileSync(modelsPath, "utf-8") === modelsBeforeRemake && fs.readFileSync(path.join(productAppRoot, "openai-compatible-gateways.json"), "utf-8") === storesBeforeRemake, "a remake refused over an unreadable key store writes no gateway");
+	assert(readJsonFile(authPath)["openai-compatible"]?.key === leftKey, "a remake refused over an unreadable key store leaves the stored key in place");
+	const remadeWithKey = await makeFirst("/api/persistent-agent-ai-profiles/openai-compatible", { key: "synthetic-remade-key" });
+	assertStatusOk(remadeWithKey, "remake of the first gateway with a key of its own");
+	assert(remadeWithKey.body.gateway.baseUrl === foreignGatewayBaseUrl && readJsonFile(authPath)["openai-compatible"]?.key === "synthetic-remade-key", "the remade gateway is saved with its own key");
+	const removedAgain = await requestJson("/api/persistent-agent-ai-profiles/openai-compatible", { method: "DELETE" });
+	assertStatusOk(removedAgain, "delete the remade first gateway");
+	assert(!readJsonFile(authPath)["openai-compatible"], "a delete that works takes the key with it");
+	const remadeNoKey = await makeFirst("/api/persistent-agent-ai-profiles/openai-compatible", {});
+	assertStatusOk(remadeNoKey, "keyless remake of the first gateway with no key left behind");
+	assert(remadeNoKey.body.gateway.baseUrl === foreignGatewayBaseUrl, `the keyless remake is saved, got ${JSON.stringify(remadeNoKey.body.gateway)}`);
+
 	console.log("openai-compatible multi-gateway smoke passed");
 } catch (error) {
 	const output = serverOutput.join("").trim();

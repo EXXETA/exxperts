@@ -5,7 +5,8 @@ import { persistentAgentModelLocksEqual } from "./persistent-agent-ai-profiles.j
 import type { PersistentAgentActiveThreadSummary, PersistentAgentId, PersistentAgentPiSessionJsonlThreadRuntime, PersistentAgentRuntimeBoundaryReason, PersistentAgentRuntimeState, PersistentAgentRuntimeStateValue, PersistentAgentThreadClosedReason, PersistentAgentThreadModelHistoryEntry, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, PersistentAgentThreadRuntime, PersistentAgentThreadStateValue, PersistentAgentThreadWriteInput, PersistentAgentThreadWriteOptions } from "./persistent-agent-types.js";
 import type { L1bSourceFingerprint } from "./persistent-agent-memory-types.js";
 import { heldMessageFiles } from "./held-messages-store.js";
-import { turnPieceFiles } from "./turn-pieces-store.js";
+import { roomHosts } from "./room-live-sessions.js";
+import { addTakenTransfers, readTakenTransfers, transferId, turnPieceFiles } from "./turn-pieces-store.js";
 import { applyCuts, isShared } from "./thread-items-by-id.js";
 import { assertOfferedRoomModel, assertPersistentAgentThreadNotInFlight, createPersistentAgentInstance, ensureDir, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, normalizePersistentAgentRootRelativePath, normalizeRuntimeModel, PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE, PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE_ID, PERSISTENT_AGENT_THREAD_ITEM_CAP, persistentAgentConflictError, persistentAgentModelLockLabel, readJson, safePersistentAgentEventRecordId, safeRuntimeThreadId, writeFileAtomic } from "./persistent-agent-store.js";
 
@@ -57,6 +58,9 @@ export function writePersistentAgentRuntimeState(agentIdRaw: string, input: Part
 	const file = instance.runtimeStatePath();
 	ensureDir(path.dirname(file));
 	writeFileAtomic(file, JSON.stringify(next, null, 2) + "\n");
+	// The room's one live session on a shared server follows the room, with every page on it.
+	const host = roomHosts.get(instance.agentId);
+	if (host && activeThreadId && activeThreadId !== host.conversationId) host.pointerMoved(activeThreadId);
 	return next;
 }
 
@@ -280,6 +284,15 @@ const acceptedAnswerCuts = new Map<string, Map<string, number>>();
 const ACCEPTED_CUTS_KEPT = 50;
 const cutsKey = (agentId: string, threadId: string) => `${agentId}\u0000${threadId}`;
 
+// The stored queue is the one truth on a shared server: every writer of it
+// tells the room's host when it changed, and the host tells every page.
+function tellHostOfPendingTransfers(agentId: string, threadId: string, before: readonly string[], after: readonly string[]): void {
+	const host = roomHosts.get(agentId);
+	if (!host || host.conversationId !== threadId) return;
+	if (before.length === after.length && before.every((block, index) => block === after[index])) return;
+	host.pendingTransfersChanged(after);
+}
+
 export function acceptAnswerCut(agentIdRaw: string, threadIdRaw: string, partId: string, kept: number): void {
 	const threadId = safeRuntimeThreadId(threadIdRaw);
 	if (!threadId) return;
@@ -352,6 +365,7 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
 	writeFileAtomic(file, JSON.stringify(thread, null, 2) + "\n");
+	tellHostOfPendingTransfers(instance.agentId, threadId, readConsultHandoffQueue(existing?.pendingHandoffs), pendingHandoffs);
 	// The room moved on to another conversation while this one was being
 	// written (a turn that landed after the switch, a late standby save):
 	// the answer is kept in the conversation it belongs to and the pointer
@@ -420,6 +434,36 @@ export function clearPersistentAgentThreadPendingHandoffs(agentIdRaw: string, th
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
 	writeFileAtomic(file, JSON.stringify(cleared, null, 2) + "\n");
+	tellHostOfPendingTransfers(instance.agentId, threadId, existing.pendingHandoffs, []);
+}
+
+/** How many taken transfers a conversation remembers: far more than one queue holds. */
+const TAKEN_TRANSFERS_KEPT = 200;
+
+/** The blocks no message of this conversation has carried yet, in their order; what is not a block stays, for the write's check to refuse. */
+export function untakenTransfers<T>(agentId: string, threadId: string, blocks: readonly T[]): T[] {
+	const taken = readTakenTransfers(agentId, threadId);
+	return blocks.filter((block) => typeof block !== "string" || !taken.has(transferId(block)));
+}
+
+/**
+ * On a shared server, the transfers one message carries, taken in one step: the stored queue, then those the page
+ * lists that the queue lacks and no message carried (its own, not saved yet). They are recorded as taken before the
+ * queue clears, so a page that names one again, in a save or a message, never sends it a second time. The stored
+ * queue is carried whole, and the page's own join it first: a kill before the queue clears leaves every one of them
+ * queued for the next message, recorded or not.
+ */
+export function takePendingTransfersForMessage(agentIdRaw: string, threadIdRaw: string, listed: unknown): string[] {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	const threadId = safeRuntimeThreadId(threadIdRaw);
+	if (!threadId) return [];
+	const stored = readConsultHandoffQueue(getPersistentAgentThread(instance.agentId, threadId)?.pendingHandoffs);
+	const own = untakenTransfers(instance.agentId, threadId, readConsultHandoffQueue(listed).filter((block) => !stored.includes(block)));
+	for (const block of own) appendPersistentAgentThreadPendingHandoff(instance.agentId, threadId, block);
+	const carried = [...stored, ...own];
+	addTakenTransfers(instance.agentId, threadId, carried, TAKEN_TRANSFERS_KEPT);
+	clearPersistentAgentThreadPendingHandoffs(instance.agentId, threadId);
+	return carried;
 }
 
 /**
@@ -450,6 +494,7 @@ export function appendPersistentAgentThreadPendingHandoff(agentIdRaw: string, th
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
 	writeFileAtomic(file, JSON.stringify(next, null, 2) + "\n");
+	tellHostOfPendingTransfers(instance.agentId, threadId, existing.pendingHandoffs ?? [], pendingHandoffs);
 	return true;
 }
 

@@ -1,12 +1,12 @@
-// Room settings' Folder pane, and the Skills pane's files line, say what the
+// Room settings' Folder pane, and the Skills pane's rows, say what the
 // room really has, in the page against a real server: the pane shows Location,
 // Can change files, Commands, the protection row and Also allowed, and none of
 // the old Access, tools, Bash, Edit or Save; an older Bounded room reads with
 // commands off; a room whose own list had no Read reads with no folder; a long
 // folder name stays inside the pane; a folder that is gone says so, by name;
 // the cross asks before the room stops using its folder; a failed load offers
-// Try again; an allowed skill's files say they run only while the room's
-// commands are on, and on a shared server that they never run; a folder's
+// Try again; a skill that is on is its name and description with nothing
+// said of its files, on the computer and on a shared server; a folder's
 // refusal shows under Location, a switch's beside the switch, a wait muted and
 // a failure in red; while the room answers every control is greyed with the
 // reason above them, in the room and from Home, and a change the server
@@ -163,6 +163,14 @@ async function closeSettings(page: Page): Promise<void> {
 }
 
 const locationRow = (pane: Locator) => pane.locator(".folder-pane-location");
+/** The Location row's full paths a screen reader alone is given, and the row's words without them. */
+const pathLines = (row: Locator) => row.evaluate((element) => {
+	const rest = element.cloneNode(true) as HTMLElement;
+	const spoken = [...rest.querySelectorAll(".sr-only")].filter((line) => line.getAttribute("role") !== "status");
+	const paths = spoken.map((line) => line.textContent);
+	for (const line of spoken) line.remove();
+	return { paths, rest: rest.textContent ?? "" };
+});
 const commandsSwitch = (pane: Locator) => pane.getByRole("switch", { name: COMMANDS, exact: true });
 const canChangeSwitch = (pane: Locator) => pane.getByRole("switch", { name: CAN_CHANGE_FILES, exact: true });
 
@@ -195,10 +203,8 @@ try {
 
 	const fullDesk = await createRoom("Full Desk");
 	await saveWorkspace(fullDesk, { root: demo, workspaceAccessMode: "localFiles", bashEnabled: false });
-	for (const action of ["enable", "approve-execution"]) {
-		const changed = await api(`/api/persistent-agents/${encodeURIComponent(fullDesk)}/skill-settings`, { method: "PUT", body: JSON.stringify({ action, name: skillName }) });
-		assert(changed.status === 200, `${action} the skill, got ${changed.status} ${JSON.stringify(changed.body)}`);
-	}
+	const enabled = await api(`/api/persistent-agents/${encodeURIComponent(fullDesk)}/skill-settings`, { method: "PUT", body: JSON.stringify({ action: "enable", name: skillName }) });
+	assert(enabled.status === 200, `enable the skill, got ${enabled.status} ${JSON.stringify(enabled.body)}`);
 	const boundedDesk = await createRoom("Bounded Desk");
 	await saveWorkspace(boundedDesk, { root: demo, workspaceAccessMode: "bounded" });
 	const noReadDesk = await createRoom("No Read Desk");
@@ -220,10 +226,8 @@ try {
 	const sharedDesk = await createRoom("Shared Desk");
 	await saveWorkspace(sharedDesk, { root: demo, workspaceAccessMode: "localFiles", bashEnabled: false });
 	for (const name of [skillName, pairSkillName]) {
-		for (const action of ["enable", "approve-execution"]) {
-			const changed = await api(`/api/persistent-agents/${encodeURIComponent(sharedDesk)}/skill-settings`, { method: "PUT", body: JSON.stringify({ action, name }) });
-			assert(changed.status === 200, `${action} ${name} in Shared Desk, got ${changed.status} ${JSON.stringify(changed.body)}`);
-		}
+		const changed = await api(`/api/persistent-agents/${encodeURIComponent(sharedDesk)}/skill-settings`, { method: "PUT", body: JSON.stringify({ action: "enable", name }) });
+		assert(changed.status === 200, `enable ${name} in Shared Desk, got ${changed.status} ${JSON.stringify(changed.body)}`);
 	}
 	const roomFolder = async (agentId: string) => (await api(`/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-default`)).body;
 	const commandsOn = async (agentId: string) => (await roomFolder(agentId))?.policy?.bashEnabled === true;
@@ -275,8 +279,9 @@ try {
 			console.log("  ok  a room with no Read reads with no folder");
 		}
 
-		// 3. A long folder name stays inside the pane, with the cross in view. On this computer the name
-		// carries its path for the pointer; a remote device, sent no path, shows the name alone.
+		// 3. A long folder name stays inside the pane, with Stop using in view. On this computer the name
+		// carries its path for the pointer and a screen reader is read it once; a remote device, sent no path,
+		// shows the name alone.
 		if (!only || only === "long") {
 			const pane = await openPane(page, "Long Desk", "Folder");
 			const shownName = pane.locator(".workspace-folder-name");
@@ -285,10 +290,11 @@ try {
 			const crossBox = await pane.getByRole("button", { name: STOP_USING_FOLDER }).boundingBox();
 			const nameBox = await shownName.boundingBox();
 			assert(paneBox && crossBox && nameBox, "the Location row is laid out");
-			assert(crossBox.x + crossBox.width <= paneBox.x + paneBox.width + 1, `the cross stays inside the pane, its right edge ${crossBox.x + crossBox.width} against ${paneBox.x + paneBox.width}`);
+			assert(crossBox.x + crossBox.width <= paneBox.x + paneBox.width + 1, `Stop using stays inside the pane, its right edge ${crossBox.x + crossBox.width} against ${paneBox.x + paneBox.width}`);
 			assert(nameBox.x + nameBox.width <= crossBox.x, "the name ends before the buttons");
 			assert(await shownName.textContent() === path.basename(longFolder) && await shownName.getAttribute("title") === longFolder, `Location shows the folder's name with its path on it, got ${await shownName.textContent()} / ${await shownName.getAttribute("title")}`);
-			assert(!(await locationRow(pane).innerText()).includes(projects), `no path shows in the row, got ${await locationRow(pane).innerText()}`);
+			const long = await pathLines(locationRow(pane));
+			assert(JSON.stringify(long.paths) === JSON.stringify([longFolder]) && !long.rest.includes(projects), `the path is read once to a screen reader and never shown as text, got ${JSON.stringify(long)}`);
 			await closeSettings(page);
 			const remoteContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 			try {
@@ -329,7 +335,7 @@ try {
 			assert(await row.locator(".workspace-folder-name").textContent() === "gone-soon", `the row still names the folder that is gone, got ${await row.innerText()}`);
 			assert(await pane.getByText(FOLDER_NOT_FOUND, { exact: true }).count() === 1, "the pane says it once");
 			assert(!(await pane.innerText()).includes('The saved workspace folder "gone-soon"'), "no line under the pane repeats it");
-			// The folder's button, not the cross beside it, which is a family button too.
+			// The folder's button, not Stop using beside it, which is a family button too.
 			const button = row.locator("button.rs-btn:not(.also-allowed-cross)");
 			assert(await button.textContent() === CHOOSE_FOLDER && await button.evaluate((el) => el.classList.contains("rs-btn-primary")), `a folder that is gone gets Choose folder, the primary button, not Change folder, got ${await button.textContent()}`);
 			await closeSettings(page);
@@ -381,12 +387,6 @@ try {
 			await pane.getByText(FOLDER_LOAD_FAILED).waitFor({ timeout: 10_000 });
 			const text = await pane.innerText();
 			assert(!text.includes(NO_FOLDER_YET_LINE) && !text.includes("Bad Request"), `a failed load is not "No folder yet" nor the raw error, got: ${text}`);
-			// While the room's commands are unknown, the skill's files line says only what is true.
-			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Skills/ }).first().click();
-			const unknownLine = page.locator(".room-settings-section:not([hidden]) .room-skill-files-row .settings-row-sub");
-			await unknownLine.waitFor({ timeout: 10_000 });
-			await waitUntil(async () => /^Allowed\. Its files? runs? only while this room's commands are on\./.test(String(await unknownLine.textContent())), "the files line says only what is true while the commands are unknown");
-			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
 			failing = false;
 			await pane.getByRole("button", { name: TRY_AGAIN }).click();
 			await commandsSwitch(pane).waitFor({ timeout: 10_000 });
@@ -395,20 +395,36 @@ try {
 			console.log("  ok  a failed load offers Try again");
 		}
 
-		// 7. An allowed skill's files say they run only while the room's commands are on, and follow the Commands switch at once.
+		// 7. A skill that is on is a row with its name, its description and its on switch, and nothing more: no files
+		// line, second switch or review, in a room with protection off too. Changed after it was switched on, it stays so, entering the
+		// room says nothing of it, and the Skills entry carries no count. A new room has no skill on.
 		if (!only || only === "skills") {
+			const protection = await api(`/api/persistent-agents/${encodeURIComponent(fullDesk)}/protection`, { method: "PUT", body: JSON.stringify({ state: "off" }) });
+			assert(protection.status === 200 || protection.status === 409, `protection off in Full Desk, got ${protection.status} ${JSON.stringify(protection.body)}`);
+			fs.writeFileSync(path.join(skillDir, "SKILL.md"), skillManifest.replace("Run the bundled script to tidy a CSV file.", "Run the bundled script twice to tidy a CSV file."), { mode: 0o600 });
 			const skills = await openPane(page, "Full Desk", "Skills");
-			const filesLine = skills.locator(".room-skill-files-row .settings-row-sub");
-			await filesLine.waitFor({ timeout: 10_000 });
-			await waitUntil(async () => /^Allowed\. Its (file runs|\d+ files run) only while this room's commands are on; turn them on under Folder\./.test(String(await filesLine.textContent())), `with commands off the files line says where to turn them on, got ${await filesLine.textContent()}`);
-			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Folder$/ }).first().click();
-			const pane = page.locator(".room-settings-section:not([hidden])");
-			await commandsSwitch(pane).click();
-			await waitUntil(async () => await commandsOn(fullDesk), "the Commands switch saves on its click");
-			await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Skills/ }).first().click();
-			await waitUntil(async () => /^Allowed\. The room may run its (file as it is|\d+ files as they are) now\./.test(String(await filesLine.textContent())), `with commands on the files line says they may run, got ${await filesLine.textContent()}`);
+			const row = skills.locator(".room-skill").filter({ hasText: "Tidies CSV files" });
+			await row.waitFor({ timeout: 10_000 });
+			const subs = await row.locator(".settings-row-sub").allTextContents();
+			assert(JSON.stringify(subs) === JSON.stringify(["Tidies CSV files with a bundled script"]), `the row carries its description alone, got ${JSON.stringify(subs)}`);
+			const text = await skills.innerText();
+			for (const gone of ["Run its files", "Review changes", "Show files", "Changed since you enabled it", "Allowed."]) assert(!text.includes(gone), `the pane still says "${gone}": ${text}`);
+			const switches = row.locator('input[role="switch"]');
+			assert(await switches.count() === 1 && await switches.isChecked(), `a skill's row has one switch, the one that switched it on, got ${await switches.count()}`);
+			const nav = await page.locator(".settings-dialog-nav-item").allTextContents();
+			assert(nav.includes("Skills") && !nav.some((label) => /to review/.test(label)), `the Skills entry carries no count, got ${JSON.stringify(nav)}`);
 			await closeSettings(page);
-			console.log("  ok  a skill's files line follows the room's commands");
+			await page.locator(".persistent-agent-card").filter({ hasText: "Full Desk" }).getByRole("button", { name: /^(Enter|Resume)$/ }).click();
+			await page.locator('button.send-btn[title="Send"]').waitFor({ timeout: 15_000 });
+			await page.waitForLoadState("networkidle");
+			const toasts = await page.locator(".room-toast").allTextContents();
+			assert(!toasts.some((toast) => /changed|paused|review/i.test(toast)), `entering the room said something of the changed skill: ${JSON.stringify(toasts)}`);
+			await page.evaluate(() => { window.location.hash = "#/"; });
+			await page.locator(".persistent-agent-card").filter({ hasText: "Full Desk" }).waitFor({ timeout: 10_000 });
+			const fresh = await api(`/api/persistent-agents/${encodeURIComponent(await createRoom("Fresh Desk"))}/skill-settings`);
+			assert(fresh.status === 200 && JSON.stringify(fresh.body?.skills) === "[]", `a new room has no skill on, got ${JSON.stringify(fresh.body)}`);
+			fs.writeFileSync(path.join(skillDir, "SKILL.md"), skillManifest, { mode: 0o600 });
+			console.log("  ok  a skill that is on is its name, description and switch, changed or not, with no count and no notice");
 		}
 
 		// 8. A refusal shows by what it is about: a folder's under Location, a switch's beside the switch;
@@ -427,7 +443,7 @@ try {
 				await page.unroute("**/api/system/choose-folder");
 			}
 			assert(await savedRoot(placeDesk) === "demo", "a refused folder leaves the saved one");
-			const muted = await pane.locator(".pane-head-text p").first().evaluate((el) => getComputedStyle(el).color);
+			const muted = await pane.locator(".pane-lead").first().evaluate((el) => getComputedStyle(el).color);
 			const commandsRow = pane.locator("label.settings-row").filter({ has: page.getByRole("switch", { name: COMMANDS, exact: true }) });
 			await page.route("**/api/persistent-agents/*/workspace-default", (route) => (route.request().method() === "PUT" ? route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: SERVER_ANSWERING_LINE, code: "active_turn_in_flight" }) }) : route.continue()));
 			await commandsSwitch(pane).click();
@@ -478,7 +494,7 @@ try {
 			for (const control of await controls.all()) assert(await control.isDisabled(), `every control is greyed while the room answers: ${await control.evaluate((el) => el.outerHTML.slice(0, 120))}`);
 			const line = pane.locator(".folder-pane-elsewhere").getByText(ROOM_ANSWERING_CHANGE_LINE, { exact: true });
 			assert(await line.isVisible(), `the reason shows above the rows, got: ${await pane.innerText()}`);
-			const muted = await pane.locator(".pane-head-text p").first().evaluate((el) => getComputedStyle(el).color);
+			const muted = await pane.locator(".pane-lead").first().evaluate((el) => getComputedStyle(el).color);
 			assert(await line.evaluate((el) => getComputedStyle(el).color) === muted, "the reason is in the muted colour");
 			await pane.getByRole("button", { name: STOP_USING_FOLDER }).click({ force: true, timeout: 2_000 }).catch(() => {});
 			await page.waitForTimeout(400);
@@ -586,7 +602,7 @@ try {
 			console.log("  ok  a greyed control carries its reason; a failed save is announced");
 		}
 
-		// 12. On a shared server an allowed skill's files never run, and the line says so in the shape of the others.
+		// 12. On a shared server the Skills pane lists a room's skills with no line on their files.
 		if (!only || only === "shared") {
 			const sharedContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 			try {
@@ -597,18 +613,18 @@ try {
 				const close = sharedPage.locator(".whats-new-close");
 				if (await close.count()) await close.click();
 				const skills = await openPane(sharedPage, "Shared Desk", "Skills");
-				const filesLine = (name: string) => skills.locator(".room-skill").filter({ hasText: name }).locator(".room-skill-files-row .settings-row-sub");
-				await filesLine(skillName).waitFor({ timeout: 10_000 });
-				await waitUntil(async () => /^Allowed\. On a shared server, its file never runs\./.test(String(await filesLine(skillName).textContent())), `one file on a shared server, got ${await filesLine(skillName).textContent()}`);
-				await waitUntil(async () => /^Allowed\. On a shared server, its 2 files never run\./.test(String(await filesLine(pairSkillName).textContent())), `two files on a shared server, got ${await filesLine(pairSkillName).textContent()}`);
+				await skills.locator(".room-skill").filter({ hasText: "Builds a report" }).waitFor({ timeout: 10_000 });
+				assert(await skills.locator(".room-skill").count() === 2, "both skills are listed");
+				const text = await skills.innerText();
+				assert(!/Run its files|never runs?|Allowed\./.test(text), `the pane says something of the skills' files: ${text}`);
 			} finally {
 				await closeContext(sharedContext);
 			}
-			console.log("  ok  on a shared server, a skill's files line says they never run");
+			console.log("  ok  on a shared server, the Skills pane says nothing of a skill's files");
 		}
 
 		// 13. On this computer Location shows the folder's name, with its full path, as the computer writes
-		// it, on the name for the pointer, and no line about a hidden path; at 390 px a long name stays
+		// it, on the name for the pointer and once for a screen reader, and no line about a hidden path; at 390 px a long name stays
 		// inside the row and the page never scrolls sideways.
 		if (!only || only === "fullpath") {
 			const pane = await openPane(page, "Path Desk", "Folder");
@@ -616,7 +632,8 @@ try {
 			const shownName = row.locator(".workspace-folder-name");
 			await shownName.waitFor({ timeout: 10_000 });
 			assert(await shownName.textContent() === path.basename(deepFolder) && await shownName.getAttribute("title") === deepFolder, `Location shows the folder's name with its full path on it, got ${await row.innerText()} / ${await shownName.getAttribute("title")}`);
-			assert(!(await row.innerText()).includes(projects), `no path shows in the row, got ${await row.innerText()}`);
+			const deep = await pathLines(row);
+			assert(JSON.stringify(deep.paths) === JSON.stringify([deepFolder]) && !deep.rest.includes(projects), `the path is read once to a screen reader and never shown as text, got ${JSON.stringify(deep)}`);
 			assert(!(await pane.innerText()).includes(HIDDEN_PATH_LINE), `no line says the path is not shown, got: ${await pane.innerText()}`);
 			await page.setViewportSize({ width: 390, height: 844 });
 			const rowBox = await row.boundingBox();

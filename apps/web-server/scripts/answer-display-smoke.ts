@@ -467,6 +467,34 @@ await check("a tool's own error flag reaches the room and the model", async () =
 	assert(end?.isError === true && result?.message.isError === true, `a result the tool flags as an error stays one, got ${JSON.stringify({ end: end?.isError, result: result?.message.isError })}`);
 });
 
+await check("a call the runtime refuses before it starts, because what the assistant sent doesn't fit the tool, reads one plain line; the model keeps the runtime's words", async () => {
+	const { agentLoop } = await import("../../../runtime/packages/agent/src/agent-loop.js");
+	const { EventStream } = await import("@exxeta/exxperts-ai");
+	const assistant = (content: any[], stopReason: string) => ({ role: "assistant", content, api: "openai-responses", provider: "openai", model: "mock", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason, timestamp: Date.now() });
+	let calls = 0;
+	// The assistant calls a connector's tool with no query, which the tool's description requires.
+	const streamFn = () => {
+		const stream = new (EventStream as any)((event: any) => event.type === "done" || event.type === "error", (event: any) => event.message ?? event.error);
+		queueMicrotask(() => {
+			const message = calls++ === 0 ? assistant([{ type: "toolCall", id: "t1", name: "toy_web_search", arguments: {} }], "toolUse") : assistant([{ type: "text", text: "done" }], "stop");
+			stream.push({ type: "done", reason: message.stopReason, message });
+		});
+		return stream;
+	};
+	let ran = 0;
+	const tool = { name: "toy_web_search", label: "Search", description: "", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, execute: async () => { ran += 1; return { content: [{ type: "text", text: "3 results" }], details: {} }; } };
+	const events: any[] = [];
+	const model = { id: "mock", name: "mock", api: "openai-responses", provider: "openai", baseUrl: "https://example.invalid", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 2048 };
+	for await (const event of agentLoop([{ role: "user", content: "search", timestamp: Date.now() }] as any, { systemPrompt: "", messages: [], tools: [tool] } as any, { model, convertToLlm: (messages: any[]) => messages } as any, undefined, streamFn as any)) events.push(event);
+	const end = events.find((event) => event.type === "tool_execution_end");
+	const told = events.find((event) => event.type === "message_end" && event.message?.role === "toolResult")?.message.content?.[0]?.text ?? "";
+	const result = String(end?.result?.content?.[0]?.text ?? "");
+	assert(ran === 0 && end?.isError === true && told === result && told.includes("query"), `the runtime refused the call before the tool ran, and the model reads its words, got ${JSON.stringify({ ran, isError: end?.isError, told })}`);
+	// The step as the page saves it from those events.
+	const card = chip({ name: "toy_web_search", status: "error", args: {}, result });
+	assert(bodyText(card).replace(/&#x27;/g, "'") === "The assistant sent something this tool couldn't use, so nothing ran." && !card.includes("Received arguments"), `the step reads one plain line, got ${bodyText(card)}`);
+});
+
 await check("page reads and web searches that failed say so", () => {
 	const page = chip({ name: "fetch_url", status: "error", args: { url: "https://docs.example.com/missing" }, result: "Couldn't read page: the site answered 404 Not Found." });
 	assert(chipName(page) === "🌐 Couldn&#x27;t read page" && summaryOf(page) === "docs.example.com", `a failed page read says so, got ${chipName(page)} / ${summaryOf(page)}`);
@@ -481,7 +509,7 @@ await check("page reads and web searches that failed say so", () => {
 
 await check("connector and skill refusals read as refusals, a search with no files as a failure, in plain words", () => {
 	const connector = chip({ name: "mcp", status: "error", args: { connect: "deepwiki" }, details: { error: "connector_not_enabled", server: "deepwiki" }, result: "Connector \"deepwiki\" is not enabled for this room. Room settings control which connectors this room can use." });
-	assert(/<span class="icon"[^>]*>⊘<\/span>/.test(connector) && chipName(connector) === "🔌 Connect" && summaryOf(connector) === "deepwiki" && bodyText(connector).includes("This connector is not on for this room. You can turn it on in Room settings, Connectors."), `a refused connector says so, got ${chipName(connector)} / ${bodyText(connector)}`);
+	assert(/<span class="icon"[^>]*>⊘<\/span>/.test(connector) && chipName(connector) === "🔌 Connect" && summaryOf(connector) === "a connector" && bodyText(connector).includes("This connector is not on for this room. You can turn it on in Room settings, Connectors."), `a refused connector says so, got ${chipName(connector)} / ${bodyText(connector)}`);
 	const skill = chip({ name: "read_skill", status: "error", args: { name: "weekly-report" }, result: "Skill \"weekly-report\" is not enabled for this room. Only skills in the enabled-skills index can be read; the user can enable others in the room settings." });
 	assert(/<span class="icon"[^>]*>⊘<\/span>/.test(skill) && chipName(skill) === "🛠️ Couldn&#x27;t use the skill" && summaryOf(skill) === "weekly-report" && bodyText(skill).includes("This skill is not on for this room. You can turn it on in Room settings, Skills.") && !bodyText(skill).includes("enabled-skills index"), `a refused skill says so, got ${chipName(skill)} / ${bodyText(skill)}`);
 	const files = chip({ name: "search_file", status: "error", args: { query: "revenue" }, result: "This room has no files, so there is nothing to search." });
@@ -556,12 +584,12 @@ await check("a failed connector step says what went wrong or keeps its own name;
 	const describe = step({ describe: "create_issue" }, "Tool \"create_issue\" not found. Use mcp({ search: \"...\" }) to search.", { mode: "describe", error: "tool_not_found" });
 	assert(chipName(describe) === "🔌 No such tool" && summaryOf(describe) === "create_issue" && !describe.includes("<details") && !describe.includes("No connector of this room has a tool called"), `describing a tool nobody has says there is no such tool, with nothing to open, got ${chipName(describe)} / ${summaryOf(describe)} / ${describe}`);
 	const native = step({ tool: "read", args: "{\"path\":\"notes.txt\"}" }, "\"read\" is a native Pi tool. Call read directly instead of using mcp({ tool: \"read\" }).", { mode: "call", error: "native_tool", requestedTool: "read" });
-	assert(chipName(native) === "🔌 read" && summaryOf(native) === "" && !native.includes("notes.txt"), `a call of one of the room's own tools names it, never its arguments, got ${chipName(native)} / ${summaryOf(native)}`);
+	assert(chipName(native) === "🔌 Read" && summaryOf(native) === "" && !native.includes("notes.txt"), `a call of one of the room's own tools names it, never its arguments, got ${chipName(native)} / ${summaryOf(native)}`);
 	const call = chip({ name: "mcp", status: "done", args: { tool: "create_issue", server: "github", args: "{\"title\":\"Export fails\"}" }, result: "Created issue 12." });
-	assert(chipName(call) === "🔌 create_issue" && summaryOf(call) === "github" && !call.includes("Export fails"), `a connector call shows the connector's name, never the raw arguments, got ${chipName(call)} / ${summaryOf(call)}`);
+	assert(chipName(call) === "🔌 Create issue" && summaryOf(call) === "" && !call.includes("Export fails") && !call.includes("github"), `a connector call names its tool in words, never the raw arguments or the connector's key, got ${chipName(call)} / ${summaryOf(call)}`);
 	for (const error of ["connect_failed", "server_not_connected", "server_backoff", "not_connected"]) {
-		const down = step({ tool: "create_issue", server: "github" }, "Server \"github\" not available (last failed 3s ago)", { mode: "call", error, server: "github" });
-		assert(chipName(down) === "🔌 Couldn&#x27;t connect" && summaryOf(down) === "github", `${error}: a connection that failed says so, got ${chipName(down)} / ${summaryOf(down)}`);
+		const down = step({ tool: "create_issue", server: "github" }, "Server \"github\" not available (last failed 3s ago)", { mode: "call", error, server: "github", connector: "GitHub" });
+		assert(chipName(down) === "🔌 Couldn&#x27;t connect" && summaryOf(down) === "GitHub", `${error}: a connection that failed says so, got ${chipName(down)} / ${summaryOf(down)}`);
 	}
 });
 
@@ -829,6 +857,18 @@ await check("on a shared server, a connector that needs a sign-in says to tell t
 	}
 	const signIn = chip({ name: "mcp", status: "error", args: { connect: "exxdocs" }, details: { mode: "connect", error: "auth_required", server: "exxdocs" }, result: "Connector \"exxdocs\" needs a sign-in." });
 	assert(bodyText(signIn) === "This connector needs a sign-in: tell your admin.", `on a shared server the person is sent to the admin, got ${bodyText(signIn)}`);
+	// A device reaching the computer remotely: the chip sends the person to the computer itself, as the card does (step-cards-smoke holds the computer's own line).
+	const placedKeyRefusal = { name: "mcp", status: "error", args: { tool: "toy_key_search", server: "toy-key" }, details: { mode: "call", error: "connect_failed", server: "toy-key", connector: "Toy key", connectorId: "toy-key", use: "Search in Toy key", failure: "key-refused" }, result: "Toy key (toy-key) turned down its key." };
+	const remoteContext: any = await import(new URL("../../web-ui/src/remote-client-context.ts", import.meta.url).href);
+	const sharedFetch = globalThis.fetch;
+	globalThis.fetch = (async () => ({ ok: true, json: async () => ({ remote: true, capability: "full", sharedServer: false }) })) as unknown as typeof fetch;
+	try {
+		assert((await remoteContext.refreshRemoteClientContext()) === "answered", "the page reads the device as remote");
+	} finally {
+		globalThis.fetch = sharedFetch;
+	}
+	const remoteLine = bodyText(chip(placedKeyRefusal));
+	assert(remoteLine === "Toy key turned down its key. Change the key on the computer itself, in Settings, Connectors, then open the room again.", `remote: the chip's line, got ${remoteLine}`);
 });
 
 console.log("answer display smoke passed");

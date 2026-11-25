@@ -22,7 +22,6 @@ import { ARCHIVE_REASONS, archiveIndex, isMigratedMemoryDocument, MEMORY_ACTIVE_
 import { readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import type { PersistentAgentListRow } from "./persistent-agent-status.js";
 import { readArchive, settleMemoryBudget, type MemoryEditEventRecord } from "./memory-entries-store.js";
-import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 
 export interface MemoryGrowthPoint {
 	/** epoch ms of the event that produced this L1b state */
@@ -37,15 +36,6 @@ export interface MemoryGrowthPoint {
 	consolidated: number;
 	/** recent-context (pending) tokens at this event */
 	recent: number;
-}
-
-/** Payoff signals from usage.jsonl, measured, no causal claim: memory is a stable prompt block, so most of it comes back as cache reads. */
-export interface RoomPayoff {
-	turns: number;
-	totalCost: number;
-	costPerTurn: number;
-	/** cacheRead / (cacheRead + input) over this room's turns; it covers the whole stable prompt, not the memory block alone. */
-	cacheHitRate: number;
 }
 
 export interface RoomMemorySummary {
@@ -76,8 +66,6 @@ export interface RoomMemorySummary {
 	/** key things the room knows (bold phrases from durable memory) */
 	knows: string[];
 	composition: MemoryComposition;
-	/** measured usage payoff for this room, or null if it has no logged turns */
-	payoff: RoomPayoff | null;
 }
 
 export interface MemoryComposition {
@@ -222,51 +210,6 @@ function readEventRecords<T extends { approvedAt: string }>(id: string, pickDir:
 
 function readCheckpoints(id: string): CheckpointEventRecord[] {
 	return readEventRecords<CheckpointEventRecord>(id, (instance) => instance.checkpointEventDir());
-}
-
-interface UsageRow {
-	ts: number;
-	agent: string;
-	input: number;
-	cacheRead: number;
-	cost: number;
-}
-
-function loadPayoffByRoom(): Map<string, RoomPayoff> {
-	const file = productAppStatePath("usage.jsonl");
-	const acc = new Map<string, { turns: number; cost: number; input: number; cacheRead: number }>();
-	let text: string;
-	try {
-		text = fs.readFileSync(file, "utf-8");
-	} catch {
-		return new Map();
-	}
-	for (const line of text.split("\n")) {
-		if (!line) continue;
-		let row: UsageRow;
-		try {
-			row = JSON.parse(line) as UsageRow;
-		} catch {
-			continue;
-		}
-		if (!row || typeof row.agent !== "string" || typeof row.ts !== "number") continue;
-		let a = acc.get(row.agent);
-		if (!a) acc.set(row.agent, (a = { turns: 0, cost: 0, input: 0, cacheRead: 0 }));
-		a.turns += 1;
-		a.cost += row.cost ?? 0;
-		a.input += row.input ?? 0;
-		a.cacheRead += row.cacheRead ?? 0;
-	}
-	const out = new Map<string, RoomPayoff>();
-	for (const [room, a] of acc) {
-		out.set(room, {
-			turns: a.turns,
-			totalCost: a.cost,
-			costPerTurn: a.turns > 0 ? a.cost / a.turns : 0,
-			cacheHitRate: a.cacheRead + a.input > 0 ? a.cacheRead / (a.cacheRead + a.input) : 0,
-		});
-	}
-	return out;
 }
 
 interface RoomL1bInfo {
@@ -598,7 +541,7 @@ function roomMemoryLimit(status: PersistentAgentListRow): RoomMemorySummary["mem
 	}
 }
 
-function summarizeRoom(status: PersistentAgentListRow, payoffByRoom: Map<string, RoomPayoff>): RoomMemorySummary {
+function summarizeRoom(status: PersistentAgentListRow): RoomMemorySummary {
 	const info = readRoomL1bInfo(status.id);
 	const checkpoints = readCheckpoints(status.id);
 	const lastCheckpointAt = status.memoryStatus.lastCheckpointAt
@@ -632,14 +575,12 @@ function summarizeRoom(status: PersistentAgentListRow, payoffByRoom: Map<string,
 			return kl !== (status.displayName ?? "").toLowerCase() && kl !== status.id.toLowerCase();
 		}).slice(0, 6),
 		composition: info.composition,
-		payoff: payoffByRoom.get(status.id) ?? null,
 	};
 }
 
 export function buildMemoryOverview(viewer: RoomViewer): MemoryOverview {
 	// The list returns active (non-archived) rooms only.
-	const payoffByRoom = loadPayoffByRoom();
-	const rooms = listPersistentAgents(viewer).map((status) => summarizeRoom(status, payoffByRoom));
+	const rooms = listPersistentAgents(viewer).map(summarizeRoom);
 	rooms.sort((a, b) => b.l1bTokens - a.l1bTokens);
 	return {
 		generatedAt: Date.now(),
@@ -1784,7 +1725,7 @@ export function buildRoomMemoryHistory(agentId: string): MemoryHistoryEvent[] {
 }
 
 export function buildRoomMemory(status: PersistentAgentStatus): RoomMemoryDetail {
-	const summary = summarizeRoom(status, loadPayoffByRoom());
+	const summary = summarizeRoom(status);
 	let memoryMap: MemoryMapRow[] = [];
 	let memoryTopics: MemoryTopicRow[] = [];
 	try {

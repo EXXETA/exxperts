@@ -212,3 +212,14 @@ export function MoonIcon({ size = 16 }: { size?: number } = {}) {
 		</Icon>
 	);
 }
+
+/** Information: the mark after a setting's name that opens its explanation. */
+export function InfoIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<circle cx="8" cy="8" r="6" />
+			<path d="M8 7.25V11" />
+			<path d="M8 5h.01" />
+		</Icon>
+	);
+}

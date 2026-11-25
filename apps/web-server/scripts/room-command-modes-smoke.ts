@@ -321,6 +321,10 @@ try {
 
 	await row("the line the model reads in a protected room says where each kind of file goes, on a Mac and on Windows, in every mode", () => {
 		const list = { folders: [], sites: [] };
+		// The file tools can't open a command's temp, so a file they must open goes into the room's folder.
+		for (const [line, temp] of [[cardText.BOX_FILE_HOMES_LINE, "$TMPDIR"], [WINDOWS_FILE_HOMES_LINE, "$env:TEMP"]] as const) {
+			assert(line.startsWith("Write what the person asked for, and any file you need to open with the file tools, into the room's folder.") && line.includes(`go under ${temp}, which only commands can open`), line);
+		}
 		for (const [asks, free] of [[true, false], [false, false], [true, true]] as const) {
 			const mac = cardText.boxModelLine(list, asks, free);
 			const windows = windowsBoxModelLine(list, asks, free);

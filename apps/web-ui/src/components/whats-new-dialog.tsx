@@ -14,30 +14,13 @@ function releaseDay(date: string): string {
 	return name && day ? `${day} ${name} ${year}` : date;
 }
 
-function versionParts(version: string): number[] | null {
-	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-	return match ? match.slice(1).map(Number) : null;
-}
-
-function newer(a: number[], b: number[]): boolean {
-	const index = a.findIndex((part, i) => part !== b[i]);
-	return index >= 0 && a[index] > b[index];
-}
-
 /**
- * A shared server's record never moves on dismissal, so there this browser's
- * seen mark decides what is new to it; with no mark, the newest line speaks.
+ * The desktop's notes are mostly about its own protection, commands, folders
+ * and apps, which a shared server does not have, so there no release shows
+ * until the cloud has notes of its own.
  */
-export function sharedServerReleases(sections: WhatsNewSections, seenMark: string | null): WhatsNewSections {
-	const all = [...sections.major, ...sections.minor].map((release) => versionParts(release.version)).filter((parts): parts is number[] => parts !== null);
-	const newest = all.reduce<number[] | null>((best, parts) => (best === null || newer(parts, best) ? parts : best), null);
-	const mark = versionParts(seenMark ?? "");
-	const keep = (release: WhatsNewRelease): boolean => {
-		const parts = versionParts(release.version);
-		if (!parts) return false;
-		return mark ? newer(parts, mark) : newest !== null && parts[0] === newest[0] && parts[1] === newest[1];
-	};
-	return { major: sections.major.filter(keep), minor: sections.minor.filter(keep) };
+export function sharedServerReleases(_sections: WhatsNewSections, _seenMark: string | null): WhatsNewSections {
+	return { major: [], minor: [] };
 }
 
 /**

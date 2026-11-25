@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { registerOAuthProvider } from "@exxeta/exxperts-ai/oauth";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AuthStorage } from "../src/core/auth-storage.js";
+import { AuthStorage, AuthStorageNotSavedError } from "../src/core/auth-storage.js";
 import { clearConfigValueCache } from "../src/core/resolve-config-value.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
@@ -353,7 +353,7 @@ describe("AuthStorage", () => {
 		/** The pid of a process that has really ended. */
 		const deadPid = () => spawnSync(process.execPath, ["-e", ""]).pid;
 		const lockOf = (file: string) => `${file}.lock`;
-		const leaveLock = (file: string, owner: { pid: number; host?: string; run?: string }) =>
+		const leaveLock = (file: string, owner: { pid: number; host?: string; run?: string; note?: string }) =>
 			writeFileSync(lockOf(file), JSON.stringify({ host: hostname(), run: "an-earlier-run", note: "tmp-1-1-a", ...owner }));
 
 		function registerRefreshingProvider(): string {
@@ -469,6 +469,26 @@ describe("AuthStorage", () => {
 			expect(authStorage.get("anthropic")).toBeDefined();
 		});
 
+		test("a dead owner's note that names another file deletes nothing, and the lock waits for the stale rule", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
+			mkdirSync(`${lockOf(authJsonPath)}.x`);
+			const victim = join(tempDir, "victim");
+			writeFileSync(victim, "keep me");
+			leaveLock(authJsonPath, { pid: deadPid(), note: "x/../victim" });
+
+			authStorage = AuthStorage.create(authJsonPath);
+			expect(authStorage.drainErrors().map((error) => (error as NodeJS.ErrnoException).code)).toEqual(["ELOCKED"]);
+			expect(existsSync(victim)).toBe(true);
+
+			const longAgo = new Date(Date.now() - 60_000);
+			utimesSync(lockOf(authJsonPath), longAgo, longAgo);
+			authStorage = AuthStorage.create(authJsonPath);
+			expect(authStorage.drainErrors()).toEqual([]);
+			expect(authStorage.get("anthropic")).toBeDefined();
+			expect(existsSync(lockOf(authJsonPath))).toBe(false);
+			expect(existsSync(victim)).toBe(true);
+		});
+
 		test("a folder an older version left names no owner, so it waits for the stale rule", () => {
 			writeAuthJson({ anthropic: { type: "api_key", key: "sk-kept" } });
 			mkdirSync(lockOf(authJsonPath));
@@ -574,7 +594,7 @@ describe("AuthStorage", () => {
 			expect(updated.google.key).toBe("google-key");
 		});
 
-		test("does not overwrite malformed auth file after load error", () => {
+		test("refuses a change after a load error, never overwriting the malformed file", () => {
 			writeAuthJson({
 				anthropic: { type: "api_key", key: "anthropic-key" },
 			});
@@ -583,10 +603,39 @@ describe("AuthStorage", () => {
 			writeFileSync(authJsonPath, "{invalid-json", "utf-8");
 
 			authStorage.reload();
-			authStorage.set("openai", { type: "api_key", key: "openai-key" });
+			const refused = (() => {
+				try {
+					authStorage.set("openai", { type: "api_key", key: "openai-key" });
+				} catch (error) {
+					return error;
+				}
+			})();
 
-			const raw = readFileSync(authJsonPath, "utf-8");
-			expect(raw).toBe("{invalid-json");
+			expect(refused).toBeInstanceOf(AuthStorageNotSavedError);
+			expect((refused as AuthStorageNotSavedError).stage).toBe("read");
+			expect(readFileSync(authJsonPath, "utf-8")).toBe("{invalid-json");
+			expect(authStorage.get("openai")).toBeUndefined();
+		});
+
+		test("refuses a change whose write fails, leaving the file and memory as they were", () => {
+			writeAuthJson({ anthropic: { type: "api_key", key: "anthropic-key" } });
+			authStorage = AuthStorage.create(authJsonPath);
+			const before = readFileSync(authJsonPath, "utf-8");
+			vi.spyOn(fs, "renameSync").mockImplementation(() => {
+				throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+			});
+
+			expect(() => authStorage.set("openai", { type: "api_key", key: "openai-key" })).toThrow(AuthStorageNotSavedError);
+			expect(() => authStorage.remove("anthropic")).toThrow(AuthStorageNotSavedError);
+			vi.restoreAllMocks();
+
+			expect(readFileSync(authJsonPath, "utf-8")).toBe(before);
+			expect(authStorage.get("openai")).toBeUndefined();
+			expect(authStorage.get("anthropic")).toEqual({ type: "api_key", key: "anthropic-key" });
+			expect(fs.readdirSync(tempDir).filter((name) => name.includes(".tmp-"))).toEqual([]);
+
+			authStorage.set("openai", { type: "api_key", key: "openai-key" });
+			expect(JSON.parse(readFileSync(authJsonPath, "utf-8")).openai.key).toBe("openai-key");
 		});
 
 		test("reload records parse errors and drainErrors clears buffer", () => {

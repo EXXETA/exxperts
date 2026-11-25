@@ -1,13 +1,14 @@
 // A skill exxperts does not own (built in, shared, project) keeps the skill
 // page's last row: "Delete skill", a line that says where it can be removed,
-// and the Delete button disabled. The library table names its source where an
-// owned skill shows its date. A remote device shows no Delete row at all.
+// and the Delete button disabled. The library table names its source under
+// From. A remote device shows no Delete row at all.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { SKILL_UNREADABLE_LINE, SKILL_UNREADABLE_PAGE_LINE } from "../../web-ui/src/skill-source-copy.js";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skills-protected-"));
@@ -81,11 +82,11 @@ try {
 
 		const { ctx, page } = await openSkills(false);
 		const sharedRow = page.locator(".skill-table-row").filter({ hasText: "brand-voice" });
-		assert((await sharedRow.locator(".skill-table-cell").last().innerText()).trim() === "Shared", "the table names a shared skill's source where the date would be");
-		// On a desktop each fact sits under its own heading.
-		const headingLeft = (await page.locator(".skill-table-head span").filter({ hasText: "Updated" }).boundingBox())?.x ?? NaN;
-		const cellLeft = (await sharedRow.locator(".skill-table-cell").last().boundingBox())?.x ?? NaN;
-		assert(Math.abs(headingLeft - cellLeft) <= 2, `the source sits under "Updated" (heading at ${headingLeft}, cell at ${cellLeft})`);
+		assert((await sharedRow.locator(".skill-table-from").innerText()).trim() === "Shared", "the table's From names a shared skill's source");
+		// One row pattern: no column heads, the facts under the name on its edge.
+		const nameLeft = (await sharedRow.locator(".skill-table-name").boundingBox())?.x ?? NaN;
+		const factsLeft = (await sharedRow.locator(".skill-table-facts").boundingBox())?.x ?? NaN;
+		assert(Math.abs(nameLeft - factsLeft) <= 2, `the facts start on the name's edge (name at ${nameLeft}, facts at ${factsLeft})`);
 
 		await sharedRow.click();
 		await page.waitForSelector(".skill-detail", { timeout: 10000 });
@@ -93,7 +94,7 @@ try {
 		assert((await deleteRow(page).locator(".settings-row-sub").innerText()).trim() === SHARED_DELETE_LINE, "the row says where a shared skill can be removed");
 		assert(await deleteRow(page).locator("button.rs-btn-danger").isDisabled(), "its Delete button is disabled");
 
-		await page.locator(".skill-detail-back").click();
+		await page.locator(".pane-head-back").click();
 		await page.locator(".skill-table-row").filter({ hasText: "cite-sources" }).click();
 		await page.waitForSelector(".skill-detail", { timeout: 10000 });
 		assert((await deleteRow(page).locator(".settings-row-sub").innerText()).trim() === "Removes it from your library. Rooms that use it stop using it.", "a skill of your own keeps its own line");
@@ -117,6 +118,46 @@ try {
 		await remote.page.waitForSelector(".skill-detail", { timeout: 10000 });
 		assert((await deleteRow(remote.page).count()) === 0, "a remote device shows no Delete row");
 		await remote.ctx.close();
+
+		// A skill whose SKILL.md is a link exxperts doesn't follow, in the shared folder (into
+		// the app's own data) and in your own library (any link): listed with the line that
+		// it can't be read and no instructions, never left out. Yours can still be deleted,
+		// and deleting it leaves the file the link led to.
+		let linksAllowed = true;
+		const elsewhere = path.join(tempHome, ".exxperts", "kept-elsewhere");
+		writeSkill(elsewhere, "linked-elsewhere", "Lives elsewhere");
+		for (const dir of [path.join(tempHome, ".agents", "skills", "shared-linked"), path.join(tempHome, ".exxperts", "agent", "skills", "own-linked")]) {
+			fs.mkdirSync(dir, { recursive: true });
+			try {
+				fs.symlinkSync(path.join(elsewhere, "SKILL.md"), path.join(dir, "SKILL.md"));
+			} catch {
+				linksAllowed = false;
+				console.log("SKIPPED: the linked SKILL.md rows (this system does not allow links here)");
+				break;
+			}
+		}
+		if (linksAllowed) {
+			const linked = await openSkills(false);
+			for (const name of ["shared-linked", "own-linked"]) {
+				const row = linked.page.locator(".skill-table-row").filter({ hasText: name });
+				assert((await row.count()) === 1, `a skill whose SKILL.md is a link is listed: ${name}`);
+				assert((await row.locator(".skill-table-problem").innerText()).trim() === SKILL_UNREADABLE_LINE, `its row says it can't be opened: ${name}`);
+			}
+			await linked.page.locator(".skill-table-row").filter({ hasText: "shared-linked" }).click();
+			await linked.page.waitForSelector(".skill-detail", { timeout: 10000 });
+			assert((await linked.page.locator(".skill-detail .pane-lead").innerText()).trim() === SKILL_UNREADABLE_PAGE_LINE, "its page says it can't be read and what to do, on the line under its title");
+			assert((await linked.page.locator(".skill-detail").innerText()).includes("Instructions") === false, "its page shows no instructions");
+			await linked.page.locator(".pane-head-back").click();
+			await linked.page.locator(".skill-table-row").filter({ hasText: "own-linked" }).click();
+			await linked.page.waitForSelector(".skill-detail", { timeout: 10000 });
+			await deleteRow(linked.page).locator("button.rs-btn-danger").click();
+			await linked.page.locator(".confirm-dialog-backdrop button.rs-btn-danger").click();
+			await linked.page.waitForSelector(".skill-table", { timeout: 10000 });
+			const after = (await (await authedFetch(`${baseUrl}/api/skills`)).json()) as Array<{ name: string }>;
+			assert(!after.some((skill) => skill.name === "own-linked"), "a skill of your own whose SKILL.md is a link can be deleted");
+			assert(fs.existsSync(path.join(elsewhere, "SKILL.md")), "deleting it leaves the file its link led to");
+			await linked.ctx.close();
+		}
 	} finally {
 		await browser.close();
 	}

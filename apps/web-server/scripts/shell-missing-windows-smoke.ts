@@ -13,7 +13,13 @@
 //   look at the pane, with no restart;
 // - without the switch (macOS, Linux) the pane never shows the line;
 // - a settings file's shell path that does not exist is not a missing shell:
-//   no line, with the switch or without.
+//   no line, with the switch or without;
+// - with Windows PowerShell there (a stand-in) and no Git, commands run in it:
+//   no line in the pane, its output in the chat and in what the model reads,
+//   the PowerShell texts, and on Auto without protection no question, with
+//   nobody connected too. With it taken away, the Git line again, or the
+//   launcher's own answer where only Windows' Linux launcher is there. Which
+//   shell, and how it is started, is windows-plain-commands-smoke.ts's.
 //
 // The faked lookup needs a machine that is not Windows: on a real Windows
 // runner Git is installed and found through git.exe. Windows is checked by
@@ -21,10 +27,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
 import { waitForTurnSettled } from "./smoke-turn-settle.js";
@@ -61,6 +68,12 @@ const hasBrowser = Boolean(chromiumPath && fs.existsSync(chromiumPath));
 // follow-up (with the tool result in its messages) is captured, answered "done".
 // ---------------------------------------------------------------------------
 const capturedToolResults: string[] = [];
+const ECHO = { name: "bash", args: { command: `echo ${COMMAND_OUTPUT}` } };
+// The next turn's call, what the command tool said of itself to the model, and a hold on the next turn's first answer.
+let nextCall: { name: string; args: Record<string, unknown> } = ECHO;
+let toolText = "";
+let holdAnswer: Promise<void> | null = null;
+let firstRequests = 0;
 
 function sseChunk(payload: unknown): string {
 	return `data: ${JSON.stringify(payload)}\n\n`;
@@ -73,7 +86,7 @@ const gateway = http.createServer((req, res) => {
 	}
 	let body = "";
 	req.on("data", (chunk) => { body += chunk; });
-	req.on("end", () => {
+	req.on("end", async () => {
 		let parsed: any = {};
 		try { parsed = JSON.parse(body); } catch {}
 		const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
@@ -81,8 +94,11 @@ const gateway = http.createServer((req, res) => {
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
 		const base = { id: `cmpl_${capturedToolResults.length + 1}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: String(parsed?.model ?? "room-model") };
 		if (toolMessages.length === 0) {
-			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_bash", type: "function", function: { name: "bash", arguments: "" } }] }, finish_reason: null }] }));
-			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: `echo ${COMMAND_OUTPUT}` }) } }] }, finish_reason: null }] }));
+			toolText = String((parsed?.tools ?? []).find((tool: any) => tool?.function?.name === "bash")?.function?.description ?? "");
+			firstRequests += 1;
+			await holdAnswer;
+			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_bash", type: "function", function: { name: nextCall.name, arguments: "" } }] }, finish_reason: null }] }));
+			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(nextCall.args) } }] }, finish_reason: null }] }));
 			res.write(sseChunk({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }));
 		} else {
 			capturedToolResults.push(toolMessages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n"));
@@ -96,7 +112,8 @@ const gateway = http.createServer((req, res) => {
 
 type SmokeServer = { process: ChildProcessWithoutNullStreams; baseUrl: string; port: number; output: string[]; home: string };
 
-async function startServer(label: string, gatewayPort: number, extraEnv: Record<string, string>): Promise<SmokeServer> {
+/** A server on a home of its own; `cwd`: started in that folder, where a program named by a Windows path is one file. */
+async function startServer(label: string, gatewayPort: number, extraEnv: Record<string, string>, cwd?: string): Promise<SmokeServer> {
 	const home = path.join(tempRoot, label);
 	const agentDir = path.join(home, ".exxperts", "agent");
 	const productAppRoot = path.join(home, ".exxperts", "app");
@@ -126,9 +143,10 @@ async function startServer(label: string, gatewayPort: number, extraEnv: Record<
 	const baseEnv: Record<string, string | undefined> = { ...process.env };
 	delete baseEnv["ProgramFiles(x86)"];
 	delete baseEnv.LOCALAPPDATA;
-	const child = spawn("npx", ["tsx", "src/index.ts"], {
+	const [program, args] = cwd === undefined ? ["npx", ["tsx", "src/index.ts"]] as const : [process.execPath, ["--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href, path.join(webServerDir, "src", "index.ts")]] as const;
+	const child = spawn(program, args, {
 		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
-		cwd: webServerDir,
+		cwd: cwd ?? webServerDir,
 		env: {
 			...baseEnv,
 			HOME: home, USERPROFILE: home,
@@ -185,8 +203,8 @@ async function createBashRoom(server: SmokeServer, name: string): Promise<string
 
 const WebSocketImpl: any = (await import("ws")).default;
 
-/** One turn over the room websocket, settled on the server; returns the bash result as the chat received it. */
-async function runTurn(server: SmokeServer, agentId: string, conversationId: string): Promise<{ text: string; isError: boolean; modelSaw: string }> {
+/** A seeded conversation's own connection, and the frames it got. */
+async function connect(server: SmokeServer, agentId: string, conversationId: string): Promise<{ socket: any; frames: any[] }> {
 	const seeded = await requestJson(server, `/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(conversationId)}`, {
 		method: "PUT",
 		body: JSON.stringify({ state: "active", origin: "launcher", model: { provider: "openai-compatible", model: "room-model" }, items: [] }),
@@ -201,6 +219,12 @@ async function runTurn(server: SmokeServer, agentId: string, conversationId: str
 		socket.addEventListener("open", () => resolve());
 		socket.addEventListener("error", () => reject(new Error("websocket failed to connect")));
 	});
+	return { socket, frames };
+}
+
+/** One turn over the room websocket, settled on the server; returns the call's result as the chat received it, and the questions it asked. */
+async function runTurn(server: SmokeServer, agentId: string, conversationId: string): Promise<{ text: string; isError: boolean; modelSaw: string; questions: number }> {
+	const { socket, frames } = await connect(server, agentId, conversationId);
 	const before = capturedToolResults.length;
 	socket.send(JSON.stringify({ type: "prompt", text: "Run a command, please." }));
 	const deadline = Date.now() + 30_000;
@@ -211,7 +235,7 @@ async function runTurn(server: SmokeServer, agentId: string, conversationId: str
 			const toolResult = frames.find((frame) => frame?.type === "event" && frame?.event?.type === "message_end" && frame?.event?.message?.role === "toolResult")?.event?.message;
 			assert(toolResult, "the chat must receive the command's result");
 			const text = (toolResult.content ?? []).filter((part: any) => part?.type === "text").map((part: any) => part.text).join("\n");
-			return { text, isError: toolResult.isError === true, modelSaw: capturedToolResults[before] };
+			return { text, isError: toolResult.isError === true, modelSaw: capturedToolResults[before], questions: frames.filter((frame) => frame?.type === "ui_request" && typeof frame.id === "string").length };
 		}
 		const errors = frames.filter((frame) => String(frame?.type ?? "").includes("error"));
 		if (errors.length > 0) throw new Error(`turn errored: ${JSON.stringify(errors[0]).slice(0, 400)}`);
@@ -242,6 +266,7 @@ async function readPane(page: any, server: SmokeServer, roomName: string): Promi
 
 let windowsServer: SmokeServer | undefined;
 let plainServer: SmokeServer | undefined;
+let powerShellServer: SmokeServer | undefined;
 try {
 	await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
 	const gatewayPort = (gateway.address() as AddressInfo).port;
@@ -315,9 +340,87 @@ try {
 		await browser?.close();
 	}
 
+	// 6. Windows PowerShell there, no Git, no protection on this computer, the room on Auto.
+	{
+		const programs = path.join(tempRoot, "programs");
+		const bin = path.join(tempRoot, "bin");
+		const noGit = path.join(tempRoot, "no-git");
+		for (const folder of [programs, bin, noGit]) fs.mkdirSync(folder);
+		const started = path.join(tempRoot, "powershell-started.txt");
+		const powerShell = path.join(programs, String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`);
+		fs.writeFileSync(powerShell, `#!/bin/sh\necho started >> ${JSON.stringify(started)}\ncommand=$EXXPERTS_COMMAND\nunset EXXPERTS_COMMAND\nexec /bin/sh -c "$command"\n`, { mode: 0o755 });
+		const starts = () => (fs.existsSync(started) ? fs.readFileSync(started, "utf8").split("\n").filter(Boolean).length : 0);
+		const launcher = `${tempRoot}/${String.raw`C:\Windows\System32\bash.exe`}`;
+		fs.writeFileSync(launcher, "#!/bin/sh\necho the-launchers-own-answer\nexit 1\n", { mode: 0o755 });
+		const whereAnswer = path.join(tempRoot, "where-bash.txt");
+		fs.writeFileSync(path.join(bin, "where"), `#!/bin/sh\n[ "$1" = bash.exe ] && [ -f ${JSON.stringify(whereAnswer)} ] || exit 1\ncat ${JSON.stringify(whereAnswer)}\n`, { mode: 0o755 });
+		fs.writeFileSync(whereAnswer, `${launcher}\r\n`);
+
+		const server = powerShellServer = await startServer("powershell", gatewayPort, {
+			EXXPERTS_TEST_INTROSPECTION: "1", EXXPERTS_TEST_SHELL_PLATFORM: "win32", EXXPERTS_TEST_WINDOWS_BOX: "off",
+			ProgramFiles: noGit, SystemRoot: String.raw`C:\Windows`, PATH: [bin, programs, process.env.PATH].join(path.delimiter),
+		}, programs);
+		const skillFolder = path.join(server.home, ".exxperts", "agent", "skills", "report");
+		fs.mkdirSync(path.join(skillFolder, "scripts"), { recursive: true });
+		fs.writeFileSync(path.join(skillFolder, "SKILL.md"), "---\nname: report\ndescription: Makes a report\n---\n\nRun scripts/report.ps1.\n");
+		fs.writeFileSync(path.join(skillFolder, "scripts", "report.ps1"), "Write-Output report\n");
+		const roomId = await createBashRoom(server, "PowerShell Room");
+		const roomPath = (rest: string) => `/api/persistent-agents/${encodeURIComponent(roomId)}${rest}`;
+		assert((await requestJson(server, roomPath("/skill-settings"), { method: "PUT", body: JSON.stringify({ action: "enable", name: "report" }) })).status === 200, "the skill is on");
+		const paneNow = async () => (await requestJson(server, roomPath("/workspace-default"))).body;
+
+		const pane = await paneNow();
+		assert(pane?.shellMissingNote === null && pane?.protection?.state === "off", `with PowerShell there the pane has no Git line, and the room no protection, got ${JSON.stringify([pane?.shellMissingNote, pane?.protection])}`);
+		const ran = await runTurn(server, roomId, "conv-powershell");
+		assert(!ran.isError && ran.text.trim() === COMMAND_OUTPUT && ran.modelSaw.trim() === COMMAND_OUTPUT && starts() === 1, `the command must run in PowerShell, and its output reach the chat and the model, got ${JSON.stringify(ran)} after ${starts()} starts`);
+		assert(ran.questions === 0, `on Auto without protection a command asks nothing, got ${ran.questions} questions`);
+		assert(toolText.startsWith("Run a Windows PowerShell 5.1 command in the room's folder.") && !toolText.includes("Programs a command starts end when it ends."), `the model must read PowerShell's text, got ${JSON.stringify(toolText)}`);
+		console.log("ok: with PowerShell and no Git a command runs in PowerShell, its output in the chat and the model, no Git line and no question");
+
+		nextCall = { name: "read_skill", args: { name: "report" } };
+		const skill = await runTurn(server, roomId, "conv-powershell-skill");
+		nextCall = ECHO;
+		assert(skill.modelSaw.includes("Run one with this room's commands by naming its program and quoting its full path") && !skill.modelSaw.includes("can't run them on this computer") && !skill.modelSaw.includes("bash tool"), `a skill's files are run with PowerShell, got ${JSON.stringify(skill.modelSaw)}`);
+		console.log("ok: a skill's text says how PowerShell runs its files");
+
+		// Nobody connected: the person leaves while the answer is still coming, and its command runs.
+		let release = () => {};
+		holdAnswer = new Promise<void>((resolve) => { release = resolve; });
+		const before = { starts: starts(), results: capturedToolResults.length, requests: firstRequests };
+		const away = await connect(server, roomId, "conv-powershell-away");
+		away.socket.send(JSON.stringify({ type: "prompt", text: "Run a command, please." }));
+		const wait = async (what: string, test: () => boolean) => {
+			const deadline = Date.now() + 30_000;
+			while (!test()) {
+				assert(Date.now() < deadline, `never: ${what}`);
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+		};
+		await wait("the answer began", () => firstRequests > before.requests);
+		const closed = new Promise<void>((resolve) => away.socket.addEventListener("close", () => resolve()));
+		away.socket.close();
+		await closed;
+		release();
+		holdAnswer = null;
+		await wait("the command's result, with nobody connected", () => capturedToolResults.length > before.results);
+		await waitForTurnSettled((pathname) => requestJson(server, pathname), roomId, "the turn nobody watched has settled");
+		assert(capturedToolResults[before.results].trim() === COMMAND_OUTPUT && starts() === before.starts + 1, `with nobody connected the command runs, got ${JSON.stringify(capturedToolResults[before.results])}`);
+		assert(away.frames.every((frame) => !(frame?.type === "ui_request" && typeof frame.id === "string")), "a question was asked");
+		console.log("ok: on Auto without protection a command runs in PowerShell with nobody connected");
+
+		// PowerShell taken away: as before this computer had it counted.
+		fs.rmSync(powerShell);
+		const launched = await runTurn(server, roomId, "conv-launcher");
+		assert((await paneNow())?.shellMissingNote === null && launched.isError && launched.text.includes("the-launchers-own-answer") && toolText.startsWith("Execute a bash command"), `with only the launcher there its own answer, got ${JSON.stringify(launched)}`);
+		fs.rmSync(whereAnswer);
+		const none = await runTurn(server, roomId, "conv-neither");
+		assert((await paneNow())?.shellMissingNote === SENTENCE && none.isError && none.text === SENTENCE && none.modelSaw === SENTENCE, `with neither shell the Git line, got ${JSON.stringify(none)}`);
+		console.log("ok: with PowerShell taken away, the launcher's own answer, or the Git line where there is no bash at all");
+	}
+
 	console.log("shell-missing-windows-smoke: OK");
 } catch (error) {
-	for (const server of [windowsServer, plainServer]) {
+	for (const server of [windowsServer, plainServer, powerShellServer]) {
 		if (server) console.error(server.output.join("").split("\n").filter((line) => !line.includes("token=")).join("\n").slice(-6000));
 	}
 	throw error;
@@ -325,5 +428,6 @@ try {
 	try { gateway.close(); } catch {}
 	await stopSmokeServer(windowsServer?.process);
 	await stopSmokeServer(plainServer?.process);
+	await stopSmokeServer(powerShellServer?.process);
 	fs.rmSync(tempRoot, { recursive: true, force: true });
 }

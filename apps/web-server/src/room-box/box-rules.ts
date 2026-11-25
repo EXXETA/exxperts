@@ -9,7 +9,7 @@ export interface BoxPolicy {
 	folder: string;
 	canChangeFiles: boolean;
 	alsoAllowed: readonly { path: string; access: "read" | "write" }[];
-	/** Approved skills' folders: reopened for reading and running, never for writing. */
+	/** The folders of the skills on in the room (`roomSkillFolders`): reopened for reading and running. They never add or take away a write: the room's write roots alone decide writes. */
 	skillFolders: readonly string[];
 	places: BoxPlaces;
 }
@@ -37,6 +37,15 @@ export const NEVER_WRITABLE_FOLDERS = [
 
 /** Name globs other tools run from, closed in every write root, at any depth. Kept apart from the exact names: only the write-deny patterns glob. */
 export const NEVER_WRITABLE_GLOBS = ["*.code-workspace"] as const;
+
+/**
+ * Of the names commands run from, what the file tools never change in a room
+ * that asks nothing (Auto with protection off), at any depth: the connector
+ * settings and the app's own data. The fence (room-files.ts) and the file
+ * program's rules both read this list; the fence alone closes more there, as
+ * the app's other names.
+ */
+export const CLOSED_TO_WRITES_ASKING_NOTHING = [".mcp.json", ".exxperts"] as const satisfies readonly ((typeof NEVER_WRITABLE_FILES)[number] | (typeof NEVER_WRITABLE_FOLDERS)[number])[];
 
 /** Inside a repository, what the file tools never change: the settings and programs git runs, the rebase and sequencer todo it runs `exec` lines from. Commands change nothing in a `.git`. */
 export const GIT_CLOSED = [
@@ -212,12 +221,15 @@ function gitPatterns(root: string): string[] {
 	return [`${anchor}/.git`, `${anchor}/**/.git`];
 }
 
+/** Each name at any depth below a root. The sandbox ignores case in its rules, on every disk format, so `.GIT` and `.VSCODE` need no names of their own. */
+function atAnyDepth(root: string, names: readonly string[]): string[] {
+	const anchor = globLiteral(root);
+	return names.flatMap((name) => [`${anchor}/${name}`, `${anchor}/**/${name}`]);
+}
+
 /** `.git` and the names other tools run from, at any depth: what a folder may never carry into the room. */
 function carriedPatterns(root: string): string[] {
-	// The sandbox ignores case in its rules, on every disk format, so `.GIT` and `.VSCODE` need no names of their own.
-	const anchor = globLiteral(root);
-	const atAnyDepth = [...NEVER_WRITABLE_FILES, ...NEVER_WRITABLE_FOLDERS, ...NEVER_WRITABLE_GLOBS].flatMap((name) => [`${anchor}/${name}`, `${anchor}/**/${name}`]);
-	return [...gitPatterns(root), ...atAnyDepth];
+	return [...gitPatterns(root), ...atAnyDepth(root, [...NEVER_WRITABLE_FILES, ...NEVER_WRITABLE_FOLDERS, ...NEVER_WRITABLE_GLOBS])];
 }
 
 function closedPatterns(root: string): string[] {
@@ -230,6 +242,9 @@ function regexLiteral(text: string): string {
 	return text.replace(/[.^$*+?()[\]{}|\\-]/g, "\\$&");
 }
 
+// Its place in an app bundle, not one Mac's path: a copy, a renamed app and `~/Applications` too. The library allows every start before this.
+const LIBREOFFICE_STARTS_NOWHERE = `(deny process-exec (regex ${JSON.stringify(`${regexLiteral(".app/Contents/MacOS/soffice")}$`)}))`;
+
 /**
  * The rules the library has no way to say, added at the end of its profile: a
  * private temp and caches that can't be swapped for a link, since the server
@@ -239,8 +254,10 @@ function regexLiteral(text: string): string {
  * holds: the library's own rule for that comes only as a side effect, and not
  * for a name its globs can't spell. Like every rule here, they carry none of the
  * library's log tag, so a refusal raises no folder card: a yes couldn't open
- * them. The last rule stops a command reading another program's start-up
- * environment and arguments.
+ * them. A command can't start LibreOffice, in any app bundle and through whatever
+ * starts it: it needs the Mac's window system, which the box refuses, and would
+ * wait for it for ever. The last rule stops a command reading another program's
+ * start-up environment and arguments.
  */
 export function profileRules(policy: BoxPolicy, writeRoots: readonly string[]): string {
 	const operations = "file-write* file-write-create file-write-unlink file-write-data";
@@ -248,7 +265,7 @@ export function profileRules(policy: BoxPolicy, writeRoots: readonly string[]): 
 	const places = [policy.places.temp, policy.places.caches].map((place) => `(deny ${operations} (literal ${JSON.stringify(place)}))`);
 	const stay = (folder: string) => `(deny file-write-unlink file-write-create (literal ${JSON.stringify(folder)}))`;
 	const links = homeLinksTo([policy.folder, ...policy.alsoAllowed.map((entry) => entry.path)]).map((link) => `(allow file-read* (literal ${JSON.stringify(link)}))`);
-	return [...places, ...roomRoots.map(stay), ...links, "(deny process-info* (target others))"].join("\n");
+	return [...places, ...roomRoots.map(stay), ...links, LIBREOFFICE_STARTS_NOWHERE, "(deny process-info* (target others))"].join("\n");
 }
 
 /**
@@ -291,6 +308,8 @@ export function boxRules(policy: BoxPolicy): { filesystem: Record<string, unknow
 	// The app's data folder holds the room's own temp and caches, so it can't be a deny: it stays closed by not being a write root.
 	const closedAroundRoom = always.filter((closed) => !isInside(temp, closed));
 	const reopened = [policy.folder, ...policy.alsoAllowed.map((entry) => entry.path), ...policy.skillFolders, ...gitSettings, temp, caches, shim, gitTemplate];
+	// A skill's folder in or holding a room's write root keeps the room's writes there; every other one stays closed to writes.
+	const skillsOutsideRoom = policy.skillFolders.filter((skill) => !writableRoots.some((root) => isInside(skill, root) || isInside(root, skill)));
 	return {
 		filesystem: {
 			denyRead: [...broad, ...always].map(literal),
@@ -300,7 +319,7 @@ export function boxRules(policy: BoxPolicy): { filesystem: Record<string, unknow
 				...writableRoots.flatMap(closedPatterns),
 				// In the private temp and caches too, so no repository or file another tool runs is made there and moved into the room. The bare-repository names are ordinary there.
 				...[temp, caches].flatMap(carriedPatterns),
-				...[...closedAroundRoom, ...policy.skillFolders, ...LIBRARY_DEFAULT_TEMP, ...homeFolders().map((home) => path.join(home, "Library/LaunchAgents"))].map(literal),
+				...[...closedAroundRoom, ...skillsOutsideRoom, ...LIBRARY_DEFAULT_TEMP, ...homeFolders().map((home) => path.join(home, "Library/LaunchAgents"))].map(literal),
 			],
 		},
 		profileRules: profileRules(policy, writeRoots),
@@ -319,6 +338,8 @@ export interface FilePolicy {
 	 * fence closes the same names; here the Mac holds them at the open.
 	 */
 	closedBelow: readonly string[];
+	/** The fence's answer for this call: a room that asks nothing, where only CLOSED_TO_WRITES_ASKING_NOTHING stays closed to writes. */
+	asksNothing: boolean;
 	/** The file program, the Node that runs it and the libraries that Node loads from outside the system's, each reopened by name, never by folder. */
 	program: readonly string[];
 }
@@ -358,7 +379,8 @@ function closedBelowRoots(operations: string, roots: readonly string[], names: r
  * The rules for the file program. It reads only what the fence opens, so a link
  * a job left behind inside the room leads nowhere: not to a system file a command
  * could read, not to a closed name in the room. It writes only when the call
- * writes, under a command's never-writable names. It has no network, and it can't read another program's start-up details.
+ * writes, under a command's never-writable names, or in a room that asks
+ * nothing under CLOSED_TO_WRITES_ASKING_NOTHING alone. It has no network, and it can't read another program's start-up details.
  */
 export function fileRules(policy: FilePolicy): { filesystem: Record<string, unknown>; profileRules: string } {
 	const { broad, always } = closedForReading();
@@ -372,12 +394,13 @@ export function fileRules(policy: FilePolicy): { filesystem: Record<string, unkn
 		...always.filter((place) => roots.some((root) => isInside(place, root))).map((place) => `(deny file-read* (subpath ${quoted(place)}))`),
 	];
 	const writes = `(deny file-write* (require-not (require-any (literal "/dev/null") ${writable.map((root) => `(subpath ${quoted(root)})`).join(" ")})))`;
+	const closedToWrites = policy.asksNothing ? (root: string) => atAnyDepth(root, CLOSED_TO_WRITES_ASKING_NOTHING) : closedPatterns;
 	return {
 		filesystem: {
 			denyRead: [...broad, ...always].map(literal),
 			allowRead: opened.map(literal),
 			allowWrite: writable.map(literal),
-			denyWrite: [...writable.flatMap(closedPatterns), ...LIBRARY_DEFAULT_TEMP.map(literal)],
+			denyWrite: [...writable.flatMap(closedToWrites), ...LIBRARY_DEFAULT_TEMP.map(literal)],
 		},
 		profileRules: [...reads, writes, "(deny network*)", "(deny process-info* (target others))"].join("\n"),
 	};

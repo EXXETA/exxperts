@@ -20,7 +20,7 @@ const SHARED_FIRST_STEP: Record<"member" | "admin", Step> = {
 };
 
 const CONNECT_STEP: Step = { lead: "Connect your AI.", body: "Open the gear, then Settings, AI setup. Sign in with a subscription, add an API key, or connect your company gateway. Set the default models for your rooms there." };
-const CREATE_STEP: Step = { lead: "Create a room.", body: "One room per project or topic. Press New room on Home, give it a name and start talking: ask questions, share files, work things through." };
+const CREATE_STEP: Step = { lead: "Create a room.", body: "One room per project or topic. Press New room on the Rooms page, give it a name and start talking: ask questions, share files, work things through." };
 const REMEMBER_STEP: Step = { lead: "Remember what matters.", body: "When a conversation is worth keeping, press Remember. You see what the room will keep before anything is saved, unless you switched that preview off in Room settings, Memory. Forget closes a conversation without keeping it." };
 const COME_BACK_STEP: Step = { lead: "Come back any time.", body: "A room rests fully saved. Press Resume to continue where you left off." };
 const TIDY_STEP: Step = { lead: "Keep the memory tidy.", body: "When conversations pile up, press Maintain on the room's card. Memorize turns them into notes, and Review tidies the notes. Nothing changes without your approval, unless you let Memorize apply by itself in Room settings, Memory." };
@@ -44,11 +44,11 @@ const FLOW = [
 const ROOM_MODEL_NOTE = "Each room can have its own model: Room settings, Model.";
 const ONE_PLACE_NOTE = "A room is open in one place at a time. If it's open in another window, close it there first.";
 
-/** A shared server offers neither the Wallet nor a choice of order: its rooms are listed A to Z. */
+/** A shared server offers no choice of order: its rooms are listed A to Z. Its rooms are open on every page at once. */
 function goodToKnow(role: Role): string[] {
 	return role
-		? [ROOM_MODEL_NOTE, ONE_PLACE_NOTE, "The Memory page shows what your rooms remember."]
-		: [ROOM_MODEL_NOTE, "Sort your rooms on Home by last used, by name, or drag them into your own order.", ONE_PLACE_NOTE, "The Memory page shows what your rooms remember. The Wallet shows what you spend."];
+		? [ROOM_MODEL_NOTE, "The Memory page shows what your rooms remember."]
+		: [ROOM_MODEL_NOTE, "Sort your rooms by last used, by name, or drag them into your own order.", ONE_PLACE_NOTE, "The Memory page shows what your rooms remember. The Wallet shows what you spend."];
 }
 
 /** The one user guide, behind Help › How it works in the gear menu (on a phone too): guidance for a new user, not a manual. It opens by itself once, useFirstRunGuide. */

@@ -366,8 +366,9 @@ const port = await freePort();
 	step("server tree torn down", serverDead() || server.pid == null);
 
 	if (failed) {
+		// The launcher prints its sign-in link at every start: the token stays out.
 		console.error("\n[smoke-release] server output (tail):");
-		console.error(serverOutput.split("\n").slice(-40).join("\n"));
+		console.error(serverOutput.split("\n").slice(-40).join("\n").replace(/token=[^\s"'&]+/g, "token=<token>"));
 	}
 }
 

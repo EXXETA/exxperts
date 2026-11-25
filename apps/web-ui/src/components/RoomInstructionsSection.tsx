@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../api";
 import type { PersistentAgentStatus, PersistentRoomInstructionsResponse } from "../types";
 import { ROOM_INSTRUCTIONS_MAX_CHARS } from "../../../web-server/src/persistent-room-instructions-text";
-import { EMPTY_INSTRUCTIONS_BOX, instructionsClearLink, measureInstructionsDraft, readInstructionsReply, reduceInstructionsBox, ROOM_INSTRUCTIONS_PLACEHOLDER, instructionsSaveFoot, useSavedAtLabel, type InstructionsBoxState } from "./instructions-pane-shared";
+import { instructionsQuietButton, EMPTY_INSTRUCTIONS_BOX, instructionsClearLink, measureInstructionsDraft, readInstructionsReply, reduceInstructionsBox, ROOM_INSTRUCTIONS_PLACEHOLDER, instructionsSaveFoot, useSavedAtLabel, type InstructionsBoxState } from "./instructions-pane-shared";
 import { outcomeAfter, savedLineAfter, switchHint } from "../room-instructions-outcome";
 import { PaneHeader } from "./pane-header";
+import { useSettingsLookNext } from "../settings-look";
 import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
 
 async function fetchInstructions(agentId: string): Promise<PersistentRoomInstructionsResponse> {
@@ -56,6 +57,9 @@ export function RoomInstructionsSection({ status, onDirtyChange, registerSave }:
 	const [error, setError] = useState<string | null>(null);
 	const [switching, setSwitching] = useState(false);
 	const [globalOpen, setGlobalOpen] = useState(false);
+	// The new look puts Clear on the line under the box, with Save and Discard.
+	const lookNext = useSettingsLookNext();
+	const quietInLook = instructionsQuietButton(lookNext);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -100,8 +104,12 @@ export function RoomInstructionsSection({ status, onDirtyChange, registerSave }:
 	// row of its own while the global text is shown between that row and the box.
 	const clearOwnRow = showGlobal && globalOpen;
 	const clearButton = clearLink && (
-		<button className="rs-btn" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
+		<button className={quietInLook} type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
 	);
+
+	const stateLine = foot.line && <span className="room-instructions-state">{foot.line}</span>;
+	const discardButton = foot.discard && <button className={quietInLook} type="button" disabled={saving || switching} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "reload", value: stored })); setMessage(null); setError(null); }}>Discard</button>;
+	const saveButton = foot.save && <button className="rs-btn rs-btn-primary" type="button" disabled={!canSave} onClick={() => void submit(measured)}>{saving ? "Saving…" : "Save"}</button>;
 
 	useEffect(() => {
 		onDirtyChange?.(dirty);
@@ -188,7 +196,7 @@ export function RoomInstructionsSection({ status, onDirtyChange, registerSave }:
 							{globalOpen ? "Hide" : "Show"} the global instructions, {globalText.length.toLocaleString()} characters
 						</button>
 					)}
-					{!clearOwnRow && clearButton}
+					{!lookNext && !clearOwnRow && clearButton}
 				</div>
 				{clearOwnRow && (
 					<>
@@ -197,7 +205,7 @@ export function RoomInstructionsSection({ status, onDirtyChange, registerSave }:
 					</>
 				)}
 			</div>
-			{clearOwnRow && <div className="room-instructions-box-head">{clearButton}</div>}
+			{!lookNext && clearOwnRow && <div className="room-instructions-box-head">{clearButton}</div>}
 			<textarea
 				className="launcher-path-input room-instructions-textarea"
 				value={draft}
@@ -211,9 +219,7 @@ export function RoomInstructionsSection({ status, onDirtyChange, registerSave }:
 			<div className="room-instructions-foot">
 				<span id="room-instructions-count" className={over > 0 ? "room-instructions-count over" : "room-instructions-count"} aria-live="polite"><span aria-hidden="true">{counter}</span><span className="sr-only">{counterSpoken}</span></span>
 				<div className="rs-pane-actions">
-					{foot.line && <span className="room-instructions-state">{foot.line}</span>}
-					{foot.discard && <button className="rs-btn" type="button" disabled={saving || switching} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "reload", value: stored })); setMessage(null); setError(null); }}>Discard</button>}
-					{foot.save && <button className="rs-btn rs-btn-primary" type="button" disabled={!canSave} onClick={() => void submit(measured)}>{saving ? "Saving…" : "Save"}</button>}
+					{lookNext ? <>{saveButton}{discardButton}{clearButton}{stateLine}</> : <>{stateLine}{discardButton}{saveButton}</>}
 				</div>
 			</div>
 			{controlsLine && <p id="room-instructions-controls" className="room-instructions-controls">{controlsLine}</p>}

@@ -20,6 +20,7 @@ import {
 	PATIENCE_WAITS_MS,
 	roomCallWait,
 	signInFailed,
+	failureCodesOf,
 	turnFailureOf,
 	withRoomCallWait,
 	type PatienceWait,
@@ -355,7 +356,7 @@ pass(`${documented.length} documented provider failures, as the runtime hands th
 		[402, "unreachable/quota", "quota"],
 		[403, "unreachable/region-or-plan", "region-or-plan"],
 		[404, "unreachable/not-offered", "not-offered"],
-		[413, "too-large", "other"],
+		[413, "too-large", "request-size"],
 		[429, "busy/too-many-requests", "other"],
 		[500, "busy/server-error", "other"],
 		[502, "busy/server-error", "other"],
@@ -798,6 +799,40 @@ pass("signed out, out of quota and no longer offered end at once, in the product
 		assert(turnFailureLine("GPT-4o", "too-large", "openai") === "GPT-4o can't take this much at once on your account. Nothing was lost. Remember, then continue, or choose another model in Room settings, Model.", "it says how to make it smaller");
 		assert(turnFailureOf("429 Rate limit reached for gpt-4o in organization org-scripted on tokens per min (TPM): Limit 30000, Used 29000, Requested 2000. Please try again in 2s.", true, "openai") === "still-busy", "a plain per-minute rate limit stays busy");
 		pass("a request larger than the per-minute limit says so; a plain rate limit stays busy");
+
+		// Amazon Bedrock's open words as LiteLLM passes them on.
+		const liteLlm = `400 litellm.ContextWindowExceededError: litellm.BadRequestError: BedrockException: Context Window Error - {"message":"Input is too long for requested model."}\nmodel=claude-haiku-5.5. context_window_fallbacks=None. fallbacks=[{"claude-haiku-5.5":["claude-sonnet-5.5"]}].\nLiteLLM: model group 'claude-haiku-5.5' failed with the error above and no fallback model group was found for it, so the request was not retried on another model.`;
+		// Refused for its size: every provider's and gateway's words, read as the runtime reads them.
+		const bySize: Array<[string, { errorStatus?: number; errorType?: string; refusedForSize?: true }]> = [
+			['413 {"error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}', { errorStatus: 413, errorType: "request_too_large" }],
+			["413 Request Entity Too Large", { errorStatus: 413, errorType: "request_too_large" }],
+			["413 Request Entity Too Large", {}],
+			["413 <html><head><title>413 Request Entity Too Large</title></head></html>", { errorStatus: 413 }],
+			["413 status code (no body)", { errorStatus: 413 }],
+			['413 status code (no body)\n{"message":"Request Too Long"}', { errorStatus: 413 }],
+			["413 Maximum content size limit (26214400) exceeded (26453458 bytes read)", { errorStatus: 413 }],
+			["Request payload size exceeds the limit: 20971520 bytes.", { errorStatus: 400 }],
+			["Payload Too Large", {}],
+			["400 Input is too long.", { errorStatus: 400 }],
+			["Something unusual happened.", { errorStatus: 413 }],
+			// Open words, once the runtime found them a size; the provider's own type stays.
+			["Validation error: Input is too long for requested model.", failureCodesOf({ errorStatus: 400, errorType: "ValidationException", refusedForSize: true })],
+			[liteLlm, failureCodesOf({ errorStatus: 400, errorType: "invalid_request_error", refusedForSize: true })],
+		];
+		for (const [words, codes] of bySize) assert(turnFailureOf(words, false, "openai", false, codes) === "request-size", `"${words}" is a refusal for size, got ${turnFailureOf(words, false, "openai", false, codes)}`);
+		// Its neighbours keep theirs: too many tokens, a limit over time, money, open words, an answer that began.
+		const neighbours: Array<[string, { errorStatus?: number; errorType?: string }, string]> = [
+			["prompt is too long: 210000 tokens > 200000 maximum", { errorStatus: 400 }, "overflow"],
+			["413 This model's maximum context length is 8192 tokens.", { errorStatus: 413 }, "overflow"],
+			[perMinute.replace("429", "413"), { errorStatus: 413 }, "too-large"],
+			["413 rate limit reached for one request", { errorStatus: 413 }, "other"],
+			["413 Your credit balance is too low for a request too large", { errorStatus: 413 }, "quota"],
+			["Validation error: Input is too long for requested model.", { errorStatus: 400, errorType: "ValidationException" }, "other"],
+			[liteLlm, { errorStatus: 400, errorType: "invalid_request_error" }, "overflow"],
+		];
+		for (const [words, codes, cause] of neighbours) assert(turnFailureOf(words, false, "openai", false, codes) === cause, `"${words}" reads ${cause}, got ${turnFailureOf(words, false, "openai", false, codes)}`);
+		assert(turnFailureOf("413 Request Entity Too Large", false, "openai", true, { errorStatus: 413 }) === "cut-off", "a failure after part of an answer stays cut off");
+		pass(`${bySize.length} refusals for a request's size are named as that, and ${neighbours.length} beside them keep their causes`);
 	} finally {
 		delete process.env.EXXPERTS_CODING_AGENT_DIR;
 		fs.rmSync(agentDir, { recursive: true, force: true });

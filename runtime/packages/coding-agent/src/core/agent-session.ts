@@ -33,6 +33,7 @@ import {
 	isContextOverflow,
 	modelsAreEqual,
 	resetApiProviders,
+	tooBigRefusal,
 } from "@exxeta/exxperts-ai";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -81,6 +82,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.js";
 import { type BashExecutionMessage, type CustomMessage, isRoomStateMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
+import { hasPicturesSinceLastMessage } from "./request-image-budget.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
@@ -302,11 +304,16 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	/** Shortened after an overflow since the last user message. */
+	private _shortenedSinceUserMessage = false;
 	/**
 	 * Counts every agent run as it starts, the waits before a run (prompt's and Try again's hooks),
 	 * aborts and the close; an overflow retry scheduled before a change stands down.
 	 */
 	private _conversationTakeovers = 0;
+	/** Counts abort(), so work that waited across one starts no model call after it. */
+	private _stops = 0;
+	private _stopsAtRunStart = 0;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -538,11 +545,16 @@ export class AgentSession {
 		// _processAgentEvent, slow earlier queued events can delay agent_end processing
 		// and waitForRetry() can miss the in-flight retry.
 		this._createRetryPromiseForAgentEnd(event);
-		if (event.type === "agent_start") this._conversationTakeovers++;
+		if (event.type === "agent_start") {
+			this._conversationTakeovers++;
+			this._stopsAtRunStart = this._stops;
+		}
 
+		// Read now: by the time the queue reaches this event another run may have started.
+		const stopsAtRunStart = this._stopsAtRunStart;
 		this._agentEventQueue = this._agentEventQueue.then(
-			() => this._processAgentEvent(event),
-			() => this._processAgentEvent(event),
+			() => this._processAgentEvent(event, stopsAtRunStart),
+			() => this._processAgentEvent(event, stopsAtRunStart),
 		);
 
 		// Keep queue alive if an event handler fails
@@ -578,11 +590,12 @@ export class AgentSession {
 		return undefined;
 	}
 
-	private async _processAgentEvent(event: AgentEvent): Promise<void> {
+	private async _processAgentEvent(event: AgentEvent, stopsAtRunStart: number): Promise<void> {
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
+			this._shortenedSinceUserMessage = false;
 			const messageText = this._getUserMessageText(event.message);
 			if (messageText) {
 				// Check steering queue first
@@ -599,6 +612,10 @@ export class AgentSession {
 					}
 				}
 			}
+		}
+
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			this._nameSizeRefusal(event.message);
 		}
 
 		// Emit to extensions first
@@ -656,13 +673,31 @@ export class AgentSession {
 			this._lastAssistantMessage = undefined;
 
 			// Check for retryable errors first (overloaded, rate limit, server errors)
+			const stopped = this._stops !== stopsAtRunStart;
 			if (this._isRetryableError(msg)) {
-				const didRetry = await this._handleRetryableError(msg);
+				const didRetry = await this._handleRetryableError(msg, stopped);
 				if (didRetry) return; // Retry was initiated, don't proceed to compaction
 			}
 
 			this._resolveRetry();
+			// Stopped after its last message landed: no shortening, and so no asking again.
+			if (stopped) return;
 			await this._checkCompaction(msg);
+		}
+	}
+
+	/**
+	 * A refusal whose words leave open whether it was for bytes or tokens is for
+	 * its bytes once a shortening did not cure it and pictures came since the
+	 * person's last message: no summary takes those away for good, since the
+	 * model reads them again. It says so from here on, so it is not shortened for
+	 * a second time.
+	 */
+	private _nameSizeRefusal(message: AssistantMessage): void {
+		if (!this._shortenedSinceUserMessage || tooBigRefusal(message) !== "either") return;
+		if (!this.model?.input.includes("image") || this.settingsManager.getBlockImages()) return;
+		if (hasPicturesSinceLastMessage(this.agent.state.messages, this.sessionManager.getBranch())) {
+			message.refusedForSize = true;
 		}
 	}
 
@@ -1073,6 +1108,7 @@ export class AgentSession {
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
+		const stopsBefore = this._stops;
 		let messages: AgentMessage[] | undefined;
 
 		try {
@@ -1214,8 +1250,21 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
-		await this.agent.prompt(messages);
+		await this._runUnlessStopped(stopsBefore, () => this.agent.prompt(messages));
 		await this.waitForRetry();
+	}
+
+	/**
+	 * Starts a run. One that a stop came before is aborted at once, so it ends
+	 * as a stopped answer does: its message is kept, and nothing is sent to the
+	 * model.
+	 */
+	private async _runUnlessStopped(stopsBefore: number, start: () => Promise<void>): Promise<void> {
+		// A run already going is another turn's: the start below is refused, and that turn keeps its answer.
+		const ownRun = !this.isStreaming;
+		const run = start();
+		if (ownRun && this._stops !== stopsBefore) this.agent.abort();
+		await run;
 	}
 
 	/**
@@ -1238,6 +1287,7 @@ export class AgentSession {
 	 */
 	async continueAfterFailure(): Promise<void> {
 		if (this.isStreaming) throw new Error("Agent is already processing.");
+		const stopsBefore = this._stops;
 		this._conversationTakeovers++;
 		const kept = this._withoutFailedAttempts();
 		if (!kept) throw new Error("No failed answer to continue from");
@@ -1247,7 +1297,7 @@ export class AgentSession {
 		this.agent.state.systemPrompt = result?.systemPrompt ?? this._baseSystemPrompt;
 		this.agent.state.messages = kept;
 		this._appendRoomState(result?.messages);
-		await this.agent.continue();
+		await this._runUnlessStopped(stopsBefore, () => this.agent.continue());
 		await this.waitForRetry();
 	}
 
@@ -1569,7 +1619,9 @@ export class AgentSession {
 	 */
 	async abort(): Promise<void> {
 		this._conversationTakeovers++;
+		this._stops++;
 		this.abortRetry();
+		this._autoCompactionAbortController?.abort();
 		this.agent.abort();
 		await this.agent.waitForIdle();
 	}
@@ -1947,7 +1999,7 @@ export class AgentSession {
 	 * Check if compaction is needed and run it.
 	 * Called after agent_end and before prompt submission.
 	 *
-	 * Two cases:
+	 * Two cases, and neither after a request was refused for its size:
 	 * 1. Overflow: LLM returned context overflow error, remove error message from agent state, compact, auto-retry
 	 * 2. Threshold: Context over threshold, compact, NO auto-retry (user continues manually)
 	 *
@@ -1980,6 +2032,9 @@ export class AgentSession {
 			return;
 		}
 
+		// A summary can't make a request fit that was refused for its bytes: the turn ends on the failed answer.
+		if (sameModel && (assistantMessage.refusedForSize || tooBigRefusal(assistantMessage) === "size")) return;
+
 		// Case 1: Overflow - LLM returned context overflow error
 		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
 			if (this._overflowRecoveryAttempted) {
@@ -1996,6 +2051,7 @@ export class AgentSession {
 			}
 
 			this._overflowRecoveryAttempted = true;
+			this._shortenedSinceUserMessage = true;
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
 			const messages = this.agent.state.messages;
@@ -2044,6 +2100,7 @@ export class AgentSession {
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
+		const stopsBefore = this._stops;
 
 		this._emit({ type: "compaction_start", reason });
 		this._autoCompactionAbortController = new AbortController();
@@ -2183,7 +2240,9 @@ export class AgentSession {
 				tokensBefore,
 				details,
 			};
-			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
+			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry: willRetry && this._stops === stopsBefore });
+			// A listener may have stopped it just now.
+			if (this._stops !== stopsBefore) return;
 
 			if (willRetry) {
 				const messages = this.agent.state.messages;
@@ -2209,10 +2268,15 @@ export class AgentSession {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 				// Kick the loop so queued messages are actually delivered.
 				setTimeout(() => {
+					if (this._stops !== stopsBefore) return;
 					this.agent.continue().catch(() => {});
 				}, 100);
 			}
 		} catch (error) {
+			if (this._stops !== stopsBefore) {
+				this._emit({ type: "compaction_end", reason, result: undefined, aborted: true, willRetry: false });
+				return;
+			}
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			this._emit({
 				type: "compaction_end",
@@ -2654,9 +2718,10 @@ export class AgentSession {
 
 	/**
 	 * Handle retryable errors with exponential backoff.
-	 * @returns true if retry was initiated, false if max retries exceeded or disabled
+	 * @param stopped Stopped before the wait began: the wait ends at once
+	 * @returns true if retry was initiated, false if max retries exceeded, disabled or stopped
 	 */
-	private async _handleRetryableError(message: AssistantMessage): Promise<boolean> {
+	private async _handleRetryableError(message: AssistantMessage, stopped: boolean): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();
 		if (!this.autoRetryEnabled) {
 			this._resolveRetry();
@@ -2705,6 +2770,7 @@ export class AgentSession {
 
 		// Wait with exponential backoff (abortable)
 		this._retryAbortController = new AbortController();
+		if (stopped) this._retryAbortController.abort();
 		try {
 			await sleep(delayMs, this._retryAbortController.signal);
 		} catch {

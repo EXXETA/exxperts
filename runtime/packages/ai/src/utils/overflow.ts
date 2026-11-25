@@ -1,5 +1,11 @@
 import type { AssistantMessage } from "../types.js";
 
+/** A client's words for an answer with no body it could read. */
+const NO_BODY = /^4(?:00|13)\s*(?:status code)?\s*\(no body\)/i;
+
+/** Amazon Bedrock's words for a request too big in its bytes or in its tokens. */
+const TOO_LONG_FOR_MODEL = /input is too long for requested model/i;
+
 /**
  * Regex patterns to detect context overflow errors from different providers.
  *
@@ -32,7 +38,7 @@ import type { AssistantMessage } from "../types.js";
 const OVERFLOW_PATTERNS = [
 	/prompt is too long/i, // Anthropic token overflow
 	/request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
-	/input is too long for requested model/i, // Amazon Bedrock
+	TOO_LONG_FOR_MODEL, // Amazon Bedrock
 	/exceeds the context window/i, // OpenAI (Completions & Responses API)
 	/input token count.*exceeds the maximum/i, // Google (Gemini)
 	/maximum prompt length is \d+/i, // xAI (Grok)
@@ -50,7 +56,7 @@ const OVERFLOW_PATTERNS = [
 	/context[_ ]length[_ ]exceeded/i, // Generic fallback
 	/too many tokens/i, // Generic fallback
 	/token limit exceeded/i, // Generic fallback
-	/^4(?:00|13)\s*(?:status code)?\s*\(no body\)/i, // Cerebras: 400/413 with no body
+	NO_BODY, // Cerebras: 400/413 with no body
 ];
 
 /**
@@ -67,6 +73,57 @@ const NON_OVERFLOW_PATTERNS = [
 	/rate limit/i, // Generic rate limiting
 	/too many requests/i, // Generic HTTP 429 style
 ];
+
+/**
+ * How a provider or a gateway in front of it words its refusal of a request for its size in bytes:
+ *
+ * - Anthropic: 413, type "request_too_large", "Request exceeds the maximum size"
+ * - OpenAI: 413 "Maximum content size limit (26214400) exceeded"
+ * - Google: 400 "Request payload size exceeds the limit: 20971520 bytes."
+ * - Amazon Bedrock: 400 ValidationException "Input is too long." ("... for requested model." can mean its tokens too: TOO_LONG_FOR_MODEL)
+ * - nginx and gateways: 413 "Request Entity Too Large", "Payload Too Large", "Content Too Large"
+ */
+const REQUEST_TOO_LARGE_PATTERNS = [
+	/request_too_large/i,
+	/(?:request|payload|content|body|entity) (?:is )?too large/i,
+	/request exceeds the maximum size/i,
+	/maximum content size limit/i,
+	/payload size exceeds/i,
+	/input is too long(?! for requested model)/i,
+];
+
+/** A refusal over money or pace, which may speak of a size too: a limit on tokens per minute answers 413 "Request too large" at some providers. */
+const SPEND_OR_RATE =
+	/rate[ _-]?limit|too many requests|throttl|tokens per (?:min|hour|day)|quota|budget|billing|credits?\b|spend|usage[ _]limit/i;
+
+/**
+ * Whether a failed answer is a refusal because the request was too big, and
+ * in which way: "size" for its bytes, which a summary of the conversation does
+ * not cure, "length" for its tokens, "either" when its words leave it open.
+ * A 413 is "size" unless its words speak of tokens. A refusal over money or
+ * pace is none of them.
+ */
+export function tooBigRefusal(
+	message: Pick<AssistantMessage, "stopReason" | "errorMessage" | "errorStatus" | "errorType">,
+): "size" | "length" | "either" | undefined {
+	if (message.stopReason !== "error") return undefined;
+	const words = `${message.errorType ?? ""} ${message.errorMessage ?? ""}`;
+	if (message.errorStatus === 402 || message.errorStatus === 429 || SPEND_OR_RATE.test(words)) return undefined;
+	if (REQUEST_TOO_LARGE_PATTERNS.some((pattern) => pattern.test(words))) return "size";
+	const errorMessage = message.errorMessage ?? "";
+	const overflow = overflowWords(errorMessage);
+	if (message.errorStatus === 413 && (!overflow || NO_BODY.test(errorMessage))) return "size";
+	if (!overflow) return undefined;
+	return TOO_LONG_FOR_MODEL.test(errorMessage) || NO_BODY.test(errorMessage) ? "either" : "length";
+}
+
+/** Whether a failure's words are a provider's for a context overflow. */
+function overflowWords(errorMessage: string): boolean {
+	// Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
+	return (
+		!NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage)) && OVERFLOW_PATTERNS.some((p) => p.test(errorMessage))
+	);
+}
 
 /**
  * Check if an assistant message represents a context overflow error.
@@ -119,12 +176,8 @@ const NON_OVERFLOW_PATTERNS = [
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
 	// Case 1: Check error message patterns
-	if (message.stopReason === "error" && message.errorMessage) {
-		// Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
-		const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!));
-		if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!))) {
-			return true;
-		}
+	if (message.stopReason === "error" && message.errorMessage && overflowWords(message.errorMessage)) {
+		return true;
 	}
 
 	// Case 2: Silent overflow (z.ai style) - successful but usage exceeds context

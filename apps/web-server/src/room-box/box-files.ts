@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { closedRefusal, type FencedPath, type FenceRoot, linkRefused, RoomFilesError, type RoomFence } from "../room-files.js";
+import { closedRefusal, deckNamesClosed, type FencedPath, type FenceRoot, linkRefused, RoomFilesError, type RoomFence } from "../room-files.js";
 import { realPathOf } from "./box-closed.js";
 import { BoxFault, FILE_WORKER } from "./box-process.js";
 import { fileRules } from "./box-rules.js";
@@ -20,7 +20,9 @@ import type { RoomBox } from "./box-session.js";
 export const FILES_STOPPED_LINE = "Commands and files can't be used because this room's protection didn't start. Restart your computer to bring them back.";
 
 // The largest file a call takes: past the shelf's 25 MiB for documents, and what one answer may hold in memory.
-const READ_LIMIT_BYTES = 64 * 1024 * 1024;
+export const READ_LIMIT_BYTES = 64 * 1024 * 1024;
+/** What a file call larger than READ_LIMIT_BYTES answers, in the box and in the server's own reads. */
+export const tooLargeForTool = (shown: string): string => `${shown} is too large for this tool.`;
 const LISTING_LIMIT_BYTES = 64 * 1024 * 1024;
 const CALL_LIMIT_MS = 30_000;
 // After a search's own budget, for the program to answer with what it found.
@@ -253,12 +255,12 @@ function refusal(code: string, target: FencedPath, raw: string): RoomFilesError 
 		case "ENOROOM":
 			return new RoomFilesError("no_space", notEnoughSpace(target.shown));
 		case "ETOOBIG":
-			return new RoomFilesError("file_too_large", `${target.shown} is too large for this tool.`);
+			return new RoomFilesError("file_too_large", tooLargeForTool(target.shown));
 		case "EPATTERN":
 			return new RoomFilesError("invalid_pattern", "Grep pattern is not a valid JavaScript regular expression.");
 		case "EPERM":
-			// A locked file gives the same answer as the box's refusal, so the line holds for both.
-			return new RoomFilesError("box_refused", `${target.shown} can't be opened: this room's protection refused it, or another program has it locked. Tell the person.`);
+			// A locked file gives the same answer as the box's refusal, so the line holds for both. The Mac's file tools keep the box in a room with protection off too, so it names no protection.
+			return new RoomFilesError("box_refused", `${target.shown} can't be opened: this room's rules for files refused it, or another program has it locked. Tell the person.`);
 		case "EACCES":
 			return new RoomFilesError("not_permitted", `${target.shown} can't be opened: the person's own rights on this computer don't allow it. Tell the person.`);
 		default:
@@ -280,7 +282,12 @@ export class BoxFiles {
 		private readonly fence: RoomFence,
 	) {}
 
-	/** What the program may reach on this call: the fence's places and its reads in the app's data, this run's long output among them. */
+	/** The names whose files the program opens only as decks: none where a deck's name is no key's, as in a room that asks nothing outside the app's data. */
+	private decks(target: FencedPath): string[] {
+		return deckNamesClosed(this.fence, target.root) ? DECK_SUFFIXES : [];
+	}
+
+	/** What the program may reach on this call: the fence's places and its reads beside them, its skills' folders and this run's long output. */
 	private roots(): FenceRoot[] {
 		return [...this.fence.roots(), ...this.fence.dataReads()];
 	}
@@ -291,7 +298,7 @@ export class BoxFiles {
 		let ran: ProgramRun;
 		try {
 			ran = await this.box.runFileProgram({
-				rules: fileRules({ roots, writes: options.writes, closedBelow: this.fence.closedBelow(), program: program.files }),
+				rules: fileRules({ roots, writes: options.writes, closedBelow: this.fence.closedBelow(), asksNothing: this.fence.asksNothing, program: program.files }),
 				command: program.command,
 				cwd: this.fence.room?.path ?? path.dirname(target.real),
 				request: JSON.stringify({ op, ...payload }),
@@ -329,19 +336,19 @@ export class BoxFiles {
 	}
 
 	async list(target: FencedPath, raw: string, signal?: AbortSignal): Promise<ListedEntry[]> {
-		return (await this.call("list", { path: target.real, decks: DECK_SUFFIXES }, target, raw, { writes: false, signal })).header.entries;
+		return (await this.call("list", { path: target.real, decks: this.decks(target) }, target, raw, { writes: false, signal })).header.entries;
 	}
 
 	async walk(target: FencedPath, raw: string, walk: { skips: string[]; maxFolders: number }, signal?: AbortSignal): Promise<WalkAnswer> {
-		return (await this.call("walk", { path: target.real, ...walk, decks: DECK_SUFFIXES }, target, raw, { writes: false, signal })).header as WalkAnswer;
+		return (await this.call("walk", { path: target.real, ...walk, decks: this.decks(target) }, target, raw, { writes: false, signal })).header as WalkAnswer;
 	}
 
 	async search(target: FencedPath & { isFile: boolean }, raw: string, request: SearchRequest, signal?: AbortSignal): Promise<SearchAnswer> {
 		const limitMs = Math.max(0, request.deadline - Date.now()) + SEARCH_ANSWER_MS;
-		return (await this.call("search", { path: target.real, isFile: target.isFile, ...request, decks: DECK_SUFFIXES }, target, raw, { writes: false, signal, limitMs })).header as SearchAnswer;
+		return (await this.call("search", { path: target.real, isFile: target.isFile, ...request, decks: this.decks(target) }, target, raw, { writes: false, signal, limitMs })).header as SearchAnswer;
 	}
 
-	/** Writes a file, making its folders, under a command's never-writable names. */
+	/** Writes a file, making its folders, where the file program's rules let it (`fileRules`). */
 	async write(target: FencedPath, raw: string, content: string, overwrite: boolean, signal?: AbortSignal): Promise<{ existed: boolean }> {
 		try {
 			return (await this.call("write", { path: target.real, content, overwrite, requireZip: target.needsDeck }, target, raw, { writes: true, signal })).header as { existed: boolean };

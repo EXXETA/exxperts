@@ -1,20 +1,28 @@
 import { findShellConfig, isNoShellFoundMessage, setShellLookupPlatformForTests } from "@exxeta/exxperts-runtime";
-import { personalShellSettings } from "./room-command-tool.js";
+import { personalShellSettings, plainShell } from "./room-command-tool.js";
 
 /**
- * Shell commands on a computer with no shell to run them in: only Windows
- * without Git for Windows (or another bash) gets here, since macOS and Linux
- * always have one. The person reads one plain line, in the Folder pane and
- * in the chat; the runtime's own text, which tells a developer to edit
- * settings.json, goes to the server log only.
+ * Shell commands on a computer with no shell to run them in: only Windows with
+ * neither Git for Windows (or another bash) nor Windows PowerShell gets here,
+ * since macOS and Linux always have one. The person reads one plain line, in
+ * the Folder pane and in the chat; the runtime's own text, which tells a
+ * developer to edit settings.json, goes to the server log only.
  *
- * Whether a shell is found is the runtime's own lookup, run fresh each time:
- * a Git installed while the app runs is found by the next command and the
- * next look at the pane, with no restart. The line still names a restart for
- * a bash the running app's PATH cannot see yet; the skills import's Git line
- * says the same.
+ * Whether a shell is found is asked fresh each time: a Git installed while the
+ * app runs is found by the next command and the next look at the pane, with no
+ * restart; one installed beside PowerShell, from the next bind (`plainShell`).
+ * The line still names a restart for a bash the running app's PATH cannot see
+ * yet; the skills import's Git line says the same.
  */
 export const PERSISTENT_ROOM_SHELL_MISSING_SENTENCE = "On Windows, shell commands need Git for Windows. Install it from gitforwindows.org; the room can run commands as soon as it is installed. If it still says this, restart exxperts.";
+
+/** A command's result where Windows doesn't let the app start PowerShell, as a company's rule may: nothing the person can do helps. */
+export const PERSISTENT_ROOM_POWERSHELL_BLOCKED_SENTENCE = "exxperts can't run commands here: this computer doesn't let it start Windows PowerShell.";
+
+/** Whether commands without protection have a shell here: Windows PowerShell where there is no Git, or a bash. */
+export function persistentRoomShellFound(): boolean {
+	return plainShell().kind === "powershell" || persistentRoomBashFound();
+}
 
 /**
  * The lookup the room's bash tool makes, with the shell path the person's
@@ -22,7 +30,7 @@ export const PERSISTENT_ROOM_SHELL_MISSING_SENTENCE = "On Windows, shell command
  * any other (a settings file's shell path that does not exist) is a
  * developer's error, which the bash tool shows as it is.
  */
-export function persistentRoomShellFound(): boolean {
+export function persistentRoomBashFound(): boolean {
 	let shellPath: string | undefined;
 	try {
 		shellPath = personalShellSettings().shellPath;

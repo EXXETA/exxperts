@@ -29,12 +29,28 @@ export const CONNECTOR_FORM_LINES = {
 	addressNotChangeable: "This connector's address can't be changed here. Change it where it was added.",
 } as const;
 
+/** The connector page's button that starts the choices again from the defaults when they can't be read; the removal's refusal names it, as it shows on the list too. */
+export const RESET_CHOICES = "Reset choices";
+
 /** The connector routes' own sentences, shared by the server and the page's fallbacks for the same failure. */
 export const CONNECTOR_REQUEST_LINES = {
 	loadFailed: "Couldn't load your connectors.",
 	saveFailed: "Couldn't save the change. Try again.",
 	noLongerExists: "This connector no longer exists.",
+	/** A tool choice saved for a connector that changed since the page showed it. */
+	toolsChanged: "This connector changed, so nothing was saved. Check its tools and choose again.",
 	notRemovable: (app: string | null) => (app ? `This connector can't be removed here. Remove it in ${app}.` : "This connector can't be removed here. Remove it where it was added."),
+	/** The removal's line on the connector's own page, with Reset choices in it. */
+	removeChoicesUnreadableBesideReset: "You can't remove it while your choices for connector tools can't be read. Reset them first.",
+	/** A removal refused while the tool choices can't be read, by why (connector-tool-choices.ts); Reset choices is on the connector's page under Tools. */
+	removeChoicesUnreadable: {
+		"cannot-read": `You can't remove it while your choices for connector tools can't be read. Use ${RESET_CHOICES} on its page first.`,
+		newer: "You can't remove it while your choices for connector tools are from a newer version of exxperts. Update exxperts first.",
+	},
+	/** Reset choices, refused: the choices can be read again, or a newer version wrote them. */
+	choicesReadableAgain: "Your choices for connector tools can be read again, so nothing was reset.",
+	choicesFromNewerVersion: "Your choices for connector tools are from a newer version of exxperts, so nothing was reset. Update exxperts to use them.",
+	choicesResetFailed: "Couldn't reset your choices. Try again.",
 	signInStillClosing: "An earlier sign-in is still closing. Try again in a few seconds.",
 	signInStartFailed: "Couldn't start the sign-in. Try again.",
 	signInCheckFailed: "Couldn't find out how the sign-in went. Try again.",

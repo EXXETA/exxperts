@@ -215,6 +215,10 @@
 	border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px;
 	background: var(--exx-surface-inset);
 }
+/* Light's other cards are white; dark's inset stays. */
+:root[data-theme="light"] .mem-digest {
+	background: var(--exx-surface);
+}
 .mem-digest-calm { border-color: var(--border); box-shadow: none; }
 .mem-digest-icon {
 	flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px;

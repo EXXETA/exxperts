@@ -50,6 +50,12 @@ requests (see `SECURITY.md`); it is not reachable from the LAN by design.
 The one exception is the off-by-default remote mode (Settings, Remote access),
 which additionally serves the user's own enrolled devices over their
 private tunnel; `SECURITY.md` has its threat model.
+Inside a Linux container with a published port, start it with
+`exxperts --container`; `SECURITY.md` says how to publish the port and why
+only to your own computer. There, connect a provider with an API key, a
+gateway or GitHub Copilot's sign-in by code: the Claude and ChatGPT plan
+sign-ins, and a connector's sign-in in the browser, wait for a callback that
+never reaches the container.
 
 Keep the `EXXETA_*` environment variable names; they remain the current compatibility/internal names for these controls.
 
@@ -117,7 +123,7 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 | Port | Service |
 |---|---|
 | `5173` | Vite dev server (web UI). |
-| `8787` | Fastify web server. Exposes `/healthz`, `/api/*`, `/ws`. Loopback only (plus the machine's own tailnet address while remote mode is enabled). |
+| `8787` | Fastify web server. Exposes `/healthz`, `/api/*`, `/ws`. Loopback only (plus the machine's own tailnet address while remote mode is enabled; with `exxperts --container` the command also passes connections on from the container's own address). |
 
 ## Logs
 

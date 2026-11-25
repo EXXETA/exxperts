@@ -26,6 +26,7 @@ import {
 	resolveGitCommand,
 	resolveRepoSource,
 } from "../src/skills-repo-fetch.js";
+import { REPOSITORY_FAILED_LINES } from "../../web-ui/src/skill-source-copy.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -112,7 +113,8 @@ try {
 			const other = standIn("other-featured", "fatal: unable to access 'https://github.com/anthropics/skills/': Could not resolve host");
 			process.env.PATH = other;
 			const retried = await loadFeaturedSource({ source: "https://github.com/anthropics/skills", author: "anthropics" });
-			assert(retried.error?.includes("Could not resolve host") && !retried.missingTool, `a retry after the tool appears runs again, not from memory: ${JSON.stringify(retried)}`);
+			// git's own text stays in the log; the page reads the plain sentence for its cause.
+			assert(retried.error === REPOSITORY_FAILED_LINES.offline && !retried.missingTool, `a retry after the tool appears runs again, not from memory: ${JSON.stringify(retried)}`);
 		} finally {
 			process.env.PATH = originalPath;
 		}

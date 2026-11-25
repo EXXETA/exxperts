@@ -54,8 +54,8 @@ export const CONSULT_HANDOFF_RESERVED_TOKEN = "**must-keep**";
  *
  * EVERY fence family is defanged in EVERY untrusted block, not just the
  * family the block belongs to (critical-fixes hardening): both envelopes and
- * the server's notes in front of a message (cut-answer-note.ts), which shares
- * this one list. The consent parser's fence recognisers
+ * the server's notes in front of a message (cut-answer-note.ts, skill-pick.ts),
+ * which share this one list. The consent parser's fence recognisers
  * (userAuthoredPromptText) match all of them, so a consult
  * answer carrying a literal `[/SPECIALIST RESULT: x]` would close the consult
  * block early and launder the rest of the model-written block into
@@ -71,7 +71,7 @@ export const CONSULT_HANDOFF_RESERVED_TOKEN = "**must-keep**";
 // of the name (`[[/X]]` would otherwise become `[/X]`), so one pass is enough.
 // Stopping the rest at any bracket and checking the lookbehind only after a
 // "[" keep the work linear in the text's length, however it is nested.
-const FENCE_MARKER_LIKE = /\[(?<!\[[\s/]*\[)[[\s/]*(?:CONSULT\s+HANDOFF|SPECIALIST\s+RESULT|ANSWER\s+CUT\s+OFF|SENT\s+WHILE\s+YOU\s+WORKED)\b[^[\]\n]*\]?/gi;
+const FENCE_MARKER_LIKE = /\[(?<!\[[\s/]*\[)[[\s/]*(?:CONSULT\s+HANDOFF|SPECIALIST\s+RESULT|ANSWER\s+CUT\s+OFF|SENT\s+WHILE\s+YOU\s+WORKED|SKILL\s+PICKED|MESSAGE\s+FROM)\b[^[\]\n]*\]?/gi;
 const MUST_KEEP_EMPHASIS = /[*_]{1,3}\s*must[\s‐-―_-]*keep\s*[*_]{1,3}/gi;
 
 /**

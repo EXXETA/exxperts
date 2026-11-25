@@ -27,6 +27,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit, putRunWithoutAsking } from "./smoke-server-process.js";
 import { BOX_FAULT_SENTENCE } from "../src/room-box/card-text.js";
+import { skillsFolderRefusal } from "../src/room-files.js";
 import { STOP_QUESTIONS_SENTENCE } from "../src/server-stop.js";
 import { STOPPED_BEFORE_ANSWER_SENTENCE } from "../src/turn-ended-by.js";
 import { readPageStyles } from "./page-styles.js";
@@ -303,10 +304,10 @@ await check("a step being written shows in the card from its first frame: a comm
 
 await check("connector and tool failures say what went wrong", () => {
 	const step = (item: Record<string, unknown>) => decode(chip({ status: "error", ...item }));
-	const signIn = step({ name: "mcp", args: { connect: "exxdocs" }, details: { mode: "connect", error: "auth_required", server: "exxdocs" }, result: "Connector \"exxdocs\" needs a sign-in." });
-	assert(chipName(signIn) === "🔌 Needs sign-in" && chipSummary(signIn) === "exxdocs" && dotted(signIn) && bodyText(signIn) === "This connector needs you to sign in: Settings, Connectors.", `a connector that needs a sign-in, got ${chipName(signIn)} / ${chipSummary(signIn)} / ${bodyText(signIn)}`);
-	const signInCall = step({ name: "mcp", args: { tool: "create_issue", server: "github" }, details: { mode: "call", error: "auth_required", server: "github" }, result: "Connector \"github\" needs a sign-in." });
-	assert(chipName(signInCall) === "🔌 Needs sign-in" && chipSummary(signInCall) === "github", `a call on a connector that needs a sign-in names the connector, got ${chipName(signInCall)} / ${chipSummary(signInCall)}`);
+	const signIn = step({ name: "mcp", args: { connect: "exxdocs" }, details: { mode: "connect", error: "auth_required", server: "exxdocs", connector: "Exx docs" }, result: "Connector \"exxdocs\" needs a sign-in." });
+	assert(chipName(signIn) === "🔌 Needs sign-in" && chipSummary(signIn) === "Exx docs" && dotted(signIn) && bodyText(signIn) === "This connector needs you to sign in: Settings, Connectors.", `a connector that needs a sign-in, got ${chipName(signIn)} / ${chipSummary(signIn)} / ${bodyText(signIn)}`);
+	const signInCall = step({ name: "mcp", args: { tool: "create_issue", server: "github" }, details: { mode: "call", error: "auth_required", server: "github", connector: "GitHub" }, result: "Connector \"github\" needs a sign-in." });
+	assert(chipName(signInCall) === "🔌 Needs sign-in" && chipSummary(signInCall) === "GitHub", `a call on a connector that needs a sign-in names the connector by its shown name, got ${chipName(signInCall)} / ${chipSummary(signInCall)}`);
 	const describe = step({ name: "mcp", args: { describe: "create_issue" }, details: { mode: "describe", error: "tool_not_found" }, result: "Tool \"create_issue\" not found. Use mcp({ search: \"...\" }) to search." });
 	// The label says there is no such tool; opened, a line would only say it again, so nothing opens.
 	assert(chipName(describe) === "🔌 No such tool" && chipSummary(describe) === "create_issue" && dotted(describe) && labelOnly(describe) && !describe.includes("No connector of this room has a tool called"), `a connector tool nobody has, as its label only, got ${chipName(describe)} / ${chipSummary(describe)} / ${describe}`);
@@ -314,8 +315,8 @@ await check("connector and tool failures say what went wrong", () => {
 	assert(chipName(call) === "🔌 No such tool" && chipSummary(call) === "create_issue" && labelOnly(call) && !call.includes("Export fails"), `a call of a connector tool nobody has, as its label only, got ${chipName(call)} / ${chipSummary(call)}`);
 	const unknown = step({ name: "open_browser", args: { url: "https://docs.example.invalid/" }, result: "Tool open_browser not found" });
 	assert(chipName(unknown) === "🛠️ No such tool" && chipSummary(unknown) === "Open browser" && dotted(unknown) && labelOnly(unknown) && !unknown.includes("open_browser") && !unknown.includes("docs.example.invalid") && !unknown.includes("This room has no tool called"), `a tool the room does not have, by its readable name, as its label only, got ${chipName(unknown)} / ${chipSummary(unknown)} / ${unknown}`);
-	const down = step({ name: "mcp", args: { tool: "create_issue", server: "github" }, details: { mode: "call", error: "server_backoff", server: "github" }, result: "Server \"github\" not available (last failed 3s ago)" });
-	assert(chipName(down) === "🔌 Couldn't connect" && chipSummary(down) === "github" && dotted(down), `a connection that failed, got ${chipName(down)} / ${chipSummary(down)}`);
+	const down = step({ name: "mcp", args: { tool: "create_issue", server: "github" }, details: { mode: "call", error: "server_backoff", server: "github", connector: "GitHub" }, result: "Server \"github\" not available (last failed 3s ago)" });
+	assert(chipName(down) === "🔌 Couldn't connect" && chipSummary(down) === "GitHub" && dotted(down), `a connection that failed, by the connector's shown name, got ${chipName(down)} / ${chipSummary(down)}`);
 	for (const failure of [signIn, describe, unknown, down]) assert(chipIcon(failure) === "✗" && failure.includes('class="tool-chip error"'), `these steps ran and failed: red, with ✗, got ${chipIcon(failure)}`);
 });
 
@@ -347,6 +348,7 @@ await check("a refusal is calm and reads apart from a failure", () => {
 		["a secret file or the app's own data", { name: "write", args: { path: "server.key" }, result: "server.key looks like a secret file or the app's own data, so rooms don't open it, even with Full access. Tell the person; they can open it themselves." }, "Blocked: a secret file or the app's own data"],
 		["a file rooms may only read", { name: "edit", args: { path: ".npmrc" }, result: ".npmrc can be read but not changed by rooms, because changing it can run code later. Tell the person." }, "Read only: rooms can read this file but not change it"],
 		["the skills folder with Bash off", { name: "read", args: { path: "/Users/a/.exxperts/skills/weekly/SKILL.md" }, result: "/Users/a/.exxperts/skills/weekly/SKILL.md is in the person's own skills folder, which opens to this room only while its terminal (Bash) is on. Tell the person." }, SKILLS_FOLDER_COMMANDS_OFF_LINE],
+		["a write into a skill's folder", { name: "write", args: { path: "/Users/a/.exxperts/agent/skills/weekly/notes.md" }, result: skillsFolderRefusal("/Users/a/.exxperts/agent/skills/weekly/notes.md") }, "A room can't change a skill's files, and reads only the skills that are on in it."],
 		["a path outside the room's folder", { name: "read", args: { path: "/etc/hosts" }, result: "Path is outside the selected workspace." }, "That is outside this room's folder."],
 		["the skills folder in a run in the background", { name: "read", args: { path: "/Users/a/.exxperts/skills/weekly/SKILL.md" }, result: "/Users/a/.exxperts/skills/weekly/SKILL.md is in the person's own skills folder, which a background run can't open. Tell the person." }, "A run in the background can't open the skills folder."],
 		["a skills folder file rooms never change", { name: "edit", args: { path: "/Users/a/.exxperts/skills/weekly/.skill-source.json" }, result: "/Users/a/.exxperts/skills/weekly/.skill-source.json is in the person's own skills folder: rooms can read it only while Bash is on, and never change it. Tell the person." }, "Read only: rooms never change this file."],
@@ -360,6 +362,7 @@ await check("a refusal is calm and reads apart from a failure", () => {
 		["a file that is already there", { name: "write", args: { path: "notes.txt" }, result: "File already exists in selected workspace. Set overwrite=true to replace it." }, "That file is already there; the room did not overwrite it."],
 		["a specialist over the limit", { name: "delegate_task", args: { template: "diagram-svg" }, result: "The specialist limit (2 at a time) is reached. Wait for a running task to finish or ask the user to stop one." }, "2 specialists are already working. Try again when one finishes."],
 		["web search switched off in AI setup", { name: "web_search", args: { query: "export guide weekly csv" }, details: { configured: false, provider: "disabled" }, result: "Web search is switched off in AI setup under Web search. Turn it back on there to use it." }, "Web search is switched off in AI setup under Web search. Turn it back on there to use it."],
+		["web search off on a shared server", { name: "web_search", args: { query: "export guide weekly csv" }, details: { configured: false, provider: "disabled" }, result: "Web search is off on this server. Your admin can turn it on under Web search." }, "Web search is off on this server. Your admin can turn it on under Web search."],
 	];
 	for (const [what, item, line] of refusals) {
 		const html = decode(chip({ status: "error", ...item }));
@@ -585,7 +588,7 @@ await check("a chained command is named by itself, in code, wherever its step sh
 	const elsewhere = rowsOf(card([bash("c8", "running")], { live: true, elsewhere: true }));
 	assert(elsewhere[0]?.state === "elsewhere" && elsewhere[0].html.includes(code), `a row another window goes on with, got ${JSON.stringify(elsewhere)}`);
 	const running = rowsOf(card([bash("c9", "running")], { live: true }));
-	assert(running[0]?.state === "running" && running[0].html.includes(`class="wk-tx wk-sweep">Running ${code}`), `a running row sweeps over the command too, got ${JSON.stringify(running)}`);
+	assert(running[0]?.state === "running" && running[0].html.includes(`<span class="wk-sweep">Running ${code}</span>`), `a running row sweeps over the command too, got ${JSON.stringify(running)}`);
 	const dated = rowsOf(card([toolItem("c10", { name: "bash", status: "done", args: { command: 'echo "$(date)"' }, result: "x" }), toolItem("c11", { name: "bash", status: "done", args: { command: "echo '$(date)'" }, result: "x" })], { endTs: 3_000 }));
 	assert(dated[0]?.html.includes('<code class="wk-code">echo "$(date)"</code>') && dated[1]?.words.startsWith("Ran echo") && !dated[1].html.includes("wk-code"), `a second program in double quotes is named in code, one in single quotes is not, got ${JSON.stringify(dated)}`);
 });
@@ -839,7 +842,7 @@ await check("thought and a step that did not run, still runs, or two steps: the 
 	assert(declinedRows.length === 2 && declinedRows[1].startsWith("row denied: Not run · you said no") && headOf(declined).label === "1 step not run", `a declined command keeps its calm row, got ${JSON.stringify(declinedRows)} / ${JSON.stringify(headOf(declined))}`);
 	const stopped = await draw(stretch([thoughtItem("t6-think", 1_000, 2_000), toolItem("t6-run", { name: "bash", status: "stopped", args: { command: "sleep 9" } })]));
 	const stoppedRows = await openCard(act, stopped);
-	assert(stoppedRows.length === 2 && stoppedRows[1].startsWith("row stopped: Stopped"), `a stopped command keeps its row, got ${JSON.stringify(stoppedRows)}`);
+	assert(stoppedRows.length === 2 && stoppedRows[1].startsWith("row stopped: Stopped") && headOf(stopped).label === "1 step stopped", `a stopped command keeps its row and the card's line says stopped, got ${JSON.stringify(stoppedRows)} / ${JSON.stringify(headOf(stopped))}`);
 	const running = await draw(createElement(workCard.WorkStretch, { items: [thoughtItem("t7-think", 1_000, 2_000), toolItem("t7-run", { name: "bash", status: "running", args: { command: "sleep 9" }, startedAt: Date.now() })], live: true, elsewhere: false, keyboardApprovalId: null, onResolve: () => undefined }));
 	assert(JSON.stringify(shownRows(running).map((row) => row.split(":")[0])) === JSON.stringify(["row done", "row running"]) && headOf(running).label === "Working", `a running command: the live card's rows, got ${JSON.stringify(shownRows(running))}`);
 	const two = await draw(stretch([thoughtItem("t8-think", 1_000, 2_000), toolItem("t8-ls", { name: "ls", status: "done", args: { path: "." }, result: "a" }), toolItem("t8-read", { name: "read", status: "done", args: { path: "a.ts" }, result: "x" })]));
@@ -855,6 +858,9 @@ const connectorUnanswered = (why: string) => ({ status: "error", result: `${why}
 const LEFT_THE_ROOM = "The user left the room while this response was being written, so interactive questions cannot be answered right now.";
 const SCHEDULED = "scheduled background room work cannot answer interactive UI requests.";
 const look: any = await import(new URL("../../web-ui/src/work-look.ts", import.meta.url).href);
+const { CONNECTOR_CAME_BACK_LABEL, CONNECTOR_SENT_LABEL } = await import("../src/connector-call-failures.js");
+// An opened connector step's two parts, as its row shows them: what the room sent, then what came back.
+const connectorOut = (sent: string, cameBack?: string) => `output: ${CONNECTOR_SENT_LABEL}${sent}${cameBack ? `${CONNECTOR_CAME_BACK_LABEL}${cameBack}` : ""}`;
 const { connectorAwayNote, declinedQuestionNoteText } = await import("../src/thread-items-by-id.js");
 
 await check("a connector step the person declined, or nobody was there to approve, folds to not run, never failed, and opened says so in the decided words", () => onLivePage(async (draw, act) => {
@@ -862,6 +868,16 @@ await check("a connector step the person declined, or nobody was there to approv
 	assert(JSON.stringify(headOf(declined)) === JSON.stringify({ label: "1 step not run", button: true, mark: "none", open: false }), `a No folds to not run, with no failed mark, got ${JSON.stringify(headOf(declined))}`);
 	const declinedRows = await openCard(act, declined);
 	assert(JSON.stringify(declinedRows) === JSON.stringify(["row denied: You declined this, so nothing changed in Asana."]) && !declined.querySelector(".wk-bad") && !declined.textContent?.includes("Don't try it again"), `opened, the decline's own sentence, once, and nothing the model was told, got ${JSON.stringify(declinedRows)}`);
+	// A tool the person blocked: not run, in the words the page's step lines keep for it, and nothing the model was told.
+	const blocked = await draw(stretch([connectorStep("k7", { status: "error", result: "Tool \"delete_project\" of \"asana\" is blocked in the person's settings, so it did not run. Don't try it again; if the task needs it, tell the person.", details: { mode: "call", error: "connector_tool_blocked", server: "asana", use: "Delete project in Asana" } })]));
+	assert(JSON.stringify(headOf(blocked)) === JSON.stringify({ label: "1 step not run", button: true, mark: "none", open: false }), `a blocked tool folds to not run, with no failed mark, got ${JSON.stringify(headOf(blocked))}`);
+	const blockedRows = await openCard(act, blocked);
+	assert(JSON.stringify(blockedRows) === JSON.stringify(["row denied: Didn't run: Delete project in Asana is blocked. You can change this in Settings, Connectors."]) && !blocked.querySelector(".wk-bad") && !blocked.textContent?.includes("Don't try it again"), `opened, the blocked line once, got ${JSON.stringify(blockedRows)}`);
+	// The line that says why wraps on any width, the row opening or not; a row that ran keeps its one line.
+	const ranToo = await draw(stretch([connectorStep("k7b", { status: "error", result: "Tool \"delete_project\" of \"asana\" is blocked in the person's settings, so it did not run. Don't try it again; if the task needs it, tell the person.", details: { mode: "call", error: "connector_tool_blocked", server: "asana", use: "Delete project in Asana" } }), toolItem("k7c", { name: "read", status: "done", args: { path: "notes.txt" }, result: "first line" })]));
+	await openCard(act, ranToo);
+	const rowWords = [...ranToo.querySelectorAll(".wk-row .wk-tx")].map((element) => ({ wraps: element.classList.contains("wk-wrap"), opens: element.tagName === "BUTTON" }));
+	assert(JSON.stringify(rowWords) === JSON.stringify([{ wraps: true, opens: true }, { wraps: false, opens: true }]), `the blocked row wraps, the read beside it doesn't, got ${JSON.stringify(rowWords)}`);
 	const away = declinedQuestionNoteText("Use Delete project in Asana?");
 	for (const [why, label] of [[LEFT_THE_ROOM, "the person left"], [SCHEDULED, "a scheduled run"]]) {
 		const refused = await draw(stretch([connectorStep(`k2-${label}`, connectorUnanswered(why))]));
@@ -887,6 +903,130 @@ await check("a connector step the person declined, or nobody was there to approv
 	assert(look.foldedWords([step(connectorUnanswered(SCHEDULED))]) === "1 step not run" && look.stepState(step(connectorUnanswered(LEFT_THE_ROOM)).item, undefined) === "denied", `a card nobody answered, on a folded turn: not run, got ${look.foldedWords([step(connectorUnanswered(SCHEDULED))])}`);
 }));
 
+// A connector call the answer's stop or a time limit ended (connector-call-ends.ts), as the room saves it: what the model was told is its result.
+const { CONNECTOR_CALL_END_RESULTS, connectorCallEndLine } = await import("../src/connector-call-ends.js");
+await check("a connector call that was stopped or ran out of time reads failed, not Done, says its line with no click, and shows nothing meant for the model", () => onLivePage(async (draw) => {
+	// What the room sent is the person's to see; what the model was told is not.
+	const sentOnly = connectorOut(`{"project":"Q3"}`);
+	for (const end of ["stopped", "no_answer", "too_long"] as const) {
+		const line = connectorCallEndLine(end, "Asana");
+		const told = CONNECTOR_CALL_END_RESULTS[end];
+		const ended = { status: "error", result: told, details: { mode: "call", error: end, server: "asana", tool: "delete_project", connector: "Asana" } };
+		assert(look.stepState(connectorStep(`e1-${end}`, ended), undefined) === "failed" && look.foldedWords([{ item: connectorStep(`e1-${end}`, ended) }]) === "1 failed", `${end}: a failure, got ${look.stepState(connectorStep(`e1-${end}`, ended), undefined)} / ${look.foldedWords([{ item: connectorStep(`e1-${end}`, ended) }])}`);
+		// A step that ran with no question is named by its tool's own name, in its connector's shown name.
+		const withThought = await draw(stretch([thoughtItem(`e2-${end}-think`, 1_000, 2_000), connectorStep(`e2-${end}`, ended)]));
+		// As a box fault's: what came of the person's Stop, or of the wait, is the point, so the card shows it unopened, and its rows carry the marks.
+		const rows = shownRows(withThought);
+		assert(headOf(withThought).open && JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", "row failed: Couldn't use Delete project in Asana", `line: ${line}`, sentOnly]) && !withThought.textContent?.includes(told), `${end}: unopened, the failed row and its line, what was sent and nothing the model was told, got ${JSON.stringify(rows)}`);
+		const sole = await draw(stretch([connectorStep(`e3-${end}`, ended)]));
+		const soleRows = shownRows(sole);
+		assert(headOf(sole).open && soleRows.includes(`line: ${line}`) && soleRows.filter((row) => row.startsWith("output:")).every((row) => row === sentOnly) && !sole.textContent?.includes(told), `${end}: a card of this step alone shows its line unopened, got ${JSON.stringify(soleRows)}`);
+		const chipHtml = decode(chip({ name: "mcp", args: { tool: "asana_delete_project" }, ...ended }));
+		assert(bodyText(chipHtml) === line && !chipHtml.includes(told) && chipIcon(chipHtml) === "✗", `${end}: its chip says the line, in red, got ${bodyText(chipHtml)} / ${chipIcon(chipHtml)}`);
+	}
+}));
+
+// A connector call that failed, as the room saves it (mcp/room-scope.ts): the module's words for the model, the connector's names and why.
+const { connectorFailureLine, connectorFailureModelWords, OPEN_IN_SETTINGS } = await import("../src/connector-call-failures.js");
+const stepLines: any = await import(new URL("../../web-ui/src/step-lines.ts", import.meta.url).href);
+const { RoomAsksContext }: any = await import(new URL("../../web-ui/src/components/box-ask-rows.tsx", import.meta.url).href);
+const ADAPTER_WORDS = "MCP error -32602: Input validation error: query is required\n\nExpected parameters:\n  query (string, required)\n\u001b[31mfailed\u001b[0m";
+const failedCall = (failure: string) => ({ status: "error", result: connectorFailureModelWords(failure as never, "Toy web (toy-web)", false) ?? ADAPTER_WORDS, details: { mode: "call", error: "connect_failed", server: "toy-web", connector: "Toy web", connectorId: "toy-web", use: "Search in Toy web", failure } });
+const failedStep = (id: string, failure: string) => ({ ...toolItem(id, { name: "mcp", args: { tool: "toy_web_search", args: "{\"query\":\"Q3\"}" }, startedAt: 3_000, endedAt: 3_400 }), ...failedCall(failure) });
+// The room's asks, as App gives them: here only Open in Settings, which records the connector it opens.
+const opensFrom = () => {
+	const opened: string[] = [];
+	return { opened, wrap: (element: unknown) => createElement(RoomAsksContext.Provider, { value: { openConnector: (id: string) => opened.push(id) } }, element) };
+};
+
+await check("a failed connector step says why by the connector's name, with Open in Settings at the computer itself, the computer named on a remote device, the admin on a shared server", () => onLivePage(async (draw, act) => {
+	const asks = opensFrom();
+	for (const failure of ["cant-connect", "needs-sign-in", "needs-sign-in-or-key", "not-allowed", "sign-in-expired", "key-refused", "key-not-allowed", "no-permission"] as const) {
+		const step = failedStep(`w1-${failure}`, failure);
+		const here = connectorFailureLine(failure, "Toy web", "computer")!;
+		const shown = await draw(asks.wrap(stretch([step])));
+		// Unopened: the line says what to do and its button does it, with no click.
+		assert(JSON.stringify(headOf(shown)) === JSON.stringify({ label: "Couldn't use Search in Toy web", button: true, mark: "failed", open: true }), `${failure}: the step's head names it as the person knows it, and the card shows it unopened, got ${JSON.stringify(headOf(shown))}`);
+		const rows = shownRows(shown);
+		assert(JSON.stringify(rows) === JSON.stringify([`line: ${here.line} ${OPEN_IN_SETTINGS}`, connectorOut(`{"query":"Q3"}`)]) && !shown.textContent?.includes(step.result), `${failure}: its line and the button, what was sent, and nothing the model was told, got ${JSON.stringify(rows)}`);
+		await act(() => (shown.querySelector(".wk-line button") as HTMLButtonElement).click());
+		assert(asks.opened.at(-1) === "toy-web", `${failure}: Open in Settings opens that connector's page, got ${asks.opened.at(-1)}`);
+		// The same step seen from elsewhere: no button, and words that say where the way on is.
+		for (const [seenFrom, sharedServer, remote] of [["remote", false, true], ["shared", true, false]] as const) {
+			const there = stepLines.stepOutcome(step.result, step, sharedServer, remote);
+			assert(there?.line === connectorFailureLine(failure, "Toy web", seenFrom)!.line && there.line !== here.line && there.refused === false && !("opensConnector" in there), `${failure} on a ${seenFrom === "remote" ? "remote device" : "shared server"}: its own line and no button, got ${JSON.stringify(there)}`);
+		}
+	}
+	// A failure nothing in the app can change starts folded, then has its line and no button, at the computer too; the model's words stay out of sight.
+	for (const failure of ["refused", "no-such-tool", "bad-input", "removed"] as const) {
+		const step = failedStep(`w2-${failure}`, failure);
+		const shown = await draw(asks.wrap(stretch([step])));
+		assert(!headOf(shown).open, `${failure}: nothing to do, so the card starts folded, got ${JSON.stringify(headOf(shown))}`);
+		const rows = await openCard(act, shown);
+		assert(JSON.stringify(rows) === JSON.stringify([`line: ${connectorFailureLine(failure, "Toy web", "computer")!.line}`, connectorOut(`{"query":"Q3"}`)]) && !shown.querySelector(".wk-line button") && !shown.textContent?.includes("Expected parameters"), `${failure}: its line alone, got ${JSON.stringify(rows)}`);
+	}
+	// A failure with no line of its own: the head says it couldn't, and what came back is the connector's, without what is for the model or a terminal's colour codes.
+	const broke = { ...failedStep("w3", "connector-error"), result: ADAPTER_WORDS };
+	const brokeShown = await draw(asks.wrap(stretch([broke])));
+	assert(!headOf(brokeShown).open, `a failure with no line of its own starts folded, got ${JSON.stringify(headOf(brokeShown))}`);
+	const brokeRows = await openCard(act, brokeShown);
+	assert(JSON.stringify(brokeRows) === JSON.stringify([connectorOut(`{"query":"Q3"}`, "MCP error -32602: Input validation error: query is required")]) && !brokeShown.textContent?.includes("Expected parameters") && !brokeShown.textContent?.includes("\u001b"), `a connector's own error opens to its two parts, cleaned, got ${JSON.stringify(brokeRows)}`);
+	// A call that worked keeps all of what came back, the same heading included: only a failure carries the adapter's list.
+	const ownHeading = "Report\n\nExpected parameters:\n  the quarter's three numbers";
+	const workedShown = await draw(asks.wrap(stretch([connectorStep("w3b", { status: "done", result: ownHeading, details: { mode: "call", server: "asana", connector: "Asana", connectorId: "asana", use: "Delete project in Asana" } })])));
+	const workedRows = await openCard(act, workedShown);
+	assert(JSON.stringify(workedRows) === JSON.stringify([connectorOut(`{"project":"Q3"}`, ownHeading.replace(/\s+/g, " "))]), `a call that worked keeps what came back whole, got ${JSON.stringify(workedRows)}`);
+	// The person's No to a connector using the room's model is a No, not a failure.
+	const declinedUse = failedStep("w4", "model-declined");
+	const declinedShown = await draw(asks.wrap(stretch([declinedUse, toolItem("w4-ls", { name: "ls", status: "done", args: { path: "." }, result: "a" })])));
+	const declinedLabel = headOf(declinedShown).label;
+	assert(declinedLabel === "Listed a folder · 1 not run", `folded, a No to the model's use counts as not run, got ${declinedLabel}`);
+	const declinedRows = await openCard(act, declinedShown);
+	assert(declinedRows[0] === `row denied: ${connectorFailureLine("model-declined", "Toy web", "computer")!.line}` && !declinedShown.querySelector(".wk-bad") && headOf(declinedShown).mark !== "failed", `a No to the model's use reads as a No, got ${JSON.stringify(declinedRows)} ${JSON.stringify(headOf(declinedShown))}`);
+	assert(asks.opened.length === 8, "only the eight failures with a way on opened anything");
+}));
+
+await check("a connector's own tool called directly reads as the mcp tool's step; a running step is named before any question; any tool's input the runtime refused reads one plain line", () => onLivePage(async (draw, act) => {
+	const asks = opensFrom();
+	// Called directly: its own tool's name, the connector's names on it.
+	const direct = toolItem("d1", { name: "toy_web_search", args: { query: "Q3" }, startedAt: 3_000, endedAt: 3_400, ...failedCall("cant-connect") });
+	assert(look.itemKind(direct) === "connector", `a direct tool's step is a connector's, got ${look.itemKind(direct)}`);
+	const directShown = await draw(asks.wrap(stretch([direct])));
+	assert(headOf(directShown).label === "Couldn't use Search in Toy web", `a direct tool's step is named as the person knows it, got ${JSON.stringify(headOf(directShown))}`);
+	const directRows = shownRows(directShown);
+	assert(JSON.stringify(directRows) === JSON.stringify([`line: ${connectorFailureLine("cant-connect", "Toy web", "computer")!.line} ${OPEN_IN_SETTINGS}`, connectorOut(`{"query":"Q3"}`)]), `a direct tool's step reads as the mcp tool's, got ${JSON.stringify(directRows)}`);
+	const directDone = await draw(stretch([toolItem("d2", { name: "toy_web_search", args: { query: "Q3" }, status: "done", result: "3 results", startedAt: 3_000, endedAt: 3_400, details: { connector: "Toy web", connectorId: "toy-web", use: "Search in Toy web" } })]));
+	assert(headOf(directDone).label === "Used Search in Toy web", `a direct tool that worked, got ${JSON.stringify(headOf(directDone))}`);
+	// Running, with no question: the names its first update gave it.
+	const running = await draw(stretch([toolItem("d3", { name: "mcp", args: { tool: "toy_web_search" }, status: "running", startedAt: 3_000, details: { connector: "Toy web", connectorId: "toy-web", use: "Search in Toy web" } })], 3_500));
+	assert((running.textContent ?? "").includes("Using Search in Toy web") && !(running.textContent ?? "").includes("toy_web_search"), `a running step reads its names before it ends, got ${running.textContent}`);
+	// The runtime refused what the assistant sent before the tool started: any tool, one plain line; the runtime's own text is the model's.
+	const refusedInput = "Validation failed for tool \"read\":\n  - path: must have required property 'path'\n\nReceived arguments:\n{}";
+	const readStep = toolItem("d4", { name: "read", args: {}, status: "error", result: refusedInput, startedAt: 3_000, endedAt: 3_100 });
+	const readShown = await draw(stretch([readStep]));
+	const readRows = await openCard(act, readShown);
+	assert(readRows[0] === "line: The assistant sent something this tool couldn't use, so nothing ran." && !readShown.textContent?.includes("Received arguments"), `the runtime's refusal reads one plain line, got ${JSON.stringify(readRows)}`);
+}));
+
+await check("with two connector calls running at once, each question sits on its own call's step, whichever is asked first; one saved without its call's id is placed as before", () => onLivePage(async (draw) => {
+	const runningCall = (id: string, callId: string, tool: string, use: string) => toolItem(id, { name: "mcp", callId, args: { tool }, status: "running", startedAt: 3_000, details: { connector: "Asana", connectorId: "asana", use } });
+	const first = runningCall("c1", "call-1", "asana_delete_project", "Delete project in Asana");
+	const second = runningCall("c2", "call-2", "asana_archive_board", "Archive board in Asana");
+	const askFor = (id: string, title: string, toolCallId?: string) => ({ kind: "approval", id, requestId: id, uiKind: "connector", title, connector: "Asana", sent: "{}", cut: 0, lasting: false, ...(toolCallId ? { toolCallId } : {}) });
+	// The first call's question, asked while the second call is the newest step.
+	const pieces = look.workPieces([first, second, askFor("q1", "Use Delete project in Asana?", "call-1")]);
+	const owner = pieces.find((piece: any) => piece.kind === "step" && piece.ask?.id === "q1");
+	assert(owner?.item.id === "c1", `the question sits on its own call's step, not the newest, got ${JSON.stringify(pieces.map((piece: any) => [piece.kind, piece.item?.id, piece.ask?.id]))}`);
+	const both = look.workPieces([first, second, askFor("q2", "Use Archive board in Asana?", "call-2"), askFor("q1", "Use Delete project in Asana?", "call-1")]);
+	const owners = Object.fromEntries(both.filter((piece: any) => piece.kind === "step").map((piece: any) => [piece.item.id, piece.ask?.id ?? null]));
+	assert(owners.c1 === "q1" && owners.c2 === "q2", `each question on its own step, whichever came first, got ${JSON.stringify(owners)}`);
+	const shown = await draw(stretch([first, second, askFor("q1", "Use Delete project in Asana?", "call-1")], 3_500));
+	assert((shown.textContent ?? "").includes("Archive board in Asana") && (shown.textContent ?? "").includes("Delete project in Asana"), `the other step keeps its own name while one asks, got ${shown.textContent}`);
+	// Saved before questions named their call: the newest running step, as before.
+	const older = look.workPieces([first, second, askFor("q3", "Use Delete project in Asana?")]);
+	assert(older.find((piece: any) => piece.kind === "step" && piece.ask?.id === "q3")?.item.id === "c2", "a question without its call's id is placed as before");
+}));
+
 await check("a connector that ran and failed still reads failed, in red, and a declined command reads as before", () => onLivePage(async (draw, act) => {
 	const broke = { status: "error", result: "MCP error -32603: Internal error", details: { mode: "call", error: "tool_error" } };
 	assert(look.foldedWords([{ item: connectorStep("f1", broke) }]) === "1 failed" && look.stepState(connectorStep("f1", broke), undefined) === "failed", `a connector error is a failure, got ${look.foldedWords([{ item: connectorStep("f1", broke) }])}`);
@@ -903,25 +1043,125 @@ await check("a connector step and the card it asked fold to the step's own line,
 	const allowed = await draw(stretch([connectorStep("a1", { status: "done", result: "{\"deleted\":\"Q3\"}", details: { mode: "call", server: "asana", tool: "delete_project" } }), connectorCard("a1-ask", { done: "Yes" })]));
 	assert(JSON.stringify(headOf(allowed)) === JSON.stringify({ label: "Used Delete project in Asana", button: true, mark: "check", open: false }), `the step's own line, not "Used a connector", got ${JSON.stringify(headOf(allowed))}`);
 	const rows = await openCard(act, allowed);
-	assert(JSON.stringify(rows) === JSON.stringify(["row done: Used Delete project in Asana", "output: {\"deleted\":\"Q3\"}", "row done: Allowed · Use Delete project in Asana?"]), `opened, the step's row open to what came back, and the person's yes, got ${JSON.stringify(rows)}`);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Used Delete project in Asana", connectorOut(`{"project":"Q3"}`, `{"deleted":"Q3"}`), "row done: Allowed · Use Delete project in Asana?"]), `opened, the step's row open to what came back, and the person's yes, got ${JSON.stringify(rows)}`);
 	// A reply that worked keeps what it says, even in a No's words.
 	const sameWords = await draw(stretch([connectorStep("a3", { status: "done", result: connectorDeclined.result, details: { mode: "call", server: "asana", tool: "delete_project" } }), connectorCard("a3-ask", { done: "Yes" })]));
 	const sameRows = await openCard(act, sameWords);
-	assert(JSON.stringify(sameRows) === JSON.stringify(["row done: Used Delete project in Asana", `output: ${connectorDeclined.result}`, "row done: Allowed · Use Delete project in Asana?"]), `a reply that worked shows what came back, got ${JSON.stringify(sameRows)}`);
+	assert(JSON.stringify(sameRows) === JSON.stringify(["row done: Used Delete project in Asana", connectorOut(`{"project":"Q3"}`, connectorDeclined.result), "row done: Allowed · Use Delete project in Asana?"]), `a reply that worked shows what came back, got ${JSON.stringify(sameRows)}`);
 	// The question in the panel: each of its three answers, as the server's closing frame names it, on the first reply and sent again after a reconnect.
 	const { answeredLabel }: any = await import(new URL("../../web-ui/src/components/box-ask-rows.tsx", import.meta.url).href);
 	const panelCard = (id: string, taken: string) => ({ kind: "approval", id, requestId: id, uiKind: "connector", title: "Use Delete project in Asana?", connector: "Asana", sent: "{}", cut: 0, lasting: true, done: answeredLabel({ uiKind: "connector" } as any, taken) });
-	for (const [taken, row] of [["once", "row done: Allowed · Use Delete project in Asana?"], ["room", "row done: Allowed for this room · Use Delete project in Asana?"]] as const) {
+	for (const [taken, row] of [["once", "row done: Allowed · Use Delete project in Asana?"], ["room", "row done: Always allowed · Use Delete project in Asana?"]] as const) {
 		const answered = await draw(stretch([connectorStep(`p-${taken}`, { status: "done", result: "ok", details: { mode: "call", server: "asana", tool: "delete_project" } }), panelCard(`p-${taken}-ask`, taken)]));
 		const answeredRows = await openCard(act, answered);
-		assert(JSON.stringify(answeredRows) === JSON.stringify(["row done: Used Delete project in Asana", "output: ok", row]), `${taken}: the step's row and the answer's own, got ${JSON.stringify(answeredRows)}`);
+		assert(JSON.stringify(answeredRows) === JSON.stringify(["row done: Used Delete project in Asana", connectorOut(`{"project":"Q3"}`, "ok"), row]), `${taken}: the step's row and the answer's own, got ${JSON.stringify(answeredRows)}`);
 	}
 	const notNow = await draw(stretch([connectorStep("p-decline", connectorDeclined), panelCard("p-decline-ask", "decline")]));
 	const notNowRows = await openCard(act, notNow);
 	assert(JSON.stringify(notNowRows) === JSON.stringify(["row denied: You declined this, so nothing changed in Asana."]), `Not now: the step's row says the no once, got ${JSON.stringify(notNowRows)}`);
-	// Without its card, the step keeps the words it has.
+	// Without its card, the step keeps the words it has: its tool's own name, and no connector's key where its name isn't known.
 	const bare = await draw(stretch([connectorStep("a2", { status: "done", result: "ok", details: { mode: "call", server: "asana", tool: "delete_project" } })]));
-	assert(headOf(bare).label === "Used asana_delete_project in asana", `no card: the step's own words, got ${JSON.stringify(headOf(bare))}`);
+	assert(headOf(bare).label === "Used Delete project", `no card: the step's own words, got ${JSON.stringify(headOf(bare))}`);
+}));
+
+await check("a describe of a tool nobody has, and one of the room's own tools called as a connector's, show none of the assistant's search hint", () => onLivePage(async (draw, act) => {
+	const hint = "Use mcp({ search: \"...\" }) to search.";
+	for (const [what, item] of [
+		["a describe of a tool nobody has", { name: "mcp", status: "error", args: { describe: "create_issue" }, details: { mode: "describe", error: "tool_not_found" }, result: `Tool "create_issue" not found. ${hint}` }],
+		["one of the room's own tools", { name: "mcp", status: "error", args: { tool: "read", args: "{}" }, details: { mode: "call", error: "native_tool", requestedTool: "read" }, result: "\"read\" is a native Pi tool. Call read directly instead of using mcp({ tool: \"read\" })." }],
+	] as const) {
+		const card = await draw(stretch([thoughtItem(`h-${what}-think`, 1_000, 2_000), toolItem(`h-${what}`, { ...item, startedAt: 3_000, endedAt: 3_100 })]));
+		const rows = await openCard(act, card);
+		assert(!card.textContent?.includes("mcp(") && !card.textContent?.includes("directly instead"), `${what}: opened, no words meant for the assistant, got ${JSON.stringify(rows)}`);
+	}
+}));
+
+// The connector look-ups of the `mcp` tool, as the room saves them (mcp/room-scope.ts), with the result texts pi-mcp-adapter's proxy-modes.ts writes for the model.
+const SHOP_LIST = "t-shop (2 tools (not connected, cached)):\n\n- t_shop_find_customer (Find customer) - Finds a customer by name. Returns the...\n- t_shop_send_invoice (Send invoice) - Sends an invoice to a customer.";
+const lookup = (id: string, args: Record<string, unknown>, item: Record<string, unknown>) => toolItem(id, { name: "mcp", args, startedAt: 3_000, endedAt: 3_100, ...item });
+const lookups: Array<[string, Record<string, unknown>, Record<string, unknown>, string]> = [
+	["a connect", { connect: "t-shop" }, { status: "done", result: SHOP_LIST.replace(" (not connected, cached)", ""), details: { mode: "list", server: "t-shop", tools: ["t_shop_find_customer", "t_shop_send_invoice"], count: 2, connector: "Shop", connectorId: "t-shop" } }, "Connected to Shop"],
+	["a list", { server: "t-shop" }, { status: "done", result: SHOP_LIST, details: { mode: "list", server: "t-shop", tools: ["t_shop_find_customer", "t_shop_send_invoice"], count: 2, connector: "Shop" } }, "Listed the tools of Shop"],
+	["a search", { search: "invoice" }, { status: "done", result: "Found 1 tool matching \"invoice\":\n\nt_shop_send_invoice (Send invoice)\n  Sends an invoice to a customer.\n\n  Parameters:\n    customer (string) *required* - Who gets it", details: { mode: "search", matches: [{ server: "t-shop", tool: "t_shop_send_invoice" }], count: 1, query: "invoice" } }, "Searched connector tools for “invoice”"],
+	["a describe", { describe: "t_shop_send_invoice" }, { status: "done", result: "t_shop_send_invoice\nServer: t-shop\n\nSends an invoice to a customer.\n\nParameters:\n  customer (string) *required* - Who gets it", details: { mode: "describe", server: "t-shop", connector: "Shop", about: "Send invoice" } }, "Read about Send invoice"],
+	["a status", {}, { status: "done", result: "MCP: 0/1 servers, 0 tools\n\n○ t-shop (not connected)\n\nmcp({ server: \"name\" }) to list tools, mcp({ search: \"...\" }) to search", details: { mode: "status", servers: [{ name: "t-shop", status: "not connected", toolCount: 0, failedAgo: null }], totalTools: 0, connectedCount: 0 } }, "Checked connectors"],
+	["a sign-in", { action: "auth-complete", server: "t-shop", args: "{\"code\":\"abc\"}" }, { status: "done", result: "OAuth authentication successful for \"t-shop\". Run mcp({ connect: \"t-shop\" }) to connect with the new token.", details: { mode: "auth-complete", server: "t-shop", authenticated: true } }, "Signed in to a connector"],
+];
+// What each kind of look-up shows when it fails: its head, the line a person reads where one exists, never what the model was told.
+const OFF_HERE = "Room settings control which connectors this room can use.";
+const failedLookups: Array<[string, Record<string, unknown>, Record<string, unknown>, string[]]> = [
+	["a connect that needs a sign-in", { connect: "t-shop" }, { status: "error", result: connectorFailureModelWords("needs-sign-in", "Shop (t-shop)", false), details: { mode: "connect", error: "auth_required", server: "t-shop", connector: "Shop", connectorId: "t-shop", failure: "needs-sign-in" } }, ["row failed: Couldn't reach Shop", `line: ${connectorFailureLine("needs-sign-in", "Shop", "computer")!.line}`]],
+	["a connect that couldn't reach it", { connect: "t-shop" }, { status: "error", result: connectorFailureModelWords("cant-connect", "Shop (t-shop)", false), details: { mode: "connect", error: "connect_failed", server: "t-shop", connector: "Shop", connectorId: "t-shop", failure: "cant-connect" } }, ["row failed: Couldn't reach Shop", `line: ${connectorFailureLine("cant-connect", "Shop", "computer")!.line}`]],
+	["a connect saved with no reason", { connect: "t-shop" }, { status: "error", result: "Failed to connect to \"t-shop\": fetch failed", details: { mode: "connect", error: "connect_failed", server: "t-shop", message: "fetch failed" } }, ["row failed: Couldn't reach a connector"]],
+	["a connect of a connector that is off", { connect: "t-shop" }, { status: "error", result: `Connector "t-shop" is not enabled for this room. ${OFF_HERE}`, details: { error: "connector_not_enabled", server: "t-shop" } }, ["row denied: This connector is not on for this room. You can turn it on in Room settings, Connectors."]],
+	["a list before it connected", { server: "t-shop" }, { status: "error", result: "Server \"t-shop\" is configured but not connected. Use mcp({ connect: \"t-shop\" }) or /mcp reconnect t-shop to retry.", details: { mode: "list", server: "t-shop", tools: [], count: 0, error: "not_connected", connector: "Shop" } }, ["row failed: Couldn't list the tools of Shop"]],
+	["a search the adapter refused", { search: "(a+)+", regex: true }, { status: "error", result: "Regex query rejected as unsafe (vulnerable).", details: { mode: "search", error: "unsafe_pattern", query: "(a+)+", safetyStatus: "vulnerable" } }, ["row failed: Couldn't search connector tools for “(a+)+”"]],
+	["a search with no connector on", { search: "invoice" }, { status: "error", result: `No MCP connectors are enabled for this room. ${OFF_HERE}`, details: { error: "no_connectors_enabled", servers: [], totalTools: 0, connectedCount: 0 } }, ["row denied: No connector is on for this room. You can turn one on in Room settings, Connectors."]],
+	["a describe of a tool that is off here", { describe: "t_shop_send_invoice" }, { status: "error", result: `Tool "t_shop_send_invoice" is not available in this room. ${OFF_HERE}`, details: { mode: "describe", error: "connector_not_enabled", requestedTool: "t_shop_send_invoice" } }, ["row denied: This connector is not on for this room. You can turn it on in Room settings, Connectors."]],
+	["a status before the connectors started", {}, { status: "error", result: "MCP initialization failed: the connectors file could not be read", details: { error: "init_failed", message: "the connectors file could not be read" } }, ["row failed: Couldn't check connectors"]],
+	["a sign-in the connector doesn't offer", { action: "auth-start", server: "t-shop" }, { status: "error", result: "Server \"t-shop\" is not configured for OAuth over HTTP.", details: { mode: "auth-start", error: "oauth_not_supported", server: "t-shop" } }, ["row failed: Couldn't sign in to a connector"]],
+];
+// Words only the model's text holds, for every kind above.
+const MODEL_WORDS = /mcp\(|not connected|Server:|\*required\*|t_shop_|MCP|OAuth|Regex|Room settings control|t-shop|tell the person|Tell the person/;
+const { itemsToSave, loadedThreadItems }: any = await import(new URL("../../web-ui/src/room-thread-items.ts", import.meta.url).href);
+// Items as a reload gives them back: saved as the page saves them (no thought, no end time), then loaded.
+const reloaded = (items: Record<string, unknown>[]) => loadedThreadItems(JSON.parse(JSON.stringify(itemsToSave(items))));
+// A card opened as the person opens it: a click on its head, unless it is open already. The rows a folded card keeps are not on screen.
+const openedRows = async (act: (work: () => void | Promise<void>) => Promise<void>, container: HTMLElement) => {
+	const rows = headOf(container).open ? shownRows(container) : await openCard(act, container);
+	assert(headOf(container).open, `the card is open, got ${JSON.stringify(headOf(container))}`);
+	return rows;
+};
+
+await check("a connector look-up step (connect, list, search, describe, status, sign-in) shows its head and opens to nothing; a failed one keeps its line for the person; neither shows the text written for the model, after a reload too", () => onLivePage(async (draw, act) => {
+	for (const [what, args, item, head] of lookups) {
+		const shown = await draw(stretch([thoughtItem(`l-${what}-think`, 1_000, 2_000), lookup(`l-${what}`, args, item)]));
+		const rows = await openedRows(act, shown);
+		assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", `row done: ${head}`]) && !shown.querySelector(".wk-in .wk-row button") && !MODEL_WORDS.test(shown.textContent ?? ""), `${what}: its row, with no way to open it and none of the model's text, got ${JSON.stringify(rows)} / ${shown.textContent}`);
+		// Alone on its card, as a reload brings it back too: the head says it, with its check, and there is nothing to open.
+		for (const [when, items] of [["live", [lookup(`l-${what}-alone`, args, item)]], ["after a reload", reloaded([thoughtItem(`l-${what}-saved-think`, 1_000, 2_000), lookup(`l-${what}-saved`, args, item)])]] as const) {
+			const alone = await draw(stretch(items as Record<string, unknown>[]));
+			assert(JSON.stringify(headOf(alone)) === JSON.stringify({ label: head, button: false, mark: "check", open: false }) && !MODEL_WORDS.test(alone.textContent ?? ""), `${what}, alone, ${when}: its head and no open, got ${JSON.stringify(headOf(alone))}`);
+		}
+	}
+	for (const [what, args, item, said] of failedLookups) {
+		const shown = await draw(stretch([thoughtItem(`lf-${what}-think`, 1_000, 2_000), lookup(`lf-${what}`, args, item)]));
+		const rows = await openedRows(act, shown);
+		assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", ...said]) && !shown.querySelector(".wk-in .wk-row button") && !shown.querySelector(".wk-out") && !MODEL_WORDS.test(shown.textContent ?? ""), `${what}: its head and its line only, got ${JSON.stringify(rows)} / ${shown.textContent}`);
+		// After a reload it is alone on its card: opened where it opens, the same words, and still none of the model's text.
+		const saved = await draw(stretch(reloaded([thoughtItem(`lf-${what}-saved-think`, 1_000, 2_000), lookup(`lf-${what}-saved`, args, item)])));
+		if (headOf(saved).button) await openedRows(act, saved);
+		const text = (saved.textContent ?? "").replace(/\s+/g, " ");
+		const words = said.map((one) => one.replace(/^(?:row \w+|line): /, ""));
+		assert(words.every((one) => text.includes(one)) && !saved.querySelector(".wk-row button") && !saved.querySelector(".wk-out") && !MODEL_WORDS.test(text), `${what}, after a reload: ${JSON.stringify(words)} and nothing else to open, got ${JSON.stringify(headOf(saved))} / ${text}`);
+	}
+	// A turn of look-ups and a call, folded: its words and count as before; opened, only the call opens, to what it sent and what came back.
+	const call = (tag: string) => connectorStep(`l-${tag}-call`, { status: "done", result: "{\"sent\":true}", args: { tool: "t_shop_send_invoice", server: "t-shop", args: "{\"customer\":\"Ada\"}" }, details: { mode: "call", server: "t-shop", connector: "Shop", connectorId: "t-shop", use: "Send invoice in Shop" } });
+	const turn = (tag: string) => [lookup(`l-${tag}-list`, lookups[1][1], lookups[1][2]), lookup(`l-${tag}-describe`, lookups[3][1], lookups[3][2]), call(tag)];
+	for (const [when, items] of [["live", turn("live")], ["after a reload", reloaded(turn("saved"))]] as const) {
+		const folded = await draw(stretch(items as Record<string, unknown>[]));
+		assert(JSON.stringify(headOf(folded)) === JSON.stringify({ label: "Used a connector 3 times", button: true, mark: "check", open: false }), `${when}: the folded card's words and count, got ${JSON.stringify(headOf(folded))}`);
+		const rows = await openedRows(act, folded);
+		assert(JSON.stringify(rows) === JSON.stringify(["row done: Listed the tools of Shop", "row done: Read about Send invoice", "row done: Used Send invoice in Shop"]) && folded.querySelectorAll(".wk-in .wk-row button").length === 1, `${when}: opened, three rows and only the call opens, got ${JSON.stringify(rows)}`);
+		await act(() => (folded.querySelector(".wk-in .wk-row button") as HTMLButtonElement).click());
+		assert(JSON.stringify(shownRows(folded).slice(3)) === JSON.stringify([connectorOut(`{"customer":"Ada"}`, `{"sent":true}`)]) && !MODEL_WORDS.test((folded.textContent ?? "").replace(`{"customer":"Ada"}`, "")), `${when}: the call opens to what it sent and what came back, got ${JSON.stringify(shownRows(folded))}`);
+	}
+}));
+
+// A sign-in the assistant started that worked: the adapter's manual instructions (proxy-modes.ts, formatManualAuthInstructions) hold the address the person opens.
+const SIGN_IN_ADDRESS = "https://shop.example/authorize?client_id=exxperts&state=abc";
+const SIGN_IN_STARTED = `MCP OAuth required for "t-shop".\n\nOpen this URL in your local browser:\n\n${SIGN_IN_ADDRESS}\n\nAfter approving, copy the full redirected localhost URL from your browser address bar and send it back with:\nmcp({ action: "auth-complete", server: "t-shop", args: '{"redirectUrl":"PASTE_REDIRECT_URL_HERE"}' })\n\nYou can also pass just the \`code\` query parameter as \`args: '{"code":"PASTE_CODE_HERE"}'\`.`;
+await check("a sign-in the assistant started that worked opens to what the adapter answered, as before, after a reload too", () => onLivePage(async (draw, act) => {
+	const started = (id: string) => lookup(id, { action: "auth-start", server: "t-shop" }, { status: "done", result: SIGN_IN_STARTED, details: { mode: "auth-start", server: "t-shop", authorizationUrl: SIGN_IN_ADDRESS } });
+	const output = `output: ${SIGN_IN_STARTED.replace(/\s+/g, " ").trim()}`;
+	const live = await draw(stretch([thoughtItem("s-live-think", 1_000, 2_000), started("s-live")]));
+	const rows = await openedRows(act, live);
+	assert(JSON.stringify(rows) === JSON.stringify(["row done: Thought for 2.0 s", "row done: Signed in to a connector", output]), `live: its row, open to the adapter's answer with the address, got ${JSON.stringify(rows)}`);
+	// After a reload it is alone on its card, which opens straight to the same answer.
+	const saved = await draw(stretch(reloaded([thoughtItem("s-saved-think", 1_000, 2_000), started("s-saved")])));
+	assert(headOf(saved).label === "Signed in to a connector" && headOf(saved).button, `after a reload: its head, and it opens, got ${JSON.stringify(headOf(saved))}`);
+	const savedRows = await openedRows(act, saved);
+	assert(JSON.stringify(savedRows) === JSON.stringify([output]), `after a reload: the adapter's answer with the address, got ${JSON.stringify(savedRows)}`);
 }));
 
 await check("a card kept after nobody answered it, alone on its card: Not answered, with the not-run icon in line, no tick", () => onLivePage(async (draw) => {
@@ -941,8 +1181,8 @@ await check("at 390 px an opened card's rows wrap whole, so the action and the c
 		console.log("  (Chromium not installed: this section is skipped)");
 		return;
 	}
-	const broke = { status: "error", result: "MCP error -32603: Internal error", details: { mode: "call", error: "tool_error" } };
-	const longName = { ...broke, args: { tool: "asana_delete_project_and_archive_its_tasks", server: "asana" } };
+	const broke = { status: "error", result: "MCP error -32603: Internal error", details: { mode: "call", error: "tool_error", server: "asana", connector: "Asana" } };
+	const longName = { ...broke, args: { tool: "asana_delete_project_and_archive_its_tasks" } };
 	const items = [connectorStep("w1", longName), connectorStep("w2", connectorUnanswered(LEFT_THE_ROOM)), toolItem("w3", { name: "ls", status: "done", args: { path: "." }, result: "a" })];
 	const opened = markup(items, { endTs: 9_000 }).replace('data-open="0"', 'data-open="1"');
 	const browser = await chromium.launch();
@@ -965,7 +1205,7 @@ await check("at 390 px an opened card's rows wrap whole, so the action and the c
 		await browser.close();
 	}
 	const [desk, phone] = measured;
-	assert(phone.rows.length === 3 && phone.rows.every((row) => !row.cut) && phone.rows[0].text === "Couldn't use asana_delete_project_and_archive_its_tasks in asana" && phone.rows[0].lines > 1 && phone.rows[1].lines > 1, `at 390 px every row shows whole, the long ones on more lines, got ${JSON.stringify(phone)}`);
+	assert(phone.rows.length === 3 && phone.rows.every((row) => !row.cut) && phone.rows[0].text === "Couldn't use Delete project and archive its tasks in Asana" && phone.rows[0].lines > 1 && phone.rows[1].lines > 1, `at 390 px every row shows whole, the long ones on more lines, got ${JSON.stringify(phone)}`);
 	assert(desk.rows[0].lines === 1 && desk.rows[2].lines === 1 && desk.rows.every((row) => !row.cut), `on a desktop a short row keeps its one line, got ${JSON.stringify(desk)}`);
 	assert([...desk.rows, ...phone.rows].every((row) => Math.abs(row.iconOff) <= 1.5), `each row's icon sits by its words' first line, got ${JSON.stringify(measured)}`);
 });

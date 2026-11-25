@@ -102,6 +102,11 @@ export function noModelSentence(role: "member" | "admin" | null): string {
 	return role === "member" ? "Ask your admin to add a model in Settings, AI setup." : role === "admin" ? "Add an API key or a gateway in Settings, AI setup." : "Sign in to an AI provider in Settings, AI setup.";
 }
 
+/** Empty Home's heading while no AI is set up, above noModelSentence's line: a shared server's member can't connect one. */
+export function connectCardHeading(role: "member" | "admin" | null): string {
+	return role === "member" ? "No AI is set up yet" : "Connect an AI to get started";
+}
+
 export function PersistentAgentCard({ status, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenModelSettings, providerLabels, offeredModels, backgroundReady = false, purging = false, arranging = false, arrangeArrows }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	// React 18 knows no `inert` prop: the attribute is passed as a string.
@@ -151,34 +156,38 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 	// model, and Enter's title carries the refusal.
 	const waitingModel = !conversationModel && status?.models?.conversation.reason ? status.models.conversation.chosen : null;
 	const waitingSentence = waitingModel ? status?.models?.conversation.refusal ?? null : null;
-	const noModelLine = noModelSentence(sharedServerRole(useRemoteClientContext()));
+	const remoteContext = useRemoteClientContext();
+	const noModelLine = noModelSentence(sharedServerRole(remoteContext));
 	const standbyFollowsPick = hasStandbyThread && !openConversationHasTurns && status?.activeThread?.threadId === status?.runtime.activeThreadId && status?.activeThread?.followsConversationPick === true;
 	const standbyLockedModel = hasStandbyThread && !standbyFollowsPick ? thread?.model ?? status?.runtime.model ?? null : null;
 	const cardModel = standbyLockedModel ?? (live ? thread?.model ?? null : null) ?? conversationModel ?? waitingModel;
 	// The label saved for the model in AI setup wins over whatever the lock kept; a model AI setup no longer offers keeps the lock's.
 	const savedLabel = cardModel ? offeredModels?.find((option) => option.provider === cardModel.provider && option.model === cardModel.model)?.label : undefined;
 	const cardModelCanonical = cardModel ? canonicalModelName({ model: cardModel.model, modelLabel: savedLabel ?? cardModel.label, provider: cardModel.provider }) : null;
-	// The provider in AI setup's words, whichever model the card shows.
+	// The provider in AI setup's words, whichever model the card shows; none for a gateway gone from a shared server, whose only name was its id.
 	const cardModelProvider = cardModel
-		? providerLabels?.[cardModel.provider] ?? (conversationModel?.provider === cardModel.provider ? conversationModel.providerLabel : undefined) ?? cardModelCanonical?.provider
+		? providerLabels?.[cardModel.provider] ?? (conversationModel?.provider === cardModel.provider ? conversationModel.providerLabel : undefined) ?? (waitingModel?.provider === cardModel.provider && waitingModel.providerLabel === "" ? "" : undefined) ?? cardModelCanonical?.provider
 		: undefined;
 	const cardModelNames = cardModelCanonical ? { name: cardModelCanonical.name, provider: cardModelProvider } : null;
 	const cardModelTitle = `${cardModelNames ? `${cardModelNames.name}${cardModelNames.provider ? ` · ${cardModelNames.provider}` : ""}. ` : ""}${hasStandbyThread && !standbyFollowsPick
 		? "This conversation continues on its current model. Room settings, Model can switch it."
 		: "The model this room talks with. Change it in Room settings, Model."}`;
-	const lockedElsewhere = !!status?.activeLock;
 	const lockSurface = status?.activeLock?.surface;
 	const lockedByScheduler = lockSurface === "scheduler";
+	// On a shared server every page on a room shares its one live session: only a scheduled task keeps a page out.
+	const onSharedServer = remoteContext?.sharedServer === true;
+	const lockedElsewhere = !!status?.activeLock && (!onSharedServer || lockedByScheduler);
 	const lockShort = lockedByScheduler ? "Working" : "In app";
 	// A web lock plus a running turn means the response is still being written
 	// (left mid-generation, or live in another window) — either way it lands in
 	// the conversation, so the badge and note say that instead of "open in
 	// another browser session".
-	const answeringInBackground = lockedElsewhere && lockSurface === "web" && !!status?.activeThread?.working;
+	const answeringInBackground = onSharedServer ? !lockedByScheduler && !!status?.activeThread?.working : lockedElsewhere && lockSurface === "web" && !!status?.activeThread?.working;
 	// A response cooking with NO client attached is a room the user
 	// may step back into; the server adopts the session onto the live stream.
-	// A room genuinely open in another window keeps its lock-and-stay-out.
-	const canStepBackIn = answeringInBackground && status?.answeringDetached === true;
+	// A room genuinely open in another window keeps its lock-and-stay-out,
+	// except on a shared server, where a page joins the window's session.
+	const canStepBackIn = answeringInBackground && (onSharedServer || status?.answeringDetached === true);
 	const lockNote = canStepBackIn
 		? "This room is still writing a response. You can step back in and watch it finish; it is saved into the conversation either way."
 		: answeringInBackground

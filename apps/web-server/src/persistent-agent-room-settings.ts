@@ -5,6 +5,7 @@ import { activePersistentRoomLock, assertPersistentRoomNotHeldByAnotherProcess, 
 import { getPersistentAgentThread } from "./persistent-agent-threads.js";
 import { getPersistentAgentStatus } from "./persistent-agent-status.js";
 import { serverHooks } from "./server-hooks.js";
+import { hostHoldingRoom, roomQuietSpell } from "./room-live-sessions.js";
 
 export function getPersistentRoomInstructions(agentIdRaw: string): PersistentRoomInstructions {
 	const instance = createPersistentAgentInstance(agentIdRaw);
@@ -131,7 +132,10 @@ export function classifyPersistentRoomBackgroundRunTarget(agentIdRaw: string, op
 	}
 	const paused = serverHooks().scheduledRunPause?.(roomId, status.unseenLandedAnswer);
 	if (paused) return { status: "blocked", reason: "owner_paused", target: noneTarget, message: paused, warnings };
-	if (activePersistentRoomLock(roomId, options)) {
+	const lock = activePersistentRoomLock(roomId, options);
+	// On a shared server the lock of a room's open pages is its host's: the schedule runs into their conversation once it is quiet.
+	const host = hostHoldingRoom(roomId, lock);
+	if (lock && !host) {
 		return {
 			status: "deferred",
 			reason: "room_in_use",
@@ -157,6 +161,29 @@ export function classifyPersistentRoomBackgroundRunTarget(agentIdRaw: string, op
 			// The conversation it met: the run may go there, late, once the person has started it (decision 47).
 			target: { ...noneTarget, threadId: activeThread.threadId },
 			message: `Persistent room is parked at an empty prepared ${activeThread.preparedByBoundary} boundary; background work must not consume or retire it automatically.`,
+			warnings,
+		};
+	}
+	if (host) {
+		const quiet = Date.now() - host.lastActivityAt() >= roomQuietSpell();
+		let thread: ReturnType<typeof getPersistentAgentThread> = null;
+		try {
+			if (quiet && activeThread?.threadId === host.conversationId) thread = getPersistentAgentThread(roomId, host.conversationId);
+		} catch {}
+		if (!thread || thread.state === "closed") {
+			return {
+				status: "deferred",
+				reason: "room_in_use",
+				target: noneTarget,
+				message: "Persistent room is open and was in use recently; background work should retry later.",
+				warnings,
+			};
+		}
+		// Empty or not, the pages' conversation, on the model they show.
+		return {
+			status: "queued",
+			reason: "resume_thread",
+			target: { kind: "resume-thread", roomId, threadId: thread.threadId, model: clonePersistentAgentModelLock(thread.model) },
 			warnings,
 		};
 	}

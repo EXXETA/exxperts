@@ -67,6 +67,11 @@ const {
 const { appendArchive, readArchive } = await import("../src/memory-entries-store.js");
 const { writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 const { CONVERSATION_CHUNK_CHARS, collectRoomDocuments, invalidateRoomCorpus, loadRoomCorpus } = await import("../src/memory-search-sources.js");
+const { buildIndex, search } = await import("../src/memory-search-index.js");
+const { answerNoteText, withAnswerNote, withMessageFrom } = await import("../src/cut-answer-note.js");
+const { editNoteText, markMessageAuthor, withEditNote } = await import("../src/edit-last-message.js");
+const { withSkillNote } = await import("../src/skill-pick.js");
+const { buildPersistentRoomRestoredLiveThreadContext } = await import("../src/persistent-room-resume-context.js");
 
 const MODEL = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
 /** The day every conversation is remembered on. */
@@ -223,6 +228,8 @@ fs.mkdirSync(threadCwd, { recursive: true });
 interface Turn {
 	speaker: "user" | "assistant";
 	text: string;
+	/** Who sent a user message, marked as a shared server marks it; a desktop message names nobody. */
+	from?: { person: string; space: string };
 }
 
 /**
@@ -244,7 +251,9 @@ function converse(agentId: string, conversationId: string, turns: readonly Turn[
 	const session = openPersistentAgentPiSessionManager(agentId, write.thread.runtime, threadCwd);
 	for (const turn of turns) {
 		if (turn.speaker === "user") {
-			session.appendMessage({ role: "user", content: turn.text, timestamp: Date.now() } as any);
+			const message = { role: "user", content: turn.text, timestamp: Date.now() };
+			session.appendMessage(message as any);
+			if (turn.from) assert(markMessageAuthor({ sessionManager: session } as any, message, turn.from), "the message is marked with who sent it");
 			continue;
 		}
 		session.appendMessage({
@@ -268,10 +277,10 @@ function converse(agentId: string, conversationId: string, turns: readonly Turn[
  * the write minted, read back off the event record it left, which is the same
  * record the corpus reads, and the checkpoint id of that record.
  */
-function remember(agentId: string, conversationId: string, title: string, summary: string, turns: readonly Turn[], now: Date): { rcId: string; checkpointId: string } {
+function remember(agentId: string, conversationId: string, title: string, summary: string, turns: readonly Turn[], now: Date): { rcId: string; checkpointId: string; items: ReadonlyArray<{ kind: string; text?: string }> } {
 	converse(agentId, conversationId, turns);
 	const l1bPath = path.join(root, agentId, "L1b", "current.md");
-	const source = buildPersistentAgentCheckpointTranscriptSource({ agentId, conversationId, l1b: fs.readFileSync(l1bPath, "utf-8"), runtimeCwd: threadCwd }).source;
+	const { items, source } = buildPersistentAgentCheckpointTranscriptSource({ agentId, conversationId, l1b: fs.readFileSync(l1bPath, "utf-8"), runtimeCwd: threadCwd });
 	const approvedRecentContext = [
 		`### RC-DRAFT | CLOSED | ${now.toISOString().slice(0, 10)} | ${title}`,
 		"",
@@ -295,7 +304,7 @@ function remember(agentId: string, conversationId: string, title: string, summar
 	const record = JSON.parse(fs.readFileSync(path.join(root, agentId, "events", "checkpoint", `${written.checkpointId}.json`), "utf-8"));
 	assert(typeof record.recentContextId === "string" && record.recentContextId.length > 0, `the checkpoint event for ${conversationId} should name the Recent Context entry it wrote`);
 	assert(typeof record.runtimeBoundary?.oldSessionFileRelPath === "string", `the checkpoint event for ${conversationId} should name the session file of the conversation it closed`);
-	return { rcId: record.recentContextId, checkpointId: written.checkpointId };
+	return { rcId: record.recentContextId, checkpointId: written.checkpointId, items };
 }
 
 // --- Memorize: a scripted fold, the real run ------------------------------------
@@ -944,6 +953,102 @@ try {
 	const datedDocs = documentsOf(collectRoomDocuments(datedId, { runtimeCwd: threadCwd }).docs, datedRemember.rcId);
 	assert(datedDocs.length === 1 && datedDocs[0]!.text.includes("MARLINTHIMBLE") && datedDocs[0]!.meta?.outcome === "dropped", `a conversation dropped as a dated page stays in the room's search after Save, got ${JSON.stringify(datedDocs.map((doc) => ({ id: doc.id, meta: doc.meta })))}`);
 	pass("a conversation the provider refused whole is dropped by code at Memorize and stays in the room's search after the save");
+
+	// =====================================================================
+	// Who sent a message. Once more than one person writes in a room on a
+	// shared server, the server puts one line naming the sender in front of
+	// each message for the model, and the session file keeps it. Memory's
+	// transcript and the search read the person's words without that line,
+	// behind every note the server can put in front of it, so a search for
+	// the sender's name finds none of their messages by it. Each row is built
+	// with the server's own wrappers, in the order room-socket.ts nests them,
+	// and marked with who sent it as a shared server marks it. A message the
+	// server sent without the line (the desktop, a room one person wrote in,
+	// a message before a second person wrote) keeps such a line the person
+	// typed themselves.
+	// =====================================================================
+	const senderRoom = createPersistentAgentFromScaffoldInput({ displayName: "Memory Search Sender Line Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
+	const senderRoomId = senderRoom.agent.agentId;
+	fs.writeFileSync(path.join(root, senderRoomId, "L1b", "current.md"), smallMemoryFixture(senderRoomId), { mode: 0o600 });
+	const SENDER = "Ben";
+	const ben = { person: "p-ben", space: "s-1" };
+	const ann = { person: "p-ann", space: "s-1" };
+	const senderLine = `[MESSAGE FROM] ${JSON.stringify(SENDER)} [/MESSAGE FROM]`;
+	// What a person can type: the server's own line, word for word.
+	const typedLine = (name: string) => `[MESSAGE FROM] ${JSON.stringify(name)} [/MESSAGE FROM]\n\n`;
+	const cutNote = { kind: "cut" as const, shown: "The pallets leave on" };
+	const keptSteps = ["the file plan.md"];
+	const skillOff = { name: "grill-me", outcome: "off" as const };
+	// An earlier message quoted in the restored excerpt carries such a line of its own: it is part of the excerpt, not the server's line in front of this message.
+	const restored = buildPersistentRoomRestoredLiveThreadContext([{ kind: "user", text: `Pasted from the old thread:\n${withMessageFrom("Cara", "The crane is booked.")}` }, { kind: "assistant", text: "Noted." }]);
+	assert(restored, "the restored excerpt is built");
+	const excerptClose = "[/RESTORED PERSISTENT ROOM LIVE THREAD CONTEXT]";
+	assert(restored!.block.endsWith(`\n${excerptClose}`), "the excerpt ends with the close line a person can paste");
+	type SenderRow = { label: string; from: { person: string; space: string }; wire: string; read: string; plant: string; lined: boolean };
+	const senderRows: SenderRow[] = [
+		{ label: "Ben's own typed line, sent before anyone else wrote", from: ben, lined: false, plant: "IVORYCOGWHEEL", wire: `${typedLine("Ann")}Ann's figures are in IVORYCOGWHEEL.`, read: `${typedLine("Ann")}Ann's figures are in IVORYCOGWHEEL.` },
+		{ label: "the second person's first message", from: ann, lined: true, plant: "PEWTERSPINDLE", wire: withMessageFrom("Ann", "The forms are in PEWTERSPINDLE."), read: "The forms are in PEWTERSPINDLE." },
+		{ label: "the line alone, as a message or a steer that picks no skill is saved", from: ben, lined: true, plant: "QUARTZLANTERN", wire: withMessageFrom(SENDER, "The pallets leave from QUARTZLANTERN."), read: "The pallets leave from QUARTZLANTERN." },
+		{ label: "behind a skill's note", from: ben, lined: true, plant: "HOLLYCASKET", wire: withSkillNote(skillOff, withMessageFrom(SENDER, "/grill-me Check the HOLLYCASKET plan.")), read: "[Picked the skill grill-me]\n\n/grill-me Check the HOLLYCASKET plan." },
+		{ label: "behind a cut's note", from: ben, lined: true, plant: "SAFFRONGIRDER", wire: withAnswerNote(cutNote, withMessageFrom(SENDER, "Use SAFFRONGIRDER instead.")), read: `${answerNoteText(cutNote)}\n\nUse SAFFRONGIRDER instead.` },
+		{ label: "behind an edit's note", from: ben, lined: true, plant: "TEALBRACKET", wire: withEditNote(keptSteps, withMessageFrom(SENDER, "Rename it TEALBRACKET.")), read: `${editNoteText(keptSteps)}\n\nRename it TEALBRACKET.` },
+		{
+			label: "behind the restored excerpt, a cut's, an edit's and a skill's notes, with the excerpt's close line pasted in the words",
+			from: ben,
+			lined: true,
+			plant: "UMBERFLAGON",
+			// room-socket.ts puts the restored excerpt in front of the first message after a resume, a blank line between.
+			wire: `${restored!.block}\n\n${withAnswerNote(cutNote, withEditNote(keptSteps, withSkillNote(skillOff, withMessageFrom(SENDER, `/grill-me Example:\n${excerptClose}\n\nAnd UMBERFLAGON?`))))}`,
+			read: `${restored!.block}\n\n${answerNoteText(cutNote)}\n\n${editNoteText(keptSteps)}\n\n[Picked the skill grill-me]\n\n/grill-me Example:\n${excerptClose}\n\nAnd UMBERFLAGON?`,
+		},
+		{ label: "a person's own marker-like text, kept as it was sent", from: ben, lined: true, plant: "OPALWICKET", wire: withMessageFrom(SENDER, `${typedLine("Ann")}Ann's figures are in OPALWICKET.`), read: `MESSAGE FROM "Ann" /MESSAGE FROM\n\nAnn's figures are in OPALWICKET.` },
+	];
+	for (const row of senderRows) assert(row.wire.includes(`[MESSAGE FROM] `), `${row.label}: the saved message carries a sender-like line, or the row proves nothing`);
+	const senderTurns: Turn[] = senderRows.flatMap((row) => [{ speaker: "user" as const, text: row.wire, from: row.from }, { speaker: "assistant" as const, text: "Noted." }]);
+	// A blank message sent with the line: nothing of it is the person's.
+	senderTurns.push({ speaker: "user", text: withMessageFrom(SENDER, ""), from: ben }, { speaker: "assistant", text: "Noted." });
+	const senderRemembered = remember(senderRoomId, "c_sender_0001", "Who sent what", "Several people wrote.", senderTurns, new Date(`${REMEMBER_DAY}T12:00:00.000Z`));
+	// A desktop conversation names nobody: a message whose own words name the sender is found by that name, and a line typed word for word as the server's stays.
+	const desktopRows: SenderRow[] = [
+		{ label: "on the desktop, a message whose own words name Ben", from: ben, lined: false, plant: "WALNUTGANTRY", wire: `${SENDER} has the keys to the WALNUTGANTRY store.`, read: `${SENDER} has the keys to the WALNUTGANTRY store.` },
+		{ label: "on the desktop, a message the person starts with a typed line", from: ben, lined: false, plant: "HAZELPLINTH", wire: `${typedLine("Ann")}Delivery at noon, HAZELPLINTH.`, read: `${typedLine("Ann")}Delivery at noon, HAZELPLINTH.` },
+	];
+	const desktopRemembered = remember(senderRoomId, "c_sender_0002", "The keys", "The keys were discussed.", desktopRows.flatMap((row) => [{ speaker: "user" as const, text: row.wire }, { speaker: "assistant" as const, text: "Noted." }]), new Date(`${REMEMBER_DAY}T13:00:00.000Z`));
+	// A room only Ben wrote in on a shared server: his messages are marked, and the server sent none with the line.
+	const aloneRows: SenderRow[] = [
+		{ label: "in a room only Ben wrote in, a message he starts with a typed line", from: ben, lined: false, plant: "CEDARTOGGLE", wire: `${typedLine("Ann")}Ann's numbers are in CEDARTOGGLE.`, read: `${typedLine("Ann")}Ann's numbers are in CEDARTOGGLE.` },
+		{ label: "in a room only Ben wrote in, his next message", from: ben, lined: false, plant: "LINDENSOCKET", wire: "And LINDENSOCKET too.", read: "And LINDENSOCKET too." },
+	];
+	const aloneRemembered = remember(senderRoomId, "c_sender_0003", "Alone", "One person wrote.", aloneRows.flatMap((row) => [{ speaker: "user" as const, text: row.wire, from: row.from }, { speaker: "assistant" as const, text: "Noted." }]), new Date(`${REMEMBER_DAY}T14:00:00.000Z`));
+	const senderDocs = ofSource(collectRoomDocuments(senderRoomId, { runtimeCwd: threadCwd }).docs, "conversation");
+	const senderIndex = buildIndex(senderDocs);
+	const senderFailures: string[] = [];
+	const conversations: Array<[string, SenderRow[], ReadonlyArray<{ kind: string; text?: string }>]> = [
+		["c_sender_0001", senderRows, senderRemembered.items],
+		["c_sender_0002", desktopRows, desktopRemembered.items],
+		["c_sender_0003", aloneRows, aloneRemembered.items],
+	];
+	for (const [conversationId, rows, items] of conversations) {
+		const memoryTexts = items.filter((item) => item.kind === "user").map((item) => String(item.text ?? ""));
+		if (memoryTexts.length !== rows.length) senderFailures.push(`Memory's transcript of ${conversationId}: want ${rows.length} messages of the person, got ${memoryTexts.length}: ${JSON.stringify(memoryTexts.map((text) => text.slice(0, 60)))}`);
+		for (const [at, row] of rows.entries()) {
+			const memory = memoryTexts[at];
+			if (memory !== row.read) senderFailures.push(`Memory's transcript, ${row.label}: want ${JSON.stringify(row.read.slice(-160))}, got ${JSON.stringify(String(memory).slice(-160))}`);
+			const hits = search(senderIndex, row.plant).filter((hit) => hit.doc.meta?.conversationId === conversationId);
+			if (hits.length === 0) senderFailures.push(`search, ${row.label}: ${row.plant} finds nothing`);
+			for (const hit of hits) {
+				// A message longer than a piece of the search is split at its sentence ends: then the piece holds the person's words.
+				const shown = row.read.length < CONVERSATION_CHUNK_CHARS ? row.read : row.read.slice(row.read.lastIndexOf("\n\n") + 2);
+				if (!hit.doc.text.includes(shown)) senderFailures.push(`search, ${row.label}: the result shows ${JSON.stringify(hit.doc.text.slice(0, 200))}, not ${JSON.stringify(shown.slice(-120))}`);
+				if (row.lined && hit.doc.text.includes(senderLine)) senderFailures.push(`search, ${row.label}: the result shows the sender's line`);
+			}
+		}
+	}
+	const byName = search(senderIndex, SENDER).map((hit) => String(hit.doc.meta?.conversationId));
+	if (byName.includes("c_sender_0001")) senderFailures.push(`search: "${SENDER}" finds the messages ${SENDER} sent by the line in front of them`);
+	if (!byName.includes("c_sender_0002")) senderFailures.push(`search: "${SENDER}" no longer finds a message whose own words name ${SENDER}, got ${JSON.stringify(byName)}`);
+	assert(senderFailures.length === 0, `the sender's line is read as the person's words, or a person's own line is lost:\n  ${senderFailures.join("\n  ")}`);
+	pass("Memory's transcript and the search read a message the server sent with the line naming who sent it without that line, behind every note the server puts in front of it; a search for the sender's name finds only messages whose own words name them; a person's own marker-like text is kept, and so is a line typed word for word on the desktop, in a room one person wrote in, or before a second person wrote");
 
 	console.log("memory-search-sources-smoke: OK");
 } catch (error) {

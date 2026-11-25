@@ -114,12 +114,12 @@ export function persistentAgentSlugFromDisplayName(displayNameRaw: unknown): str
 	return slug || "agent";
 }
 
-function persistentAgentIdCandidate(baseAgentId: string, attempt: number, idTail: (() => string) | undefined): PersistentAgentId {
-	const suffix = idTail ? `-${idTail()}` : attempt <= 1 ? "" : `-${attempt}`;
+function persistentAgentIdCandidate(baseAgentId: string, attempt: number, newId: (() => string) | undefined): PersistentAgentId {
+	if (newId) return validatePersistentAgentId(newId());
+	const suffix = attempt <= 1 ? "" : `-${attempt}`;
 	const maxBaseLength = MAX_PERSISTENT_AGENT_ID_LENGTH - suffix.length;
 	const truncatedBase = baseAgentId.slice(0, Math.max(1, maxBaseLength)).replace(/-+$/g, "") || "agent";
-	const candidate = `${truncatedBase}${suffix}`;
-	return validatePersistentAgentId(candidate);
+	return validatePersistentAgentId(`${truncatedBase}${suffix}`);
 }
 
 export function normalizePersistentAgentScaffoldInput(input: PersistentAgentScaffoldInput): NormalizedPersistentAgentScaffoldInput {
@@ -151,7 +151,7 @@ const ROOM_BEING_BUILT_PREFIX = ".being-built-";
 const ROOM_BUILD_ABANDONED_MS = 60 * 60 * 1000;
 
 /** Picks a free id and makes the folder the room is built in, under a name of its own, and drops what a kill left long ago. */
-export function reserveUniquePersistentAgentRoot(baseAgentIdRaw: string, idTail?: () => string): ReservedPersistentAgentRoot {
+export function reserveUniquePersistentAgentRoot(baseAgentIdRaw: string, newId?: () => string): ReservedPersistentAgentRoot {
 	const baseAgentId = persistentAgentSlugFromDisplayName(baseAgentIdRaw);
 	ensureDir(PERSISTENT_AGENTS_ROOT);
 	for (const name of fs.readdirSync(PERSISTENT_AGENTS_ROOT)) {
@@ -161,7 +161,7 @@ export function reserveUniquePersistentAgentRoot(baseAgentIdRaw: string, idTail?
 		if (age > ROOM_BUILD_ABANDONED_MS) fs.rmSync(folder, { recursive: true, force: true });
 	}
 	for (let attempt = 1; attempt <= 9999; attempt += 1) {
-		const agentId = persistentAgentIdCandidate(baseAgentId, attempt, idTail);
+		const agentId = persistentAgentIdCandidate(baseAgentId, attempt, newId);
 		const rootDir = path.join(PERSISTENT_AGENTS_ROOT, agentId);
 		if (fs.existsSync(rootDir)) continue;
 		const buildDir = path.join(PERSISTENT_AGENTS_ROOT, `${ROOM_BEING_BUILT_PREFIX}${agentId}-${crypto.randomUUID()}`);
@@ -233,7 +233,7 @@ function removeRoomBeingBuiltOnFailure(buildDir: string): void {
  * a server with several people must not ask for it: anyone sending the same
  * details would get the room.
  */
-export function createPersistentAgentFromScaffoldInput(input: PersistentAgentScaffoldInput, options: { idTail?: () => string; untilAnswered?: boolean; viewer?: RoomViewer } = {}): PersistentAgentScaffoldResult {
+export function createPersistentAgentFromScaffoldInput(input: PersistentAgentScaffoldInput, options: { newId?: () => string; untilAnswered?: boolean; viewer?: RoomViewer } = {}): PersistentAgentScaffoldResult {
 	const normalized = normalizePersistentAgentScaffoldInput(input);
 	const key = scaffoldInputKey(normalized);
 	const holder = roomHoldingDisplayName(normalized.displayName, { viewer: options.viewer });
@@ -241,7 +241,7 @@ export function createPersistentAgentFromScaffoldInput(input: PersistentAgentSca
 		if (options.untilAnswered && readJson(unansweredCreatePath(createPersistentAgentInstance(holder).rootDir))?.key === key) return scaffoldResult(holder, normalized, []);
 		throw displayNameTaken(normalized.displayName);
 	}
-	const reserved = reserveUniquePersistentAgentRoot(normalized.baseAgentId, options.idTail);
+	const reserved = reserveUniquePersistentAgentRoot(normalized.baseAgentId, options.newId);
 	const now = Date.now();
 	const created: string[] = [];
 	try {

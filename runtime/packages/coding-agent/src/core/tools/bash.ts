@@ -11,6 +11,7 @@ import {
 	getShellConfig,
 	getShellEnv,
 	killProcessTree,
+	type ShellConfig,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.js";
@@ -66,11 +67,11 @@ export interface BashOperations {
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
  */
-export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
+export function createLocalBashOperations(options?: { shellPath?: string; shell?: ShellConfig }): BashOperations {
 	return {
 		exec: (command, cwd, { onData, signal, timeout, env }) => {
 			return new Promise((resolve, reject) => {
-				const { shell, args } = getShellConfig(options?.shellPath);
+				const { shell, args } = options?.shell ?? getShellConfig(options?.shellPath);
 				if (!existsSync(cwd)) {
 					reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
 					return;
@@ -80,6 +81,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 					detached: process.platform !== "win32",
 					env: env ?? getShellEnv(),
 					stdio: ["ignore", "pipe", "pipe"],
+					windowsHide: options?.shell !== undefined,
 				});
 				if (child.pid) trackDetachedChildPid(child.pid);
 				let timedOut = false;

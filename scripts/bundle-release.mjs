@@ -42,7 +42,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { findPrunedTypeScriptImports, pruneNodeModules } from "./bundle-release-prune.mjs";
+import { dropTargetPackages, findPrunedTypeScriptImports, pruneNodeModules } from "./bundle-release-prune.mjs";
 import { checkPayloadAgainstLock } from "./payload-lock-check.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -81,10 +81,11 @@ const NODE_VERSION = NODE_PIN.version;
 // The most files a release archive may carry, one ceiling for every target.
 // Each file costs install and update time on Windows, where the virus scanner
 // checks every new file, so growth has to be a reviewed decision. Measured:
-// the darwin-arm64 archive held 32,389 files before the payload trim and
-// 13,611 after it (win-x64 and linux-x64 estimated at 13,662 and 13,605 from
-// an earlier release's archives); the ceiling sits about 10 percent above
-// the trimmed count.
+// the darwin-arm64 archive held 32,389 files before the payload trim, 14,253
+// after it with Microsoft's sandbox kit, and 13,827 without it
+// (ARCHIVE_TARGET_DROP), as linux-x64 ships. win-x64 keeps the kit, so it is
+// estimated at about 14,300, as an earlier release's zip held 51 files more
+// than the darwin-arm64 archive. The ceiling sits about 5 percent above that.
 const MAX_ARCHIVE_FILES = 15_000;
 
 // ---------------------------------------------------------------------------
@@ -347,6 +348,16 @@ if (brokenImports.length > 0) {
 		console.error(`[bundle-release]   ${path.relative(appDir, file)} imports ${specifier}`);
 	}
 	console.error("[bundle-release] Add the package to PROTECTED_PACKAGES in scripts/bundle-release-prune.mjs, with the reason.");
+	process.exit(1);
+}
+
+// Leave out the packages nothing on this target loads (ARCHIVE_TARGET_DROP in
+// bundle-release-prune.mjs), after the lock check above has seen the full
+// install; the drop checks that the rest still holds what the app needs.
+try {
+	for (const entry of dropTargetPackages(appDir, target)) log(`left out of the ${target} archive: ${entry.name} (${entry.reason})`);
+} catch (err) {
+	console.error(`[bundle-release] ${err.message}`);
 	process.exit(1);
 }
 

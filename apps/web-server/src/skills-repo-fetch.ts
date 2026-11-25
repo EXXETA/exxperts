@@ -24,33 +24,53 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
-import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeScan } from "./skills-import.js";
+import { parseFrontmatter as parseYamlFrontmatter } from "@exxeta/exxperts-runtime";
+import { frontmatterFlagTrue } from "./skills-executable.js";
+import { SKILL_ID_MAX_LENGTH, SKILL_PROVENANCE_FILENAME, type SkillRefKind } from "./skills-store.js";
+import { filterRepoScanSkillFiles, isSkillScript, keepsRunMark, keptFileMode, nameFoldsOnto, outsidePath, scanInvisibleUnicode, SCRIPT_HEAD_BYTES, skillFileKind, skillFileList, skillOverLimit, SkillTooBigError, type InvisibleUnicodeScan, type SkillFile } from "./skills-import.js";
+import { repositoryFailedLine, type SkillTooBig } from "../../web-ui/src/skill-source-copy.js";
 
 /** A skill discovered in a cloned repo (the multi-select list row, spec §3). */
 export interface RepoFoundSkill {
 	/** Repo-relative POSIX path of the skill's directory ("" for a root SKILL.md). */
 	path: string;
-	/** Frontmatter `name`, falling back to the directory basename. */
+	/** Frontmatter `name`, falling back to its folder's name, or the repository's for a root SKILL.md. */
 	name: string;
+	/** The name the library keeps it under and a room's "/" picks it by: `name` fitted (`fitSkillName`). */
+	id: string;
 	description: string;
-	/** License from frontmatter, else detected from the repo's LICENSE file, else null. */
+	/** License from frontmatter, else the skill folder's LICENSE file, else the repo's, else null. */
 	license: string | null;
 	/** True when the skill dir carries any non-.md file (spec §3 bundled-scripts flag). */
 	hasBundledScripts: boolean;
+	/** The author marked it `disable-model-invocation`: the list shows the tag. */
+	disableModelInvocation: boolean;
+	/** Past the size limit, with its real count or size: it can't be added. */
+	tooBig?: SkillTooBig;
 }
 
 /** The review-screen candidate (the MR-3 seam contract shape). */
 export interface RepoSkillCandidate {
 	name: string;
+	/** The name the library keeps it under and a room's "/" picks it by (`RepoFoundSkill.id`). */
+	id: string;
+	/** Its front matter's name, when that isn't the "/" name: Replace tells a different skill by it. */
+	writtenName?: string;
 	description: string;
 	body: string;
 	/** Display source (the repo the user pasted / a featured entry). */
 	source: string;
 	license: string | null;
+	/** The version its front matter states, or null. */
+	version: string | null;
 	/** Invisible-unicode findings surfaced at review (spec §7 must 1). */
 	scanFindings: InvisibleUnicodeScan;
-	/** Relative filenames of the non-.md files bundled with the skill ("scripts will not run"). */
-	bundledScripts: string[];
+	/** Every file an import writes, SKILL.md included, with its kind, which the review lists. */
+	files: SkillFile[];
+	/** The author marked it `disable-model-invocation`: the review tags it as one that starts only when picked. */
+	disableModelInvocation: boolean;
+	/** The first path, as written, its Markdown reaches above its folder by (`outsidePath`): adding copies the folder alone. */
+	outsidePath?: string;
 }
 
 /** A curated Browse source (spec §3 featured-sources v1). */
@@ -119,9 +139,11 @@ function looksLikeLocalPath(input: string): boolean {
  * URLs (https/http/ssh/git, `git@host:user/repo`, and `host/user/repo`
  * shorthand), plus `file://` URLs and absolute local paths (the fetch path must
  * accept a local repo for smoke testability — spec §3/smokes). Returns a clear
- * error otherwise. Never throws.
+ * error otherwise. Never throws. `recorded` marks an address read back from a
+ * skill's record: it is taken as it was recorded, so a `git@host:<digits>/a/b`
+ * there stays a folder named in digits (see `sshPortOf`).
  */
-export function resolveRepoSource(rawInput: string, opts: { allowLocal?: boolean } = {}): { ok: true; value: ResolvedRepoSource } | { ok: false; error: string } {
+export function resolveRepoSource(rawInput: string, opts: { allowLocal?: boolean; recorded?: boolean } = {}): { ok: true; value: ResolvedRepoSource } | { ok: false; error: string } {
 	const input = String(rawInput ?? "").trim();
 	if (!input) return { ok: false, error: "a repository URL is required" };
 	if (input.length > 2048) return { ok: false, error: "repository URL is too long" };
@@ -148,6 +170,8 @@ export function resolveRepoSource(rawInput: string, opts: { allowLocal?: boolean
 	if (urlPart.startsWith("-")) return { ok: false, error: "invalid repository URL" };
 
 	const scpLike = urlPart.match(/^git@([^:\s]+):([^\s]+)$/);
+	const port = scpLike && !opts.recorded && !/[/@]/.test(scpLike[1]) ? sshPortOf(scpLike[2]) : null;
+	if (scpLike && port) return resolveRepoSource(`ssh://git@${scpLike[1]}:${port.port}/${port.path}${ref === undefined ? "" : `#${ref}`}`, opts);
 	if (scpLike) {
 		// Reject a leading-dash host independently of git's own CVE-2017-1000117
 		// fix — a `git@-oProxyCommand=…:x/y` host must never reach ssh as an option.
@@ -181,6 +205,46 @@ export function resolveRepoSource(rawInput: string, opts: { allowLocal?: boolean
 		return { ok: false, error: "expected a git URL with a user/repo path" };
 	}
 	return { ok: true, value: { kind: "git", cloneArg, ref, display: shownAddress(parsed, cloneArg), host: parsed.host } };
+}
+
+/**
+ * The port in the path of a `git@host:<port>/group/repo` address, as a GitLab
+ * on its own SSH port gives it, with the path after it; null for any other
+ * path. git reads that form as port 22 and a folder named for the digits, so it
+ * is sent as `ssh://git@host:<port>/group/repo`. One part after the digits
+ * (`git@host:2024/repo`) stays a folder. Only a typed address is read so: an
+ * add records the `ssh://` form, so a recorded `git@host:<digits>/a/b` is a
+ * group named in digits and goes to git as recorded. A person adding such a
+ * group from a typed address uses its https or `ssh://` address.
+ */
+function sshPortOf(scpPath: string): { port: string; path: string } | null {
+	const match = scpPath.match(/^([1-9]\d{0,4})\/(.+)$/);
+	if (!match || Number(match[1]) > 65535 || match[2].replace(/\.git$/, "").split("/").filter(Boolean).length < 2) return null;
+	return { port: match[1], path: match[2] };
+}
+
+/**
+ * The address a skill's record keeps to reach the repository again, without the
+ * `#ref`: the shown one, except that an SSH address keeps its login (`git@`):
+ * SSH signs in with a key, so that user name is never a secret, while any other
+ * may be a token.
+ */
+export function recordedAddress(source: ResolvedRepoSource): string {
+	if (source.kind === "local") return source.cloneArg;
+	try {
+		return new URL(source.cloneArg).protocol === "ssh:" ? source.cloneArg : source.display;
+	} catch {
+		return source.cloneArg; // `git@host:user/repo`
+	}
+}
+
+/** A stored repository address as the app shows it: without the login an SSH address keeps. */
+export function shownRepositoryAddress(address: string): string {
+	try {
+		return shownAddress(new URL(address), address);
+	} catch {
+		return address;
+	}
 }
 
 /**
@@ -223,19 +287,36 @@ function finishLocal(localPath: string, allowLocal?: boolean): { ok: true; value
 const CLONE_TIMEOUT_MS = 90_000;
 const CONFIG_READ_TIMEOUT_MS = 5_000;
 
+/** What a check or a fetch that the person didn't press for leaves out. */
+export interface RepoAskOptions {
+	/** False keeps a Mac's install window for Apple's tools shut. */
+	askForDeveloperTools?: boolean;
+	/**
+	 * False uses no sign-in of the person's: no credential helper and no SSH key
+	 * or agent, since any of them may open a window or wait for a touch that git
+	 * can't be told to skip. A repository that needs one fails as "sign-in". What
+	 * git sends without asking anyone (a ~/.netrc, a header in the git config) stays.
+	 */
+	signIns?: boolean;
+}
+
 // Hardened environment: no credential prompts, no system config, no hooks or
 // templates, transports allow-listed (file: included for local smoke repos).
 // Hooks are never fetched from a remote, but a poisoned template dir is closed
 // off too, belt-and-braces.
-function hardenedGitEnv(): NodeJS.ProcessEnv {
+// Without the person's sign-ins ssh is no transport either, so a rewrite of the
+// address in their git config can't bring it back.
+function hardenedGitEnv(options: RepoAskOptions = {}): NodeJS.ProcessEnv {
 	return {
 		...process.env,
 		GIT_TERMINAL_PROMPT: "0",
 		GIT_ASKPASS: "",
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_TEMPLATE_DIR: "",
-		GIT_ALLOW_PROTOCOL: "https:http:ssh:git:file",
+		GIT_ALLOW_PROTOCOL: options.signIns === false ? "https:http:git:file" : "https:http:ssh:git:file",
 		GCM_INTERACTIVE: "never",
+		// A clone's commit is read from its ref files (cloneOrigin): keep them files, whatever git's default.
+		GIT_DEFAULT_REF_FORMAT: "files",
 	};
 }
 
@@ -313,15 +394,21 @@ export function resolveGitCommand(platform: NodeJS.Platform = process.platform, 
 	return candidates.find((candidate) => exists(candidate)) ?? "git";
 }
 
-function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.ProcessEnv, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
+/** How much of a git command's output is kept by default; an answer that reaches its bound may be cut. */
+const RUN_GIT_STDOUT_MAX = 262_144;
+/** The bound for git's list of a checkout's files: far past what a repository within the scan's 20,000 files lists. */
+const LS_FILES_STDOUT_MAX = 32 * 1024 * 1024;
+
+/** Runs git and answers its exit code and output; a git that is missing, can't start or runs past `timeoutMs` rejects as a `RepoReachFailure` naming why. */
+function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.ProcessEnv, cwd?: string, stdoutMax = RUN_GIT_STDOUT_MAX): Promise<{ code: number; stdout: string; stderr: string }> {
 	return new Promise((resolve, reject) => {
 		let child: ChildProcess;
 		// A missing git is a missing tool, not a broken repository: say so in
 		// words, and keep the system's own text for whoever reads the log.
 		const missing = (err: unknown) => {
-			if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") return err;
+			if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") return new RepoReachFailure("failed", err instanceof Error ? err.message : String(err), { cause: err });
 			console.warn(`[skills] git is not available: ${(err as Error).message}`);
-			return new Error(gitMissingMessage(), { cause: err });
+			return new RepoReachFailure("missing-tool", gitMissingMessage(), { cause: err });
 		};
 		try {
 			// Its own process group off Windows, so the timeout can end the whole tree.
@@ -343,7 +430,7 @@ function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.Pro
 			child.stderr?.destroy();
 		}, timeoutMs);
 		child.stdout?.on("data", (chunk) => {
-			if (stdout.length < 262_144) stdout += String(chunk);
+			if (stdout.length < stdoutMax) stdout += String(chunk);
 		});
 		child.stderr?.on("data", (chunk) => {
 			if (stderr.length < 8192) stderr += String(chunk);
@@ -355,7 +442,7 @@ function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.Pro
 		child.once("close", (code) => {
 			clearTimeout(timer);
 			if (timedOut) {
-				reject(new Error(`git ${what} timed out after ${timeoutMs}ms`));
+				reject(new RepoReachFailure("timeout", `git ${what} timed out after ${timeoutMs}ms`));
 				return;
 			}
 			resolve({ code: code ?? -1, stdout, stderr: stderr.trim() });
@@ -476,9 +563,28 @@ export function signInArgsFromConfigListing(listing: string, cloneArg: string): 
  * The `-c credential.*` args of a clone, read fresh on every clone, so a sign-in
  * made after a failed attempt counts on the retry. Never throws.
  */
-export async function storedSignInArgs(cloneArg: string): Promise<string[]> {
-	if (!signInRemote(cloneArg)) return ["-c", "credential.helper="];
+export async function storedSignInArgs(cloneArg: string, options: RepoAskOptions = {}): Promise<string[]> {
+	if (options.signIns === false || !signInRemote(cloneArg)) return ["-c", "credential.helper="];
 	return signInArgsFromConfigListing(await readGitConfigListing(), cloneArg);
+}
+
+/** The source is reached over SSH: an `ssh://` address, or `git@host:user/repo`. */
+function reachedOverSsh(source: ResolvedRepoSource): boolean {
+	if (source.kind !== "git") return false;
+	try {
+		return new URL(source.cloneArg).protocol === "ssh:";
+	} catch {
+		return true;
+	}
+}
+
+/** git's answer when `GIT_ALLOW_PROTOCOL` leaves out the ssh that the person's own config sends an address to. */
+const SSH_NOT_ALLOWED_STDERR = /transport 'ssh' not allowed/i;
+
+/** The failure of a repository that only answers a sign-in, asked without the person's (`signIns: false`); null for any other answer. */
+function signInNotUsed(source: ResolvedRepoSource, options: RepoAskOptions, stderr?: string): RepoReachFailure | null {
+	if (options.signIns !== false || !(stderr === undefined ? reachedOverSsh(source) : SSH_NOT_ALLOWED_STDERR.test(stderr))) return null;
+	return new RepoReachFailure("sign-in", "this repository is reached over SSH, which this check doesn't use");
 }
 
 /** What to do about a sign-in failure, by what the host answered; null when the failure is something else. */
@@ -493,7 +599,7 @@ function signInAdvice(stderr: string, host: string): string | null {
 		return `${host} refused access to this repository. Your sign-in there may not include it, or an access token may lack the right to read repositories.`;
 	}
 	if (/could not read (?:Username|Password)|terminal prompts disabled/i.test(stderr)) {
-		return `this repository needs a sign-in to ${host} and git has none stored for it, or the address is wrong. Clone it once in a terminal so git stores the sign-in, or use the repository's SSH address (git@${host}:group/repo.git).`;
+		return `This computer has no sign-in for ${host}, or the address is wrong. Sign in there with git in a terminal, then try again.`;
 	}
 	return null;
 }
@@ -511,17 +617,13 @@ export function describeCloneFailure(rawStderr: string, source: ResolvedRepoSour
 }
 
 /**
- * Shallow-clone a validated source into a fresh temp directory and return its
- * path. Depth 1, no tags, single branch, submodules NOT recursed, hooks/templates
- * neutralized. On any failure the temp dir is removed and an Error is thrown.
- * `askForDeveloperTools: false` keeps a Mac's install window shut when git is
- * only a fallback that a missing tool does not explain.
+ * The options every git command that fetches a repository's files runs with, in
+ * one place: the stored sign-in, read-only; no hooks; no `ext::` transport, and
+ * `file:` only as typed by the person; and no symlinks made.
  */
-export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS, options: { askForDeveloperTools?: boolean } = {}): Promise<string> {
-	if (source.kind === "git" && addressHasPassword(source.cloneArg)) throw new Error(PASSWORD_IN_ADDRESS);
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skill-repo-"));
-	const args = [
-		...(source.kind === "git" ? await storedSignInArgs(source.cloneArg) : []),
+async function hardenedFetchArgs(source: ResolvedRepoSource, options: RepoAskOptions): Promise<string[]> {
+	return [
+		...(source.kind === "git" ? await storedSignInArgs(source.cloneArg, options) : []),
 		"-c",
 		"core.hooksPath=/dev/null",
 		"-c",
@@ -533,25 +635,94 @@ export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = C
 		// SKILL.md (or a vendored file) at an out-of-checkout path and turn import
 		// into an arbitrary local-file read.
 		"core.symlinks=false",
-		"clone",
-		"--depth",
-		"1",
-		"--no-tags",
-		"--single-branch",
-		"--no-recurse-submodules",
 	];
-	if (source.ref) args.push("--branch", source.ref);
-	// `--` terminates option parsing: neither the repo arg nor the target can be
-	// read as a git flag even if it somehow began with "-".
-	args.push("--", source.cloneArg, dir);
+}
+
+/** A full commit id after `#`: fetched by id, since `clone --branch` takes only a branch or a tag. */
+function isFullCommitId(ref: string | undefined): ref is string {
+	return ref !== undefined && COMMIT_RE.test(ref.toLowerCase());
+}
+
+/**
+ * The git commands that fill an empty folder with one version of a source, each
+ * run in that folder. A full commit id is fetched by id into a new repository
+ * (git's protocol v2 lets a client ask for any commit); anything else is a
+ * shallow clone of its branch or tag. Depth 1, no tags, submodules NOT recursed.
+ * `--` ends the options: neither the repo arg nor the target can be read as a
+ * git flag even if it somehow began with "-".
+ */
+function fetchCommands(source: ResolvedRepoSource, dir: string): Array<{ what: string; args: string[] }> {
+	if (isFullCommitId(source.ref)) {
+		return [
+			{ what: "init", args: ["init", "-q"] },
+			{ what: "fetch", args: ["fetch", "--depth", "1", "--no-tags", "--no-recurse-submodules", "--", source.cloneArg, source.ref] },
+			{ what: "checkout", args: ["checkout", "-q", "--detach", "FETCH_HEAD"] },
+		];
+	}
+	return [{ what: "clone", args: ["clone", "--depth", "1", "--no-tags", "--single-branch", "--no-recurse-submodules", ...(source.ref ? ["--branch", source.ref] : []), "--", source.cloneArg, dir] }];
+}
+
+/** git's answer when the branch, tag or commit asked for is not in the repository. */
+const REF_MISSING_STDERR = /Remote branch .+ not found|couldn't find remote ref|not our ref|no such remote ref/i;
+
+/**
+ * Why git could not fetch a source, as a `RepoReachFailure`: a sign-in carries
+ * only its advice, every other reason git's own text, which only the server's
+ * log shows (the person reads one plain sentence per reason).
+ */
+function gitFetchFailure(stderr: string, code: number, what: string, source: ResolvedRepoSource): RepoReachFailure {
+	const message = describeCloneFailure(stderr, source) || `git ${what} exited with code ${code}`;
+	console.warn(`[skills] git ${what} of ${source.display} failed: ${message}`);
+	const advice = source.kind === "git" && source.host ? signInAdvice(stderr, source.host) : null;
+	if (advice) return new RepoReachFailure("sign-in", advice);
+	return reachFailure(stderr, message, source) ?? new RepoReachFailure(REF_MISSING_STDERR.test(stderr) ? "ref-missing" : "failed", message);
+}
+
+/**
+ * With `core.symlinks=false` git writes a committed link as a plain file holding
+ * its target's path, which would come in as one of the skill's files. git's own
+ * list of what it checked out names each link (mode 120000); those files are
+ * removed, as GitHub's zip leaves its links out (`unpackArchive`). A list that
+ * can't be read fails the fetch: a link is never taken for a file.
+ */
+async function dropCommittedLinks(dir: string, hardening: string[], timeoutMs: number): Promise<void> {
+	const listed = await runGit([...hardening, "ls-files", "--stage", "-z"], "ls-files", timeoutMs, hardenedGitEnv(), dir, LS_FILES_STDOUT_MAX);
+	if (listed.code !== 0) throw new RepoReachFailure("failed", `git ls-files exited with code ${listed.code}: ${listed.stderr}`);
+	if (listed.stdout.length >= LS_FILES_STDOUT_MAX) throw new RepoReachFailure("failed", "git's list of the checkout's files is too long to read");
+	const root = path.resolve(dir);
+	for (const entry of listed.stdout.split("\0")) {
+		const tab = entry.indexOf("\t");
+		if (tab < 0 || !entry.startsWith("120000 ")) continue;
+		const file = path.resolve(root, entry.slice(tab + 1));
+		if (!file.startsWith(root + path.sep)) continue;
+		fs.rmSync(file, { force: true });
+	}
+}
+
+/**
+ * Fetch a validated source into a fresh temp directory and return its path
+ * (`fetchCommands`), hooks and templates neutralized. On any failure the temp
+ * dir is removed and a `RepoReachFailure` is thrown. `askForDeveloperTools:
+ * false` keeps a Mac's install window shut when git is only a fallback that a
+ * missing tool does not explain.
+ */
+export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS, options: RepoAskOptions = {}): Promise<string> {
+	if (source.kind === "git" && addressHasPassword(source.cloneArg)) throw new RepoReachFailure("failed", PASSWORD_IN_ADDRESS);
+	const unused = signInNotUsed(source, options);
+	if (unused) throw unused;
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skill-repo-"));
 	try {
-		const result = await runGit(args, "clone", timeoutMs, hardenedGitEnv());
-		if (result.code !== 0 && isMacDeveloperToolsStub(result.stderr)) {
-			console.warn("[skills] git is Apple's stand-in: the command line tools are not installed");
-			if (options.askForDeveloperTools !== false) requestMacDeveloperToolsInstall();
-			throw new Error(MAC_DEVELOPER_TOOLS_MISSING);
+		const hardening = await hardenedFetchArgs(source, options);
+		for (const { what, args } of fetchCommands(source, dir)) {
+			const result = await runGit([...hardening, ...args], what, timeoutMs, hardenedGitEnv(options), dir);
+			if (result.code !== 0 && isMacDeveloperToolsStub(result.stderr)) {
+				console.warn("[skills] git is Apple's stand-in: the command line tools are not installed");
+				if (options.askForDeveloperTools !== false) requestMacDeveloperToolsInstall();
+				throw new RepoReachFailure("missing-tool", MAC_DEVELOPER_TOOLS_MISSING);
+			}
+			if (result.code !== 0) throw signInNotUsed(source, options, result.stderr) ?? gitFetchFailure(result.stderr, result.code, what, source);
 		}
-		if (result.code !== 0) throw new Error(describeCloneFailure(result.stderr, source) || `git clone exited with code ${result.code}`);
+		await dropCommittedLinks(dir, hardening, timeoutMs);
 		return dir;
 	} catch (err) {
 		// Best effort: such a leftover helper can still hold the folder on Windows,
@@ -580,8 +751,8 @@ const ARCHIVE_MAX_REDIRECTS = 3;
 // git's time, so the download gets this long to start.
 const ARCHIVE_ANSWER_TIMEOUT_MS = 15_000;
 
-/** Why a download failed: git may sign in, the repository is too big, or anything else. */
-type ArchiveFailureKind = "not-found" | "too-large" | "failed";
+/** Why a download failed: git may sign in, the repository is too big, GitHub could not be reached or didn't answer in time, or anything else. */
+type ArchiveFailureKind = "not-found" | "too-large" | "unreachable" | "timed-out" | "failed";
 
 class ArchiveFailure extends Error {
 	constructor(readonly kind: ArchiveFailureKind, message: string, options?: { cause?: unknown }) {
@@ -598,6 +769,13 @@ class ArchiveFailure extends Error {
  * anywhere else.
  */
 export function githubArchiveUrl(source: ResolvedRepoSource, base = archiveBase()): string | null {
+	const repo = githubRepoUrl(source, base);
+	if (!repo) return null;
+	return `${repo}/archive/${(source.ref ?? "HEAD").split("/").map(encodeURIComponent).join("/")}.zip`;
+}
+
+/** `<base>/<owner>/<repo>` of a source `githubArchiveUrl` takes, or null. */
+function githubRepoUrl(source: ResolvedRepoSource, base: string): string | null {
 	if (source.kind !== "git") return null;
 	let parsed: URL;
 	try {
@@ -609,7 +787,7 @@ export function githubArchiveUrl(source: ResolvedRepoSource, base = archiveBase(
 	const repo = parsed.pathname.replace(/\/+$/, "").replace(/\.git$/, "").split("/").filter(Boolean);
 	const ref = (source.ref ?? "HEAD").split("/");
 	if (repo.length !== 2 || [...repo, ...ref].some((segment) => !segment || segment === "." || segment === "..")) return null;
-	return `${base.replace(/\/+$/, "")}/${repo.map(encodeURIComponent).join("/")}/archive/${ref.map(encodeURIComponent).join("/")}.zip`;
+	return `${base.replace(/\/+$/, "")}/${repo.map(encodeURIComponent).join("/")}`;
 }
 
 function archiveBase(): string {
@@ -620,11 +798,12 @@ function archiveBase(): string {
 	return "https://github.com";
 }
 
-function fetchFailureReason(err: unknown): string {
-	if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) return "GitHub did not answer in time";
+/** A download that ran past its time, or that couldn't reach GitHub at all. */
+function notAnswered(err: unknown): ArchiveFailure {
+	if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) return new ArchiveFailure("timed-out", "GitHub did not answer in time", { cause: err });
 	const cause = (err as { cause?: { code?: unknown; message?: unknown } } | undefined)?.cause;
 	const detail = typeof cause?.code === "string" ? cause.code : typeof cause?.message === "string" ? cause.message : err instanceof Error ? err.message : String(err);
-	return `GitHub could not be reached (${detail})`;
+	return new ArchiveFailure("unreachable", `GitHub could not be reached (${detail})`, { cause: err });
 }
 
 /** Download the zip, following GitHub's own redirects only, capped in size. */
@@ -647,7 +826,7 @@ async function downloadFollowing(url: string, signal: AbortSignal, maxBytes: num
 		try {
 			res = await fetch(current, { redirect: "manual", signal, headers: { "user-agent": "exxperts" } });
 		} catch (err) {
-			throw new ArchiveFailure("failed", fetchFailureReason(err), { cause: err });
+			throw notAnswered(err);
 		}
 		if (res.status >= 300 && res.status < 400) {
 			const location = res.headers.get("location");
@@ -672,7 +851,7 @@ async function downloadFollowing(url: string, signal: AbortSignal, maxBytes: num
 			}
 		} catch (err) {
 			if (err instanceof ArchiveFailure) throw err;
-			throw new ArchiveFailure("failed", fetchFailureReason(err), { cause: err });
+			throw notAnswered(err);
 		}
 		return Buffer.concat(chunks);
 	}
@@ -708,17 +887,20 @@ function readEntryCapped(entry: JSZip.JSZipObject, maxBytes: number): Promise<Bu
 
 /**
  * Unpack GitHub's zip into `dir` as plain files, dropping the one folder GitHub
- * wraps everything in. Like the clone (`core.symlinks=false`), no symlink is
- * made; a name that could leave the folder, or that a file system or the skill
- * digest would misread, is skipped.
+ * wraps everything in, and return the commit it holds: GitHub writes it as the
+ * zip's comment. Like the clone (`core.symlinks=false`), no symlink is made; a
+ * name that could leave the folder, or that a file system or the skill digest
+ * would misread, is skipped.
  */
-async function unpackArchive(buffer: Buffer, dir: string, maxBytes: number): Promise<void> {
+async function unpackArchive(buffer: Buffer, dir: string, maxBytes: number): Promise<string> {
 	let zip: JSZip;
 	try {
 		zip = await JSZip.loadAsync(buffer);
 	} catch (err) {
 		throw new ArchiveFailure("failed", "GitHub's download was not a readable zip", { cause: err });
 	}
+	const commit = String((zip as JSZip & { comment?: unknown }).comment ?? "").trim().toLowerCase();
+	if (!COMMIT_RE.test(commit)) throw new ArchiveFailure("failed", "GitHub's download did not say which commit it holds");
 	const entries = Object.values(zip.files).filter((entry) => !entry.dir);
 	if (entries.length > WALK_MAX_FILES) throw new ArchiveFailure("too-large", "the repository has too many files to unpack");
 	const root = path.resolve(dir);
@@ -743,7 +925,63 @@ async function unpackArchive(buffer: Buffer, dir: string, maxBytes: number): Pro
 		}
 		remaining -= bytes.length;
 		fs.mkdirSync(path.dirname(dest), { recursive: true });
-		fs.writeFileSync(dest, bytes);
+		fs.writeFileSync(dest, bytes, { mode: keptFileMode(segments.join("/"), Number(entry.unixPermissions) || 0, bytes.subarray(0, SCRIPT_HEAD_BYTES)) });
+	}
+	return commit;
+}
+
+/** A full commit id: SHA-1, or SHA-256 for a repository that uses it. */
+const COMMIT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** Which version of a repository a checkout holds, as a skill's record keeps it. */
+export interface RepoOrigin {
+	address: string;
+	ref?: string;
+	refKind: SkillRefKind;
+	commit: string;
+}
+
+/** A checkout, and the version it holds when that could be told: without it a skill is still added, only not kept up to date. */
+export interface RepoCheckout {
+	dir: string;
+	origin?: RepoOrigin;
+}
+
+function originOf(source: ResolvedRepoSource, refKind: SkillRefKind, commit: string): RepoOrigin {
+	return { address: recordedAddress(source), ...(source.ref ? { ref: source.ref } : {}), refKind, commit };
+}
+
+/**
+ * The version a clone holds, read from its own files (no git is run): the commit
+ * of HEAD, and how its ref moves. `--branch` with a branch leaves HEAD on that
+ * branch; with a tag, HEAD holds the tag's commit itself; a commit fetched by its
+ * full id is that commit.
+ */
+function cloneOrigin(dir: string, source: ResolvedRepoSource): RepoOrigin {
+	const gitDir = path.join(dir, ".git");
+	const head = fs.readFileSync(path.join(gitDir, "HEAD"), "utf-8").trim();
+	const symbolic = head.match(/^ref: (refs\/heads\/\S+)$/);
+	let commit = symbolic ? null : head.toLowerCase();
+	if (symbolic) {
+		const loose = path.join(gitDir, ...symbolic[1].split("/"));
+		if (fs.existsSync(loose)) commit = fs.readFileSync(loose, "utf-8").trim().toLowerCase();
+		else {
+			const packed = fs.readFileSync(path.join(gitDir, "packed-refs"), "utf-8").split("\n").map((line) => line.trim().split(" "));
+			commit = packed.find((fields) => fields[1] === symbolic[1])?.[0]?.toLowerCase() ?? null;
+		}
+	}
+	if (!commit || !COMMIT_RE.test(commit)) throw new Error("could not tell which commit of the repository was fetched");
+	return originOf(source, !source.ref ? "default" : symbolic ? "branch" : isFullCommitId(source.ref) ? "commit" : "tag", commit);
+}
+
+/** A shallow clone (`cloneRepoShallow`) with the version it holds, when its files tell it (an empty repository's do not). */
+async function cloneCheckout(source: ResolvedRepoSource, timeoutMs: number, options: RepoAskOptions = {}): Promise<RepoCheckout> {
+	const dir = await cloneRepoShallow(source, timeoutMs, options);
+	try {
+		return { dir, origin: cloneOrigin(dir, source) };
+	} catch (err) {
+		console.warn(`[skills] could not tell which version of ${source.display} was fetched: ${err instanceof Error ? err.message : String(err)}`);
+		return { dir };
 	}
 }
 
@@ -755,14 +993,19 @@ async function unpackArchive(buffer: Buffer, dir: string, maxBytes: number): Pro
  * and certificates), but if git is missing too, the reason shown is GitHub's,
  * and a Mac is not asked to install tools that would not have helped.
  */
-export async function fetchRepoCheckout(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS, limits: { downloadBytes?: number; unpackedBytes?: number } = {}): Promise<string> {
+export async function fetchRepoCheckout(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS, limits: { downloadBytes?: number; unpackedBytes?: number } = {}, options: RepoAskOptions = {}): Promise<RepoCheckout> {
 	const url = githubArchiveUrl(source);
-	if (!url) return cloneRepoShallow(source, timeoutMs);
+	if (!url) return cloneCheckout(source, timeoutMs, options);
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skill-repo-"));
 	let failure: ArchiveFailure;
 	try {
-		await unpackArchive(await downloadArchive(url, timeoutMs, limits.downloadBytes ?? ARCHIVE_MAX_DOWNLOAD_BYTES), dir, limits.unpackedBytes ?? ARCHIVE_MAX_UNPACKED_BYTES);
-		return dir;
+		const commit = await unpackArchive(await downloadArchive(url, timeoutMs, limits.downloadBytes ?? ARCHIVE_MAX_DOWNLOAD_BYTES), dir, limits.unpackedBytes ?? ARCHIVE_MAX_UNPACKED_BYTES);
+		// The zip is good whatever GitHub says of its ref: a kind that can't be told only leaves the skill without updates.
+		const refKind = await archiveRefKind(source, commit).catch((err: unknown) => {
+			console.warn(`[skills] could not tell what ${source.display}'s ref is: ${err instanceof Error ? err.message : String(err)}`);
+			return null;
+		});
+		return { dir, ...(refKind ? { origin: originOf(source, refKind, commit) } : {}) };
 	} catch (err) {
 		try {
 			fs.rmSync(dir, { recursive: true, force: true });
@@ -770,20 +1013,191 @@ export async function fetchRepoCheckout(source: ResolvedRepoSource, timeoutMs = 
 		failure = err instanceof ArchiveFailure ? err : new ArchiveFailure("failed", err instanceof Error ? err.message : String(err), { cause: err });
 	}
 	console.warn(`[skills] GitHub's zip of ${source.display} failed (${failure.message}); trying git`);
-	if (failure.kind !== "failed") return cloneRepoShallow(source, timeoutMs);
+	return withGitAfterGitHub(failure, (fallback) => cloneCheckout(source, timeoutMs, fallback ? { ...options, askForDeveloperTools: false } : options));
+}
+
+/**
+ * git's turn after GitHub's own answer failed. A private repository (GitHub's
+ * 404) or one too big for a zip is git's job, so git's failure is the one shown.
+ * When GitHub could not be reached or answered something else, git may still get
+ * through; if git is missing too, GitHub's reason is shown, and a Mac is not asked
+ * to install tools that would not have helped.
+ */
+async function withGitAfterGitHub<T>(failure: ArchiveFailure, run: (fallback: boolean) => Promise<T>): Promise<T> {
+	if (failure.kind === "not-found" || failure.kind === "too-large") return run(false);
 	try {
-		return await cloneRepoShallow(source, timeoutMs, { askForDeveloperTools: false });
+		return await run(true);
 	} catch (err) {
-		if (err instanceof Error && isMissingToolMessage(err.message)) throw new Error(failure.message, { cause: err });
+		if (err instanceof Error && isMissingToolMessage(err.message)) throw new RepoReachFailure(failure.kind === "unreachable" ? "offline" : failure.kind === "timed-out" ? "timeout" : "failed", failure.message, { cause: err });
 		throw err;
 	}
+}
+
+/**
+ * How the ref of a GitHub zip moves: none is the default branch; a ref the
+ * commit begins with is that commit; else GitHub's own list of branches and tags
+ * says which it is.
+ */
+async function archiveRefKind(source: ResolvedRepoSource, commit: string): Promise<SkillRefKind> {
+	if (!source.ref) return "default";
+	if (/^[0-9a-f]{7,64}$/i.test(source.ref) && commit.startsWith(source.ref.toLowerCase())) return "commit";
+	const refs = await githubRefs(source);
+	if (refs.refs.has(`refs/heads/${source.ref}`)) return "branch";
+	if (refs.refs.has(`refs/tags/${source.ref}`)) return "tag";
+	throw new ArchiveFailure("failed", "GitHub does not list this branch or tag");
+}
+
+// --- A repository's refs -----------------------------------------------------
+//
+// Whether a skill's repository has moved is asked of its refs alone, which is a
+// small answer, before anything is fetched: `git ls-remote`, or for a public
+// GitHub repository GitHub's own list, so no git is needed there either.
+
+/** A repository's refs: each ref's commit (a tag's peeled commit when it has one), and HEAD's. */
+export interface RemoteRefs {
+	head: string | null;
+	refs: Map<string, string>;
+}
+
+/**
+ * Why a repository could not be reached: the network, a server that was found
+ * but didn't take the connection on its port, no answer in time, a sign-in, a
+ * tool this machine lacks, a branch, tag or commit it doesn't have, or anything else.
+ */
+export type RepoReachReason = "offline" | "connect-failed" | "timeout" | "sign-in" | "missing-tool" | "ref-missing" | "failed";
+
+export class RepoReachFailure extends Error {
+	/** The host git was sent to, without a login: named when the server didn't take the connection. */
+	readonly host?: string;
+	constructor(readonly reason: RepoReachReason, message: string, options?: { cause?: unknown; host?: string }) {
+		super(message, options);
+		if (options?.host) this.host = options.host;
+	}
+}
+
+/** Any failure to fetch a source as a reason and the message behind it (the server's log keeps the message; the person reads `repositoryFailedLine`). */
+export function repoFailureOf(err: unknown): { reason: RepoReachReason; message: string; host?: string } {
+	const message = err instanceof Error ? err.message : String(err);
+	if (!(err instanceof RepoReachFailure)) return { reason: "failed", message };
+	return { reason: err.reason, message, ...(err.host ? { host: err.host } : {}) };
+}
+
+const LS_REMOTE_TIMEOUT_MS = 30_000;
+const REFS_MAX_BYTES = 1024 * 1024;
+const OFFLINE_STDERR = /Could not resolve host|Failed to connect|Couldn't connect|Could not connect|Connection refused|Connection timed out|Operation timed out|Network is unreachable|No route to host/i;
+/**
+ * ssh's own lines for a server it found by name that didn't take the connection:
+ * nothing answered on its port, it refused it, or it cut the handshake (a server
+ * reached outside a company's VPN often does). OpenSSH words them the same on a
+ * Mac, Linux and Git for Windows; a name it can't resolve or a network it can't
+ * reach stays offline.
+ */
+const SSH_CONNECT_FAILED_STDERR = /ssh: connect to host \S+ port \d+: (?:Connection refused|Operation timed out|Connection timed out)|kex_exchange_identification|Connection reset by \S+ port \d+/i;
+
+/** A failure to reach the source's server, by git's text, or null when the text says something else. */
+function reachFailure(stderr: string, message: string, source: ResolvedRepoSource): RepoReachFailure | null {
+	if (SSH_CONNECT_FAILED_STDERR.test(stderr) && source.kind === "git" && source.host) return new RepoReachFailure("connect-failed", message, { host: source.host });
+	return OFFLINE_STDERR.test(stderr) ? new RepoReachFailure("offline", message) : null;
+}
+
+/** The commit a skill's ref points at in `refs`, or null when the ref is gone. A commit never moves. */
+export function refCommit(refs: RemoteRefs, refKind: SkillRefKind, ref: string | undefined): string | null {
+	if (refKind === "default") return refs.head;
+	if (refKind === "branch") return refs.refs.get(`refs/heads/${ref}`) ?? null;
+	if (refKind === "tag") return refs.refs.get(`refs/tags/${ref}`) ?? null;
+	return ref ?? null;
+}
+
+/**
+ * A repository's refs: GitHub's list for a public GitHub address (git when that
+ * fails, as for a download), else `git ls-remote --symref` with the clone's
+ * hardened environment and read-only sign-in. Throws `RepoReachFailure`.
+ */
+export async function listRemoteRefs(source: ResolvedRepoSource, options: RepoAskOptions = {}): Promise<RemoteRefs> {
+	if (!githubRepoUrl(source, archiveBase())) return gitRemoteRefs(source, options);
+	try {
+		return await githubRefs(source);
+	} catch (err) {
+		const failure = err instanceof ArchiveFailure ? err : new ArchiveFailure("failed", err instanceof Error ? err.message : String(err), { cause: err });
+		console.warn(`[skills] GitHub's list of refs of ${source.display} failed (${failure.message}); trying git`);
+		return withGitAfterGitHub(failure, (fallback) => gitRemoteRefs(source, fallback ? { ...options, askForDeveloperTools: false } : options));
+	}
+}
+
+/** GitHub's list of a public repository's refs (git's smart http answer), under the zip's redirect rules, in 15 seconds and 1 MB. */
+async function githubRefs(source: ResolvedRepoSource): Promise<RemoteRefs> {
+	const repo = githubRepoUrl(source, archiveBase());
+	if (!repo) throw new ArchiveFailure("failed", "not a GitHub address");
+	const answer = await downloadArchive(`${repo}.git/info/refs?service=git-upload-pack`, ARCHIVE_ANSWER_TIMEOUT_MS, REFS_MAX_BYTES);
+	const lines = pktLines(answer);
+	if (!lines || lines[0] !== "# service=git-upload-pack") throw new ArchiveFailure("failed", "GitHub's list of branches and tags could not be read");
+	const refs: RemoteRefs = { head: null, refs: new Map() };
+	for (const line of lines.slice(1)) {
+		const [entry] = line.split("\0");
+		const [commit, name] = entry.split(" ");
+		if (!name || !COMMIT_RE.test(commit)) continue;
+		addRef(refs, name, commit);
+	}
+	return refs;
+}
+
+/** The payloads of git's pkt-lines (flushes dropped, each without its newline), or null when they don't parse. */
+function pktLines(answer: Buffer): string[] | null {
+	const lines: string[] = [];
+	for (let at = 0; at < answer.length; ) {
+		const size = Number.parseInt(answer.subarray(at, at + 4).toString("latin1"), 16);
+		if (!Number.isInteger(size) || !/^[0-9a-f]{4}$/i.test(answer.subarray(at, at + 4).toString("latin1"))) return null;
+		if (size === 0) {
+			at += 4;
+			continue;
+		}
+		if (size < 4 || at + size > answer.length) return null;
+		lines.push(answer.subarray(at + 4, at + size).toString("utf-8").replace(/\n$/, ""));
+		at += size;
+	}
+	return lines;
+}
+
+/** One listed ref; a tag's peeled line (`^{}`) names the commit the tag points at, which wins. */
+function addRef(refs: RemoteRefs, name: string, commit: string): void {
+	const sha = commit.toLowerCase();
+	if (name === "HEAD") refs.head = sha;
+	else if (name.endsWith("^{}")) refs.refs.set(name.slice(0, -3), sha);
+	else if (!refs.refs.has(name) || !name.startsWith("refs/tags/")) refs.refs.set(name, sha);
+}
+
+async function gitRemoteRefs(source: ResolvedRepoSource, options: RepoAskOptions = {}): Promise<RemoteRefs> {
+	if (source.kind === "git" && addressHasPassword(source.cloneArg)) throw new RepoReachFailure("failed", PASSWORD_IN_ADDRESS);
+	const unused = signInNotUsed(source, options);
+	if (unused) throw unused;
+	// Only HEAD and the ref asked for, so a repository with many refs answers in a
+	// few lines; `<ref>^{}` too, since a tag's pattern alone leaves out the line
+	// with the commit an annotated tag points at.
+	const args = [...(source.kind === "git" ? await storedSignInArgs(source.cloneArg, options) : []), "-c", "core.hooksPath=/dev/null", "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=user", "ls-remote", "--symref", "--", source.cloneArg, "HEAD", ...(source.ref ? [source.ref, `${source.ref}^{}`] : [])];
+	const result = await runGit(args, "ls-remote", LS_REMOTE_TIMEOUT_MS, hardenedGitEnv(options));
+	if (result.code !== 0 && isMacDeveloperToolsStub(result.stderr)) {
+		// The line says macOS has offered the tools, as the clone's does: ask for that window the same way.
+		if (options.askForDeveloperTools !== false) requestMacDeveloperToolsInstall();
+		throw new RepoReachFailure("missing-tool", MAC_DEVELOPER_TOOLS_MISSING);
+	}
+	if (result.code !== 0) {
+		const unusedSsh = signInNotUsed(source, options, result.stderr);
+		if (unusedSsh) throw unusedSsh;
+		const message = describeCloneFailure(result.stderr, source) || `git ls-remote exited with code ${result.code}`;
+		if (source.kind === "git" && source.host && signInAdvice(result.stderr, source.host)) throw new RepoReachFailure("sign-in", message);
+		throw reachFailure(result.stderr, message, source) ?? new RepoReachFailure("failed", message);
+	}
+	const refs: RemoteRefs = { head: null, refs: new Map() };
+	for (const line of result.stdout.split("\n")) {
+		const [commit, name] = line.trim().split("\t");
+		if (name && COMMIT_RE.test(commit.toLowerCase())) addRef(refs, name, commit);
+	}
+	return refs;
 }
 
 // --- Discovery / scan --------------------------------------------------------
 
 const WALK_MAX_FILES = 20_000;
-const VENDOR_MAX_BYTES = 8 * 1024 * 1024;
-const VENDOR_MAX_FILES = 500;
 
 /** List repo-relative POSIX file paths under `root`, skipping `.git`, symlinks and `node_modules`. */
 function walkFiles(root: string): string[] {
@@ -921,12 +1335,50 @@ function readPlainScalar(rest: string, lines: string[], start: number): [string,
  * Parse a SKILL.md's `---` frontmatter into a flat `key → string` map plus the body.
  * A dependency-free YAML SUBSET covering what skill frontmatter actually uses: top-level
  * (zero-indent) `key:` entries whose value is a scalar — plain, single/double-quoted (with
- * escapes + line folding), or a block scalar (`|`, `>` and their chomping variants). A value
- * that is a nested map/list is treated as "". Never throws (falls back to the lenient parse on
- * any trouble). NOTE: the skill fingerprint is sha256 of the RAW SKILL.md bytes elsewhere
- * (skills-library.ts `sha256(manifest)`), so this only shapes derived display/stored metadata.
+ * escapes + line folding), or a block scalar (`|`, `>` and their chomping variants). A key
+ * with nothing on its line takes what YAML reads below it when that is a string, as in a
+ * description written on the indented lines below its key; the runtime's YAML parser reads
+ * the front matter once, and only for such a key. `name` is the exception and stays "": a
+ * skill already in the library is listed, and switched on in rooms, by the name read before
+ * (`libraryKey` in skills-executable.ts). A nested map/list stays "" (`skillVersion`
+ * reads the one nested field it needs), and front matter YAML can't read keeps the subset's
+ * result for every key. Never throws (falls back to the lenient parse on any trouble).
+ * The import record's sha256 is of the raw SKILL.md bytes (skill-routes.ts), so this only
+ * shapes the fields shown and stored. A missing or blank description reads as the body's
+ * first line with text (`descriptionFromBody`), as the leading tools read it, so every
+ * reader (the scan, a review, the library, an update, the model's list) shows the same.
  */
 export function parseSkillFrontmatter(raw: string): { fm: Record<string, string>; body: string } {
+	const parsed = readFrontmatter(raw);
+	if (!parsed.fm.description?.trim()) {
+		const line = descriptionFromBody(parsed.body);
+		if (line) parsed.fm.description = line;
+	}
+	return parsed;
+}
+
+/** The longest description a skill may have (`validateSkillWritePayload` in skills-library.ts). */
+const SKILL_DESCRIPTION_MAX = 1024;
+
+/**
+ * A skill's description when its front matter has none: the body's first line
+ * with text once a heading's or a list item's mark is taken off, cut to the
+ * longest a description may have; "" when no line has text.
+ */
+function descriptionFromBody(body: string): string {
+	for (const line of body.split("\n")) {
+		const text = line.trim().replace(/^(?:#{1,6}|[-*+]|\d{1,9}[.)])(?:\s+|$)/, "").trim();
+		if (!text) continue;
+		if (text.length <= SKILL_DESCRIPTION_MAX) return text;
+		const cut = text.slice(0, SKILL_DESCRIPTION_MAX);
+		// Never half a character: a cut between a surrogate pair drops its first half.
+		return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;
+	}
+	return "";
+}
+
+/** The front matter's fields as written, and the body (`parseSkillFrontmatter`). */
+function readFrontmatter(raw: string): { fm: Record<string, string>; body: string } {
 	// Normalize CRLF/CR to LF up front: the fence regex is LF-only, so a CRLF (or
 	// lone-CR) SKILL.md would otherwise miss its frontmatter entirely — the `---`
 	// block would leak into the body and every key/value/body line would keep a
@@ -935,6 +1387,7 @@ export function parseSkillFrontmatter(raw: string): { fm: Record<string, string>
 	const m = normalized.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
 	if (!m) return { fm: {}, body: normalized };
 	const fm: Record<string, string> = {};
+	const readBelow: string[] = [];
 	try {
 		const lines = m[1].split("\n");
 		let i = 0;
@@ -954,7 +1407,8 @@ export function parseSkillFrontmatter(raw: string): { fm: Record<string, string>
 				if (quoted) [fm[key], i] = quoted;
 				else [fm[key], i] = readPlainScalar(rest, lines, i); // begins with a quote but isn't one → verbatim
 			} else if (rest.trim() === "") {
-				fm[key] = ""; // empty scalar or a nested map/list (its indented lines are skipped)
+				fm[key] = ""; // empty, a nested map/list or a plain value below: YAML decides, after the loop
+				if (key !== "name") readBelow.push(key);
 				i++;
 			} else {
 				[fm[key], i] = readPlainScalar(rest, lines, i);
@@ -963,15 +1417,57 @@ export function parseSkillFrontmatter(raw: string): { fm: Record<string, string>
 	} catch {
 		// Malformed frontmatter: keep whatever parsed cleanly (lenient, never throws).
 	}
+	if (readBelow.length > 0) {
+		let yaml: unknown;
+		try {
+			yaml = parseYamlFrontmatter(`---\n${m[1]}\n---\n`).frontmatter;
+		} catch {
+			yaml = undefined;
+		}
+		if (yaml && typeof yaml === "object" && !Array.isArray(yaml)) {
+			for (const key of readBelow) {
+				const value = (yaml as Record<string, unknown>)[key];
+				if (typeof value === "string") fm[key] = value;
+			}
+		}
+	}
 	return { fm, body: m[2] };
+}
+
+/**
+ * The version a skill states in its front matter, or null. Read with the runtime's YAML
+ * parser, so a comment, quotes, a blank line or a flow map is read as YAML reads it; a
+ * top-level version YAML would turn into a number (1.10 into 1.1) keeps its text as
+ * written, less a comment. Front matter that isn't valid YAML (old files written by hand)
+ * keeps its top-level version as written, as every other field, and states no nested one.
+ */
+export function skillVersion(manifest: string): string | null {
+	const written = parseSkillFrontmatter(manifest).fm.version?.trim();
+	let frontmatter: Record<string, unknown>;
+	try {
+		frontmatter = parseYamlFrontmatter(manifest).frontmatter as Record<string, unknown>;
+	} catch {
+		return written || null;
+	}
+	const top = frontmatter.version;
+	if (typeof top === "string" && top.trim()) return top.trim();
+	// A plain scalar can't hold " #", so what follows one is a comment.
+	if (typeof top === "number" && written) return written.replace(/\s+#.*$/, "");
+	const metadata = frontmatter.metadata;
+	const nested = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).version : undefined;
+	return (typeof nested === "string" || typeof nested === "number") && String(nested).trim() ? String(nested).trim() : null;
 }
 
 const LICENSE_FILENAMES = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "COPYING.md"];
 
-/** Best-effort SPDX-ish label from a repo's root LICENSE file, or null. */
-function detectRepoLicense(root: string): string | null {
+/**
+ * Best-effort SPDX-ish label from the LICENSE file directly in `dir` (a skill's
+ * folder or a repository's root), or null. Read only when it is a plain file
+ * with no link between `root` and it.
+ */
+export function detectLicense(dir: string, root: string = dir): string | null {
 	for (const name of LICENSE_FILENAMES) {
-		const raw = readRegularFileWithin(root, path.join(root, name));
+		const raw = readRegularFileWithin(root, path.join(dir, name));
 		if (raw == null) continue;
 		const head = raw.slice(0, 2048);
 		const upper = head.toUpperCase();
@@ -987,19 +1483,110 @@ function detectRepoLicense(root: string): string | null {
 }
 
 /**
- * Non-.md files bundled inside a skill's OWN dir (relative to that dir). A
- * root-level SKILL.md (skillDir === "") has no bounded package — the "skill dir"
- * would be the whole repository — so it reports (and vendors) no bundled files;
- * only sub-directory skills carry a real, scoped bundle.
+ * The files an import of the skill in `skillDir` writes, relative to it, SKILL.md
+ * included, and the refusal when they are past the limit (their sizes as the
+ * checkout holds them; nothing is read). A root SKILL.md ("") takes the
+ * checkout's whole folder, as the leading tools do; the size limit bounds it like
+ * any other skill.
  */
-function bundledScriptsFor(root: string, skillDir: string): string[] {
-	if (skillDir === "" || skillDir === ".") return [];
-	return walkFiles(path.join(root, skillDir)).filter((rel) => !rel.toLowerCase().endsWith(".md"));
+function skillFilesFor(root: string, skillDir: string): { files: string[]; tooBig: SkillTooBig | null } {
+	const dir = path.join(root, skillDir);
+	const files = walkFiles(dir).filter((file) => file !== path.basename(file) || !nameFoldsOnto(file, SKILL_PROVENANCE_FILENAME));
+	let bytes = 0;
+	for (const file of files) bytes += fs.lstatSync(path.join(dir, file)).size;
+	return { files, tooBig: skillOverLimit(files.length, bytes) };
 }
 
-/** True when the resolved skill dir is the checkout root (a root-level SKILL.md). */
-function isRootSkillDir(checkoutDir: string, srcDir: string): boolean {
-	return path.resolve(srcDir) === path.resolve(checkoutDir);
+/** A skill's scripts (`isSkillScript`), each with whether it keeps its run mark (`keepsRunMark`). */
+export type SkillScripts = ReadonlyMap<string, boolean>;
+
+/**
+ * A plain file's mode and its first `headBytes` (`SCRIPT_HEAD_BYTES`), or null
+ * when it is no plain file or can't be read; with no bytes asked, its mode alone,
+ * from a look that opens nothing. It never follows a link or waits on a named
+ * pipe put there: the open refuses the one and the fstat the other.
+ */
+export function fileModeAndHead(file: string, headBytes = SCRIPT_HEAD_BYTES): { mode: number; head: Buffer } | null {
+	try {
+		if (headBytes === 0) {
+			const stat = fs.lstatSync(file);
+			return stat.isFile() ? { mode: stat.mode, head: Buffer.alloc(0) } : null;
+		}
+		const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+		try {
+			const stat = fs.fstatSync(fd);
+			if (!stat.isFile()) return null;
+			const head = Buffer.alloc(headBytes);
+			return { mode: stat.mode, head: head.subarray(0, fs.readSync(fd, head, 0, headBytes, 0)) };
+		} finally {
+			fs.closeSync(fd);
+		}
+	} catch {
+		return null;
+	}
+}
+
+/** Of a skill's files in `dir`, its scripts by their mode and first bytes on disk (`SkillScripts`); a file that can't be read is none. */
+export function scriptFiles(dir: string, files: readonly string[]): SkillScripts {
+	const scripts = new Map<string, boolean>();
+	for (const file of files) {
+		// A script's name alone makes it one, so only its mode is needed.
+		const read = fileModeAndHead(path.join(dir, file), skillFileKind(file) === "scripts" ? 0 : SCRIPT_HEAD_BYTES);
+		if (read && isSkillScript(file, read.mode, read.head)) scripts.set(file, keepsRunMark(file, read.mode, read.head));
+	}
+	return scripts;
+}
+
+/** The first path a skill's SKILL.md (`manifest`) or other Markdown file in `dir` writes that reaches above its folder (`outsidePath`); a file that can't be read is passed over. */
+export function skillOutsidePath(dir: string, files: readonly string[], manifest: string): string | null {
+	const others = files.filter((file) => file !== "SKILL.md" && file.toLowerCase().endsWith(".md")).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+	const read = others.flatMap((file) => {
+		const text = readRegularFileWithin(dir, path.join(dir, file));
+		return text === null ? [] : [{ path: file, text }];
+	});
+	return outsidePath([{ path: "SKILL.md", text: manifest }, ...read]);
+}
+
+/** The repository's own name, from its shown address or local path: its last part, without `.git`. */
+function repositoryName(source: string): string {
+	return source.replace(/[\\/]+$/, "").split(/[\\/:]/).pop()?.replace(/\.git$/i, "") ?? "";
+}
+
+/** The name a skill is listed under (its front matter's, else its folder's, else, at a repository's root, the repository's) and the name the library keeps it under (`skillIdFor`, the repository's name after its folder's). */
+function repoSkillNames(fm: Record<string, string>, skillDir: string, source: string): { name: string; id: string } {
+	const folder = path.posix.basename(skillDir);
+	const repository = repositoryName(source);
+	return { name: (fm.name?.trim() || folder || repository).trim(), id: skillIdFor(fm.name, folder, repository) };
+}
+
+/**
+ * A skill's name as the standard allows one, the way the library keeps it and a
+ * room's "/" picks it: lower case; spaces, underscores and dots as hyphens; any
+ * other character dropped; one hyphen at a time, none at either end; cut to the
+ * length limit. A name that already fits stays as it is. Empty when nothing fits.
+ */
+export function fitSkillName(value: string): string {
+	return value
+		.toLowerCase()
+		.replace(/[\s_.]+/g, "-")
+		.replace(/[^a-z0-9-]/g, "")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "")
+		.slice(0, SKILL_ID_MAX_LENGTH)
+		.replace(/-$/, "");
+}
+
+/**
+ * The name the library keeps a skill under: the first of `names` (its written
+ * name, then the ones a skill with no name falls back on) of which anything fits
+ * (`fitSkillName`), else "skill". Never empty, so never refused.
+ */
+export function skillIdFor(...names: Array<string | undefined>): string {
+	for (const name of names) {
+		const fitted = fitSkillName(name ?? "");
+		if (fitted) return fitted;
+	}
+	return "skill";
 }
 
 /**
@@ -1007,8 +1594,8 @@ function isRootSkillDir(checkoutDir: string, srcDir: string): boolean {
  * rules MINUS the root-`.md`-as-skill rule (MR-1 `filterRepoScanSkillFiles`), so
  * obra/superpowers yields exactly its skills and README/docs are excluded.
  */
-export function scanRepoSkills(checkoutDir: string): RepoFoundSkill[] {
-	const repoLicense = detectRepoLicense(checkoutDir);
+export function scanRepoSkills(checkoutDir: string, source: string): RepoFoundSkill[] {
+	const repoLicense = detectLicense(checkoutDir);
 	const manifests = filterRepoScanSkillFiles(walkFiles(checkoutDir).map((p) => p.replace(/\\/g, "/")));
 	const found: RepoFoundSkill[] = [];
 	for (const manifest of manifests) {
@@ -1020,17 +1607,63 @@ export function scanRepoSkills(checkoutDir: string): RepoFoundSkill[] {
 			continue;
 		}
 		const { fm } = parseSkillFrontmatter(raw);
-		const name = (fm.name || path.posix.basename(skillDir) || "skill").trim();
-		const scripts = bundledScriptsFor(checkoutDir, skillDir);
+		const { name, id } = repoSkillNames(fm, skillDir, source);
+		const { files, tooBig } = skillFilesFor(checkoutDir, skillDir);
 		found.push({
 			path: skillDir,
 			name,
+			id,
 			description: (fm.description || "").trim(),
-			license: fm.license?.trim() || repoLicense,
-			hasBundledScripts: scripts.length > 0,
+			license: fm.license?.trim() || detectLicense(path.join(checkoutDir, skillDir), checkoutDir) || repoLicense,
+			hasBundledScripts: files.some((rel) => !rel.toLowerCase().endsWith(".md")),
+			disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]),
+			...(tooBig ? { tooBig } : {}),
 		});
 	}
-	return found.sort((a, b) => a.name.localeCompare(b.name));
+	return found.sort((a, b) => a.name.localeCompare(b.name) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * A coding tool's copy of a skill: a folder on its path starts with a dot and
+ * sits anywhere but right inside a `skills` folder (`.claude/skills/x`,
+ * `.github/plugins/p/skills/x`; never `skills/.curated/x`).
+ */
+function isToolCopy(skillPath: string): boolean {
+	const parts = skillPath.split("/");
+	return parts.some((part, i) => part.startsWith(".") && parts[i - 1] !== "skills");
+}
+
+/** Which tool copy is offered when a name has no other: one anywhere below the folder several tools share, then below Claude's, then the first by path. */
+function toolCopyRank(skillPath: string): number {
+	const above = `/${path.posix.dirname(skillPath)}/`;
+	if (above.includes("/.agents/skills/")) return 0;
+	if (above.includes("/.claude/skills/")) return 1;
+	return 2;
+}
+
+/**
+ * The skills a scan or Browse offers to add: every found one but a SKILL.md
+ * inside another found skill's folder, which belongs to that skill and comes in
+ * with it; when that skill is too big to add, the one inside is offered on its
+ * own. Then one row per name (case ignored) among coding tools' copies: none
+ * when the name has an ordinary folder left that can be added, else the one
+ * `toolCopyRank` puts first, as the common installer keeps the first of each
+ * name. Two ordinary folders of one name both stay. An update still finds a
+ * skill in any of these folders (`scanRepoSkills`).
+ */
+export function offeredRepoSkills(found: readonly RepoFoundSkill[]): RepoFoundSkill[] {
+	const holds = (outer: RepoFoundSkill, inner: string) => !outer.tooBig && outer.path !== inner && (outer.path === "" || inner.startsWith(`${outer.path}/`));
+	const rows = found.filter((skill) => !found.some((other) => holds(other, skill.path)));
+	const nameOf = (skill: RepoFoundSkill) => skill.name.toLowerCase();
+	const ordinary = new Set(rows.filter((skill) => !isToolCopy(skill.path) && !skill.tooBig).map(nameOf));
+	const comesFirst = (a: RepoFoundSkill, b: RepoFoundSkill) => toolCopyRank(a.path) < toolCopyRank(b.path) || (toolCopyRank(a.path) === toolCopyRank(b.path) && a.path < b.path);
+	const keptCopy = new Map<string, RepoFoundSkill>();
+	for (const skill of rows) {
+		if (!isToolCopy(skill.path) || ordinary.has(nameOf(skill))) continue;
+		const kept = keptCopy.get(nameOf(skill));
+		if (!kept || comesFirst(skill, kept)) keptCopy.set(nameOf(skill), skill);
+	}
+	return rows.filter((skill) => !isToolCopy(skill.path) || keptCopy.get(nameOf(skill)) === skill);
 }
 
 /** Resolve a repo-relative skill dir path INSIDE the checkout, or null on traversal. */
@@ -1045,7 +1678,8 @@ function resolveSkillDir(checkoutDir: string, skillPath: string): string | null 
 	return resolved;
 }
 
-/** Build the review-screen candidate for a chosen skill (runs the invisible-unicode scan). */
+/** Build the review-screen candidate for a chosen skill (runs the invisible-unicode scan).
+ *  Throws `SkillTooBigError` for a skill past the limit: it never reaches the review. */
 export function readRepoCandidate(checkoutDir: string, skillPath: string, source: string): RepoSkillCandidate | null {
 	const dir = resolveSkillDir(checkoutDir, skillPath);
 	if (!dir) return null;
@@ -1054,15 +1688,35 @@ export function readRepoCandidate(checkoutDir: string, skillPath: string, source
 	const { fm, body } = parseSkillFrontmatter(raw);
 	const trimmedBody = body.trim();
 	const rel = path.relative(checkoutDir, dir).replace(/\\/g, "/");
+	const { files, tooBig } = skillFilesFor(checkoutDir, rel);
+	if (tooBig) throw new SkillTooBigError(tooBig);
+	const pointsOutside = skillOutsidePath(dir, files, raw);
+	const names = repoSkillNames(fm, rel, source);
+	const writtenName = fm.name?.trim();
 	return {
-		name: (fm.name || path.posix.basename(rel) || "skill").trim(),
+		...names,
+		...(writtenName && writtenName !== names.id ? { writtenName } : {}),
 		description: (fm.description || "").trim(),
 		body: trimmedBody,
 		source,
-		license: fm.license?.trim() || detectRepoLicense(checkoutDir),
+		license: fm.license?.trim() || detectLicense(dir, checkoutDir) || detectLicense(checkoutDir),
+		version: skillVersion(raw),
 		scanFindings: scanInvisibleUnicode(`${trimmedBody}\n${(fm.description || "").trim()}`),
-		bundledScripts: bundledScriptsFor(checkoutDir, rel),
+		files: skillFileList(files, scriptFiles(dir, files)),
+		disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]),
+		...(pointsOutside ? { outsidePath: pointsOutside } : {}),
 	};
+}
+
+/**
+ * The skill at `skillPath` of a checkout: its folder and the files an add or an
+ * update writes from it (`skillFilesFor`), with the refusal when they are past
+ * the limit; null when there is no skill there.
+ */
+export function repoSkillFiles(checkoutDir: string, skillPath: string): { dir: string; files: string[]; tooBig: SkillTooBig | null } | null {
+	const dir = resolveSkillDir(checkoutDir, skillPath);
+	if (!dir) return null;
+	return { dir, ...skillFilesFor(checkoutDir, path.relative(checkoutDir, dir)) };
 }
 
 export interface VendorResult {
@@ -1075,38 +1729,31 @@ export interface VendorResult {
 
 /**
  * Copy a repo skill dir into a destination store dir (`destSkillDir`, already
- * `<store>/<id>`). Copies SKILL.md plus any bundled files — as INERT files:
- * D-exec guarantees they never run, but keeping them lets the prose reference its
- * own assets and makes the multi-file skill dir the delete path must handle real.
- * Symlinks and `.git` are skipped; total size/file count are capped. Caller writes
- * the provenance sidecar (via MR-1 machinery). Returns the persisted body so the
- * caller can hash exactly what landed on disk.
+ * `<store>/<id>`): SKILL.md and its bundled files, byte for byte, each runnable
+ * only when it is a script the checkout marks so (`keptFileMode`). Importing only copies them;
+ * whether a room may run them is the room's switch (`roomSkillFolders` in
+ * skills-executable.ts). Symlinks and `.git` are skipped; total size/file count
+ * are capped. The caller writes the import record. Returns the persisted body so
+ * the caller can hash exactly what landed on disk.
  */
 export function vendorRepoSkill(checkoutDir: string, skillPath: string, destSkillDir: string): VendorResult {
-	const srcDir = resolveSkillDir(checkoutDir, skillPath);
-	if (!srcDir) throw new Error("skill not found in checkout");
-	// A root-level SKILL.md has no bounded package dir (the "dir" is the whole
-	// repo), so vendor ONLY the manifest — never copy the entire repository.
-	const files = isRootSkillDir(checkoutDir, srcDir) ? ["SKILL.md"] : walkFiles(srcDir);
-	if (files.length > VENDOR_MAX_FILES) throw new Error(`skill directory has too many files (${files.length})`);
-	let total = 0;
-	for (const f of files) {
-		const stat = fs.statSync(path.join(srcDir, f));
-		total += stat.size;
-		if (total > VENDOR_MAX_BYTES) throw new Error("skill directory is too large to import");
-	}
+	const found = repoSkillFiles(checkoutDir, skillPath);
+	if (!found) throw new Error("skill not found in checkout");
+	const { dir: srcDir, files, tooBig } = found;
+	if (tooBig) throw new SkillTooBigError(tooBig);
 	fs.mkdirSync(destSkillDir, { recursive: true, mode: 0o700 });
 	let bundledCopied = 0;
 	for (const f of files) {
 		const dest = path.join(destSkillDir, f);
 		fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
 		fs.copyFileSync(path.join(srcDir, f), dest);
-		fs.chmodSync(dest, 0o600);
+		const source = fileModeAndHead(path.join(srcDir, f));
+		fs.chmodSync(dest, source ? keptFileMode(f, source.mode, source.head) : 0o600);
 		if (f !== "SKILL.md") bundledCopied += 1;
 	}
 	const raw = fs.readFileSync(path.join(destSkillDir, "SKILL.md"), "utf-8");
 	const { fm, body } = parseSkillFrontmatter(raw);
-	return { body: body.trim(), license: fm.license?.trim() || detectRepoLicense(checkoutDir), bundledCopied };
+	return { body: body.trim(), license: fm.license?.trim() || detectLicense(srcDir, checkoutDir) || detectLicense(checkoutDir), bundledCopied };
 }
 
 // --- Checkout cache (scan → review → accept continuity) ----------------------
@@ -1121,6 +1768,8 @@ const CHECKOUT_TTL_MS = 15 * 60_000;
 interface CachedCheckout {
 	dir: string;
 	source: string;
+	/** The repository's version it holds; absent for an upload's files. */
+	origin?: RepoOrigin;
 	createdAt: number;
 }
 
@@ -1142,18 +1791,18 @@ function sweepCheckouts(): void {
 }
 
 /** Register a fresh checkout and return its token. */
-export function registerCheckout(dir: string, source: string): string {
+export function registerCheckout(dir: string, source: string, origin?: RepoOrigin): string {
 	sweepCheckouts();
 	const token = crypto.randomUUID();
-	checkoutCache.set(token, { dir, source, createdAt: Date.now() });
+	checkoutCache.set(token, { dir, source, ...(origin ? { origin } : {}), createdAt: Date.now() });
 	return token;
 }
 
-/** Resolve a token to its live checkout dir + source, or null when expired/unknown. */
-export function getCheckout(token: string): { dir: string; source: string } | null {
+/** Resolve a token to its live checkout dir + source (and the repository's version it holds), or null when expired/unknown. */
+export function getCheckout(token: string): { dir: string; source: string; origin?: RepoOrigin } | null {
 	sweepCheckouts();
 	const entry = checkoutCache.get(String(token ?? ""));
-	return entry ? { dir: entry.dir, source: entry.source } : null;
+	return entry ? { dir: entry.dir, source: entry.source, ...(entry.origin ? { origin: entry.origin } : {}) } : null;
 }
 
 /** Remove every cached checkout from disk (process-exit cleanup). */
@@ -1221,14 +1870,15 @@ export async function loadFeaturedSource(entry: FeaturedSource): Promise<Feature
 		return result;
 	}
 	try {
-		const dir = await fetchRepoCheckout(resolved.value);
-		const token = registerCheckout(dir, resolved.value.display);
-		const result: FeaturedSourceResult = { source: entry.source, author: entry.author, token, skills: scanRepoSkills(dir) };
+		const { dir, origin } = await fetchRepoCheckout(resolved.value);
+		const token = registerCheckout(dir, resolved.value.display, origin);
+		const result: FeaturedSourceResult = { source: entry.source, author: entry.author, token, skills: offeredRepoSkills(scanRepoSkills(dir, resolved.value.display)) };
 		featuredCache.set(entry.source, { result, fetchedAt: Date.now() });
 		return result;
 	} catch (err) {
-		const error = err instanceof Error ? err.message : String(err);
-		const missingTool = isMissingToolMessage(error);
+		const failure = repoFailureOf(err);
+		const missingTool = failure.reason === "missing-tool";
+		const error = repositoryFailedLine(failure, resolved.value.ref, "browse");
 		const result: FeaturedSourceResult = { source: entry.source, author: entry.author, token: null, skills: [], error, ...(missingTool ? { missingTool: true } : {}) };
 		// A missing tool fails in milliseconds, so there is no slow clone to
 		// spare, and the sentence says "try again" once it is installed: that

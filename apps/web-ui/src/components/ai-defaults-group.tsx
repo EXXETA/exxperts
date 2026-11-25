@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { withoutServiceLine } from "../api";
-import { credentialGoneWords, modelCredentialWords } from "../../../web-server/src/model-not-offered";
+import { credentialGoneWords, modelCredentialWords, sharedCredentialState } from "../../../web-server/src/model-not-offered";
 import { modelDisplayName, modelOnProvider } from "../model-names";
 import { NEW_ADMIN_HINT, SHARED_SERVER_ADMIN_LINE, sharedServerNonAdmin, useRemoteClientContext } from "../remote-client-context";
 import { fetchAiDefaults, fetchRoomModelProviders, keyRefusalMarks, putAiDefaults } from "../room-models-api";
@@ -21,10 +21,12 @@ function lockName(lock: RoomModelLockView): string {
 	return modelDisplayName({ model: lock.model, modelLabel: lock.label, provider: lock.provider }) || lock.name;
 }
 
-function defaultUnavailableSentence(row: AiDefaultsView[RoomModelTask]): string | null {
+/** `member`: a shared server's member, who reads the defaults but cannot change them; the admin keeps the words that say what to do here. */
+export function defaultUnavailableSentence(row: AiDefaultsView[RoomModelTask], member: boolean): string | null {
 	if (!row.stored || !row.reason || row.effective) return null;
 	const named = modelOnProvider(lockName(row.stored), row.stored.providerLabel);
 	const gone = row.keyGone ? "key-missing" : "signed-out";
+	if (member) return `${named} ${row.reason === "signed-out" ? sharedCredentialState(gone) : "is no longer offered"}. Rooms on this default wait until your admin chooses another.`;
 	const words = modelCredentialWords(lockName(row.stored), row.stored.providerLabel, named, gone);
 	return row.reason === "signed-out"
 		? `${words.subject} ${words.state}. Rooms on this default wait until you ${credentialGoneWords(gone).again.toLowerCase()} or choose another here.`
@@ -75,7 +77,7 @@ export function AiDefaultsGroup({ refreshKey, serviceBack, onSaved }: { refreshK
 
 	function row(task: RoomModelTask, label: string) {
 		const view = defaults?.[task];
-		const unavailable = view ? defaultUnavailableSentence(view) : null;
+		const unavailable = view ? defaultUnavailableSentence(view, sharedServerNonAdmin(remoteClient)) : null;
 		const value = view?.stored ?? view?.effective ?? null;
 		return (
 			<div className="settings-row room-model-row">
@@ -103,7 +105,7 @@ export function AiDefaultsGroup({ refreshKey, serviceBack, onSaved }: { refreshK
 
 	return (
 		<div className="settings-group ai-defaults-group">
-			<GroupHeader kicker="Default models" line="Rooms use these until you set their own in Room settings, Model." />
+			<GroupHeader kicker="Default models" />
 			{/* Defaults that could not be read are not "Choose a model": the line below says why. */}
 			{(defaults || !error) && (
 				<div className="settings-rows">

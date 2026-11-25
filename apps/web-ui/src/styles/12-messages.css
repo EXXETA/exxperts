@@ -37,10 +37,16 @@
 /* The column now carries the width cap; keep the inner bubble uncapped so the
  * two do not nest and shrink long user messages. */
 .bubble-col.user > .bubble.user { max-width: 100%; }
+/* Another person's message sits on the left, your own on the right. */
+.bubble-row.user.others { justify-content: flex-start; }
+.bubble-col.user.others { align-items: flex-start; }
+/* Who sent another person's message, above it. */
+.bubble-sender { margin-bottom: 4px; color: var(--muted); font-size: 12.5px; line-height: 1.3; overflow-wrap: anywhere; }
 
 /* Action row under a bubble: the copy control and the message time. The
- * reply's row sits under its last segment, button first; the user's hugs the
- * right edge under the bubble, time first. */
+ * reply's row sits under its last segment, button first; your own message's
+ * hugs the right edge under the bubble, time first; another person's sits on
+ * the left under theirs, button first, as a reply's. */
 .message-actions {
 	display: flex;
 	align-items: center;
@@ -49,6 +55,7 @@
 	min-height: 22px;
 }
 .message-actions.user { align-self: flex-end; }
+.message-actions.user.others { align-self: flex-start; }
 .message-actions .message-copy { margin-top: 0; }
 /* When the message was written: quiet, revealed with the row on hover, the
  * full date and time in its tooltip. */

@@ -10,6 +10,7 @@ import { Help } from "./Help";
 import { GearIcon, MoonIcon, ScreenIcon, SunIcon } from "./icons";
 import { openShortcuts, useShortcutsOffered } from "./keys-list";
 import { useEscapeKey } from "./use-escape-key";
+import { SHARED_USAGE_NAV, SHARED_USAGE_NAV_HOVER } from "../usage-words";
 
 export type ThemeMode = "dark" | "light";
 /** What the user picked for the theme; "system" resolves to a ThemeMode via prefers-color-scheme. */
@@ -357,13 +358,14 @@ function SignOutEverywhere({ signOut }: { signOut: string }) {
 }
 
 export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, theme, appearance, onSetAppearance, active }: { onHome: () => void; onSettings: (section?: "remote") => void; onDashboard: () => void; onMemory?: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; active: ProductSidebarActive }) {
-	// The Wallet reads the whole usage log, which a shared server keeps closed,
-	// to its admin too: it is not offered there.
+	// On a shared server the same page is each person's own usage, with no
+	// money, so it goes by another name there.
 	const { sharedServer, person, signOut } = useRemoteClientContext();
-	// On a phone the footer then takes a row of its own under the bar (35-sidebar-remote.css), as SignedInAs shows Sign out.
-	const withSignOut = sharedServer && person !== null && signOut !== null;
+	// When SignedInAs shows, on a phone the footer takes a row of its own under the bar (35-sidebar-remote.css):
+	// the person's name, and Sign out when the server gives it, get the whole width, and the tabs keep theirs.
+	const withPersonRow = sharedServer && person !== null && (person.name !== "" || signOut !== null);
 	return (
-		<aside className={`product-sidebar${withSignOut ? " with-sign-out" : ""}`}>
+		<aside className={`product-sidebar${withPersonRow ? " with-person-row" : ""}`}>
 			<div className="product-sidebar-header">
 				<SidebarToggleButton />
 				<div className="brand">
@@ -379,11 +381,13 @@ export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, them
 						<button className={`list-btn ${active === "memory" ? "active" : ""}`} onClick={onMemory} title="What your rooms know, and questions across all of it">Memory</button>
 					</div>
 				)}
-				{!sharedServer && (
-					<div className="product-nav-section">
+				<div className="product-nav-section">
+					{sharedServer ? (
+						<button className={`list-btn ${active === "dashboard" ? "active" : ""}`} onClick={onDashboard} title={SHARED_USAGE_NAV_HOVER}>{SHARED_USAGE_NAV}</button>
+					) : (
 						<button className={`list-btn ${active === "dashboard" ? "active" : ""}`} onClick={onDashboard} title="What your rooms spend: API costs and plan usage">Wallet</button>
-					</div>
-				)}
+					)}
+				</div>
 			</nav>
 			{/* No connection status here on purpose: a healthy app says nothing
 			    about its plumbing, and a sustained failure gets a banner that

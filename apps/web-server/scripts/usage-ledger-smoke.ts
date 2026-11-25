@@ -106,6 +106,7 @@ try {
 			return undefined;
 		},
 		liveAgents: () => new Map([["room-a", "Room A"]]),
+		roomNames: async () => ({ live: new Map(), archived: new Map() }),
 		providerDisplayName: (providerId) => (providerId === "gateway-foo" ? "Foo Gateway" : undefined),
 	});
 	const usage = await handlers.get("/api/usage")!({ query: {} });

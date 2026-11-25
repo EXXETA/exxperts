@@ -9,6 +9,7 @@ import {
 } from "./background-runs.js";
 import { getPersistentAgentThread } from "./persistent-agents.js";
 import {
+	scheduledAnswerKey,
 	scheduledPromptBackgroundAssistantItemId,
 	scheduledPromptBackgroundThreadId,
 	scheduledPromptBackgroundUserItemId,
@@ -193,8 +194,14 @@ export function scheduledPromptBackgroundRunHasOutputArtifact(run: BackgroundRun
 	return artifactExists(relPath);
 }
 
-function itemExists(items: unknown[], itemId: string, kind: "user" | "assistant"): boolean {
-	return items.some((item: any) => item?.kind === kind && item?.id === itemId && typeof item?.text === "string" && item.text.trim().length > 0);
+function itemExists(items: unknown[], itemId: string | ((id: string) => boolean), kind: "user" | "assistant"): boolean {
+	const named = typeof itemId === "string" ? (id: string) => id === itemId : itemId;
+	return items.some((item: any) => item?.kind === kind && typeof item?.id === "string" && named(item.id) && typeof item?.text === "string" && item.text.trim().length > 0);
+}
+
+/** A run through the room's live session landed under its key: the question as the key, the answer as `<key>-a<n>` (thread-items-by-id.ts). */
+function keyedAnswerPart(key: string): (id: string) => boolean {
+	return (id) => id.startsWith(`${key}-a`) && /^\d+$/.test(id.slice(key.length + 2));
 }
 
 export function inspectScheduledPromptBackgroundRunIdempotency(input: { run: BackgroundRunRecord; threadId?: string }): ScheduledPromptBackgroundRunIdempotencyEvidence {
@@ -215,8 +222,9 @@ export function inspectScheduledPromptBackgroundRunIdempotency(input: { run: Bac
 	}
 	const hasInputArtifact = scheduledPromptBackgroundRunHasInputArtifact(input.run);
 	const hasOutputArtifact = scheduledPromptBackgroundRunHasOutputArtifact(input.run);
-	const hasUserItem = itemExists(items, userItemId, "user");
-	const hasAssistantItem = itemExists(items, assistantItemId, "assistant");
+	const key = scheduledAnswerKey(runId);
+	const hasUserItem = itemExists(items, userItemId, "user") || itemExists(items, key, "user");
+	const hasAssistantItem = itemExists(items, assistantItemId, "assistant") || itemExists(items, keyedAnswerPart(key), "assistant");
 	return {
 		runId,
 		...(roomId ? { roomId } : {}),

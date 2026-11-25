@@ -14,7 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
+import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, withoutSignInTokens } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -81,7 +81,7 @@ async function waitForHealth(want: boolean, timeoutMs: number, label: string): P
 		if ((await healthy()) === want) return;
 		await sleep(50);
 	}
-	throw new Error(`${label}: the server was not ${want ? "up" : "down"} within ${timeoutMs}ms\n${launcherOutput}`);
+	throw new Error(`${label}: the server was not ${want ? "up" : "down"} within ${timeoutMs}ms\n${withoutSignInTokens(launcherOutput)}`);
 }
 
 async function api(route: string, init: { method?: string; body?: string } = {}): Promise<{ status: number; body: any }> {

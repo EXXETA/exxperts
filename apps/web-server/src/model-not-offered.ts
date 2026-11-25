@@ -114,7 +114,7 @@ export function credentialGoneWhy(gone: CredentialGone, shared = false): string 
  * `model` is the model as the picker names it, with its provider
  * ("GPT-6.1 Sol on OpenAI", see modelOnProvider). `signsIn` is false for a
  * key provider or a gateway, whose signed-out row has no key saved.
- * `shared` on a shared server, where only the admin can bring a provider back.
+ * `shared` on a shared server, where only the admin can bring a provider back or change the defaults.
  */
 export function roomModelUnavailableLine(model: string, reason: "signed-out" | "not-offered", task: "conversation" | "memory", of: RoomModelRefusalOf = "room", signsIn = true, bare?: { model: string; provider: string }, shared = false): string {
 	const row = task === "memory" ? "memory model" : "model";
@@ -125,6 +125,6 @@ export function roomModelUnavailableLine(model: string, reason: "signed-out" | "
 	const words = reason === "signed-out" && !signsIn && bare ? modelCredentialWords(bare.model, bare.provider, model, "key-missing") : { subject: model, state: reason === "signed-out" ? gone.state : "is no longer offered" };
 	const wayOut = of !== "defaults"
 		? reason === "signed-out" ? `${gone.again} in Settings, AI setup, or choose another model in ${settings}.` : `Choose another ${task === "memory" ? "Memory model" : "model"} in ${settings}.`
-		: reason === "signed-out" ? `${gone.again}, or choose another default, in Settings, AI setup.` : "Choose another default in Settings, AI setup.";
+		: reason === "signed-out" ? `${gone.again}, or choose another default, in Settings, AI setup.` : shared ? "Your admin can choose another in AI setup." : "Choose another default in Settings, AI setup.";
 	return `${subject}, ${words.subject}, ${words.state}. ${wayOut}`;
 }

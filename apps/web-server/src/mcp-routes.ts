@@ -1,7 +1,6 @@
 import { startRefusalLookup } from "./connector-start-check.js";
 import { getMcpConnectorsStatus } from "./mcp-status.js";
-import { revokeMcpConnectorFromAllRooms } from "./persistent-room-mcp-settings.js";
-import { McpAdminError, addMcpServer, type AddMcpServerInput, changeMcpServerAddress, type ChangeMcpServerAddressInput, removeMcpServer, startMcpServerLogin, getMcpServerLoginState, cancelMcpServerLogin, logoutMcpServer, testMcpServer } from "./mcp-admin.js";
+import { McpAdminError, McpRoomsKeepConnectorError, addMcpServer, type AddMcpServerInput, changeMcpServerAddress, type ChangeMcpServerAddressInput, removeMcpServer, resetMcpToolChoices, setMcpServerToolChoices, type SetMcpServerToolChoicesInput, startMcpServerLogin, getMcpServerLoginState, cancelMcpServerLogin, logoutMcpServer, testMcpServer } from "./mcp-admin.js";
 import { app } from "./server-app.js";
 import { CONNECTOR_REQUEST_LINES } from "./connector-form.js";
 
@@ -28,23 +27,21 @@ app.post("/api/mcp/servers", async (req, reply) => {
 	}
 });
 
+// Takes the connector out of every room, then out of the app, or changes
+// nothing: a refused or failed delete leaves it and every room's grant, and
+// the same delete again tries again (removeMcpServer). The one exception: a
+// failed write whose file then cannot be read leaves the grants gone, as no
+// one can say the connector stayed.
 app.delete("/api/mcp/servers/:name", async (req, reply) => {
 	try {
-		const name = String((req.params as { name: string }).name);
-		// Grant identity rule: deleting a connector revokes it from every room,
-		// so a later re-created connector with the same name starts ungranted.
-		// The sweep runs BEFORE the config mutation: a crash between the two
-		// then leaves the connector configured with its grants gone
-		// (fail-closed, user re-deletes), never a deleted connector whose
-		// grants linger for a namesake to inherit. Sweep failures are reported,
-		// not swallowed.
-		const revokeSweep = revokeMcpConnectorFromAllRooms(name);
-		for (const failure of revokeSweep.failures) {
-			app.log.warn({ agentId: failure.agentId, err: failure.error }, "connector delete: revoking the grant in a room failed");
-		}
-		const removed = await removeMcpServer(name);
-		return { ...removed, revokedFromRooms: revokeSweep.revokedFrom, ...(revokeSweep.failures.length > 0 ? { revokeFailures: revokeSweep.failures } : {}) };
+		return await removeMcpServer(String((req.params as { name: string }).name));
 	} catch (e) {
+		if (e instanceof McpRoomsKeepConnectorError) {
+			for (const failure of e.revokeFailures) {
+				app.log.warn({ agentId: failure.agentId, err: failure.error }, "connector delete: revoking the grant in a room failed");
+			}
+			return reply.code(500).send({ error: e.message, revokeFailures: e.revokeFailures });
+		}
 		return sendMcpAdminError(reply, e, "Failed to remove the connector.");
 	}
 });
@@ -56,6 +53,27 @@ app.put("/api/mcp/servers/:name/address", async (req, reply) => {
 		return await changeMcpServerAddress(String((req.params as { name: string }).name), (req.body ?? {}) as ChangeMcpServerAddressInput);
 	} catch (e) {
 		return sendMcpAdminError(reply, e, CONNECTOR_REQUEST_LINES.saveFailed);
+	}
+});
+
+// Each tool's choice on the connector's page: Always allow, Ask first, Blocked,
+// or null to clear it. Always allow names the connector the page showed, and a
+// connector that changed since answers 409.
+app.put("/api/mcp/servers/:name/tools", async (req, reply) => {
+	try {
+		return await setMcpServerToolChoices(String((req.params as { name: string }).name), (req.body ?? {}) as SetMcpServerToolChoicesInput);
+	} catch (e) {
+		return sendMcpAdminError(reply, e, CONNECTOR_REQUEST_LINES.saveFailed);
+	}
+});
+
+// Reset choices: a choices file that can't be read is set aside, and every
+// tool of every connector goes back to its default (resetMcpToolChoices).
+app.post("/api/mcp/tool-choices/reset", async (_req, reply) => {
+	try {
+		return resetMcpToolChoices();
+	} catch (e) {
+		return sendMcpAdminError(reply, e, CONNECTOR_REQUEST_LINES.choicesResetFailed);
 	}
 });
 
@@ -90,7 +108,12 @@ app.post("/api/mcp/servers/:name/logout", async (req, reply) => {
 
 app.post("/api/mcp/servers/:name/test", async (req, reply) => {
 	try {
-		return await testMcpServer(String((req.params as { name: string }).name));
+		// The page stops a check by closing its request: the connection closes before the answer is sent.
+		const stop = new AbortController();
+		reply.raw.on("close", () => {
+			if (!reply.raw.writableEnded) stop.abort();
+		});
+		return await testMcpServer(String((req.params as { name: string }).name), stop.signal);
 	} catch (e) {
 		return sendMcpAdminError(reply, e, "Failed to test the connector.");
 	}

@@ -1,0 +1,963 @@
+/* The settings windows' new look: a connector's own page and the two pages
+   that add one (by web address, a program on this computer) ----------------
+   Loaded after the look's other page files, and built while the switch is off
+   as they are: every rule starts with .settings-dialog.settings-look-next (or,
+   for the tools' menu drawn on <body>, with the body holding such a window),
+   so with the switch off nothing here applies. The list, a room's Connectors
+   and AI setup share many of these classes (the dot, the tile, the tag, the
+   row's button, the fields), so each rule names one of these pages' own
+   holders: a connector's page (.connector-page) or an add page
+   (.connector-custom-form). The strip, tag and dot carry the numbers of the
+   Connectors list's, for a later step to fold into one part each. */
+
+/* --- The page: one column that spaces its own parts. */
+.settings-dialog.settings-look-next :is(.connector-page, .connector-custom-form) {
+	--look-connector-tile: color-mix(in srgb, var(--fg) 5%, var(--exx-surface-page));
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+}
+.settings-dialog.settings-look-next:where(:root:not([data-theme="light"]) *) :is(.connector-page, .connector-custom-form) {
+	--look-connector-tile: var(--exx-surface-hover);
+}
+
+/* --- The identity: on the title line the arrow, the tile and the name with its
+   tag; a name too long for the line is cut before the close, whole in its tip. */
+.settings-dialog.settings-look-next .connector-page > .connector-page-head {
+	display: contents;
+}
+.settings-dialog.settings-look-next .connector-page .pane-head > .connector-avatar {
+	flex: none;
+	box-sizing: border-box;
+	/* 10 to the name, 2 of the header's 12. */
+	margin: 2px -2px 0 0;
+	border: 0;
+	border-radius: 6px;
+	background: var(--look-connector-tile);
+	color: var(--fg-soft);
+	font-size: 12px;
+	line-height: 16px;
+	font-weight: 700;
+}
+.settings-dialog.settings-look-next .connector-page .pane-head > .connector-avatar > svg {
+	color: var(--fg);
+}
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .connector-page .pane-head .pane-head-text > h2 {
+		min-width: 0;
+		overflow: hidden;
+		white-space: nowrap;
+	}
+}
+
+/* --- The status mark: an 8 px dot in a 12 px slot, or a 12 px spinner that
+   keeps turning with reduced motion too; "ring" is a program on this
+   computer, a grey dot; "wait" is not connected, a hollow ring. */
+.settings-dialog.settings-look-next .connector-page {
+	--look-connector-ok: var(--exx-success);
+	--look-connector-warn: var(--exx-warning);
+	--look-connector-err: var(--error);
+	--look-connector-grey: var(--exx-icon-quiet);
+}
+.settings-dialog.settings-look-next .connector-page .connector-dot {
+	width: 12px;
+	height: 12px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-dot::before {
+	box-sizing: border-box;
+	width: 8px;
+	height: 8px;
+	border: 0;
+	background: var(--look-connector-grey);
+	animation: none;
+}
+.settings-dialog.settings-look-next .connector-page .connector-dot-ok::before {
+	background: var(--look-connector-ok);
+}
+.settings-dialog.settings-look-next .connector-page .connector-dot-warn::before {
+	background: var(--look-connector-warn);
+}
+.settings-dialog.settings-look-next .connector-page .connector-dot-err::before {
+	background: var(--look-connector-err);
+}
+.settings-dialog.settings-look-next .connector-page .connector-dot-wait::before {
+	background: none;
+	border: 1.5px solid var(--muted);
+}
+.settings-dialog.settings-look-next .connector-page .connector-dot-busy::before {
+	width: 12px;
+	height: 12px;
+	background: none;
+	border: 1.5px solid color-mix(in srgb, var(--fg) 25%, transparent);
+	border-top-color: var(--fg);
+	opacity: 1;
+	animation: spin 800ms linear infinite;
+}
+
+/* --- The strips: the line after a save (a green dot) under the identity,
+   choices that can't be read (a red dot) under Tools' title, and a removal
+   that failed (a red dot) under Remove. The tile's fill, radius 12, the dot
+   in its 12 px slot, 6 px, the sentence 13/18 in the text colour, then its
+   one small button at the right. */
+.settings-dialog.settings-look-next :is(.connector-page > .connector-notice, .connector-page .connector-tools-unreadable, .connector-page > .connector-page-error) {
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 6px;
+	box-sizing: border-box;
+	min-height: 40px;
+	max-width: none;
+	padding: 6px 8px 6px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: var(--look-connector-tile);
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.connector-page > .connector-notice, .connector-page .connector-tools-unreadable, .connector-page > .connector-page-error)::before {
+	content: "";
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin: 0 2px;
+	border-radius: 50%;
+	background: var(--look-connector-err);
+}
+.settings-dialog.settings-look-next .connector-page > .connector-notice::before {
+	background: var(--look-connector-ok);
+}
+.settings-dialog.settings-look-next :is(.connector-page .connector-tools-unreadable > p, .connector-page > .connector-page-error > span) {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.connector-page .connector-tools-unreadable, .connector-page > .connector-page-error) > .rs-btn {
+	flex: none;
+	margin-left: 6px;
+}
+
+/* --- Under the identity: the facts (or a line after a save, then the facts 12
+   under it) where a page with no lead starts, the sections 32 apart. */
+.settings-dialog.settings-look-next .connector-page > :is(.connector-notice, .settings-group) {
+	margin: 12px 0 0;
+}
+.settings-dialog.settings-look-next .connector-page > .settings-group + .settings-group {
+	margin-top: 32px;
+}
+
+/* Technical details: a disclosure line, its 16 px chevron turning 90° in
+   150 ms, 13/20 at 500; opened, its text mono 12/18 and Copy small and quiet. */
+.settings-dialog.settings-look-next .connector-page .connector-tech {
+	max-width: 100%;
+	margin: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tech > summary {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	width: auto;
+	margin: 0;
+	border-radius: 6px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+	transition: color 100ms ease;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tech > summary::before {
+	width: 16px;
+	height: 16px;
+	margin-left: -2px;
+	background-color: currentColor;
+	transition: transform 150ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .connector-page .connector-tech > summary:hover {
+		color: var(--fg);
+	}
+}
+.settings-dialog.settings-look-next .connector-page .connector-tech > summary:active {
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .connector-page .connector-tech > summary:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .connector-page .connector-tech-body {
+	align-items: flex-start;
+	gap: 12px;
+	margin-top: 6px;
+}
+/* The text's first line on the middle of Copy, a small button 28 tall. */
+.settings-dialog.settings-look-next .connector-page .connector-tech-body code {
+	padding-top: 5px;
+	color: var(--fg-soft);
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tech-body > .rs-btn:last-child {
+	margin-right: 0;
+}
+/* Beside the facts' labels, Copy goes under a text it leaves too little width. */
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .connector-page .connector-tech-body {
+		flex-wrap: wrap;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-tech-body code {
+		flex-basis: 160px;
+	}
+}
+
+/* --- The facts: one card of rows 44 tall at least. The label 13/18 muted in
+   a 160 column, 12, the value 13/18 in the text colour, left-aligned, then
+   the row's button at the right padding, every one on one right edge. A
+   label sits on its value's first line when the value wraps. */
+.settings-dialog.settings-look-next .connector-page .connector-facts {
+	padding: 0 16px;
+	background: var(--exx-surface-card);
+}
+.settings-dialog.settings-look-next .connector-page .connector-facts > .connector-fact {
+	display: grid;
+	grid-template-columns: 160px minmax(0, 1fr);
+	align-items: first baseline;
+	align-content: center;
+	gap: 0 12px;
+	box-sizing: border-box;
+	min-height: 44px;
+	padding: 8px 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact > .settings-row-main {
+	display: contents;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact .settings-row-label {
+	grid-column: 1;
+	grid-row: 1;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+}
+/* The Status row: its dot and words, a note and Technical details under them at
+   their left edge, its step on the words' first line, level with the label. */
+.settings-dialog.settings-look-next .connector-page .connector-fact.connector-fact-status > .connector-fact-value {
+	align-items: first baseline;
+}
+/* A missing runtime's two ways stand under the words when there is no room beside them. */
+.settings-dialog.settings-look-next .connector-page .connector-fact.connector-fact-status > .connector-fact-value:has(> .connector-way-link) {
+	flex-wrap: wrap;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact.connector-fact-status > .connector-fact-value:has(> .connector-way-link) > .connector-status {
+	flex: 1 1 200px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-status {
+	display: flex;
+	align-items: first baseline;
+	gap: 6px;
+	min-width: 0;
+	/* Its first line as far from the card's edge as a one-line row's words from
+	   their line, with a button beside it, under it or none. */
+	padding-top: 5px;
+}
+/* As far under its last line as over its first; on a phone only where no button stands under it. */
+.settings-dialog.settings-look-next .connector-page .connector-fact-value:not(:has(> :is(.rs-btn, .connector-slot-btn))) > .connector-status {
+	padding-bottom: 5px;
+}
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .connector-page .connector-status {
+		padding-bottom: 5px;
+	}
+}
+.settings-dialog.settings-look-next .connector-page .connector-status > .connector-dot {
+	flex: none;
+	align-self: flex-start;
+	margin-top: 3px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-status-text {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .connector-page .connector-status-text > p {
+	margin: 0;
+	color: inherit;
+}
+.settings-dialog.settings-look-next .connector-page :is(.connector-status-check, .connector-status-text > .connector-status-note) {
+	color: var(--muted);
+}
+.settings-dialog.settings-look-next .connector-page .connector-status-text > .connector-tech {
+	margin-top: 4px;
+}
+@media (hover: none) {
+	/* Under the check's target (44, .pane-lead-link::after), not inside it. */
+	.settings-dialog.settings-look-next .connector-page .connector-status-text > p:has(> .connector-status-check) + .connector-tech {
+		margin-top: 13px;
+	}
+}
+/* A line about the row (where a connector from another app came from) under its label, across the row; a program's command on
+   the value's second line, mono. */
+.settings-dialog.settings-look-next .connector-page .connector-fact .settings-row-sub {
+	grid-column: 1 / -1;
+	grid-row: 2;
+	margin-top: 2px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	-webkit-line-clamp: none;
+	line-clamp: none;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact .settings-row-sub:has(> code.connector-command) {
+	grid-column: 2;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact code.connector-command {
+	color: var(--fg);
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	line-height: 18px;
+}
+/* A word longer than the line still breaks inside, at the line's end. */
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-command-word {
+	display: inline-block;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-fact-note {
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-fact-value {
+	grid-column: 2;
+	grid-row: 1;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-width: 0;
+	max-width: none;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	text-align: left;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-fact-value > :is(.rs-btn, .connector-slot-btn) {
+	flex: none;
+	width: auto;
+	min-width: 0;
+	margin-left: auto;
+}
+/* Two steps side by side (Reconnect, Disconnect) stand together at the row's end, 8 px apart as the fixes under what went wrong. */
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-fact-value > :is(.rs-btn, .connector-slot-btn) + :is(.rs-btn, .connector-slot-btn) {
+	margin-left: -4px;
+}
+/* On a phone the two don't fit beside the row's words, nor beside each other: each takes a line of its own under them, at the row's end, both as wide as the wider. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .connector-page .connector-fact .connector-fact-value:has(> :is(.rs-btn, .connector-slot-btn) + :is(.rs-btn, .connector-slot-btn)) {
+		display: grid;
+		grid-template-columns: 1fr max-content;
+		gap: 8px;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-fact .connector-fact-value:has(> :is(.rs-btn, .connector-slot-btn) + :is(.rs-btn, .connector-slot-btn)) > :not(.rs-btn, .connector-slot-btn) {
+		grid-column: 1 / -1;
+		justify-self: start;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-fact .connector-fact-value:has(> :is(.rs-btn, .connector-slot-btn) + :is(.rs-btn, .connector-slot-btn)) > :is(.rs-btn, .connector-slot-btn) {
+		grid-column: 2;
+		justify-self: stretch;
+		margin-left: 0;
+	}
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-address {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-item-state {
+	gap: 6px;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+/* The state's dot shows once, in the Status row: the Sign-in row's words stand
+   on the values' column without one. */
+.settings-dialog.settings-look-next .connector-page .connector-fact .connector-item-state > .connector-dot {
+	display: none;
+}
+/* The rooms: sentence links, underlined at 40 %, whole on hover; none, muted.
+   A name longer than the value's column wraps there rather than pushing the
+   page sideways. */
+.settings-dialog.settings-look-next .connector-page .connector-fact-rooms .connector-fact-value:not(:has(.connector-rooms)) {
+	color: var(--muted);
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact-rooms .connector-rooms a {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	border-radius: 2px;
+	color: var(--fg);
+	text-decoration: underline;
+	text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	transition: text-decoration-color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .connector-page .connector-fact-rooms .connector-rooms a:hover {
+		text-decoration-color: currentColor;
+	}
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact-rooms .connector-rooms a:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	text-decoration-color: currentColor;
+}
+
+/* Change address and Change key open in their row: the label in its column,
+   the fields (at most a form's width) at the value's edge, a hint 13/18 muted, then Save
+   and Cancel 8 apart on the value's left edge. */
+.settings-dialog.settings-look-next .connector-page .connector-facts > .connector-fact-edit {
+	align-items: start;
+	padding: 12px 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact-edit .settings-row-label {
+	padding-top: 7px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-fact-edit .connector-edit {
+	grid-column: 2;
+	grid-row: 1;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 8px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-edit > .connector-edit-input {
+	width: 100%;
+}
+.settings-dialog.settings-look-next .connector-page .connector-edit > .connector-address {
+	padding-top: 7px;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-edit > .connector-edit-hint {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-edit > :is(.connector-row-error, .connector-way) {
+	justify-self: start;
+}
+.settings-dialog.settings-look-next .connector-page .connector-edit > .connector-edit-foot {
+	justify-content: flex-start;
+	gap: 8px;
+	margin-top: 4px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-edit-foot > .rs-btn {
+	width: auto;
+	min-width: 0;
+}
+
+/* The page's red-dot lines: a save that failed in a tool's row, an edit
+   refused, a reset that failed under Tools; soft text, cut nowhere but in a
+   tool's row. */
+.settings-dialog.settings-look-next .connector-page .connector-row-error {
+	position: relative;
+	overflow-wrap: anywhere;
+	padding-left: 18px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-row-error::before {
+	content: "";
+	position: absolute;
+	top: 5px;
+	left: 2px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--look-connector-err);
+}
+
+/* --- Tools: the section's title, its help 13/18 muted, then each group's title
+   8 above its card. */
+.settings-dialog.settings-look-next .connector-page .connector-tools-group > .group-head {
+	margin: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tools-group > :is(.connector-tools-line, .cli-note:not(.connector-tools-line)) {
+	margin: 4px 0 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tools-group > :is(.connector-tools-unreadable, .connector-row-error) {
+	margin: 8px 0 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tools-kicker {
+	margin: 24px 0 8px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tools + .connector-tools-kicker {
+	margin-top: 32px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tools {
+	margin: 0;
+	padding: 0 16px;
+	background: var(--exx-surface-card);
+}
+/* A tool's row: its name 14/20 at 500 over its line 13/18 muted, one line
+   each, cut with "…" (the line whole in its tip); its choice at the right
+   padding. 64 tall, 48 for a tool with no line; nothing a choice or a save
+   shows changes that. */
+.settings-dialog.settings-look-next .connector-page .connector-tools > .connector-tool {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 0 12px;
+	box-sizing: border-box;
+	height: 48px;
+	min-height: 0;
+	padding: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tools > .connector-tool:has(.settings-row-sub) {
+	height: 64px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tool > .settings-row-main {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tool :is(.settings-row-label, .settings-row-sub, .connector-row-error) {
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	-webkit-line-clamp: none;
+	line-clamp: none;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tool .settings-row-label {
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next .connector-page .connector-tool .settings-row-sub {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+/* A save that failed, or can't be told saved, says so in its line's place. */
+.settings-dialog.settings-look-next .connector-page .connector-tool .settings-row-main:has(> .connector-row-error) > .settings-row-sub {
+	display: none;
+}
+/* The choice: every select 148 wide, its right edge on the row's padding, so all stand at one x. Words
+   where it can't change here start where a select's value does. */
+.settings-dialog.settings-look-next .connector-page .connector-tool > .connector-choice {
+	grid-column: 2;
+	grid-row: 1;
+	justify-content: flex-end;
+	gap: 8px;
+	min-width: 148px;
+	margin: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice > .connector-choice-words {
+	box-sizing: border-box;
+	width: 148px;
+	padding: 0 11px;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+	text-align: left;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice > .connector-slot-btn {
+	width: auto;
+	min-width: 0;
+	margin-right: auto;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice .ai-profile-menu-anchor {
+	display: block;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice .connector-choice-btn {
+	width: 148px;
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice-btn > .connector-choice-face {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 12px;
+	align-items: center;
+	column-gap: 8px;
+	width: 100%;
+	height: 100%;
+	vertical-align: top;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice-face > :is(.connector-slot-label, .connector-choice-sizer) {
+	grid-area: 1 / 1;
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-align: left;
+	text-overflow: ellipsis;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice-face > :is(.connector-slot-label, .connector-choice-sizer)::after {
+	content: none;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice-face > .connector-choice-chevron {
+	grid-area: 1 / 2;
+	display: flex;
+	width: 12px;
+	height: 12px;
+	opacity: 0.7;
+}
+.settings-dialog.settings-look-next .connector-page .connector-choice-btn.is-busy .connector-choice-chevron {
+	visibility: hidden;
+}
+
+/* The tools' menu: today's four items, 32 tall, the choice in force at 500
+   with a 14 px check at the right. */
+body:has(.settings-dialog.settings-look-next .connector-page) > .ai-profile-menu .connector-choice-item {
+	padding-right: 34px;
+}
+body:has(.settings-dialog.settings-look-next .connector-page) > .ai-profile-menu .connector-choice-item::before {
+	content: none;
+}
+body:has(.settings-dialog.settings-look-next .connector-page) > .ai-profile-menu .connector-choice-item[aria-checked="true"] {
+	font-weight: 500;
+}
+body:has(.settings-dialog.settings-look-next .connector-page) > .ai-profile-menu .connector-choice-item[aria-checked="true"]::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	right: 10px;
+	width: 14px;
+	height: 14px;
+	background-color: currentColor;
+	-webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / contain no-repeat;
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / contain no-repeat;
+	transform: translateY(-50%);
+}
+
+/* --- Remove: its own card, last; its name 14/20 at 500 over its line 13/18
+   muted, the soft red Remove at the right padding. Where it can't be removed
+   here, today's note, muted, and no card. */
+.settings-dialog.settings-look-next .connector-page .connector-remove-group > .settings-rows {
+	padding: 0 16px;
+	background: var(--exx-surface-card);
+}
+.settings-dialog.settings-look-next .connector-page .connector-remove-group .settings-row {
+	align-items: center;
+	gap: 12px;
+	box-sizing: border-box;
+	min-height: 64px;
+	padding: 12px 0;
+}
+.settings-dialog.settings-look-next .connector-page .connector-remove-group .settings-row-main {
+	gap: 2px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-remove-group .settings-row-sub {
+	color: var(--muted);
+}
+.settings-dialog.settings-look-next .connector-page .connector-remove-group .rs-btn {
+	width: auto;
+	margin-left: auto;
+}
+.settings-dialog.settings-look-next .connector-page .connector-remove-group > .connector-note {
+	margin: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-remove-group > .connector-note + .connector-note,
+.settings-dialog.settings-look-next .connector-page .connector-remove-group > .settings-rows + .connector-note {
+	margin-top: 8px;
+}
+.settings-dialog.settings-look-next .connector-page .connector-note code {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+}
+/* A removal that failed: 12 under the card, the page's bottom padding under it. */
+.settings-dialog.settings-look-next .connector-page > .connector-page-error {
+	margin: 12px 0 0;
+}
+
+/* --- An add page's form: fields in one column (label a row title's 14/20 at
+   500, 6, the field, 6, help 13/18 muted), 20 apart, in the form's column (44);
+   the trust sentence in soft text 24 above Add and Cancel, which start on the
+   content's left edge. */
+.settings-dialog.settings-look-next .connector-custom-form > .connector-form {
+	display: grid;
+	gap: 20px;
+	margin-top: 24px;
+}
+.settings-dialog.settings-look-next .connector-custom-form :is(.connector-form, .connector-oauth-fields) > * {
+	min-width: 0;
+	margin: 0;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form-field {
+	display: grid;
+	gap: 6px;
+	justify-items: start;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form-field > .connector-form-hint {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form-field > .connector-command-input {
+	font-family: var(--exx-font-mono);
+	font-size: 13px;
+}
+/* The fold: a disclosure line, its 16 px chevron turning 90° in 150 ms,
+   13/20 at 500; opened, its fields follow in the same column. */
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-toggle {
+	justify-self: start;
+	gap: 6px;
+	padding: 0;
+	border-radius: 6px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+	transition: color 100ms ease;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-toggle > .disclosure-chevron {
+	width: 16px;
+	height: 16px;
+	margin-left: -2px;
+	background-color: currentColor;
+	transition: transform 150ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-toggle:hover {
+		color: var(--fg);
+	}
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-toggle:active {
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-toggle:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-fields {
+	display: grid;
+	gap: 20px;
+}
+/* "Your own sign-in app" and "Extra headers": a section's label, their hint 2 under them. */
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-fields > .connector-form-sub + .cli-note {
+	margin-top: -18px;
+}
+.settings-dialog.settings-look-next .connector-custom-form :is(.connector-form, .connector-oauth-fields) > .cli-note {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .cli-note code {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+}
+/* Pairs (headers, a program's settings): name and value 12 apart across the
+   form's column (44), the remove button after them, 8 between pairs; Add
+   another quiet under them. Each field keeps its name for a screen reader;
+   the placeholders show. */
+.settings-dialog.settings-look-next .connector-custom-form .connector-header-row {
+	display: grid;
+	align-items: center;
+	gap: 0 12px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-header-row > .connector-form-field > input {
+	width: 100%;
+}
+/* The value reaches 4 into the gap, so the remove button stands 8 after it and
+   ends on the column's edge (a margin on the button would shrink its track). */
+.settings-dialog.settings-look-next .connector-custom-form .connector-header-row > .connector-form-field:nth-child(2) {
+	margin-right: -4px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-fields > .cli-note + .connector-header-row,
+.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-fields > :is(.connector-header-row + .connector-header-row, .connector-header-row + .connector-header-add) {
+	margin-top: -12px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form-field[role="group"] {
+	gap: 8px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form-field[role="group"] > span:first-child {
+	margin-bottom: -2px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-header-add {
+	justify-self: start;
+	border-radius: 6px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+	text-decoration: none;
+	transition: color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .connector-custom-form .connector-header-add:hover {
+		color: var(--fg);
+		text-decoration: underline;
+	}
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-header-add:active {
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-header-add:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+/* The lines before Add: the sign-in sentence 8 under the fold; the trust
+   sentence, the thing to read before Add, 13/18 in soft text; a program's
+   check line 4 under it; the buttons 24 below. */
+.settings-dialog.settings-look-next .connector-custom-form .connector-form > .connector-oauth-toggle + .connector-form-line {
+	margin-top: -12px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form > .connector-form-warning {
+	margin-top: 4px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form > .connector-form-warning + .connector-form-line {
+	margin-top: -16px;
+}
+/* A refusal: a red-dot strip 24 under the sentences, 12 above the buttons. */
+.settings-dialog.settings-look-next .connector-custom-form .connector-form > .checkpoint-proposal-error {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	box-sizing: border-box;
+	min-height: 40px;
+	margin-top: 4px;
+	padding: 6px 8px 6px 12px;
+	border: 0;
+	border-radius: 12px;
+	background: var(--look-connector-tile);
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form > .checkpoint-proposal-error::before {
+	content: "";
+	flex: none;
+	width: 8px;
+	height: 8px;
+	margin: 0 2px;
+	border-radius: 50%;
+	background: var(--error);
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form > .settings-form-foot {
+	justify-content: flex-start;
+	gap: 8px;
+	margin-top: 4px;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-form > .checkpoint-proposal-error + .settings-form-foot {
+	margin-top: -8px;
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next :is(.connector-page .connector-tech > summary, .connector-custom-form .connector-oauth-toggle > .disclosure-chevron) {
+		transition: none;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-tech > summary::before {
+		transition: none;
+	}
+}
+
+/* --- Phone (760 px and less): the facts' label column is 112; a tool's select
+   goes under its whole line, the column's width; every field is the column's
+   width, a pair's two fields stacked beside its remove. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .connector-page .pane-head > .connector-avatar {
+		margin: 10px 10px 0 0;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-facts > .connector-fact {
+		grid-template-columns: 112px minmax(0, 1fr);
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-tools > .connector-tool,
+	.settings-dialog.settings-look-next .connector-page .connector-tools > .connector-tool:has(.settings-row-sub) {
+		grid-template-columns: minmax(0, 1fr);
+		row-gap: 8px;
+		height: auto;
+		padding: 12px 0;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-tool :is(.settings-row-label, .settings-row-sub, .connector-row-error) {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-tool > .connector-choice {
+		grid-column: 1;
+		grid-row: 2;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 4px;
+		min-width: 0;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-choice > .connector-choice-words {
+		align-self: flex-start;
+	}
+	/* The details' first line on the middle of Copy, 44 tall here. */
+	.settings-dialog.settings-look-next .connector-page .connector-tech-body code {
+		padding-top: 13px;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-choice > .ai-profile-menu-anchor {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-choice .connector-choice-btn {
+		width: 100%;
+	}
+	.settings-dialog.settings-look-next .connector-page .connector-choice > .connector-choice-words {
+		width: auto;
+		padding: 0;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form .connector-form-field > input {
+		max-width: none;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form .connector-header-row {
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 8px 8px;
+		justify-self: stretch;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form .connector-header-row > .connector-form-field:first-child {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form .connector-header-row > .connector-form-field:nth-child(2) {
+		grid-column: 1;
+		grid-row: 2;
+		margin-right: 0;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form .connector-header-row > .connector-header-remove {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+	}
+	/* The fold's line and Add another keep their 20 px line, with a 44 px
+	   target a finger can find. */
+	.settings-dialog.settings-look-next .connector-custom-form :is(.connector-oauth-toggle, .connector-header-add) {
+		position: relative;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form :is(.connector-oauth-toggle, .connector-header-add)::after {
+		content: "";
+		position: absolute;
+		inset: -12px 0;
+	}
+	/* A pair's two fields 8 apart, 16 between pairs, so each name keeps its value. */
+	.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-fields > .connector-header-row + .connector-header-row {
+		margin-top: -4px;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form .connector-form-field[role="group"] > .connector-header-row + .connector-header-row {
+		margin-top: 8px;
+	}
+	/* Add another 12 under the last pair, so its target ends where the field does. */
+	.settings-dialog.settings-look-next .connector-custom-form .connector-oauth-fields > .connector-header-row + .connector-header-add {
+		margin-top: -8px;
+	}
+	.settings-dialog.settings-look-next .connector-custom-form .connector-form-field[role="group"] > .connector-header-row + .connector-header-add {
+		margin-top: 4px;
+	}
+}

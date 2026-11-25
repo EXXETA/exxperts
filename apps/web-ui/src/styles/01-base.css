@@ -131,6 +131,40 @@
 	/* The edge of a dialog that dims the page (no shadow): the standard
 	   border in both themes, which the light block's --exx-border sets. */
 	--exx-edge-dialog: var(--exx-border);
+	/* The settings windows' new look (44-settings-look.css): a card one step
+	   lighter than the page with an 8 % edge, the sidebar one step darker.
+	   Light's sidebars, Home's and a room's, take --exx-surface-side too, and
+	   the windows' page is the canvas there. */
+	--exx-surface-card: var(--exx-surface-raised);
+	--exx-surface-side: #272727;
+	--exx-surface-page: var(--exx-surface);
+	--exx-border-card: color-mix(in srgb, var(--exx-text) 8%, transparent);
+	--exx-hairline: color-mix(in srgb, var(--exx-text) 11%, transparent);
+	--exx-border-field: #5e5952;
+	--exx-switch-off: #8a847c;
+	--exx-switch-off-hover: #9a948b;
+	--exx-nav-hover: color-mix(in srgb, var(--exx-text) 5%, transparent);
+	--exx-nav-on: color-mix(in srgb, var(--exx-text) 9%, transparent);
+	--exx-shadow-small: 0 1px 2px rgba(0, 0, 0, 0.4);
+	--exx-shadow-window: 0 28px 72px -24px rgba(0, 0, 0, 0.6);
+	/* Its controls: a field's border under the pointer, the quiet grey of a
+	   placeholder example and of the search mark (drawn in that grey, as an
+	   image a field can carry), a row under the pointer and pressed, and the
+	   veil behind a question. */
+	--exx-border-field-hover: #6f6a64;
+	--exx-icon-quiet: #8a847c;
+	--exx-search-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none' stroke='%238a847c' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='6' cy='6' r='4.25'/%3E%3Cpath d='m9.25 9.25 3.5 3.5'/%3E%3C/svg%3E");
+	--exx-search-clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%23aaa39a' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='m3 3 6 6M9 3l-6 6'/%3E%3C/svg%3E");
+	--exx-veil: rgba(0, 0, 0, 0.5);
+	--exx-row-hover: color-mix(in srgb, var(--exx-text) 4%, transparent);
+	--exx-row-press: color-mix(in srgb, var(--exx-text) 8%, transparent);
+	/* A segment not chosen, at rest and under the pointer: muted words fall
+	   under 4.5:1 on dark's track, so dark's are a step lighter. */
+	--exx-segment-words: var(--fg-soft);
+	--exx-segment-words-hover: var(--fg);
+	/* The chosen one of a row of choices, lighter than the track: dark's card
+	   is darker than the track. */
+	--exx-segment-chosen: color-mix(in srgb, var(--exx-text) 20%, var(--exx-surface));
 
 	/* Compatibility aliases for the existing stylesheet. */
 	--bg: var(--exx-canvas);
@@ -200,15 +234,15 @@
 }
 
 :root[data-theme="light"] {
-	--exx-canvas: #f3f0ea;
-	--exx-surface: #fffaf2;
-	--exx-surface-raised: #ebe6dc;
-	--exx-surface-hover: #e2ddd3;
-	--exx-surface-inset: #f8f5ef;
+	--exx-canvas: #faf8f4;
+	--exx-surface: #ffffff;
+	--exx-surface-raised: #efebe3;
+	--exx-surface-hover: #e7e2d9;
+	--exx-surface-inset: #f5f2ec;
 
 	--exx-ink: #111111;
 	--exx-paper: #ffffff;
-	--exx-paper-soft: #fffaf2;
+	--exx-paper-soft: var(--exx-surface);
 
 	--exx-text: #171717;
 	--exx-text-soft: #34312d;
@@ -216,11 +250,11 @@
 	--exx-text-disabled: #928b82;
 
 	--exx-border: #c7c0b6;
-	--exx-border-soft: #ded8cf;
-	--exx-divider: #e4ded5;
+	--exx-border-soft: #e2ddd3;
+	--exx-divider: #e8e3da;
 
 	--exx-action-primary-bg: #111111;
-	--exx-action-primary-fg: #fffaf2;
+	--exx-action-primary-fg: #ffffff;
 	--exx-action-primary-hover-bg: #000000;
 	--exx-action-secondary-bg: transparent;
 	--exx-action-secondary-fg: var(--exx-text-soft);
@@ -230,8 +264,8 @@
 
 	--exx-focus: #111111;
 	--exx-active-bg: #111111;
-	--exx-active-fg: #fffaf2;
-	--exx-active-muted-bg: #e7e0d5;
+	--exx-active-fg: #ffffff;
+	--exx-active-muted-bg: #e6e1d7;
 
 	--exx-success: #357a42;
 	--exx-warning: #9a650f;
@@ -269,6 +303,28 @@
 	--exx-radius-pill: 999px;
 	--exx-shadow-hover: 0 2px 8px rgba(17, 17, 17, 0.12);
 	--exx-shadow-popover: 0 8px 28px rgba(17, 17, 17, 0.18);
+	--exx-surface-card: #ffffff;
+	--exx-surface-side: #f3f0ea;
+	--exx-surface-page: var(--exx-canvas);
+	--exx-border-card: var(--exx-border-soft);
+	--exx-hairline: var(--exx-divider);
+	--exx-border-field: var(--exx-border);
+	--exx-switch-off: #928b82;
+	--exx-switch-off-hover: #7f786f;
+	--exx-nav-hover: color-mix(in srgb, var(--exx-text) 4%, transparent);
+	--exx-nav-on: color-mix(in srgb, var(--exx-text) 7%, transparent);
+	--exx-shadow-small: 0 1px 2px rgba(17, 17, 17, 0.14);
+	--exx-shadow-window: 0 24px 64px -16px rgba(17, 17, 17, 0.24), 0 2px 6px rgba(17, 17, 17, 0.06);
+	--exx-border-field-hover: #b3aba0;
+	--exx-icon-quiet: var(--exx-text-disabled);
+	--exx-search-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none' stroke='%23928b82' stroke-width='1.5' stroke-linecap='round'%3E%3Ccircle cx='6' cy='6' r='4.25'/%3E%3Cpath d='m9.25 9.25 3.5 3.5'/%3E%3C/svg%3E");
+	--exx-search-clear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%236d675f' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='m3 3 6 6M9 3l-6 6'/%3E%3C/svg%3E");
+	--exx-veil: rgba(17, 17, 17, 0.28);
+	--exx-row-hover: color-mix(in srgb, var(--exx-text) 3%, transparent);
+	--exx-row-press: color-mix(in srgb, var(--exx-text) 6%, transparent);
+	--exx-segment-words: var(--muted);
+	--exx-segment-words-hover: var(--fg-soft);
+	--exx-segment-chosen: var(--exx-surface-card);
 
 	--bg: var(--exx-canvas);
 	--bg-2: var(--exx-surface-inset);
@@ -286,7 +342,7 @@
 	--warning: var(--exx-warning);
 	--error: var(--exx-danger-strong);
 	--danger: var(--error);
-	/* Light's amber a step deeper for small words on its tints, 4.5:1. */
+	/* Light's amber a step deeper for small words on its tints and in code, 4.5:1. */
 	--warning-text: #8a5a0d;
 	--error-text: var(--error);
 	--user-bubble: var(--exx-surface-raised);
@@ -306,7 +362,7 @@
 	--code-token-keyword: var(--exx-pill-reorganize);
 	--code-token-string: var(--exx-success);
 	--code-token-string-expression: var(--exx-success);
-	--code-token-constant: var(--exx-warning);
+	--code-token-constant: var(--warning-text);
 	--code-token-function: var(--exx-pill-update);
 	--code-token-link: var(--exx-pill-update);
 	--code-token-comment: var(--exx-text-muted);
@@ -314,7 +370,7 @@
 	--code-token-parameter: var(--code-fg);
 	--code-token-inserted: var(--exx-success);
 	--code-token-deleted: var(--exx-danger-strong);
-	--code-token-changed: var(--exx-warning);
+	--code-token-changed: var(--warning-text);
 	--overlay-bg: color-mix(in srgb, var(--bg) 72%, transparent);
 	--contrast-bg: var(--exx-ink);
 	--contrast-fg: var(--exx-paper);
@@ -343,7 +399,8 @@ strong, b { font-weight: 700; }
 
 /* Buttons: the one family, and the only place a button's look is set.
    Kinds: .rs-btn ordinary, + .rs-btn-primary main (ink), + .rs-btn-quiet,
-   + .rs-btn-danger red words, + .rs-btn-primary.rs-btn-danger red fill,
+   + .rs-btn-danger red words, + .rs-btn-danger.rs-btn-danger-soft red words
+   on a soft red fill, + .rs-btn-primary.rs-btn-danger red fill,
    + .rs-btn-icon a square mark; .rs-btn-sm is the small size for cards,
    rows and headers. A rule in another style file that names a family button
    sets only where it sits (margin, flex, grid, order, position, width,
@@ -447,6 +504,14 @@ strong, b { font-weight: 700; }
 	--btn-bg-press: color-mix(in srgb, var(--error-text) 8%, transparent);
 	--btn-fg: var(--error-text);
 	--btn-fg-hover: color-mix(in srgb, var(--error-text) 80%, var(--fg));
+}
+/* Red words on a soft red fill, for a destructive button in a row beside
+   filled ones, so their boxes line up. The fill mixes the red fill's colour,
+   which keeps the dark theme's light red words at 4.5:1 on it. */
+.rs-btn.rs-btn-danger.rs-btn-danger-soft {
+	--btn-bg: color-mix(in srgb, var(--exx-action-danger-bg) 8%, transparent);
+	--btn-bg-hover: color-mix(in srgb, var(--exx-action-danger-bg) 12%, transparent);
+	--btn-bg-press: color-mix(in srgb, var(--exx-action-danger-bg) 16%, transparent);
 }
 .rs-btn.rs-btn-primary.rs-btn-danger {
 	--btn-bg: var(--exx-action-danger-bg);

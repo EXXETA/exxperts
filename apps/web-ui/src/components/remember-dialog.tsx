@@ -10,6 +10,7 @@ import { type RememberReadEstimate, fetchRememberReadEstimate, rememberFillsRoom
 import { editableMemoryBody, storedMemoryBody, plainMemoryText } from "../memory-v2-copy";
 import type { CheckpointProposalResponse, CheckpointApprovalResponse } from "../types";
 import { ChevronDownIcon } from "./icons";
+import { BACK_TO_ROOMS_LABEL } from "../back-to-rooms-label";
 import type { PersistentChatConfig } from "../room-thread-items";
 import { CHECKPOINT_DENSITY_OPTIONS, CHECKPOINT_REMEMBER_MAX_CHARS, type CheckpointDensity } from "../maintain-workflow-state";
 import { roomFilledBy } from "../maintenance-errors";
@@ -154,7 +155,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						{/* A full room has no Keep chatting: its next conversation waits for Memorize. */}
 						<div className="checkpoint-preview-actions">
 							{!roomFilled && <button className="rs-btn rs-btn-primary" onClick={onContinueAfterCheckpoint} title="Stay in this room with a new conversation">Keep chatting</button>}
-							<button className="rs-btn" onClick={onRestAfterCheckpoint}>Return Home</button>
+							<button className="rs-btn" onClick={onRestAfterCheckpoint}>{BACK_TO_ROOMS_LABEL}</button>
 							{roomFilled && <button className="rs-btn rs-btn-primary" onClick={onMemorizeAfterCheckpoint}>Memorize</button>}
 						</div>
 					</div>

@@ -3,10 +3,11 @@ import type { PersistentAgentStatus, PersistentRoomCapabilityPolicyView, Persist
 import { addAlsoAllowedFolder, type AlsoAllowedAddResponse, type AlsoAllowedEntryName, type AlsoAllowedFolderView, type AlsoAllowedList, type AlsoAllowedRemoveResponse, chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchAlsoAllowed, fetchPersistentRoomWorkspaceDefault, NO_FOLDER_WINDOW_CODES, removeAlsoAllowed, restoreAlsoAllowed, savePersistentRoomWorkspaceDefault, setAlsoAllowedAccess, setPersistentRoomProtection } from "../persistent-room-workspace-api";
 import { fetchPersistentRoomBashSettings } from "../persistent-room-management-api";
 import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
-import { ADD_A_FOLDER, ALLOW_CHANGES, ALSO_ALLOWED, ALSO_ALLOWED_LINE, ALSO_ALLOWED_LOAD_FAILED, CAN_CHANGE_FILES, CAN_CHANGE_FILES_OFF_LINE, CAN_CHANGE_FILES_OFF_NO_COMMANDS_LINE, CAN_CHANGE_FILES_OFF_UNPROTECTED_LINE, CAN_CHANGE_FILES_ON_LINE, CAN_READ, CAN_READ_AND_CHANGE, CANCEL, CHANGE_SAVE_FAILED, CHANGE_FOLDER, CHANGEABLE_AT_COMPUTER, CHOOSE_FOLDER, CHOOSING, COMMANDS, COMMANDS_FREE_REACH, COMMANDS_NEED_CHANGES_LINE, COMMANDS_NO_PROTECTION_REACH, COMMANDS_PROTECTED_REACH, COMMANDS_UNPROTECTED_REACH, CREATE_ROOM_FIRST, FOLDER_CLEAR_FAILED, FOLDER_LOAD_FAILED, FOLDER_NOT_FOUND, FOLDER_PANE_LINE, FOLDER_PANE_TITLE, FOLDER_REMOVED, FOLDER_REMOVED_NONE, FOLDER_SAVE_FAILED, folderRemovedLine, folderStillReadLine, LOADING, LOCATION, NO_FOLDER, NO_FOLDER_YET, NO_FOLDER_YET_LINE, NO_OTHER_FOLDERS_OR_SITES, NOT_FOUND, ONLY_ALLOW_READING, PROTECTION, PROTECTION_LINE, PROTECTION_ROW_UNAVAILABLE, PROTECTION_ROW_UNAVAILABLE_COMPUTER, PROTECTION_ROW_UNAVAILABLE_FOLDER, PROTECTION_UNAVAILABLE, REMOVE_FROM_LIST, ROOM_ANSWERING_CHANGE_LINE, ROOM_NEEDS_ATTENTION, SAVED, SHARED_SERVER_NO_FOLDER, SITE, siteRemovedLine, STOP_USING, STOP_USING_FOLDER, STOP_USING_FOLDER_BODY, stopUsingFolderTitle, TRY_AGAIN, TURN_OFF, TURN_OFF_PROTECTION_BODY, TURN_OFF_PROTECTION_BODY_COMMANDS_OFF, TURN_OFF_PROTECTION_TITLE, TYPE_THE_PATH, typedPathExample, UNDO, USE_THIS_FOLDER } from "../../../web-server/src/room-box/card-text";
+import { ADD_A_FOLDER, ALLOW_CHANGES, ALSO_ALLOWED, ALSO_ALLOWED_LINE, ALSO_ALLOWED_LOAD_FAILED, CAN_CHANGE_FILES, CAN_CHANGE_FILES_OFF_LINE, CAN_CHANGE_FILES_OFF_NO_COMMANDS_LINE, CAN_CHANGE_FILES_OFF_UNPROTECTED_LINE, CAN_CHANGE_FILES_ON_LINE, CAN_READ, CAN_READ_AND_CHANGE, CANCEL, CHANGE_SAVE_FAILED, CHANGE_FOLDER, CHANGEABLE_AT_COMPUTER, CHOOSE_FOLDER, CHOOSING, commandModeOf, type CommandMode, COMMANDS, COMMANDS_FREE_REACH, COMMANDS_NEED_CHANGES_LINE, COMMANDS_NO_PROTECTION_AUTO_REACH, COMMANDS_NO_PROTECTION_REACH, COMMANDS_PROTECTED_REACH, COMMANDS_UNPROTECTED_AUTO_REACH, COMMANDS_UNPROTECTED_REACH, CREATE_ROOM_FIRST, FOLDER_CLEAR_FAILED, FOLDER_LOAD_FAILED, FOLDER_NOT_FOUND, FOLDER_PANE_LINE, FOLDER_PANE_TITLE, FOLDER_REMOVED, FOLDER_REMOVED_NONE, FOLDER_SAVE_FAILED, folderRemovedLine, folderStillReadLine, LOADING, LOCATION, NO_FOLDER, NO_FOLDER_YET, NO_FOLDER_YET_LINE, NO_OTHER_FOLDERS_OR_SITES, NOT_FOUND, ONLY_ALLOW_READING, PROTECTION, PROTECTION_LINE, PROTECTION_OFF_LINE, PROTECTION_ROW_UNAVAILABLE, PROTECTION_ROW_UNAVAILABLE_COMPUTER, PROTECTION_ROW_UNAVAILABLE_FOLDER, PROTECTION_UNAVAILABLE, REMOVE_FROM_LIST, ROOM_ANSWERING_CHANGE_LINE, ROOM_NEEDS_ATTENTION, SAVED, SHARED_SERVER_NO_FOLDER, SITE, siteRemovedLine, STOP_USING, STOP_USING_FOLDER, STOP_USING_FOLDER_BODY, stopUsingFolderTitle, TRY_AGAIN, TURN_OFF, TURN_OFF_PROTECTION_BODY, TURN_OFF_PROTECTION_BODY_COMMANDS_OFF, TURN_OFF_PROTECTION_TITLE, TYPE_THE_PATH, typedPathExample, UNDO, USE_THIS_FOLDER } from "../../../web-server/src/room-box/card-text";
 import { CloseIcon, FolderIcon, GlobeIcon, PlusIcon } from "./icons";
 import { GroupHeader, PaneHeader } from "./pane-header";
 import { confirmDialog } from "./confirm-dialog";
+import { useSettingsLookNext } from "../settings-look";
 
 // How long a change's Saved stays in the live line a screen reader hears, so the next change's Saved is heard again.
 const SAVED_LINE_MS = 3000;
@@ -30,16 +31,16 @@ interface RoomFolder {
 	shellMissingNote: string | null;
 	/** Absent on a shared server. */
 	protection?: PersistentRoomProtection;
-	/** The room is on Auto, which the Commands line says: only while it is protected. */
-	free: boolean;
+	/** The room's mode for its commands, in the protection read with it, which the Commands line says on Auto; Ask where it isn't read. */
+	mode: CommandMode;
 }
 
-const roomFolderOf = (response: PersistentRoomWorkspaceDefaultResponse, free: boolean): RoomFolder => ({
+const roomFolderOf = (response: PersistentRoomWorkspaceDefaultResponse, mode: CommandMode): RoomFolder => ({
 	policy: response.policy,
 	warnings: response.warnings ?? [],
 	shellMissingNote: response.shellMissingNote || null,
 	protection: response.protection,
-	free,
+	mode,
 });
 
 /**
@@ -50,17 +51,18 @@ const roomFolderOf = (response: PersistentRoomWorkspaceDefaultResponse, free: bo
 function readRoomFolder(roomId: string, readsMode: boolean): Promise<RoomFolder> {
 	return Promise.all([
 		fetchPersistentRoomWorkspaceDefault(roomId),
-		readsMode ? fetchPersistentRoomBashSettings(roomId).then((response) => response.settings.free === true) : false,
-	]).then(([response, free]) => roomFolderOf(response, free));
+		readsMode ? fetchPersistentRoomBashSettings(roomId) : null,
+	]).then(([response, modeRead]) => roomFolderOf(response, modeRead ? commandModeOf(modeRead.settings, response.protection?.state !== "off") : "ask"));
 }
 
 const canChangeOf = (policy: PersistentRoomCapabilityPolicyView | null): boolean => policy?.allowedToolNames.some((name) => name === "write" || name === "edit") === true;
 
 /** The Commands line for the room's protection and mode now, and whether the switch can move at all. */
-function commandsLineOf(protection: PersistentRoomProtection | undefined, canChange: boolean, free: boolean): { line: string; held: boolean } {
-	if (!protection || protection.state === "on") return { line: free ? COMMANDS_FREE_REACH : COMMANDS_PROTECTED_REACH, held: false };
-	if (protection.cause === "computer") return canChange ? { line: COMMANDS_NO_PROTECTION_REACH, held: false } : { line: COMMANDS_NEED_CHANGES_LINE, held: true };
-	return { line: COMMANDS_UNPROTECTED_REACH, held: false };
+function commandsLineOf(protection: PersistentRoomProtection | undefined, canChange: boolean, mode: CommandMode): { line: string; held: boolean } {
+	const auto = mode === "auto";
+	if (!protection || protection.state === "on") return { line: auto ? COMMANDS_FREE_REACH : COMMANDS_PROTECTED_REACH, held: false };
+	if (protection.cause === "computer") return canChange ? { line: auto ? COMMANDS_NO_PROTECTION_AUTO_REACH : COMMANDS_NO_PROTECTION_REACH, held: false } : { line: COMMANDS_NEED_CHANGES_LINE, held: true };
+	return { line: auto ? COMMANDS_UNPROTECTED_AUTO_REACH : COMMANDS_UNPROTECTED_REACH, held: false };
 }
 
 /** Can change files' line: off, it says what the room's commands can still do where protection stands now. */
@@ -71,9 +73,9 @@ function canChangeLineOf(protection: PersistentRoomProtection | undefined, canCh
 	return protection.cause === "computer" ? CAN_CHANGE_FILES_OFF_NO_COMMANDS_LINE : CAN_CHANGE_FILES_OFF_UNPROTECTED_LINE;
 }
 
-/** The protection row's line: what it is where it can work, and only the cause where it can't. */
+/** The protection row's line: what it does where it is on, what turning it on does where the person turned it off, and only the cause where it can't work. */
 const CAUSE_LINES = { computer: PROTECTION_ROW_UNAVAILABLE_COMPUTER, folder: PROTECTION_ROW_UNAVAILABLE_FOLDER, unknown: PROTECTION_ROW_UNAVAILABLE } as const;
-const protectionLineOf = (protection: PersistentRoomProtection): string => protection.state === "off" && protection.cause ? CAUSE_LINES[protection.cause] : PROTECTION_LINE;
+const protectionLineOf = (protection: PersistentRoomProtection): string => protection.state === "on" ? PROTECTION_LINE : protection.cause ? CAUSE_LINES[protection.cause] : PROTECTION_OFF_LINE;
 
 /** Where in the pane a change was made: why it failed shows right there. */
 type Spot = "location" | "canChange" | "commands" | "protection";
@@ -91,8 +93,9 @@ type Outcome =
  * a time, and none while the room answers. Only the computer changes it: a
  * phone sees it greyed, with names and no paths.
  */
-export function RoomWorkspaceSection({ status, answering = false, onRefresh, onTerminalOnChange }: { status: PersistentAgentStatus; answering?: boolean; onRefresh?: () => void; onTerminalOnChange?: (on: boolean | null) => void }) {
+export function RoomWorkspaceSection({ status, answering = false, onRefresh }: { status: PersistentAgentStatus; answering?: boolean; onRefresh?: () => void }) {
 	const waitLineId = useId();
+	const lookNext = useSettingsLookNext();
 	const [room, setRoom] = useState<RoomFolder | null>(null);
 	// Nothing is known before the first read: no frame draws a room with no folder, or reads its list, before it.
 	const [loading, setLoading] = useState(true);
@@ -113,11 +116,6 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onT
 	const folderMissing = (room?.warnings.length ?? 0) > 0;
 	// No folder, or one no longer found: Location's button is the primary one, to choose a folder; a folder that is there gets changed.
 	const needsFolder = !savedRoot || folderMissing;
-	// What the saved folder lets the room run, for the Skills pane's files line; null while unknown.
-	const terminalOn = loading || loadFailed || !canManageWorkspace ? null : policy?.bashEnabled === true && !folderMissing;
-	useEffect(() => {
-		onTerminalOnChange?.(terminalOn);
-	}, [terminalOn, onTerminalOnChange]);
 	// A Saved is a moment, not a state: it goes once it has been heard.
 	useEffect(() => {
 		if (outcome?.kind !== "saved") return;
@@ -265,10 +263,9 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onT
 		const body = policy?.bashEnabled === true ? TURN_OFF_PROTECTION_BODY : TURN_OFF_PROTECTION_BODY_COMMANDS_OFF;
 		if (state === "off" && !(await confirmDialog({ title: TURN_OFF_PROTECTION_TITLE, body, confirmLabel: TURN_OFF, cancelLabel: CANCEL, danger: true }))) return;
 		await change("protection", state === "on", async () => {
-			const answer = await setPersistentRoomProtection(status.id, state);
-			// Back on, the Commands line says the room's mode, so it is read again: a failed read goes to the check below, never a guess.
-			if (state === "on") return readRoom();
-			return room ? { ...room, protection: answer.protection } : null;
+			await setPersistentRoomProtection(status.id, state);
+			// The Commands line says the room's mode as the new state reads it, so the room is read again: a failed read goes to the check below, never a guess.
+			return readRoom();
 		}, (stored) => state === "on" ? stored.protection?.state === "on" : stored.protection?.state === "off" && stored.protection.cause === undefined, (stored, code) => {
 			// A cause that stands now says itself on the row.
 			if (stored.protection?.state === "off" && stored.protection.cause) return null;
@@ -284,7 +281,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onT
 	const protectionOn = outcome?.kind === "saving" && outcome.at === "protection" ? outcome.on === true : protection?.state === "on";
 	// Where a cause stands the switch shows off and can't move: only the person's own choice can.
 	const protectionHeld = protection?.state === "off" && protection.cause !== undefined;
-	const commands = commandsLineOf(protection, canChange, room?.free === true);
+	const commands = commandsLineOf(protection, canChange, room?.mode ?? "ask");
 	// One change at a time, and none while the room answers.
 	const locked = answering || outcome?.kind === "saving" || choosing;
 	// A greyed control names the line that says why, for a screen reader.
@@ -313,7 +310,13 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onT
 	const locationLine = !savedRoot
 		? (atComputer ? NO_FOLDER_YET_LINE : NO_FOLDER_YET)
 		// The folder's name; only a page on this computer is sent its path, which the pointer finds on the name.
-		: <span className="workspace-folder-name" title={savedRoot.path || undefined}>{folderName}</span>;
+		: <>
+			<span className="workspace-folder-name" title={savedRoot.path || undefined}>{folderName}</span>
+			{/* A screen reader hears no tip. */}
+			{lookNext && savedRoot.path && <span className="sr-only">{savedRoot.path}</span>}
+		</>;
+	// While the path is typed, its Use this folder is the row's main button.
+	const chooseClass = needsFolder && !(lookNext && typing) ? "rs-btn rs-btn-primary" : "rs-btn";
 
 	let body: ReactNode;
 	if (!canManageWorkspace) body = <div className="workspaces-error">{status.exists ? ROOM_NEEDS_ATTENTION : CREATE_ROOM_FIRST}</div>;
@@ -352,7 +355,7 @@ export function RoomWorkspaceSection({ status, answering = false, onRefresh, onT
 					</div>
 					{atComputer ? (
 						<span className="also-allowed-actions">
-							<button className={needsFolder ? "rs-btn rs-btn-primary" : "rs-btn"} type="button" disabled={locked} aria-describedby={heldReason} onClick={() => void chooseLocation()}>{choosing ? CHOOSING : needsFolder ? CHOOSE_FOLDER : CHANGE_FOLDER}</button>
+							<button className={chooseClass} type="button" disabled={locked} aria-describedby={heldReason} onClick={() => void chooseLocation()}>{choosing ? CHOOSING : needsFolder ? CHOOSE_FOLDER : CHANGE_FOLDER}</button>
 							{savedRoot && <button className="rs-btn rs-btn-icon rs-btn-sm also-allowed-cross" type="button" aria-label={STOP_USING_FOLDER} title={STOP_USING_FOLDER} disabled={locked} aria-describedby={heldReason} onClick={() => void stopUsingFolder()}><CloseIcon size={14} /></button>}
 						</span>
 					) : folderMissing && <span className="settings-row-tag">{NOT_FOUND}</span>}

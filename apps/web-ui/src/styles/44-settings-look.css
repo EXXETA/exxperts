@@ -1,0 +1,1458 @@
+/* The settings windows' new look -----------------------------------
+   Built while its switch is off (settings-look.ts): every rule here starts
+   with .settings-dialog.settings-look-next, the class the shell sets only
+   when the switch is on, so with it off nothing here applies. That extra
+   class also lets these rules win over the older files without editing them.
+   The window, its sidebar, the page header that stays put, cards, form rows,
+   section titles and the switch. On a phone (760 px and less) one bar holds
+   back, the page's name and close. */
+
+/* The window: at most 1040 by 800, 24 px clear of the screen's edges. Cards
+   take the old soft boxes' place by their fill token, which the held pages'
+   own rules read too. */
+.settings-dialog.settings-look-next {
+	--settings-box-fill: var(--exx-surface-card);
+	--settings-side-w: 240px;
+	--settings-pad: 40px;
+	--settings-scrollbar: 10px;
+	/* The one width of a page's column, its boxes and its words alike: what the
+	   full window leaves. Words run to their box's edge, with no width of their own. */
+	--settings-column: 718px;
+	/* The close button's box: 28 square with a mouse, the family's finger size without one. */
+	--settings-close: 28px;
+	/* The keyboard's ring, and a focused field's edge: the ink at 60%, still
+	   at least 3:1 on the page and the cards, so it never reads as a heavy box. */
+	--settings-focus: color-mix(in srgb, var(--exx-focus) 60%, transparent);
+	position: relative;
+	width: min(1040px, calc(100vw - 48px));
+	max-width: none;
+	/* 36 above and below, as today, so the Mac app's window buttons stay clear of it. */
+	height: min(800px, calc(100vh - 72px));
+	/* The edge alone over the dimmed, blurred veil: a wide shadow on it shows in bands. */
+	border: 1px solid var(--exx-border-card);
+	box-shadow: none;
+	background: var(--exx-surface-page);
+}
+/* Every ring and focused edge inside the window takes the window's ring. */
+.settings-dialog.settings-look-next * {
+	--exx-focus: var(--settings-focus);
+}
+@media (hover: none) {
+	.settings-dialog.settings-look-next {
+		--settings-close: var(--exx-btn-h);
+	}
+}
+@media (min-width: 761px) and (max-width: 879px) {
+	.settings-dialog.settings-look-next {
+		--settings-side-w: 200px;
+		--settings-pad: 24px;
+	}
+}
+.settings-dialog.settings-look-next .settings-dialog-body {
+	grid-template-columns: var(--settings-side-w) minmax(0, 1fr);
+}
+
+/* The sidebar: the window's name on top, then the pages. Its words and the
+   window's name start 24 px from the window's edge. */
+.settings-dialog.settings-look-next .settings-dialog-side {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	background: var(--exx-surface-side);
+	border-right: 1px solid var(--exx-border-card);
+}
+.settings-dialog.settings-look-next .settings-dialog-head {
+	flex: none;
+	display: block;
+	min-height: 56px;
+	padding: 21px 12px 11px 24px;
+}
+.settings-dialog.settings-look-next .settings-dialog-title-row,
+.settings-dialog.settings-look-next .room-settings-rename-form {
+	min-height: 24px;
+	gap: 8px;
+}
+/* While the name is edited its field takes the column's width, Save and Cancel under it. */
+.settings-dialog.settings-look-next .room-settings-rename-form {
+	flex-wrap: wrap;
+}
+.settings-dialog.settings-look-next .room-settings-rename-input {
+	min-width: 0;
+	flex: 1 0 100%;
+	font-size: 18px;
+}
+/* A refused name says why under Save and Cancel, in normal flow as the line
+   for an empty one is, and the list moves down; the question about the room's
+   memory and the notes after a rename keep their card. */
+.settings-dialog.settings-look-next .settings-dialog-head-note:has(> .workspaces-error:only-child) {
+	position: static;
+	width: auto;
+	margin-top: 8px;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	box-shadow: none;
+}
+.settings-dialog.settings-look-next .settings-dialog-head-note > .workspaces-error:only-child {
+	color: var(--error);
+	font-size: 13px;
+	line-height: 18px;
+	overflow-wrap: anywhere;
+}
+/* What a rename changes wraps inside its message. */
+.settings-dialog.settings-look-next .settings-dialog-head-note {
+	grid-template-columns: minmax(0, 1fr);
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .room-settings-rename-preview-actions {
+	flex-wrap: wrap;
+}
+/* The side list is too narrow to read them in: the message floats over the page. */
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .settings-dialog-head-note:has(> .room-settings-rename-preview) {
+		width: 360px;
+	}
+}
+/* A long room name takes two lines, then ends in an ellipsis; what stands
+   beside it keeps its size, on the name's first line. */
+.settings-dialog.settings-look-next .settings-dialog-title-row {
+	align-items: flex-start;
+}
+.settings-dialog.settings-look-next .settings-dialog-title-row > :not(.settings-dialog-title) {
+	flex: none;
+}
+/* Where the side list is at its narrowest, a room's state leaves its name too little: it goes under the name and its pencil. */
+@media (min-width: 761px) and (max-width: 879px) {
+	.settings-dialog.settings-look-next .settings-dialog-title-row:has(> .room-settings-status) {
+		flex-wrap: wrap;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-title-row:has(> .room-settings-status) > .settings-dialog-title {
+		max-width: calc(100% - 34px);
+	}
+}
+/* The room's name and its pencil are one target: a pointer on the name's line
+   or the keyboard's focus shows the pencil; without a pointer it always shows.
+   Its box leaves the line 24 tall. */
+.settings-dialog.settings-look-next .settings-dialog-title-row {
+	gap: 6px;
+}
+.settings-dialog.settings-look-next .settings-dialog-title-row:has(> .settings-dialog-title-edit) > .settings-dialog-title {
+	cursor: pointer;
+}
+.settings-dialog.settings-look-next .settings-dialog-title-edit {
+	display: flex;
+	margin: -2px 0;
+	opacity: 0;
+	transition: opacity 100ms ease;
+}
+.settings-dialog.settings-look-next .settings-dialog-title-row:hover > .settings-dialog-title-edit,
+.settings-dialog.settings-look-next .settings-dialog-title-edit:has(> :focus-visible) {
+	opacity: 1;
+}
+@media (hover: none) {
+	.settings-dialog.settings-look-next .settings-dialog-title-edit {
+		opacity: 1;
+	}
+}
+@media (max-width: 760px), (hover: none) {
+	.settings-dialog.settings-look-next .settings-dialog-title-edit {
+		margin: -10px -4px -10px 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next .settings-dialog-title-edit {
+		transition: none;
+	}
+}
+.settings-dialog.settings-look-next .settings-dialog-title {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	min-width: 0;
+	font-family: var(--exx-font-display);
+	font-size: 18px;
+	line-height: 24px;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next .settings-dialog-nav {
+	flex: 1 1 auto;
+	gap: 2px;
+	padding: 0 12px 12px;
+}
+.settings-dialog.settings-look-next .settings-dialog-nav-item {
+	display: flex;
+	align-items: center;
+	flex: none;
+	height: 32px;
+	padding: 0 12px;
+	border-radius: 8px;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 400;
+	color: var(--fg-soft);
+	/* No fill but on a pointer's hover (below): a finger's last tap leaves none. */
+	background: none;
+	transition: background-color 100ms ease, color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .settings-dialog-nav-item:hover {
+		background: var(--exx-nav-hover);
+		color: var(--fg);
+	}
+}
+.settings-dialog.settings-look-next .settings-dialog-nav-item:active,
+.settings-dialog.settings-look-next .settings-dialog-nav-item.active {
+	background: var(--exx-nav-on);
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .settings-dialog-nav-item.active {
+	font-weight: 500;
+}
+/* Inside the item, so the scrolling list never cuts it. */
+.settings-dialog.settings-look-next .settings-dialog-nav-item:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -4px;
+}
+/* Archive or delete sits at the foot, in the ordinary colour: red is kept
+   for the button that deletes. */
+.settings-dialog.settings-look-next .settings-dialog-nav-item.danger {
+	margin-top: auto;
+	color: var(--fg-soft);
+}
+.settings-dialog.settings-look-next .settings-dialog-nav-item.danger:is(:active, .active) {
+	color: var(--fg);
+}
+
+/* The pane: one scroller over the page's column. The scrollbar
+   lives in the right padding, its track below the page header; a jump to a
+   row stops below the header too. */
+.settings-dialog.settings-look-next .settings-dialog-pane {
+	padding: 0 calc(var(--settings-pad) - var(--settings-scrollbar)) var(--settings-pad) var(--settings-pad);
+	scroll-padding-top: 64px;
+}
+.settings-dialog.settings-look-next .settings-dialog-pane > * {
+	max-width: var(--settings-column);
+}
+/* A phone keeps its own scrollbar, drawn over the page, with no room kept for it. */
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .settings-dialog-pane {
+		scrollbar-gutter: stable;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-pane::-webkit-scrollbar {
+		width: var(--settings-scrollbar);
+	}
+	.settings-dialog.settings-look-next .settings-dialog-pane::-webkit-scrollbar-thumb {
+		background: var(--exx-border-field);
+		background-clip: padding-box;
+		border: 2px solid transparent;
+		border-radius: 5px;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-pane::-webkit-scrollbar-track {
+		margin-top: 56px;
+		margin-bottom: 16px;
+	}
+}
+
+/* The bar: on a desktop only its close shows, on the page's title line with
+   its mark on the content's right edge. */
+.settings-dialog.settings-look-next .settings-dialog-bar {
+	position: absolute;
+	z-index: 7;
+	top: calc(33px - var(--settings-close) / 2);
+	right: calc(var(--settings-pad) + 8px - var(--settings-close) / 2);
+	display: flex;
+}
+.settings-dialog.settings-look-next .settings-dialog-close {
+	position: static;
+	margin: 0;
+}
+.settings-dialog.settings-look-next .settings-dialog-back,
+.settings-dialog.settings-look-next .settings-dialog-bar-title {
+	display: none;
+}
+
+/* The page header: the title has the window name's size and stands on its
+   line, with the close and the page's actions centred on it. The line stays put
+   while the page scrolls, 56 tall, across the pane's whole width; its hairline
+   shows once the page has scrolled. The lead follows it, 8 under the title, and
+   scrolls with the page. */
+.settings-dialog.settings-look-next .pane-top {
+	display: contents;
+}
+.settings-dialog.settings-look-next .pane-head {
+	position: sticky;
+	top: 0;
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	height: 56px;
+	margin: 0 calc(var(--settings-scrollbar) - var(--settings-pad)) 0 calc(-1 * var(--settings-pad));
+	padding: 17px calc(var(--settings-pad) - var(--settings-scrollbar) + 34px) 7px var(--settings-pad);
+	background: var(--exx-surface-page);
+	box-shadow: 0 1px 0 transparent;
+	transition: box-shadow 120ms ease;
+}
+.settings-dialog.settings-look-next.is-scrolled .pane-head {
+	box-shadow: 0 1px 0 var(--exx-hairline);
+}
+.settings-dialog.settings-look-next .pane-head-text {
+	min-width: 0;
+}
+.settings-dialog.settings-look-next .pane-head h2 {
+	margin: 0;
+	font-family: var(--exx-font-display);
+	font-size: 18px;
+	line-height: 24px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Beside the title, on its words' line: how many of a room's list are on, or
+   where a connector came from. */
+.settings-dialog.settings-look-next .pane-head-text:has(> .pane-head-beside) {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+}
+.settings-dialog.settings-look-next .pane-head-beside {
+	flex: none;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	white-space: nowrap;
+}
+/* A phone, whose bar names the page, has the count as a quiet line over the list. */
+.settings-dialog.settings-look-next .settings-dialog-pane .room-list-count {
+	margin: 0 0 8px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+@media (min-width: 761px) {
+	.settings-dialog.settings-look-next .settings-dialog-pane .room-list-count {
+		display: none;
+	}
+}
+/* Every page's root but Model's spaces its children 12 apart: the lead sits
+   24 above what follows, help's size on the cards' left edge. */
+.settings-dialog.settings-look-next .pane-lead {
+	margin: -15px 0 12px;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .room-model-section > .pane-top > .pane-lead {
+	margin: -3px 0 24px;
+}
+/* A page inside a page (a skill, a connector, a way to add a skill): the arrow
+   back, its mark on the content's left edge and its box as the close's, then
+   the name, with a connector's tile before it. A name too long for the line
+   wraps and the header grows with it; the arrow and the close stay on its first
+   line. Its page spaces its own parts. */
+.settings-dialog.settings-look-next .pane-head:has(> .pane-head-back) {
+	align-items: flex-start;
+	justify-content: flex-start;
+	gap: 12px;
+	height: auto;
+	min-height: 56px;
+	padding: 19px calc(var(--settings-pad) - var(--settings-scrollbar) + 34px) 9px var(--settings-pad);
+}
+.settings-dialog.settings-look-next .pane-head > .pane-head-back {
+	flex: none;
+	/* 28 of the line whatever its size: 44 to a finger on a wide screen too. */
+	--back-over: calc((28px - var(--btn-h)) / 2);
+	margin: var(--back-over) var(--back-over) var(--back-over) calc(var(--back-over) - 6px);
+}
+.settings-dialog.settings-look-next .pane-head-back ~ .pane-head-text {
+	margin-top: 2px;
+}
+.settings-dialog.settings-look-next .pane-head-back ~ .pane-head-text > h2 {
+	overflow: visible;
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+.settings-dialog.settings-look-next .pane-top:has(.pane-head-back) > .pane-lead {
+	margin: -3px 0 0;
+}
+/* A page's one way to its library in Settings ends its lead: the lead's own
+   words underlined, in the text colour under the pointer and the focus; 44 to
+   the finger without growing the line. */
+.settings-dialog.settings-look-next .pane-lead-link {
+	position: relative;
+	color: inherit;
+	font: inherit;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	border-radius: 4px;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .pane-lead-link:hover {
+		color: var(--fg);
+	}
+}
+.settings-dialog.settings-look-next .pane-lead-link:active {
+	opacity: 0.7;
+}
+.settings-dialog.settings-look-next .pane-lead-link:focus-visible {
+	color: var(--fg);
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+@media (hover: none) {
+	.settings-dialog.settings-look-next .pane-lead-link::after {
+		content: "";
+		position: absolute;
+		inset: -13px -8px;
+	}
+}
+/* A check at the end of the line it belongs to ("Last checked", what went wrong
+   on a connector's page) is such a link, in one piece; Check now stays while it
+   runs, only words. */
+.settings-dialog.settings-look-next .pane-check-link {
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .pane-check-link[aria-disabled="true"] {
+	text-decoration: none;
+	cursor: default;
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next .pane-head {
+		transition: none;
+	}
+}
+
+/* Words: one width and one small scale on every page. Running text wraps as
+   normal and runs to its box's edge; help in a row takes the room its control
+   leaves. Only a heading evens its lines.
+   The roles: the page's title 18/24 in the display face (above); a section's
+   label 13/20 at 600; a row's title 14/20 at 500; help 13/18; small 12/16.
+   Controls keep their own: a field's words 14, a button's 13 at 500. */
+.settings-dialog.settings-look-next .settings-dialog-pane,
+.settings-dialog.settings-look-next .settings-dialog-pane * {
+	text-wrap-style: pretty;
+}
+.settings-dialog.settings-look-next .settings-dialog-pane :is(h2, h3) {
+	text-wrap-style: balance;
+}
+/* The older files' own caps on a line of words don't hold here. */
+.settings-dialog.settings-look-next .settings-dialog-pane :is(p, .settings-row-sub, .group-head-line) {
+	max-width: none;
+}
+.settings-dialog.settings-look-next .settings-dialog-pane :is(.ai-setup-copy, .cli-note, .settings-row-value) {
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* Sections: a quiet title, its help, then one card 8 below it; 32 px between
+   sections, of which the page's own column gives 12. */
+.settings-dialog.settings-look-next .settings-group {
+	margin-top: 20px;
+}
+.settings-dialog.settings-look-next :is(.pane-top, .pane-head) + .settings-group {
+	margin-top: 0;
+}
+.settings-dialog.settings-look-next .group-head {
+	margin-bottom: 8px;
+}
+.settings-dialog.settings-look-next .settings-group-kicker + :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .connector-list, .skill-table) {
+	margin-top: 8px;
+}
+.settings-dialog.settings-look-next .ai-setup-section > .settings-group-kicker + .settings-rows {
+	margin-top: -4px;
+}
+.settings-dialog.settings-look-next .settings-group-kicker {
+	margin: 0;
+}
+/* Every section's label, whatever its page calls it. */
+.settings-dialog.settings-look-next :is(.settings-group-kicker, .room-connector-group-title, .connector-tools-kicker, .room-schedules-history-head strong, .skill-import-found-count, .connector-form-sub) {
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 600;
+	color: var(--fg-soft);
+}
+/* A tag after a name ("Custom", "Needs a key", "By hand"): quiet words, no
+   fill and no edge, so nothing that isn't a button looks like one.
+   The model menu's tag takes the same look in 45-settings-look-room-pages.css,
+   since the menu is drawn outside the window. */
+.settings-dialog.settings-look-next :is(.skill-tag, .connector-dir-kind) {
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 16px;
+	font-weight: 400;
+}
+/* A form field's label is a row's title. */
+.settings-dialog.settings-look-next :is(.connector-form-field > span:first-child, .settings-field > span:first-child, .skill-review-field-label, .copilot-address-label, .web-search-searxng-label) {
+	color: var(--fg);
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+}
+/* A form on a page of its own, one rule for all: label, field, help and
+   buttons in the page's column, 20 between fields; each field fills the
+   column, its label and help 6 from it. A pair of fields (a program's
+   settings, a header) shares the column with its remove cross, so the cross
+   ends on the column's edge. A field with Scan or Save beside it shares the
+   column the same way. */
+.settings-dialog.settings-look-next :is(.connector-custom-form > .connector-form, .skill-write-block > .connector-form, .skill-import-from-repo > .skill-import-row, .web-search-searxng) {
+	max-width: var(--settings-column);
+}
+.settings-dialog.settings-look-next .room-schedules-form .settings-form-foot {
+	justify-content: flex-start;
+}
+.settings-dialog.settings-look-next .room-schedules-form {
+	gap: 20px;
+}
+/* A new task's form, clear of the tasks under its buttons. */
+.settings-dialog.settings-look-next .room-schedules-section > .room-schedules-form {
+	margin-bottom: 20px;
+}
+/* In its task's row, clear of the line above it. */
+.settings-dialog.settings-look-next .room-schedules-list .room-schedules-form {
+	margin-top: 12px;
+}
+.settings-dialog.settings-look-next .settings-field {
+	gap: 6px;
+}
+.settings-dialog.settings-look-next :is(.connector-custom-form, .skill-write-block) .connector-form-field > :is(input, textarea),
+.settings-dialog.settings-look-next .room-schedules-form > .settings-field > :is(input, textarea) {
+	width: 100%;
+}
+.settings-dialog.settings-look-next .connector-custom-form .connector-header-row {
+	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+	width: 100%;
+}
+.settings-dialog.settings-look-next :is(.skill-import-row > .skill-import-url, .web-search-searxng input) {
+	flex: 1 1 0;
+	width: auto;
+	min-width: 0;
+	max-width: none;
+}
+.settings-dialog.settings-look-next .group-head-line {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* Cards: the card colour, the card edge, rows divided by lines that stop
+   16 px short of its sides. */
+.settings-dialog.settings-look-next :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-list, .skill-table) {
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+}
+/* An empty list, one look and one place on every page: one muted line where
+   the list's card would start, no card, nothing beside it. */
+.settings-dialog.settings-look-next .settings-dialog-pane :is(.settings-empty, .room-skills-empty) {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	text-align: start;
+	overflow-wrap: anywhere;
+}
+.settings-dialog.settings-look-next :is(.settings-rows, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .skill-table) > * + *,
+.settings-dialog.settings-look-next .ai-profile-row-group + .ai-profile-row-group {
+	border-top: 1px solid var(--exx-hairline);
+}
+
+/* Form rows: at least 56 tall, the label over its help, the control at the
+   card's right padding, in the row's middle. Where the words under the label
+   run past two lines (data-tall, settings-dialog.tsx), the control sits on
+   the label's line: its words on the label's baseline; a switch or the slider,
+   which have no words, at the line's top, their middle on its middle. */
+.settings-dialog.settings-look-next .settings-row {
+	align-items: center;
+	min-height: 56px;
+	gap: 24px;
+	padding: 12px 0;
+}
+.settings-dialog.settings-look-next .settings-row[data-tall] {
+	align-items: first baseline;
+}
+.settings-dialog.settings-look-next .settings-row[data-tall] > :is(.workspaces-tool-switch, .memory-budget-control) {
+	align-self: flex-start;
+}
+.settings-dialog.settings-look-next .settings-row[data-tall] > .memory-budget-control {
+	margin-top: 1px;
+}
+/* On a phone a wide control stands under its words, on their edge (36-settings-dialog.css). */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .settings-row:has(> :is(.rs-btn-danger, .settings-segments)) {
+		align-items: flex-start;
+	}
+}
+/* A radio button stands before its label, on the label's first line. */
+.settings-dialog.settings-look-next .settings-row.settings-row-choice {
+	align-items: flex-start;
+}
+.settings-dialog.settings-look-next .settings-row-label {
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next .settings-row-sub {
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* The switch: 36 by 20, grey off (at least 3:1 on the card), ink on, a 44
+   by 32 target around it. Without the browser's margin after a checkbox, so
+   on every page it ends on its card's padding. */
+.settings-dialog.settings-look-next .workspaces-tool-switch {
+	margin-inline-end: 0;
+	width: 36px;
+	height: 20px;
+	border: 0;
+	background: var(--exx-switch-off);
+	transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.settings-dialog.settings-look-next .workspaces-tool-switch::before {
+	width: 16px;
+	background: var(--exx-paper);
+	box-shadow: var(--exx-shadow-small);
+	transition: transform 150ms cubic-bezier(0.2, 0, 0, 1), width 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.settings-dialog.settings-look-next .workspaces-tool-switch::after {
+	content: "";
+	position: absolute;
+	inset: -6px -4px;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .workspaces-tool-switch:hover:not(:checked, :disabled) {
+		background: var(--exx-switch-off-hover);
+	}
+}
+.settings-dialog.settings-look-next .workspaces-tool-switch:checked {
+	background: var(--exx-action-primary-bg);
+}
+.settings-dialog.settings-look-next .workspaces-tool-switch:checked::before {
+	background: var(--exx-action-primary-fg);
+	transform: translateX(16px);
+}
+/* Pressed, the knob widens toward the middle. */
+.settings-dialog.settings-look-next .workspaces-tool-switch:active:not(:disabled)::before {
+	width: 18px;
+}
+.settings-dialog.settings-look-next .workspaces-tool-switch:checked:active:not(:disabled)::before {
+	transform: translateX(14px);
+}
+.settings-dialog.settings-look-next .workspaces-tool-switch:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.settings-dialog.settings-look-next .workspaces-tool-switch:disabled {
+	opacity: 0.45;
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next .workspaces-tool-switch,
+	.settings-dialog.settings-look-next .workspaces-tool-switch::before {
+		transition: none;
+	}
+}
+
+/* Phone: the window fills the screen; one 52 px bar holds back, the page's
+   name and close, and the list of pages shows the window's name in its
+   place. The page's lead comes first, then its actions. */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next {
+		--settings-pad: 16px;
+		--settings-close: 44px;
+		width: 100%;
+		height: 100%;
+		border: 0;
+		border-radius: 0;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-bar {
+		position: relative;
+		top: auto;
+		right: auto;
+		flex: none;
+		display: grid;
+		grid-template-columns: 44px minmax(0, 1fr) 44px;
+		align-items: center;
+		gap: 4px;
+		height: calc(52px + env(safe-area-inset-top, 0px));
+		padding: env(safe-area-inset-top, 0px) 4px 0;
+		border-bottom: 1px solid var(--exx-hairline);
+		background: var(--exx-surface-page);
+	}
+	.settings-dialog.settings-look-next .settings-dialog-back {
+		grid-column: 1;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 44px;
+		height: 44px;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 8px;
+		background: none;
+		/* The same quiet mark as close. */
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-back:active {
+		background: var(--exx-nav-on);
+		color: var(--fg);
+	}
+	.settings-dialog.settings-look-next .settings-dialog-bar-title {
+		grid-column: 2;
+		display: block;
+		margin: 0;
+		font-family: var(--exx-font-sans);
+		letter-spacing: normal;
+		font-size: 18px;
+		line-height: 24px;
+		font-weight: 700;
+		text-align: center;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-close {
+		grid-column: 3;
+	}
+	/* The list of pages: the bar keeps only its close, over the window's name. */
+	.settings-dialog.settings-look-next.show-list .settings-dialog-bar {
+		position: absolute;
+		top: 0;
+		right: 0;
+		grid-template-columns: 44px;
+		padding-left: 0;
+		border-bottom: 0;
+		background: none;
+	}
+	.settings-dialog.settings-look-next.show-list .settings-dialog-close {
+		grid-column: 1;
+	}
+	.settings-dialog.settings-look-next.show-list :is(.settings-dialog-back, .settings-dialog-bar-title) {
+		display: none;
+	}
+	/* A page inside a page carries its own way back. */
+	.settings-dialog.settings-look-next:has(.pane-head-back) .settings-dialog-back {
+		visibility: hidden;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-body {
+		display: block;
+		flex: 1 1 auto;
+		min-height: 0;
+	}
+	.settings-dialog.settings-look-next:not(.show-list) .settings-dialog-side,
+	.settings-dialog.settings-look-next.show-list .settings-dialog-pane {
+		display: none;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-side {
+		height: 100%;
+		overflow-y: auto;
+		background: var(--exx-surface-page);
+		border-right: 0;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-head {
+		min-height: 52px;
+		padding: calc(14px + env(safe-area-inset-top, 0px)) 52px 13px;
+		border-bottom: 1px solid var(--exx-hairline);
+		text-align: center;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-title-row {
+		justify-content: center;
+	}
+	/* Room settings' head (the room's name and its pencil) keeps today's left edge until its own task. */
+	.settings-dialog.settings-look-next.rs-shell .settings-dialog-head {
+		padding-left: 16px;
+		text-align: left;
+	}
+	.settings-dialog.settings-look-next.rs-shell .settings-dialog-title-row {
+		justify-content: flex-start;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-nav {
+		height: auto;
+		gap: 0;
+		padding: 4px 16px 16px;
+		overflow: visible;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-nav-item {
+		justify-content: space-between;
+		height: 52px;
+		padding: 0;
+		border-radius: 0;
+		border-bottom: 1px solid var(--exx-hairline);
+		color: var(--fg);
+	}
+	.settings-dialog.settings-look-next .settings-dialog-nav-item.active {
+		background: none;
+		font-weight: 400;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-nav-item.danger {
+		margin-top: 12px;
+		border-bottom: 0;
+		color: var(--fg);
+	}
+	.settings-dialog.settings-look-next .settings-dialog-nav-item.danger::after {
+		content: "";
+	}
+	/* The list's last row has no line under it, nor the row over Archive or delete. */
+	.settings-dialog.settings-look-next .settings-dialog-nav-item:is(:has(+ .danger), :last-child) {
+		border-bottom: 0;
+	}
+	.settings-dialog.settings-look-next .settings-dialog-pane {
+		height: 100%;
+		padding: 16px 16px 24px;
+		scroll-padding-top: 8px;
+	}
+	/* Tighter than on a desktop, so the first row starts within 240 px of
+	   the top: 8 from the lead to the actions, 12 to what follows (the
+	   page's own gap; Model's root has none). */
+	.settings-dialog.settings-look-next .pane-top {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		margin-bottom: 0;
+	}
+	.settings-dialog.settings-look-next .room-model-section > .pane-top {
+		margin-bottom: 12px;
+	}
+	.settings-dialog.settings-look-next :is(.pane-lead, .room-model-section > .pane-top > .pane-lead) {
+		order: -1;
+		margin: 0;
+	}
+	.settings-dialog.settings-look-next .pane-head {
+		position: static;
+		height: auto;
+		margin: 0;
+		padding: 0;
+		background: none;
+		box-shadow: none;
+	}
+	/* The bar names the page, so the page's own title steps aside; a page
+	   inside a page keeps it, as the bar names only the page around it. A
+	   section's title (GroupHeader) shares the text block's class and always
+	   stays. */
+	.settings-dialog.settings-look-next .pane-head:not(:has(> .pane-head-back)) > .pane-head-text,
+	.settings-dialog.settings-look-next .pane-head:not(:has(> .pane-head-actions, > .pane-head-back)) {
+		display: none;
+	}
+	/* Its arrow is the body's first mark, 44 to the finger on the name's first
+	   line, and its lead follows its name. */
+	.settings-dialog.settings-look-next .pane-head:has(> .pane-head-back) {
+		flex-wrap: nowrap;
+		gap: 0;
+		min-height: 0;
+		margin: -8px 0 0;
+		padding: 0;
+	}
+	.settings-dialog.settings-look-next .pane-head > .pane-head-back {
+		width: 44px;
+		height: 44px;
+		margin: 0 0 0 -14px;
+	}
+	.settings-dialog.settings-look-next .pane-head-back ~ .pane-head-text {
+		margin: 10px 0;
+	}
+	.settings-dialog.settings-look-next .pane-top:has(.pane-head-back) {
+		gap: 0;
+	}
+	.settings-dialog.settings-look-next .pane-top:has(.pane-head-back) > .pane-lead {
+		order: 0;
+		margin: 0;
+	}
+	.settings-dialog.settings-look-next .pane-head > .pane-head-actions {
+		flex-wrap: wrap;
+		flex: 1 1 auto;
+		justify-content: flex-start;
+	}
+	/* The actions sit together from the left, 8 apart. */
+	.settings-dialog.settings-look-next .pane-head > .pane-head-actions {
+		gap: 8px;
+	}
+	.settings-dialog.settings-look-next .pane-head > .pane-head-actions > * {
+		margin-left: 0;
+	}
+	/* A card keeps 16 inside its sides here too. */
+	.settings-dialog.settings-look-next :is(.settings-rows, .ai-profile-card, .room-skills-rows, .room-schedules-list, .room-schedules-run-list, .connector-list, .skill-table) {
+		padding-inline: 16px;
+	}
+	/* A control that drops under its words sits 12 below them. */
+	.settings-dialog.settings-look-next .settings-row {
+		row-gap: 12px;
+	}
+	/* The table's head is hidden here, so its first row draws no line. */
+	.settings-dialog.settings-look-next .skill-table > .settings-table-head + * {
+		border-top: 0;
+	}
+	.settings-dialog.settings-look-next .workspaces-tool-switch {
+		width: 44px;
+		height: 24px;
+	}
+	.settings-dialog.settings-look-next .workspaces-tool-switch::before {
+		width: 20px;
+		height: 20px;
+	}
+	.settings-dialog.settings-look-next .workspaces-tool-switch:checked::before {
+		transform: translateX(20px);
+	}
+	.settings-dialog.settings-look-next .workspaces-tool-switch:active:not(:disabled)::before {
+		width: 22px;
+	}
+	.settings-dialog.settings-look-next .workspaces-tool-switch:checked:active:not(:disabled)::before {
+		transform: translateX(18px);
+	}
+	.settings-dialog.settings-look-next .workspaces-tool-switch::after {
+		inset: -10px 0;
+	}
+	.settings-dialog.settings-look-next .settings-row[data-tall] > .workspaces-tool-switch {
+		margin-block: -2px;
+	}
+}
+
+/* Fields: white, a grey edge that darkens under the pointer, and on focus an
+   ink edge with a 1 px ring of the same ink just outside it. 32 tall (44 on a
+   phone, with the 16 px text 38-phone.css sets); the long text box keeps its
+   height and takes a wider radius and padding. The placeholder is the quiet
+   grey: an example, with the field's own label above it. :where keeps one
+   specificity for every kind, so the long text box's own rule below wins.
+   The long text box takes no right padding here: Instructions keeps its own,
+   which holds the text clear of Clear in the box's corner. */
+.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea) {
+	box-sizing: border-box;
+	height: 32px;
+	border: 1px solid var(--exx-border-field);
+	border-radius: 8px;
+	background-color: var(--exx-surface-card);
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-size: 14px;
+	line-height: 20px;
+	outline: none;
+	box-shadow: none;
+	transition: border-color 100ms ease;
+}
+.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select) {
+	padding: 0 10px;
+}
+.settings-dialog.settings-look-next .settings-dialog-pane textarea {
+	height: auto;
+	padding-block: 12px;
+	padding-left: 14px;
+	border-radius: 12px;
+	line-height: 22px;
+}
+.settings-dialog.settings-look-next .settings-dialog-pane :is(input, textarea)::placeholder {
+	color: var(--exx-icon-quiet);
+	opacity: 1;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea):hover:not(:focus, :disabled, [aria-invalid="true"]) {
+		border-color: var(--exx-border-field-hover);
+	}
+}
+/* Why a form can't be saved, one way on every page: the field's red edge
+   (below) and, under the field, the reason in the text colour after a red
+   dot, 13/18, wrapping under itself. */
+.settings-dialog.settings-look-next :is(.skill-field-error, .settings-needed-line, .state-profiles .settings-row-sub.workspaces-error, .room-schedules-form > .workspaces-error) {
+	position: relative;
+	display: block;
+	margin: 0;
+	padding-left: 18px;
+	color: var(--fg);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.skill-field-error, .settings-needed-line, .state-profiles .settings-row-sub.workspaces-error, .room-schedules-form > .workspaces-error)::before {
+	content: "";
+	position: absolute;
+	top: 5px;
+	left: 2px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--error);
+}
+/* Under a field that shares its row with its button, as far as under any other. */
+.settings-dialog.settings-look-next .skill-import-from-repo > .skill-import-row + .settings-needed-line {
+	margin-top: 6px;
+}
+.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea):focus {
+	outline: none;
+	border-color: var(--exx-focus);
+	box-shadow: 0 0 0 1px var(--exx-focus);
+}
+/* A field holding something wrong has a red edge, with the focus and without
+   it: a pressed button moves the focus to it. The mark goes as it is mended. */
+.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea)[aria-invalid="true"] {
+	border-color: var(--error);
+}
+.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea)[aria-invalid="true"]:focus {
+	box-shadow: 0 0 0 1px var(--error);
+}
+.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea):disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+/* A search field carries its mark 10 px in, the words starting at 32. */
+.settings-dialog.settings-look-next .settings-dialog-pane input[type="search"] {
+	padding-left: 32px;
+	background-image: var(--exx-search-mark);
+	background-repeat: no-repeat;
+	background-position: 10px center;
+	background-size: 14px 14px;
+}
+/* Its clear mark is the family's 20 px icon button: a muted cross, the
+   quiet fill under the pointer, in place of the browser's blue one. */
+.settings-dialog.settings-look-next .settings-dialog-pane input[type="search"]::-webkit-search-cancel-button {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 20px;
+	height: 20px;
+	margin: 0 -4px 0 8px;
+	border-radius: 6px;
+	background: var(--exx-search-clear) center / 12px 12px no-repeat;
+	cursor: pointer;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .settings-dialog-pane input[type="search"]::-webkit-search-cancel-button:hover {
+		background-color: var(--exx-quiet-fill);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.settings-dialog.settings-look-next .settings-dialog-pane :is(input, select, textarea) {
+		transition: none;
+	}
+}
+
+/* The segmented choice: a 32 px grey track holding 28 px segments; the chosen
+   one is a lighter segment, white in light, with the small shadow, the others
+   quieter words. */
+.settings-dialog.settings-look-next .settings-segments {
+	gap: 0;
+	height: 32px;
+	padding: 2px;
+	border: 0;
+	border-radius: 8px;
+	background: var(--exx-quiet-fill);
+	overflow: visible;
+}
+.settings-dialog.settings-look-next .settings-segment {
+	height: 28px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	color: var(--exx-segment-words);
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+	transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), color 100ms ease;
+}
+.settings-dialog.settings-look-next .settings-segment + .settings-segment {
+	border-left: 0;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .settings-segment:hover:not(:disabled, .active) {
+		color: var(--exx-segment-words-hover);
+	}
+}
+.settings-dialog.settings-look-next .settings-segment:active:not(:disabled, .active) {
+	background: var(--exx-quiet-fill);
+	color: var(--fg);
+}
+/* Through the track, to win over the dark theme's own chosen fill (23-room-settings.css). */
+.settings-dialog.settings-look-next .settings-segments .settings-segment.active {
+	background: var(--exx-segment-chosen);
+	box-shadow: var(--exx-shadow-small);
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .settings-segment:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 0;
+}
+.settings-dialog.settings-look-next .settings-segment:disabled {
+	opacity: 0.45;
+}
+/* It ends on the card's padding: the pull Remote access gives a row's quiet
+   buttons (35-sidebar-remote.css) is not for a track. */
+.settings-dialog.settings-look-next .remote-device-actions:has(> .settings-segments) {
+	margin-right: 0;
+}
+
+/* Radios: a 16 px ring in the field's grey, 12 px before its words; chosen,
+   an ink ring round an 8 px ink centre. The whole row is the target and
+   tints under the pointer. */
+.settings-dialog.settings-look-next .settings-row-choice {
+	position: relative;
+	isolation: isolate;
+	cursor: pointer;
+}
+.settings-dialog.settings-look-next .settings-row-choice::before {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset: 0 -8px;
+	border-radius: 8px;
+	transition: background-color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .settings-row-choice:hover:not(:has(input:disabled))::before {
+		background: var(--exx-row-hover);
+	}
+}
+.settings-dialog.settings-look-next .settings-row-choice:active:not(:has(input:disabled))::before {
+	background: var(--exx-row-press);
+}
+.settings-dialog.settings-look-next .settings-row.settings-row-choice {
+	column-gap: 12px;
+}
+.settings-dialog.settings-look-next .settings-row-choice input[type="radio"] {
+	/* 16 in its label's 20 line, whose middle is its middle. */
+	margin-top: 2px;
+	border: 1.5px solid var(--exx-border-field);
+}
+.settings-dialog.settings-look-next .settings-row-choice input[type="radio"]:checked {
+	border-color: var(--exx-action-primary-bg);
+}
+.settings-dialog.settings-look-next .settings-row-choice input[type="radio"]:checked::after {
+	/* 8 across whatever width the screen draws the 1.5 px ring at. */
+	inset: calc(50% - 4px);
+	background: var(--exx-action-primary-bg);
+}
+.settings-dialog.settings-look-next .settings-row-choice input[type="radio"]:disabled {
+	opacity: 0.45;
+}
+
+/* The slider: ink on the grey track, 200 wide, its value in a fixed 72 px
+   slot so the slider stays put as the number changes. */
+.settings-dialog.settings-look-next .memory-budget-control {
+	flex: none;
+	min-width: 0;
+	gap: 12px;
+}
+.settings-dialog.settings-look-next .memory-budget-slider {
+	flex: none;
+	width: 200px;
+	margin: 0;
+	accent-color: var(--exx-action-primary-bg);
+}
+.settings-dialog.settings-look-next .memory-budget-slider:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+/* Where the page can read the slider's value (typed attr()), it is drawn as
+   specified: a 4 px track in the soft fill, ink up to a white 16 px thumb
+   with the field's edge and the small shadow. Elsewhere the browser's own
+   slider stays, in ink. */
+@supports (width: calc(attr(data-x type(<number>), 0) * 1px)) {
+	.settings-dialog.settings-look-next .memory-budget-slider {
+		--exx-slider-part: calc((attr(value type(<number>), 0) - attr(min type(<number>), 0)) / (attr(max type(<number>), 1) - attr(min type(<number>), 0)));
+		appearance: none;
+		-webkit-appearance: none;
+		height: 16px;
+		background: transparent;
+		cursor: pointer;
+	}
+	.settings-dialog.settings-look-next .memory-budget-slider::-webkit-slider-runnable-track {
+		height: 4px;
+		border-radius: 2px;
+		background: linear-gradient(to right, var(--exx-action-primary-bg) calc(8px + (100% - 16px) * var(--exx-slider-part)), var(--exx-quiet-fill) 0);
+	}
+	.settings-dialog.settings-look-next .memory-budget-slider::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		box-sizing: border-box;
+		width: 16px;
+		height: 16px;
+		margin-top: -6px;
+		border: 1px solid var(--exx-border-field);
+		border-radius: 50%;
+		background: var(--exx-paper);
+		box-shadow: var(--exx-shadow-small);
+		transition: border-color 100ms ease;
+	}
+	@media (hover: hover) {
+		.settings-dialog.settings-look-next .memory-budget-slider:hover:not(:disabled)::-webkit-slider-thumb {
+			border-color: var(--exx-action-primary-bg);
+		}
+	}
+	.settings-dialog.settings-look-next .memory-budget-slider:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	/* 44 to the finger, the track still drawn across its middle. */
+	@media (hover: none) {
+		.settings-dialog.settings-look-next .memory-budget-slider {
+			height: 44px;
+		}
+	}
+}
+.settings-dialog.settings-look-next .memory-budget-value {
+	flex: none;
+	width: 72px;
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 500;
+	text-align: right;
+}
+
+/* The info mark: a 16 px line mark in a 28 px quiet button 4 px after the
+   words; the button overhangs above, below and after, so the line is no
+   taller for it and only 20 px longer. 44 to the finger. Its explanation
+   opens in a bubble drawn as a menu, from the line's foot, under its own
+   button and ring; the ring is drawn inside the button, clear of the words
+   beside and above it. */
+.settings-dialog.settings-look-next .rs-info-anchor {
+	display: inline-flex;
+	align-items: center;
+	height: 16px;
+	margin: 0 -12px 0 4px;
+	vertical-align: middle;
+}
+.settings-dialog.settings-look-next .rs-info {
+	position: relative;
+	margin: -6px 0;
+	width: 28px;
+	height: 28px;
+	border: 0;
+	border-radius: 8px;
+	color: var(--muted);
+	cursor: pointer;
+	transition: background-color 100ms ease, color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .rs-info:hover {
+		background: var(--exx-quiet-fill);
+		color: var(--fg);
+	}
+}
+.settings-dialog.settings-look-next .rs-info:active,
+.settings-dialog.settings-look-next .rs-info[aria-expanded="true"] {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .rs-info[aria-expanded="true"] {
+	z-index: 41;
+}
+.settings-dialog.settings-look-next .rs-info:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
+@media (hover: none) {
+	.settings-dialog.settings-look-next .rs-info::after {
+		content: "";
+		position: absolute;
+		inset: -8px;
+	}
+}
+.settings-dialog.settings-look-next .rs-info-tip {
+	top: calc(100% + 3px);
+	padding: 8px 12px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--exx-surface-card);
+	box-shadow: var(--exx-shadow-popover);
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+/* The menu: drawn on <body>, outside the window (ai-profile-switcher.tsx), so
+   it takes the look while a window in the look shows; the windows are modal,
+   so any menu then is one of theirs. White, radius 12, 200 to 280 wide, 6 px
+   under its button (where the menu's own code puts it); items 32 tall, 44 to
+   a finger; the red item last, under a line. */
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu {
+	min-width: 200px;
+	max-width: 280px;
+	padding: 4px;
+	gap: 0;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--exx-surface-card);
+	box-shadow: var(--exx-shadow-popover);
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item {
+	position: relative;
+	display: block;
+	box-sizing: border-box;
+	height: 32px;
+	padding: 0 10px;
+	overflow: hidden;
+	border-radius: 8px;
+	color: var(--fg);
+	font-family: var(--exx-font-sans);
+	font-size: 13px;
+	line-height: 32px;
+	font-weight: 400;
+	text-overflow: ellipsis;
+	cursor: pointer;
+	transition: background-color 100ms ease;
+}
+@media (hover: hover) {
+	body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item:hover:not(:disabled) {
+		background: var(--exx-quiet-fill);
+	}
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+	background: var(--exx-quiet-fill);
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item:active:not(:disabled) {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item.danger {
+	color: var(--error-text);
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item + .ai-profile-menu-item.danger {
+	overflow: visible;
+	margin-top: 9px;
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item + .ai-profile-menu-item.danger::before {
+	content: "";
+	position: absolute;
+	top: -5px;
+	right: 0;
+	left: 0;
+	height: 1px;
+	background: var(--exx-hairline);
+}
+body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-confirm {
+	max-width: none;
+	overflow-wrap: anywhere;
+	padding: 6px 10px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 18px;
+}
+@media (hover: none) {
+	body:has(.settings-dialog.settings-look-next) > .ai-profile-menu .ai-profile-menu-item {
+		height: 44px;
+		line-height: 44px;
+	}
+}
+
+/* The question: drawn outside the window (confirm-dialog.tsx), which gives it
+   the class when a window in the look asks. 400 wide, radius 16, on a 28 %
+   veil; the safe answer first and the confirming one last, at the right. */
+.confirm-dialog-backdrop.settings-look-next {
+	padding: 24px;
+	background: var(--exx-veil);
+	backdrop-filter: none;
+}
+.confirm-dialog-backdrop.settings-look-next .maintain-confirm-card {
+	display: block;
+	width: min(400px, 100%);
+	max-width: none;
+	padding: 24px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 16px;
+	background: var(--exx-surface-card);
+	box-shadow: var(--exx-shadow-window);
+	/* A name it asks about may have no space to wrap at. */
+	overflow-wrap: anywhere;
+}
+.confirm-dialog-backdrop.settings-look-next .maintain-confirm-card h2 {
+	margin: 0;
+	font-family: var(--exx-font-sans);
+	font-size: 18px;
+	line-height: 24px;
+	font-weight: 700;
+	letter-spacing: normal;
+}
+.confirm-dialog-backdrop.settings-look-next .maintain-confirm-card p {
+	margin: 8px 0 0;
+	color: var(--fg-soft);
+	font-size: 14px;
+	line-height: 20px;
+	text-wrap: pretty;
+}
+.confirm-dialog-backdrop.settings-look-next .checkpoint-preview-actions {
+	margin-top: 24px;
+	justify-content: flex-end;
+	gap: 8px;
+}
+/* Three answers do not fit 400 side by side: one full-width column at every
+   width, the confirming one on top, as on a phone. */
+.confirm-dialog-backdrop.settings-look-next .confirm-dialog-three .checkpoint-preview-actions {
+	flex-direction: column-reverse;
+	align-items: stretch;
+}
+
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .settings-dialog-pane :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select) {
+		height: 44px;
+	}
+	.settings-dialog.settings-look-next .settings-segments {
+		height: 44px;
+	}
+	.settings-dialog.settings-look-next .settings-segment {
+		flex: 1 1 0;
+		height: 40px;
+	}
+	/* A choice that drops under its words takes the row's width. */
+	.settings-dialog.settings-look-next .settings-row > .settings-segments {
+		align-self: stretch;
+	}
+	.settings-dialog.settings-look-next .remote-device-actions:has(> .settings-segments) {
+		flex: 1 1 100%;
+	}
+	.settings-dialog.settings-look-next .remote-device-actions > .settings-segments {
+		flex: 1 1 auto;
+	}
+	/* A finger cannot drag the box's corner; 16 px text takes a 24 px line. */
+	.settings-dialog.settings-look-next .settings-dialog-pane textarea {
+		resize: none;
+		line-height: 24px;
+	}
+	.settings-dialog.settings-look-next .memory-budget-control {
+		flex: 1 1 100%;
+	}
+	.settings-dialog.settings-look-next .memory-budget-slider {
+		flex: 1 1 auto;
+		width: auto;
+		min-width: 0;
+	}
+	/* Centred on a mark near the screen's edge, the explanation would run off
+	   it: on a phone it starts at its row's left edge, just under the mark's
+	   line, and ends before the row's switch, 280 at most. */
+	.settings-dialog.settings-look-next .settings-row:has(.rs-info-anchor) {
+		position: relative;
+	}
+	.settings-dialog.settings-look-next .settings-row .rs-info-anchor {
+		position: static;
+	}
+	.settings-dialog.settings-look-next .settings-row .rs-info-tip {
+		top: auto;
+		right: auto;
+		left: 0;
+		width: min(280px, calc(100% - 56px));
+		max-width: none;
+		align-self: flex-start;
+		margin-top: 19px;
+		transform: none;
+	}
+	/* On a phone the question sits 16 from the screen's sides, its answers
+	   full width and stacked, the confirming one on top. */
+	.confirm-dialog-backdrop.settings-look-next {
+		padding: 16px;
+	}
+	.confirm-dialog-backdrop.settings-look-next .checkpoint-preview-actions {
+		flex-direction: column-reverse;
+		align-items: stretch;
+	}
+}

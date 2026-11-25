@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { app, WEB_UI_DIST } from "./server-app.js";
 import { staticSecurityHeadersFor } from "./request-checks.js";
+import { servedFile } from "./static-route-path.js";
 
 function contentType(file: string): string {
 	if (file.endsWith(".html")) return "text/html; charset=utf-8";
@@ -34,36 +35,38 @@ function staticCacheControl(file: string): string | null {
 	return null;
 }
 
-function safeStaticPath(urlPath: string): string | null {
-	if (!fs.existsSync(WEB_UI_DIST)) return null;
-	const rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
-	const resolved = path.resolve(WEB_UI_DIST, rel);
-	if (!resolved.startsWith(WEB_UI_DIST + path.sep) && resolved !== WEB_UI_DIST) return null;
-	return fs.existsSync(resolved) && fs.statSync(resolved).isFile() ? resolved : path.join(WEB_UI_DIST, "index.html");
-}
-
-app.get("/", async (req, reply) => {
+// Each route names the one folder it serves and hands over the rest of the
+// path as the request sent it, the query cut off: a path that leaves that
+// folder, or a file that isn't there, answers 404, never another file and
+// never index.html (the page keeps its place in the address's hash, so no
+// address needs index.html in place of a file).
+function sendFile(req: { raw: { url?: string; socket?: unknown } }, reply: any, folder: string, rest: string, missingPage: string) {
 	reply.headers(staticSecurityHeadersFor(req));
-	const file = safeStaticPath("/");
-	if (!file) return reply.code(404).send({ error: "web UI dist not found; run npm run build --workspace @exxeta/pi-web-ui" });
-	const cache = staticCacheControl(file);
-	if (cache) reply.header("cache-control", cache);
-	return reply.type(contentType(file)).send(fs.createReadStream(file));
-});
-
-async function sendStatic(req: { raw: { url?: string; socket?: unknown } }, reply: any) {
-	reply.headers(staticSecurityHeadersFor(req));
-	const file = safeStaticPath((req.raw.url ?? "/").split("?")[0]);
-	if (!file) return reply.code(404).send({ error: "web UI dist not found" });
+	if (!fs.existsSync(WEB_UI_DIST)) return reply.code(404).send({ error: missingPage });
+	const file = servedFile(folder, rest);
+	if (!file) return reply.code(404).send({ error: "not found" });
 	const cache = staticCacheControl(file);
 	if (cache) reply.header("cache-control", cache);
 	return reply.type(contentType(file)).send(fs.createReadStream(file));
 }
 
-app.get("/assets/*", sendStatic);
+app.get("/", async (req, reply) => sendFile(req, reply, WEB_UI_DIST, "index.html", "web UI dist not found; run npm run build --workspace @exxeta/pi-web-ui"));
 
-app.get("/brand/*", sendStatic);
+// The rest of the raw path after `/<folder>/`; a request the router matched
+// some other way gives an empty rest, which servedFile refuses.
+function sendFromFolder(folder: string) {
+	const prefix = `/${folder}/`;
+	return async (req: { raw: { url?: string; socket?: unknown } }, reply: any) => {
+		const rawPath = (req.raw.url ?? "").split("?")[0];
+		const rest = rawPath.startsWith(prefix) ? rawPath.slice(prefix.length) : "";
+		return sendFile(req, reply, path.join(WEB_UI_DIST, folder), rest, "web UI dist not found");
+	};
+}
 
-app.get("/fonts/*", sendStatic);
+app.get("/assets/*", sendFromFolder("assets"));
 
-app.get("/manifest.webmanifest", sendStatic);
+app.get("/brand/*", sendFromFolder("brand"));
+
+app.get("/fonts/*", sendFromFolder("fonts"));
+
+app.get("/manifest.webmanifest", async (req, reply) => sendFile(req, reply, WEB_UI_DIST, "manifest.webmanifest", "web UI dist not found"));

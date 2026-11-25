@@ -8,6 +8,8 @@
 // And while the room's pick cannot run (its provider signed out), an empty
 // conversation waits with the room: the socket refuses with the room's
 // sentence instead of binding on the lock the conversation was prepared with.
+// And a conversation open on a gateway whose address and key are saved anew
+// sends its next message only to the new address, with the new key.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -52,7 +54,7 @@ const GPT = { provider: "fake-gpt", model: "gpt-fake" };
 
 // --- The two providers -------------------------------------------------------------
 
-type Request = { api: "anthropic" | "openai"; body: any; raw: string; aborted: boolean };
+type Request = { api: "anthropic" | "openai"; body: any; raw: string; aborted: boolean; url: string; authorization: string };
 const requests: Request[] = [];
 let hangRemember = false;
 /** The next room turn hangs mid-stream (the text stays in the history, so a flag, not a marker). */
@@ -68,7 +70,7 @@ const providers = http.createServer((req, res) => {
 	req.on("end", () => {
 		const body = JSON.parse(raw || "{}");
 		const api = String(req.url ?? "").includes("/messages") ? "anthropic" : "openai";
-		const record: Request = { api, body, raw, aborted: false };
+		const record: Request = { api, body, raw, aborted: false, url: String(req.url ?? ""), authorization: String(req.headers.authorization ?? "") };
 		requests.push(record);
 		res.on("close", () => { if (!res.writableFinished) record.aborted = true; });
 		res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -221,6 +223,60 @@ try {
 	assert(!frames.some((frame) => frame.type === "ready") && requests.length === requestsBefore, "nothing bound on Claude, the lock it was prepared with, and no model was asked");
 	assert((await api(`/api/persistent-agents/${agentId}/threads/${waitingId}`)).body.thread.model.model === CLAUDE.model, "the conversation's lock is left as it was, for when the room can run again");
 	pass("while the room's pick has no key saved, an empty conversation refuses instead of running on the model it was prepared with");
+
+	// A gateway moved to a new address with a new key while a conversation on it stays open.
+	socket.close();
+	const firstKey = "synthetic-gateway-first-key";
+	const secondKey = "synthetic-gateway-second-key";
+	const saved = await api("/api/persistent-agent-ai-profiles/gateways", { method: "POST", body: JSON.stringify({ label: "Moving Gateway", baseUrl: `http://127.0.0.1:${providerPort}/old/v1`, key: firstKey, roomModels: [{ modelId: "gw-fake" }] }) });
+	assert(saved.status === 200, `saving the gateway, got ${saved.status} ${JSON.stringify(saved.body).slice(0, 300)}`);
+	const gatewayId = String(saved.body.gateway?.id ?? "");
+	const GATEWAY = { provider: String(saved.body.gateway?.providerId ?? ""), model: "gw-fake" };
+	const gatewayRoom = agents.createPersistentAgentFromScaffoldInput({ displayName: "Moving Gateway Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
+	const gatewayConversation = "c_gateway_moves_0001";
+	assert((await api(`/api/persistent-agents/${gatewayRoom}/models`, { method: "PUT", body: JSON.stringify({ conversation: GATEWAY }) })).status === 200, "the room picks the gateway's model");
+	assert((await api(`/api/persistent-agents/${gatewayRoom}/threads/${gatewayConversation}`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "home", items: [] }) })).status === 200, "the gateway room's conversation opens");
+	await connect(gatewayRoom, gatewayConversation);
+	const beforeMove = await turn(gatewayRoom, "First message on the gateway.");
+	assert(beforeMove.url.startsWith("/old/v1/") && beforeMove.authorization === `Bearer ${firstKey}`, `the first message reaches the old address with the first key, got ${beforeMove.url}`);
+	const movedSave = await api(`/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gatewayId)}`, { method: "PUT", body: JSON.stringify({ baseUrl: `http://127.0.0.1:${providerPort}/new/v1`, key: secondKey, roomModels: [{ modelId: "gw-fake" }] }) });
+	assert(movedSave.status === 200, `moving the gateway, got ${movedSave.status} ${JSON.stringify(movedSave.body).slice(0, 300)}`);
+	const sentFrom = requests.length;
+	await turn(gatewayRoom, "Second message, the gateway moved.");
+	const afterMove = requests.slice(sentFrom).filter((request) => !request.raw.includes("Checkpoint Compression Constitution"));
+	const atOld = afterMove.filter((request) => request.url.startsWith("/old/"));
+	assert(atOld.length === 0, `the message after the move reached the old address (${atOld.length} call(s)${atOld.some((request) => request.authorization === `Bearer ${secondKey}`) ? ", carrying the new key" : ""})`);
+	assert(afterMove.length >= 1 && afterMove.every((request) => request.url.startsWith("/new/v1/") && request.authorization === `Bearer ${secondKey}`), `the message after the move reaches only the new address with the new key, got ${JSON.stringify(afterMove.map((request) => request.url))}`);
+	pass("a conversation open on a gateway whose address and key are saved anew sends its next message only to the new address, with the new key");
+
+	// models.json unreadable for one message: no move is read, so the bound session answers at its address.
+	// Only where a mode can refuse a read: not on Windows, nor as root.
+	const canForceFsRefusal = process.platform !== "win32" && process.getuid?.() !== 0;
+	if (canForceFsRefusal) {
+		const modelsFile = path.join(agentDir, "models.json");
+		const unreadFrom = requests.length;
+		fs.chmodSync(modelsFile, 0o000);
+		let unread: Request;
+		try {
+			unread = await turn(gatewayRoom, "Third message, the models file unreadable.");
+		} finally {
+			fs.chmodSync(modelsFile, 0o600);
+		}
+		assert(requests.length > unreadFrom && unread.url.startsWith("/new/v1/") && !frames.some((frame) => frame.type === "error"), `with models.json unreadable the message reached ${unread.url}, frames ${JSON.stringify(frames.filter((frame) => frame.type === "error"))}`);
+		pass("with models.json unreadable for a message, the open conversation answers on its bound address instead of refusing");
+	}
+
+	// The gateway removed while its conversation is open: this computer answers the next message as before, with the
+	// turn's own failure, never with the refusal a shared server sends, which alone hands the message back to the box.
+	const removedGateway = await api(`/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gatewayId)}`, { method: "DELETE" });
+	assert(removedGateway.status === 200, `removing the gateway, got ${removedGateway.status} ${JSON.stringify(removedGateway.body).slice(0, 300)}`);
+	frames.length = 0;
+	const goneFrom = requests.length;
+	socket.send(JSON.stringify({ type: "prompt", text: "Fourth message, the gateway removed." }));
+	await waitUntil(() => frames.some((frame) => frame.type === "prompt_returned"), "the message after the gateway's removal returned");
+	const goneErrors = frames.filter((frame) => frame.type === "error");
+	assert(goneErrors.length === 1 && goneErrors[0].code === undefined && requests.length === goneFrom, `after the gateway's removal the message got ${JSON.stringify(frames.filter((frame) => frame.type === "error"))} and reached ${requests.length - goneFrom} call(s)`);
+	pass("with its gateway removed, an open conversation's next message fails as its turn, with no room_model_unavailable refusal");
 
 	console.log("empty conversation follows pick smoke passed");
 } catch (error) {

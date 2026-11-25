@@ -16,7 +16,7 @@
 // - a 429 in the backend's own rate-limit words is not asked again either:
 //   the client's own tries are the only requests, no retry note, then
 //   "still busy";
-// - 413 keeps the plain line, as a request too large does in the chat.
+// - 413 the line for a request refused for its size.
 //
 // Offline: the backend is a local fake. The rooms run side by side.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -75,7 +75,7 @@ const cases: Expected[] = [
 	{ status: 402, cause: `${NAME} has reached your plan's usage limit.` },
 	{ status: 403, cause: `${NAME} refused this request: it may not be offered in your region or on your plan.` },
 	{ status: 404, cause: `This room's model, ${NAME} on ChatGPT Plus/Pro, is no longer offered.` },
-	{ status: 413, cause: PLAIN },
+	{ status: 413, cause: `${NAME} can't take this much at once.` },
 	{ status: 429, cause: STILL_BUSY },
 	{ status: 500, cause: PLAIN },
 	{ status: 502, cause: PLAIN },

@@ -37,16 +37,18 @@ function lockName(lock: RoomModelLockView): string {
 	return modelDisplayName({ model: lock.model, modelLabel: lock.label, provider: lock.provider }) || lock.name;
 }
 
-/** Why the row's model cannot run, in the pane's words. */
-function unavailableSentence(row: RoomModelRowView, task: RoomModelTask): string | null {
+/** Why the row's model cannot run, in the pane's words. `shared` on a shared server, where nobody signs in and only the admin changes the AI setup. */
+export function unavailableSentence(row: RoomModelRowView, task: RoomModelTask, shared: boolean): string | null {
 	if (!row.chosen || !row.reason || row.effective) return null;
 	const named = modelOnProvider(lockName(row.chosen), row.chosen.providerLabel);
 	const gone = row.keyGone ? "key-missing" : "signed-out";
+	const another = task === "memory" ? "Memory model" : "model";
+	if (row.reason === "signed-out" && shared) return `${row.source === "default" ? `The default, ${named},` : named} ${sharedCredentialState(gone)}. This room waits until you choose another ${another}, or your admin adds one.`;
 	const words = row.reason === "signed-out" ? modelCredentialWords(lockName(row.chosen), row.chosen.providerLabel, named, gone) : { subject: named, state: "is no longer offered" };
 	const what = row.source === "default" ? `The default, ${words.subject},` : words.subject;
 	return row.reason === "signed-out"
 		? `${what} ${words.state}. This room waits until you ${credentialGoneWords(gone).again.toLowerCase()} or choose another model.`
-		: `${what} is no longer offered. This room waits until you choose another ${task === "memory" ? "Memory model" : "model"}.`;
+		: `${what} is no longer offered. This room waits until you choose another ${another}.`;
 }
 
 /**
@@ -128,7 +130,7 @@ export function RoomModelSection({ status, onRefresh, onOpenAiSetup }: { status:
 		const view = models?.[task];
 		const stored = lockOf(view?.stored);
 		const inherited = !stored;
-		const unavailable = view ? unavailableSentence(view, task) : null;
+		const unavailable = view ? unavailableSentence(view, task, role !== null) : null;
 		// The model the row is set to, even while it waits: never another.
 		const shownView = (unavailable ? view?.chosen : view?.stored ?? view?.effective) ?? null;
 		const shown = lockOf(shownView);
@@ -153,7 +155,7 @@ export function RoomModelSection({ status, onRefresh, onOpenAiSetup }: { status:
 						unpickable={tooSmall}
 						unpickableLine={TOO_SMALL_LINE}
 						providerMarks={marks}
-						defaultChoice={fallback ? { name: lockName(fallback), reason: tooSmall.get(`${fallback.provider}/${fallback.model}`), mark: marks.get(fallback.provider), onPick: () => void save(task, null) } : undefined}
+						defaultChoice={fallback ? { name: lockName(fallback), provider: fallback.provider, reason: tooSmall.get(`${fallback.provider}/${fallback.model}`), mark: marks.get(fallback.provider), onPick: () => void save(task, null) } : undefined}
 						openRequest={chooseAsk[task]}
 						onOpen={refreshRefusals}
 						onPick={(lock) => void save(task, lock)}

@@ -17,6 +17,7 @@ import { MemoryChangeFold } from "./memory-change-fold";
 import { askUntilAnswered, noteLimitLine, sameNoteWords, SAVE_ANSWER_LOST_SENTENCE, SAVE_NOT_LANDED_SENTENCE, saveAnswerLost, UNDO_NOT_LANDED_SENTENCE, lostUndoLanded } from "../memory-save-answer";
 import { MEMORY_NOTE_MAX_CHARS } from "../../../web-server/src/memory-typed-text";
 import { GroupHeader } from "./pane-header";
+import { useSettingsLookNext } from "../settings-look";
 import { TopicMove } from "./topic-move";
 import {
 	ADD_NOTE_LABEL,
@@ -97,9 +98,13 @@ function matchesQuery(entry: EntryCard, query: string): boolean {
 
 export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDeleted, onChanged }: { status: PersistentAgentStatus; onMemoryTokens?: (tokens: number | null) => void; onArchiveDeleted?: () => void; /** Told after each change this section makes to memory. */ onChanged?: () => void }) {
 	const [entries, setEntries] = useState<EntryCard[] | null>(null);
+	// The new look draws the two section actions small, and has no "Show" for an empty archive.
+	const lookNext = useSettingsLookNext();
+	const archiveHeadRef = useRef<HTMLDivElement>(null);
 	const [topicOrder, setTopicOrder] = useState<{ section: MemoryEntriesTopicGroup["section"]; title: string }[]>([]);
 	const [budget, setBudget] = useState<BudgetState | null>(null);
-	const [archiveCount, setArchiveCount] = useState(0);
+	// Unknown (null) until a read gives it: a failed read never says the archive is empty.
+	const [archiveCount, setArchiveCount] = useState<number | null>(null);
 	const [archiveHistory, setArchiveHistory] = useState(0);
 	const [archive, setArchive] = useState<ArchivedEntryCard[] | null>(null);
 	const [archiveNext, setArchiveNext] = useState<string | undefined>(undefined);
@@ -311,7 +316,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 			const response = seen(await deleteMemoryEntry(status.id, entry.id));
 			setEntries((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
 			setBudget(response.budget);
-			if (!response.alreadySaved) setArchiveCount((count) => count + 1);
+			if (!response.alreadySaved) setArchiveCount((count) => count === null ? null : count + 1);
 			setArchive((current) => (current === null || response.alreadySaved ? current : [response.archived, ...current]));
 			setConfirmDeleteId(null);
 		}, (list) => !list.some((candidate) => candidate.id === entry.id), () => setConfirmDeleteId(null));
@@ -367,7 +372,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 			const response = seen(await restoreMemoryEntry(status.id, entry.id));
 			applyEntry(response.entry, response.budget);
 			setArchive((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
-			if (!response.alreadySaved) setArchiveCount((count) => Math.max(0, count - 1));
+			if (!response.alreadySaved) setArchiveCount((count) => count === null ? null : Math.max(0, count - 1));
 			setConfirmArchiveDeleteId(null);
 		}, (list) => list.some((candidate) => candidate.id === entry.id), () => setConfirmArchiveDeleteId(null));
 	}
@@ -386,10 +391,18 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 			return !near.entries.some((row) => row.id === entry.id);
 		}, () => {
 			setArchive((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
-			setArchiveCount((current) => Math.max(0, current - 1));
+			setArchiveCount((current) => current === null ? null : Math.max(0, current - 1));
 			setConfirmArchiveDeleteId(null);
 			onArchiveDeleted?.();
 		});
+	}
+
+	// Hide on an archive emptied while open takes its button away in the new look: the focus goes to the archive's line, which says it is empty.
+	function focusArchiveLine(): void {
+		const line = archiveHeadRef.current?.querySelector<HTMLElement>(".group-head-line");
+		if (!line) return;
+		line.tabIndex = -1;
+		line.focus();
 	}
 
 	function renderEntry(entry: EntryCard) {
@@ -460,7 +473,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 				kicker="Notes"
 				line={notesSummaryLine(noteCount, topicCount)}
 				actions={!readOnly && entries !== null && !adding && (
-					<button className="rs-btn" type="button" onClick={() => setAddOpen(true)}>{ADD_NOTE_LABEL}</button>
+					<button className={lookNext ? "rs-btn rs-btn-sm" : "rs-btn"} type="button" onClick={() => setAddOpen(true)}>{ADD_NOTE_LABEL}</button>
 				)}
 			/>
 			{readOnly && <p className="settings-row-sub">{readOnlySentence}</p>}
@@ -520,13 +533,14 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 					{SECTION_ORDER.flatMap((section) => filtered.filter((group) => group.section === section)).map(renderTopic)}
 				</div>
 			)}
-			<div className="memory-archive-head">
+			<div className="memory-archive-head" ref={archiveHeadRef}>
 				<GroupHeader
 					kicker="Archive"
-					line={archiveSummaryLine(archiveCount, archiveHistory)}
-					actions={archive === null
-						? <button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => void loadArchive()}>{archiveBusy ? "Reading…" : "Show"}</button>
-						: <button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => setArchive(null)}>Hide</button>}
+					line={archiveSummaryLine(archiveCount ?? 0, archiveHistory)}
+					// An archive read as empty has no Show in the new look (one of unknown count keeps it); its holder stays, empty, so the page keeps its parts.
+					actions={lookNext && archive === null && archiveCount === 0 ? <></> : archive === null
+						? <button className={lookNext ? "rs-btn rs-btn-quiet rs-btn-sm" : "rs-btn"} type="button" disabled={archiveBusy} onClick={() => void loadArchive()}>{archiveBusy ? "Reading…" : "Show"}</button>
+						: <button className={lookNext ? "rs-btn rs-btn-quiet rs-btn-sm" : "rs-btn"} type="button" disabled={archiveBusy} onClick={() => { setArchive(null); if (lookNext && archiveCount === 0) focusArchiveLine(); }}>Hide</button>}
 				/>
 			</div>
 			{archive === null ? null : archive.length === 0 ? (

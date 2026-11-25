@@ -15,13 +15,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { smokeHomeEnv } from "./smoke-server-process.js";
+import { smokeHomeEnv, withoutSignInTokens } from "./smoke-server-process.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-web-launcher-busy-port-home-"));
 
+// Every failure message here can carry the launcher's output.
 function assert(condition: unknown, message: string): asserts condition {
-	if (!condition) throw new Error(message);
+	if (!condition) throw new Error(withoutSignInTokens(message));
 }
 
 function assertIncludes(haystack: string, needle: string, label: string): void {
@@ -46,7 +47,7 @@ function runLauncher(port: number): Promise<{ status: number | null; output: str
 		child.stderr.on("data", (chunk) => { output += chunk; });
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
-			reject(new Error(`launcher did not exit within 30s; output so far:\n${output}`));
+			reject(new Error(`launcher did not exit within 30s; output so far:\n${withoutSignInTokens(output)}`));
 		}, 30_000);
 		child.on("error", (err) => { clearTimeout(timer); reject(err); });
 		child.on("close", (status) => { clearTimeout(timer); resolve({ status, output }); });
@@ -69,6 +70,7 @@ function listeningPort(server: http.Server | net.Server): number {
 	holder.close();
 	assert(status === 1, `responding holder: expected exit 1, got ${status}:\n${output}`);
 	assertIncludes(output, `Port ${port} is already in use`, "responding holder");
+	assertIncludes(output, `Or, to keep using the already-running server, open http://localhost:${port} in your browser.\n    A browser that isn't signed in needs the sign-in link its terminal printed.`, "responding holder (reuse hint)");
 	assertNotIncludes(output, "exxperts running at", "responding holder (no false success)");
 }
 

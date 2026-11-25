@@ -31,7 +31,7 @@ function stateHomePayload() {
 	const reason = source === "env"
 		? "The location is pinned by the EXXPERTS_DATA_DIR environment variable; unset it to move the folder from here."
 		: !process.env.EXXPERTS_HOME_MOVE_SUPERVISED
-			? "Moving needs the app to run under 'exxperts', the desktop app, or the dev harness."
+			? "The data folder can't be moved from here. Open exxperts as the desktop app, or start it with the exxperts command."
 			: null;
 	return {
 		dir: stateProfileRealHome(),

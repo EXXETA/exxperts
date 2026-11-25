@@ -17,6 +17,7 @@ import type {
 	TextContent,
 } from "../../types.js";
 import { headersToRecord } from "../../utils/headers.js";
+import { fetchWithBoundedRetryDelay, untilStopped } from "../../utils/request-stop.js";
 import { sanitizeSurrogates } from "../../utils/sanitize-unicode.js";
 
 interface OpenRouterGeneratedImage {
@@ -54,7 +55,7 @@ export const generateImagesOpenRouter: ImagesFunction<"openrouter-images", Image
 		if (!apiKey) {
 			throw new Error(`No API key available for provider: ${model.provider}`);
 		}
-		const client = createClient(model, apiKey, options?.headers);
+		const client = createClient(model, apiKey, options);
 		let params = buildParams(model, context);
 		const nextParams = await options?.onPayload?.(params, model);
 		if (nextParams !== undefined) {
@@ -65,9 +66,10 @@ export const generateImagesOpenRouter: ImagesFunction<"openrouter-images", Image
 			...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 			...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 		};
-		const { data: response, response: rawResponse } = await client.chat.completions
-			.create(params as unknown as ChatCompletionCreateParamsNonStreaming, requestOptions)
-			.withResponse();
+		const { data: response, response: rawResponse } = await untilStopped(
+			client.chat.completions.create(params as unknown as ChatCompletionCreateParamsNonStreaming, requestOptions).withResponse(),
+			options?.signal,
+		);
 		await options?.onResponse?.({ status: rawResponse.status, headers: headersToRecord(rawResponse.headers) }, model);
 
 		const imageResponse = response as OpenRouterImageGenerationResponse;
@@ -107,7 +109,7 @@ export const generateImagesOpenRouter: ImagesFunction<"openrouter-images", Image
 function createClient(
 	model: ImagesModel<"openrouter-images">,
 	apiKey: string,
-	optionsHeaders?: Record<string, string>,
+	options?: ImagesOptions,
 ): OpenAI {
 	return new OpenAI({
 		apiKey,
@@ -115,8 +117,9 @@ function createClient(
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: {
 			...model.headers,
-			...optionsHeaders,
+			...options?.headers,
 		},
+		fetch: fetchWithBoundedRetryDelay(options?.maxRetryDelayMs),
 	});
 }
 

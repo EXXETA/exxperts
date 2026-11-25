@@ -66,17 +66,22 @@ function resolveAuthToken(): string {
 // warnings there; LOG_LEVEL overrides in either direction.
 const LOG_LEVEL = process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "warn" : "info");
 
-// The request log never shows the sign-in token. The query parser reads a
-// parameter by its decoded name ("%74oken" is "token" too), starting after
-// the first "?" or "#" and splitting on "&". So after every "?", "#" or "&",
-// a name that decodes to "token" has its value, up to the next "&", logged
-// as [redacted]: every spelling the parser reads as the token, a repeated
-// one included. Every other parameter is logged as sent.
-function redactSignInToken(url: string): string {
+// The request log never shows a value that opens access from the address: the
+// sign-in token, a phone's pairing code, and the pairing request's id, whose
+// first poll after the approval collects the new device's key
+// (remote-routes.ts). The query parser reads a parameter by its decoded name
+// ("%74oken" is "token" too), starting after the first "?" or "#" and
+// splitting on "&". So after every "?", "#" or "&", a name that decodes to one
+// of these has its value, up to the next "&", logged as [redacted]: every
+// spelling the parser reads as that name, a repeated one included. Every other
+// parameter is logged as sent.
+const REDACTED_QUERY_NAMES: ReadonlySet<string> = new Set(["token", "code", "requestId"]);
+
+function redactAddressSecrets(url: string): string {
 	let redacted = "";
 	let from = 0;
 	for (const match of url.matchAll(/[?#&]([^=&?#]*)=/g)) {
-		if (match.index < from || queryNameAsParsed(match[1]) !== "token") continue;
+		if (match.index < from || !REDACTED_QUERY_NAMES.has(queryNameAsParsed(match[1]))) continue;
 		const valueStart = match.index + match[0].length;
 		const valueEnd = url.indexOf("&", valueStart);
 		redacted += `${url.slice(from, valueStart)}[redacted]`;
@@ -96,30 +101,32 @@ function queryNameAsParsed(name: string): string {
 }
 
 // Fastify's own line for an unknown route prints the raw address, outside the
-// request serializer below, so it redacts the token the same way.
-class TokenRedactingLogController extends LogController {
+// request serializer below, so it redacts the same values the same way.
+class SecretRedactingLogController extends LogController {
 	routeNotFound(request: FastifyRequest): void {
 		if (this.isLogDisabled(request)) return;
-		request.log.info(`Route ${request.raw.method}:${redactSignInToken(String(request.raw.url ?? ""))} not found`);
+		request.log.info(`Route ${request.raw.method}:${redactAddressSecrets(String(request.raw.url ?? ""))} not found`);
 	}
 }
 
-// The request serializer mirrors Fastify's default fields but redacts the
-// token query value, so the /auth/session exchange never lands a usable
-// token in dev logs (production logs at warn and skips request lines anyway).
+// The request serializer mirrors Fastify's default fields but redacts those
+// query values, so neither the /auth/session exchange nor a phone's pairing
+// lands a usable value in dev logs (production logs at warn and skips request
+// lines anyway).
 const app = Fastify({
 	// Room ids reach 120 characters; the default of 100 answered 414 for them.
 	maxParamLength: 256,
 	// A request reaching a closing server goes through the stop's door (server-stop.ts), never the framework's bare 503.
 	return503OnClosing: false,
-	logController: new TokenRedactingLogController(),
-	logger: {
+	logController: new SecretRedactingLogController(),
+	// A shared-server entry may give the logger options of its own (server-hooks.ts).
+	logger: (serverHooks().loggerOptions ?? ((base) => base))({
 		level: LOG_LEVEL,
 		serializers: {
 			req(request: any) {
 				return {
 					method: request.method,
-					url: redactSignInToken(String(request.url ?? "")),
+					url: redactAddressSecrets(String(request.url ?? "")),
 					host: request.host,
 					remoteAddress: request.ip,
 					remotePort: request.socket?.remotePort,
@@ -127,9 +134,9 @@ const app = Fastify({
 			},
 			// The websocket plugin logs an upgrade to a route without a socket
 			// handler with its raw address under "path", outside req above.
-			path: (value: unknown) => (typeof value === "string" ? redactSignInToken(value) : value),
+			path: (value: unknown) => (typeof value === "string" ? redactAddressSecrets(value) : value),
 		},
-	},
+	}),
 });
 
 await app.register(websocket);

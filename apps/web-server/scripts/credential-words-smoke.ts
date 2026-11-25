@@ -52,9 +52,9 @@ const backend = http.createServer((req, res) => {
 	});
 });
 await new Promise<void>((resolve) => backend.listen(0, "127.0.0.1", () => resolve()));
-fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: { anthropic: { baseUrl: `http://127.0.0.1:${(backend.address() as { port: number }).port}` } } }));
+const backendUrl = `http://127.0.0.1:${(backend.address() as { port: number }).port}`;
+fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({ providers: { anthropic: { baseUrl: backendUrl }, "anthropic-api-key": { baseUrl: backendUrl } } }));
 const authFile = path.join(agentDir, "auth.json");
-const keySaved = (saved: boolean) => saved ? fs.writeFileSync(authFile, JSON.stringify({ anthropic: { type: "api_key", key: "sk-smoke" } }), { mode: 0o600 }) : fs.rmSync(authFile, { force: true });
 
 try {
 	const { createPersistentAgentFromScaffoldInput } = await import("../src/persistent-agents.js");
@@ -62,8 +62,21 @@ try {
 	const { parseRoomModelPatch, roomModelNames } = await import("../src/ai-models.js");
 	const { createRoomModelCatalog, memoryModelTooSmallSentence, roomModelUnavailableSentence } = await import("../src/room-models.js");
 	const { modelUnreachableSentence, notOnAccountLine } = await import("../src/model-call-causes.js");
-	const { registerServerHooks } = await import("../src/server-hooks.js");
+	const { isSharedServer, registerServerHooks } = await import("../src/server-hooks.js");
 	const { PERSISTENT_AGENT_AI_PROFILE_FILE } = await import("../src/persistent-agent-ai-profile-state.js");
+	const { deleteCustomAiProfile, writeCustomAiProfile, customAiProfileIdForProvider } = await import("../src/custom-ai-profiles.js");
+	// On this computer the key is the built-in Claude row's; a shared server has no such row, so it is the
+	// admin's Claude API key with the models they approved, as Settings, AI setup saves both.
+	const keySaved = (saved: boolean) => {
+		const provider = isSharedServer() ? "anthropic-api-key" : "anthropic";
+		if (!saved) {
+			fs.rmSync(authFile, { force: true });
+			if (isSharedServer()) deleteCustomAiProfile(customAiProfileIdForProvider(provider));
+			return;
+		}
+		fs.writeFileSync(authFile, JSON.stringify({ [provider]: { type: "api_key", key: "sk-smoke" } }), { mode: 0o600 });
+		if (isSharedServer()) writeCustomAiProfile({ providerId: provider, roomModels: ["claude-opus-5-5"], learnModel: "claude-opus-5-5" });
+	};
 	await import("../src/memory-routes.js");
 	const { app, AUTH_HEADER_NAME, AUTH_TOKEN } = await import("../src/server-app.js");
 	app.log.level = "silent";
@@ -163,7 +176,7 @@ try {
 		"16 defaults": "GPT-6.1 Sol isn't available on this server's ChatGPT account. Tell your admin.",
 		"17 too small": "The default, Claude Opus 5.5, is too small for this room's memory. Keep this room's own Memory model, or ask your admin for a larger default.",
 		"12 memory chat failed": "Couldn't answer right now. Try again in a moment; if it repeats, tell your admin.",
-		"13 reopening": "Anthropic / Claude isn't available on this server, so this conversation cannot continue on Claude Opus 5.5. Continue it on another model in Room settings, Model, or tell your admin.",
+		"13 reopening": "Claude API key isn't available on this server, so this conversation cannot continue on Claude Opus 5.5. Continue it on another model in Room settings, Model, or tell your admin.",
 	};
 	// The words the page builds on a shared server, for a member and for the admin, as the word list has them.
 	const PAGE_SHARED = [

@@ -113,8 +113,7 @@ try {
 	assert(provenance.source === "local", "hand-written skill provenance source should be 'local'");
 	assert(provenance.license === null, "hand-written skill provenance license should be null");
 	assert(typeof provenance.importedAt === "string" && !Number.isNaN(Date.parse(provenance.importedAt)), "provenance importedAt should be an ISO timestamp");
-	// The fingerprint is the whole SKILL.md on disk (frontmatter + body), so a
-	// description edit forces re-review just like a body edit (spec §7 must 2).
+	// The record's sha256 is of the whole SKILL.md on disk (frontmatter + body).
 	const createdManifest = fs.readFileSync(path.join(createdSkillDir, "SKILL.md"), "utf-8");
 	assert(provenance.sha256 === sha256(createdManifest), `provenance sha256 should hash the whole SKILL.md, got ${provenance.sha256}`);
 	assert(createdManifest.includes(instructions), "the SKILL.md must contain the submitted instructions");

@@ -6,6 +6,7 @@ import {
 	type PersistentRoomWorkspaceToolSelection,
 	normalizePersistentRoomWorkspaceToolSelectionInput,
 	normalizeStoredPersistentRoomWorkspaceToolSelection,
+	PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES,
 	PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES,
 	persistentRoomFoldedToolSelection,
 	persistentRoomWorkspaceToolNamesForPolicy,
@@ -16,6 +17,8 @@ import { productAppStatePath, productAppStateRoot, stateHome } from "../../../pi
 import { readPersistentRoomBashSettings, storeRunWithoutAskingAsOwn } from "./persistent-room-bash-settings.js";
 import { type PersistentRoomProtection, persistentRoomProtection, persistentRoomProtectionCanRun } from "./persistent-room-protection.js";
 import { serverHooks } from "./server-hooks.js";
+import { roomFilesAreTheFolder } from "./room-files-folder.js";
+import { agentFolderPath } from "./agent-folder.js";
 
 export type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
 /**
@@ -25,7 +28,7 @@ export type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
  * switched them off, so the room never asks for them on a card.
  */
 export type PersistentRoomCommands = "automatic" | "on" | "off" | "switched-off";
-export type PersistentRoomWorkspaceRootSource = "manual" | "query-param" | "runtime-state" | "admin-dev";
+export type PersistentRoomWorkspaceRootSource = "manual" | "query-param" | "runtime-state" | "admin-dev" | "room-files";
 export type PersistentRoomForbiddenRootKind = "repo-root" | "persistent-agents-root" | "persistent-agent-root" | "exxeta-state-root";
 
 export interface PersistentRoomPathHash {
@@ -156,8 +159,8 @@ export interface CreatePersistentRoomCapabilityPolicyInput extends PersistentRoo
 }
 
 export type CreatePersistentRoomDefaultCapabilityPolicyInput = Omit<CreatePersistentRoomCapabilityPolicyInput, "conversationId">;
-export type PersistentRoomCapabilityPolicyResolutionSource = "room-default" | "none";
-export type PersistentRoomEffectiveWorkspacePolicySource = "room-default" | "none";
+export type PersistentRoomCapabilityPolicyResolutionSource = "room-default" | "room-files" | "none";
+export type PersistentRoomEffectiveWorkspacePolicySource = "room-default" | "room-files" | "none";
 
 export interface PersistentRoomCapabilityPolicyResolution {
 	policy: PersistentRoomCapabilityPolicy | null;
@@ -394,13 +397,24 @@ export function defaultPersistentRoomForbiddenRoots(input: {
 			realHomeRoots.push({ kind: "exxeta-state-root", path: profileDir });
 		}
 	}
-	return [
+	const roots: PersistentRoomWorkspaceForbiddenRootInput[] = [
 		{ kind: "repo-root", path: input.repoRoot },
 		{ kind: "exxeta-state-root", path: exxetaStateRoot },
 		...realHomeRoots,
 		{ kind: "persistent-agents-root", path: persistentAgentsRoot },
 		{ kind: "persistent-agent-root", path: persistentAgentRootPath(agentId, persistentAgentsRoot) },
 	];
+	// The agent folder (the sign-in file, the connector settings, the library)
+	// sits in the state tree unless a developer setting moved it out: then it is
+	// forbidden as the tree is, with the same sentence.
+	// Judged by where it really is: a setting may name a link in the tree that leads out of it.
+	const agentFolder = canonicalAbsolutePath(agentFolderPath());
+	const agentReal = existingRealpath(agentFolder) ?? agentFolder;
+	const inListed = roots.some((root) => {
+		const listed = canonicalAbsolutePath(root.path);
+		return [listed, existingRealpath(listed) ?? listed].some((place) => sameOrDescendant(agentReal, place));
+	});
+	return inListed ? roots : [...roots, { kind: "exxeta-state-root", path: agentFolder }];
 }
 
 export function persistentRoomDeniedRootViews(input: PersistentRoomWorkspaceValidationContext): PersistentRoomDeniedRootView[] {
@@ -643,6 +657,7 @@ function commandsStartOnPath(agentId: string, options: PersistentRoomWorkspacePo
  * chosen with the switch untouched: a new room's start-on default, or how Clear
  * kept them. Never where that folder will only
  * read: protected, its commands only read too, and elsewhere they don't run.
+ * Never on a shared server either, where Run without asking reads as none.
  */
 export function persistentRoomCommandsStartOn(agentId: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): boolean {
 	if (readPersistentRoomDefaultCapabilityPolicy(agentId, options) !== null) return false;
@@ -816,8 +831,41 @@ export function deletePersistentRoomDefaultCapabilityPolicy(agentIdRaw: string, 
 	return { deleted: true };
 }
 
-/** Every conversation of a room runs on the room's own settings. */
+
+const ROOM_FILES_SINCE = new Date(0).toISOString();
+
+/**
+ * A room's own files as its folder, built from the room at each read and never
+ * stored: the six file tools, no commands, nothing else open. The fence never
+ * reads this root: it finds the room's files from the room (room-files.ts,
+ * roomFilesFence); the root here names them for the views and the fingerprint.
+ * `files` is the shelf's folder (persistent-room-shelf.ts, PERSISTENT_ROOM_SHELF_DIR_NAME).
+ */
+function roomFilesPolicy(agentId: string, options: PersistentRoomWorkspacePolicyStorageOptions): PersistentRoomCapabilityPolicy {
+	const files = path.join(persistentAgentRootPath(agentId, options.persistentAgentsRoot), "files");
+	const allowedToolNames = [...PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES];
+	return {
+		schemaVersion: 1,
+		policyId: "room-files",
+		agentId,
+		conversationId: PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID,
+		workspaceAccessMode: "localFiles",
+		roots: [{ id: "room-files", displayLabel: "Attachments", path: files, realpath: files, basename: "files", pathHash: hashPersistentRoomPath(files), source: "room-files", grantedAt: ROOM_FILES_SINCE }],
+		modes: { read: true, write: true },
+		allowedToolNames,
+		toolSelection: { kind: "standard" },
+		...withCommands("off"),
+		deniedRoots: [],
+		denySegments: [],
+		denyFilenameGlobs: [],
+		createdAt: ROOM_FILES_SINCE,
+		updatedAt: ROOM_FILES_SINCE,
+	};
+}
+
+/** Every conversation of a room runs on the room's own settings; on a server that says so, on the room's own files instead. */
 export function resolvePersistentRoomCapabilityPolicy(agentIdRaw: string, _conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicyResolution {
+	if (roomFilesAreTheFolder()) return { policy: roomFilesPolicy(safePolicyFileId(agentIdRaw, "agent id"), options), source: "room-files" };
 	const defaultPolicy = readPersistentRoomDefaultCapabilityPolicy(agentIdRaw, options);
 	if (defaultPolicy) return { policy: defaultPolicy, source: "room-default" };
 	return { policy: null, source: "none" };
@@ -1114,7 +1162,9 @@ function effectiveWorkspacePolicyFromResolution(input: {
 	const workspaceAccessMode = input.policy?.workspaceAccessMode ?? PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE;
 	const allowedToolNames = input.policy ? persistentRoomWorkspaceToolNamesForPolicy(input.policy) : [];
 	const policyBashEnabled = input.policy ? persistentRoomPolicyCommandsRun(input.policy) : false;
-	const workspaceToolsEnabled = Boolean(input.policy && (allowedToolNames.length > 0 || policyBashEnabled) && input.policy.modes.read === true && workspacePolicyRootCurrentlyUsable(input.policy));
+	// A room's own files are made at the first call that needs them, so a room with no upload yet has its tools too.
+	const rootUsable = (policy: PersistentRoomCapabilityPolicy) => input.source === "room-files" || workspacePolicyRootCurrentlyUsable(policy);
+	const workspaceToolsEnabled = Boolean(input.policy && (allowedToolNames.length > 0 || policyBashEnabled) && input.policy.modes.read === true && rootUsable(input.policy));
 	const effectiveAllowedToolNames = workspaceToolsEnabled ? allowedToolNames : [];
 	const effectiveBashEnabled = workspaceToolsEnabled ? policyBashEnabled : false;
 	const fingerprint = fingerprintEffectiveWorkspacePolicy({
@@ -1174,7 +1224,8 @@ export function persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectivePol
 	// a room without a usable grant falls back (bounded tools never consult the
 	// cwd, but the session claiming to run from the repo root was a lie).
 	const root = effectivePolicy?.policy?.roots[0];
-	if (!root) return fallback;
+	// A room's own files hold only what people and the room put there: the session's own settings never come from them.
+	if (!root || effectivePolicy?.source === "room-files") return fallback;
 	const rootRealpath = existingRealpath(root.realpath) ?? existingRealpath(root.path);
 	if (!rootRealpath) return fallback;
 	try {

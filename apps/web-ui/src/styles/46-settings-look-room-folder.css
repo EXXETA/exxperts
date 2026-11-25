@@ -1,0 +1,374 @@
+/* The settings windows' new look, for a room's Folder, Scheduled tasks,
+   Conversation and Archive or delete pages. Every rule starts with the
+   switch's class (settings-look.ts), as in 44-settings-look.css, so with the
+   switch off nothing here applies. A rule that names a family button sets
+   only where it sits: how a button looks is 01-base.css's alone. */
+
+/* A long folder's name in a line or a refusal of the list breaks rather than run past the page. */
+.settings-dialog.settings-look-next .also-allowed > :is(.also-allowed-line, .also-allowed-failed) {
+	overflow-wrap: anywhere;
+}
+/* Folder: under Location, the folder's name. */
+.settings-dialog.settings-look-next .workspace-folder-name {
+	display: block;
+	color: var(--fg);
+}
+/* Also allowed: rows of 64, a 32 px tile, the access words muted, and the
+   cross's middle on the switches' middle above it (half of 36). */
+.settings-dialog.settings-look-next .also-allowed-row {
+	grid-template-columns: 32px minmax(0, 1fr) auto;
+	column-gap: 12px;
+	min-height: 64px;
+	box-sizing: border-box;
+}
+.settings-dialog.settings-look-next .also-allowed-icon {
+	width: 32px;
+	height: 32px;
+	background: var(--exx-nav-hover);
+}
+.settings-dialog.settings-look-next .also-allowed-access {
+	color: var(--muted);
+}
+.settings-dialog.settings-look-next .also-allowed-cross {
+	margin-right: 4px;
+}
+/* A folder's name in the line of the row that went. */
+.settings-dialog.settings-look-next .also-allowed-removed .settings-row-sub {
+	overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .also-allowed-cross {
+		margin-right: 0;
+	}
+	/* Location's buttons, under its words here, 12 below them; the cross at the
+	   card's edge, as an allowed folder's is. */
+	.settings-dialog.settings-look-next .folder-pane-location > .also-allowed-actions {
+		justify-content: space-between;
+		margin-top: 12px;
+	}
+}
+
+/* Scheduled tasks: a card of tasks. Each row: the name with its state (a dot
+   and plain words) and the Enabled switch at the right padding, then the
+   schedule in words and the other lines in the muted secondary size. */
+.settings-dialog.settings-look-next .room-schedules-summary {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .room-schedules-job {
+	gap: 2px;
+	padding: 12px 0;
+}
+.settings-dialog.settings-look-next .room-schedules-job-head {
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+.settings-dialog.settings-look-next .room-schedules-job-head strong {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next .room-schedules-record-state {
+	flex: none;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+}
+/* The switch is a checkbox: no browser margin, so it ends on the padding. */
+.settings-dialog.settings-look-next .room-schedules-enabled {
+	flex: none;
+	margin: 0 0 0 12px;
+}
+.settings-dialog.settings-look-next :is(.room-schedules-when-summary, .room-schedules-job-meta, .room-schedules-prompt) {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next :is(.room-schedules-when-summary, .room-schedules-prompt) span {
+	color: var(--muted);
+	font-weight: 500;
+}
+.settings-dialog.settings-look-next .room-schedules-job-meta code {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	line-height: 18px;
+}
+/* A reason is soft text, so it stands out from the muted lines around it. */
+.settings-dialog.settings-look-next :is(.room-schedules-row-reason, .room-schedules-run-reason) {
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .room-schedules-job-actions {
+	margin-top: 6px;
+}
+/* Edit and Delete are both boxes, so the row starts on the text edge, not
+   pulled out as bare words are (23-room-settings.css). */
+.settings-dialog.settings-look-next .room-schedules-job > .room-schedules-job-actions {
+	margin-left: 0;
+}
+/* Delete's question in the row: a quiet tile, no red edge. */
+.settings-dialog.settings-look-next .room-schedules-delete-confirm {
+	margin-top: 6px;
+	padding: 8px 12px;
+	border: 0;
+	border-radius: 8px;
+	background: var(--exx-nav-hover);
+}
+.settings-dialog.settings-look-next .room-schedules-delete-confirm p {
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .room-schedules-completed-toggle {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .room-schedules-completed-toggle:hover {
+		color: var(--fg);
+	}
+}
+/* Recent runs: a section title, then one-line rows of 48: the dot, the task's
+   name, the state in words after it (so the names keep one edge whatever the
+   state), and the time ending on the row's edge. The state and the time keep
+   their whole width; a long name gives way. */
+.settings-dialog.settings-look-next .room-schedules-history {
+	gap: 8px;
+	margin-top: 0;
+	padding-top: 20px;
+}
+.settings-dialog.settings-look-next .room-schedules-history-head span {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+}
+.settings-dialog.settings-look-next .room-schedules-run {
+	gap: 2px;
+	padding: 14px 0;
+}
+.settings-dialog.settings-look-next .room-schedules-run-primary {
+	display: grid;
+	grid-template-columns: 12px minmax(0, max-content) max-content minmax(max-content, 1fr);
+	align-items: baseline;
+	gap: 0 6px;
+}
+.settings-dialog.settings-look-next .room-schedules-run-dot {
+	align-self: center;
+}
+.settings-dialog.settings-look-next .room-schedules-run-primary > strong {
+	grid-area: 1 / 2;
+}
+.settings-dialog.settings-look-next .room-schedules-run-primary > .room-schedules-run-status {
+	grid-area: 1 / 3;
+}
+.settings-dialog.settings-look-next .room-schedules-run-status {
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 400;
+}
+.settings-dialog.settings-look-next .room-schedules-run-primary strong {
+	min-width: 0;
+	overflow: hidden;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .room-schedules-run-primary > span:last-child {
+	grid-area: 1 / 4;
+	justify-self: end;
+	margin-left: 6px;
+	overflow: hidden;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 18px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.settings-dialog.settings-look-next .room-schedules-run-reason {
+	padding-left: 18px;
+}
+@media (max-width: 760px) {
+	/* The time takes the row's second line, under the words. */
+	.settings-dialog.settings-look-next .room-schedules-run-primary {
+		grid-template-columns: 12px minmax(0, max-content) minmax(max-content, 1fr);
+	}
+	.settings-dialog.settings-look-next .room-schedules-run-primary > span:last-child {
+		grid-area: 2 / 2 / 3 / -1;
+		justify-self: start;
+		margin: 2px 0 0;
+	}
+}
+
+/* The status dot: 8 px in a 12 px slot, 6 px before its words. Green works,
+   amber is on its way or needs a look, red failed, grey nothing to report,
+   and a ring for a task that is off. */
+.settings-dialog.settings-look-next :is(.room-schedules-state-dot, .room-schedules-run-dot) {
+	flex: none;
+	box-sizing: border-box;
+	width: 8px;
+	height: 8px;
+	margin: 0 2px;
+	border-radius: 50%;
+	background: var(--muted);
+}
+.settings-dialog.settings-look-next .room-schedules-state-dot {
+	margin-right: 0;
+}
+.settings-dialog.settings-look-next :is(.room-schedules-state-dot.success, .room-schedules-run-dot.status-succeeded) {
+	background: var(--success);
+}
+.settings-dialog.settings-look-next :is(.room-schedules-state-dot.warning, .room-schedules-run-dot:is(.status-queued, .status-running)) {
+	background: var(--warning);
+}
+.settings-dialog.settings-look-next :is(.room-schedules-state-dot.danger, .room-schedules-run-dot:is(.status-failed, .status-blocked)) {
+	background: var(--error-text);
+}
+.settings-dialog.settings-look-next .room-schedules-state-dot.disabled {
+	border: 1.5px solid var(--muted);
+	background: none;
+}
+
+/* The day choice in the task's form: a track of day segments, the chosen
+   days lighter, white in light, with the small shadow, as the segmented
+   choice. */
+.settings-dialog.settings-look-next .room-schedules-day-row {
+	gap: 0;
+	width: fit-content;
+	max-width: 100%;
+	padding: 2px;
+	border-radius: 8px;
+	background: var(--exx-quiet-fill);
+}
+.settings-dialog.settings-look-next .room-schedules-day-chip {
+	min-width: 44px;
+	height: 28px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	color: var(--exx-segment-words);
+	font-size: 13px;
+	line-height: 20px;
+	font-weight: 500;
+	transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1), color 100ms ease;
+}
+@media (hover: hover) {
+	.settings-dialog.settings-look-next .room-schedules-day-chip:hover:not(:disabled, .active) {
+		border: 0;
+		color: var(--exx-segment-words-hover);
+	}
+}
+.settings-dialog.settings-look-next .room-schedules-day-chip:active:not(:disabled, .active) {
+	background: var(--exx-quiet-fill);
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .room-schedules-day-row .room-schedules-day-chip.active {
+	background: var(--exx-segment-chosen);
+	box-shadow: var(--exx-shadow-small);
+	color: var(--fg);
+}
+.settings-dialog.settings-look-next .room-schedules-day-chip:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 0;
+}
+.settings-dialog.settings-look-next .room-schedules-day-chip:disabled {
+	opacity: 0.45;
+}
+/* When a task runs: a row's words keep a width they read at, and a control
+   that leaves less goes on a line of its own under them, inside the card: One
+   time's three controls at every width, the other rows' one on a phone. */
+.settings-dialog.settings-look-next .room-schedules-form .settings-row:has(> .settings-row-value) {
+	flex-wrap: wrap;
+	row-gap: 10px;
+}
+.settings-dialog.settings-look-next .room-schedules-form .settings-row:has(> .settings-row-value) > .settings-row-main {
+	flex: 1 1 150px;
+}
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row:has(> .settings-row-main) {
+		flex-wrap: wrap;
+		row-gap: 10px;
+	}
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row > .settings-row-main {
+		flex: 1 1 150px;
+	}
+	/* One time: the words the row's width, then In or At, then its two fields side by side where they fit. */
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row > .settings-row-value {
+		flex: 1 0 100%;
+		flex-wrap: wrap;
+	}
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row-value > .settings-segments {
+		flex: 1 0 100%;
+	}
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row-value > :is(input, select) {
+		flex: 1 1 130px;
+		min-width: 0;
+	}
+	/* Under its words a field takes the row's width, as a choice does. */
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row > .room-schedules-expression-input {
+		flex: 1 1 220px;
+	}
+	/* The four ways to repeat fit also in an edit's card; where there is room each has its share of it as before. */
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row > .settings-segments > .settings-segment {
+		padding-inline: 2px;
+	}
+	.settings-dialog.settings-look-next .room-schedules-form .settings-row:has(> .room-schedules-day-row) {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 10px;
+	}
+	.settings-dialog.settings-look-next .room-schedules-day-row {
+		width: auto;
+	}
+	.settings-dialog.settings-look-next .room-schedules-day-chip {
+		flex: 1 1 0;
+		min-width: 0;
+		height: 40px;
+		padding: 0;
+	}
+}
+
+/* Conversation and Archive or delete: a soft red button sits on the card's
+   padding, like the boxed buttons beside it, not pulled past it as red words
+   are: at the row's end (23-room-settings.css), and on a phone at the start
+   of its own line (36-settings-dialog.css). */
+.settings-dialog.settings-look-next .settings-row > .rs-btn-danger-soft {
+	margin-right: 0;
+	margin-left: 0;
+}
+/* Archive or delete: the list's two rows are two cards, 12 apart (the page's
+   own gap): what can be undone, then what cannot. */
+.settings-dialog.settings-look-next .room-danger-zone > .settings-rows {
+	display: contents;
+}
+.settings-dialog.settings-look-next .room-danger-zone > .settings-rows > .settings-row {
+	padding: 12px 16px;
+	border: 1px solid var(--exx-border-card);
+	border-radius: 12px;
+	background: var(--settings-box-fill);
+}
+/* On a phone both cards take one shape: the button under its words, on their
+   edge, as a red button's row already drops (36-settings-dialog.css). */
+@media (max-width: 760px) {
+	.settings-dialog.settings-look-next .room-danger-zone > .settings-rows > .settings-row {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 12px;
+	}
+}

@@ -26,7 +26,9 @@ import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_
 //   3. a page that leaves, or Stop, while the runtime shortens a conversation
 //      that overflowed leaves it free: the next message is answered, not
 //      refused as still running, and the shortening stops without asking the
-//      model again or showing a failure.
+//      model again or showing a failure;
+//   4. Stop while the runtime shortens a full conversation before it asks the
+//      model ends the turn: the model is not asked, and no failure shows.
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-auto-compaction-failure-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -88,8 +90,8 @@ const gateway = http.createServer((req, res) => {
 		const messages: any[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
 		// The summarization request wraps the transcript in <conversation> tags.
 		const isSummary = messages.some((message) => message?.role === "user" && messageText(message).includes("<conversation>"));
+		if (isSummary && holdNextSummary) { holdNextSummary = false; heldSummaries.push(res); return; }
 		if (overflowMode) {
-			if (isSummary && holdNextSummary) { holdNextSummary = false; heldSummaries.push(res); return; }
 			if (!isSummary) overflowChats += 1;
 			if (messageText([...messages].reverse().find((message) => message?.role === "user" && !messageText(message).startsWith(ROOM_STATE_HEADING))).includes("OVERFLOW")) {
 				res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "This model's maximum context length is 64000 tokens. Please reduce the length of the messages.", type: "invalid_request_error", code: "context_length_exceeded" } }));
@@ -329,6 +331,33 @@ try {
 	assert(!ws.frames.some((frame) => frame.type === "error"), `a failed compaction must not fail the turn, saw ${JSON.stringify(ws.frames.filter((frame) => frame.type === "error"))}`);
 	assert(ws.frames.filter((frame) => frame.type === "ui_request" && frame.kind === "notify" && frame.level === "error").length === 1, "one attempt, one notice");
 	pass("the client receives one red notice line after the turn, and no error frame");
+
+	// --- 4. Stop while the runtime shortens a full conversation before it asks: the failed shortening above left it full --
+	{
+		const from = ws.frames.length;
+		const asked = chatCalls;
+		holdNextSummary = true;
+		ws.send({ type: "prompt", text: "And what else?" });
+		for (const deadline = Date.now() + 15_000; heldSummaries.length === 0;) {
+			assert(Date.now() < deadline, "the runtime should shorten before it asks the model");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		ws.send({ type: "abort" });
+		for (const deadline = Date.now() + 15_000; (await requestJson(`/api/persistent-agents/${roomId}/status`)).body?.activeThread?.inFlight !== false;) {
+			assert(Date.now() < deadline, "Stop before the model was asked should end the turn");
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		answerHeldSummary();
+		await new Promise((resolve) => setTimeout(resolve, 1200));
+		assert(chatCalls === asked, `after Stop the model is not asked, got ${chatCalls - asked} chat requests`);
+		const said = ws.frames.slice(from).filter((frame) => (frame.type === "ui_request" && frame.kind === "notify" && frame.level === "error") || frame.type === "error");
+		assert(said.length === 0, `Stop before the model was asked shows no failure, got ${JSON.stringify(said)}`);
+		const next = ws.frames.length;
+		ws.send({ type: "prompt", text: "Say something short." });
+		const outcome = await ws.waitFor((row) => row.type === "error" || (row.type === "event" && row.event?.type === "agent_end"), "the answer after that Stop", next);
+		assert(JSON.stringify(ws.frames[outcome].event?.messages ?? []).includes("Short answer."), `the next message is answered, got ${JSON.stringify(ws.frames[outcome])}`);
+		pass("Stop while the runtime shortens before it asks ends the turn, and the model is not asked");
+	}
 
 	// --- 3. Leaving or Stop while the runtime shortens an overflowing conversation frees it, and the shortening stops quietly --
 	ws.close();

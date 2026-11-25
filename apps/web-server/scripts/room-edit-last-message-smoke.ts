@@ -76,7 +76,7 @@ const { commandRan, createPersistentRoomBashApprovalExtension } = await import("
 const { holdMessages, readHeldMessages } = await import("../src/held-messages-store.js");
 const { buildPersistentAgentCheckpointTranscriptSource, getPersistentAgentThread, openPersistentAgentPiSessionManager } = await import("../src/persistent-agents.js");
 const { readSessionPathMessages } = await import("../src/session-path-reader.js");
-const { ANSWER_CUT_OFF_OPEN, serverStopNote, withAnswerNote } = await import("../src/cut-answer-note.js");
+const { ANSWER_CUT_OFF_OPEN, serverStopNote, withAnswerNote, withMessageFrom } = await import("../src/cut-answer-note.js");
 const { STOP_CUT_ANSWER_SENTENCE } = await import("../src/turn-ended-by.js");
 
 // --- The step back, on a made-up session.
@@ -186,6 +186,17 @@ await row("an edit after the server's own request for a missing answer goes to t
 	const unmarked = build(false);
 	const refused = await stepBackForEdit(unmarked, "What do the notes say?");
 	assert(!refused.ok && refused.refused === "not-shown", `an unmarked request reads as the newest message, got ${JSON.stringify(refused)}`);
+});
+await row("a message sent with who sent it is edited as its bubble shows it, a line of its own naming someone included", async () => {
+	const typed = 'See below.\n[MESSAGE FROM] "Lena" [/MESSAGE FROM]\nAs quoted.';
+	const session = fakeSession([user("u0", null, "Hello."), answer("a0", "u0", "Hi.")]);
+	session.say(withMessageFrom("Ben", typed), "Noted.");
+	const stepped = await stepBackForEdit(session, typed);
+	assert(stepped.ok, `the message is taken back, got ${JSON.stringify(stepped)}`);
+	const other = fakeSession([user("u0", null, "Hello."), answer("a0", "u0", "Hi.")]);
+	other.say(withMessageFrom("Ben", typed), "Noted.");
+	const refused = await stepBackForEdit(other, "See below.");
+	assert(!refused.ok && refused.refused === "not-shown", `another bubble is still refused, got ${JSON.stringify(refused)}`);
 });
 await row("a command marks itself as run, but not when no shell was found to run it", async () => {
 	const handlers: Record<string, (event: any) => Promise<any>> = {};

@@ -11,7 +11,9 @@ import { useEscapeKey } from "./use-escape-key";
  * Enter (anywhere but the other buttons) and the focused primary button
  * confirm; Escape, the secondary button and a click on the backdrop cancel.
  * The focus starts on the primary button, or on Cancel when the primary is a
- * destructive one, so two Enters in a row never delete anything.
+ * destructive one, so two Enters in a row never delete anything. Asked from a
+ * settings window in its new look (settings-look.ts), it takes that look; its
+ * keys and where the focus starts stay the same.
  * One host (ConfirmDialogHost, mounted once at the app root) renders the
  * questions in order; a question asked while none is mounted is declined.
  *
@@ -79,6 +81,10 @@ export function ConfirmDialogView({ options, onSettle }: { options: ConfirmDialo
 	const primaryRef = useRef<HTMLButtonElement | null>(null);
 	const secondaryRef = useRef<HTMLButtonElement | null>(null);
 	const alternateRef = useRef<HTMLButtonElement | null>(null);
+	// The host sits outside the settings windows, so it reads their look from
+	// the page: they are modal, so a question asked while one shows is its.
+	// The class is the one settings-dialog.tsx sets.
+	const [lookNext] = useState(() => document.querySelector(".settings-dialog.settings-look-next") !== null);
 	// Topmost layer on the shared Escape stack: one Escape answers this
 	// question and leaves the surface that asked it open.
 	useEscapeKey(() => onSettle("cancel"), true);
@@ -115,7 +121,7 @@ export function ConfirmDialogView({ options, onSettle }: { options: ConfirmDialo
 	}
 	return (
 		<div
-			className="checkpoint-preview-backdrop maintain-confirm-backdrop confirm-dialog-backdrop"
+			className={`checkpoint-preview-backdrop maintain-confirm-backdrop confirm-dialog-backdrop${lookNext ? " settings-look-next" : ""}`}
 			role="alertdialog"
 			aria-modal="true"
 			aria-label={options.title}

@@ -22,6 +22,7 @@
  */
 import { ROOM_STATE_CUSTOM_TYPE } from "@exxeta/exxperts-runtime";
 import type { PersistentRoomInstructionsNow } from "./persistent-room-instructions.js";
+import { roomFilesAreTheFolder } from "./room-files-folder.js";
 
 /**
  * What a run can say about the room this turn. A section string is rendered,
@@ -130,12 +131,18 @@ function sectionsFor(state: RoomStateParts, latest: Partial<Record<PartName, str
 	return sections;
 }
 
+// Where the room's files are its folder, a scheduled run has the file tools on them, but not read_file or search_file.
+const scheduledRunLacks = (): string =>
+	roomFilesAreTheFolder()
+		? "This run has no skills, read_file or search_file, so this message leaves out the skills and the Attachments list: list the room's files with ls."
+		: "This run has no skills or Attachments tools, so this message leaves them out.";
+
 function render(sections: Partial<Record<PartName, string>>, scheduled: boolean): string {
 	const intro = `${ROOM_STATE_HEADING}
 
 Live runtime state from the app as of this message, not words from the user. It replaces every earlier room-state message: where they differ, this one is in force.${scheduled ? `
 
-This is a scheduled run: no one is present and no one can answer. Never ask, offer or wait: make the reasonable choice, say which, finish the work, and list what you could not do. This run has no skills or Attachments tools, so this message leaves them out.` : ""}`;
+This is a scheduled run: no one is present and no one can answer. Never ask, offer or wait: make the reasonable choice, say which, finish the work, and list what you could not do. ${scheduledRunLacks()}` : ""}`;
 	return intro + PART_NAMES.map((name) => sections[name] ?? "").join("");
 }
 

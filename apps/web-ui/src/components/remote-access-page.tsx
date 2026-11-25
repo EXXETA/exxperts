@@ -23,6 +23,7 @@ import {
 import { fetchRemoteClientContext, useRemoteClientContext } from "../remote-client-context";
 import { shownRoomName } from "../../../web-server/src/room-name";
 import { GroupHeader } from "./pane-header";
+import { useSettingsLookNext } from "../settings-look";
 
 /**
  * Remote access, managed where the other app-level choices live instead of a
@@ -159,6 +160,8 @@ function CopyUrlButton({ text }: { text: string }) {
 
 export function RemoteAccessPage() {
 	const remoteClient = useRemoteClientContext();
+	// In the new look, getting the tunnel is the step this page waits for, so it is the page's main button.
+	const lookNext = useSettingsLookNext();
 	const [status, setStatus] = useState<RemoteAccessStatus | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -471,7 +474,7 @@ export function RemoteAccessPage() {
 								: "Not found yet. Install Tailscale here and on your phone, signed in to the same account; this screen notices it by itself, and any other compatible tunnel too."}
 						</span>
 					</div>
-					{!tunnelReady && <a className="rs-btn" href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Get Tailscale</a>}
+					{!tunnelReady && <a className={lookNext ? "rs-btn rs-btn-sm" : "rs-btn"} href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Get Tailscale</a>}
 				</div>
 				{on && (
 					<label className="settings-row">

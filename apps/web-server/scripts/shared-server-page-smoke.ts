@@ -30,19 +30,38 @@
 // field, and the field on a 401, a 500 or a 503, end nothing (rows X1 to X6,
 // X3a, X3b).
 // The Wallet's
-// address shows one sentence there and never reads usage, even before the
-// probe answers or when it fails; on this computer the Wallet waits for an
-// answer, then reads.
+// address shows the person's own usage there and, for the admin, the
+// company's totals below it, never the Wallet's read, and reads nothing
+// before the probe answers or when it fails; it asks once per showing, never
+// on a timer, a failed read says so, and a refused company read takes that part
+// away; on this computer the Wallet waits for an answer, then reads.
 // The probe is intercepted in the page, so one ordinary server serves both.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type BrowserContext, type Page, type Route, type WebSocketRoute } from "playwright";
+import JSZip from "jszip";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page, type Route, type WebSocketRoute } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, waitForServer } from "./smoke-server-process.js";
 import { closeBrowser, closeContext } from "./smoke-close-context.js";
 import { CAN_CHANGE_FILES, CHANGE_FOLDER, COMMANDS, STOP_USING_FOLDER } from "../src/room-box/card-text.js";
+import {
+	COMPANY_USAGE_CSV_HOVER,
+	COMPANY_USAGE_LINE,
+	COMPANY_USAGE_EMPTY,
+	COMPANY_USAGE_TITLE,
+	SHARED_USAGE_FOOTER,
+	SHARED_USAGE_HEADING,
+	SHARED_USAGE_LINE,
+	SHARED_USAGE_MODELS_HINT,
+	SHARED_USAGE_NAV,
+	SHARED_USAGE_NAV_HOVER,
+	SHARED_USAGE_ROOMS_HINT,
+	SHARED_USAGE_UNAVAILABLE_ROOM,
+	SHARED_USAGE_UNREADABLE,
+} from "../../web-ui/src/usage-words.js";
+import { ADD_SKILL_WAYS, ADD_TO_LIBRARY, BROWSE_FEATURED_LINK, SKILL_FILES_LINES, skillScriptsCount } from "../../web-ui/src/skill-source-copy.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-shared-server-page-"));
 process.env.HOME = tempHome;
@@ -76,6 +95,32 @@ const SIGN_OUT_REFUSED = { error: "exxperts could not sign you out on your other
 // The edge's answer to every request of a session a stored sign-out ends.
 const SESSION_SIGNED_OUT = { error: "You were signed out.", code: "session_signed_out" };
 const ADMIN_HINT = "Just made an admin? Sign out and in again to get the admin's controls.";
+// The admin's AI setup on a shared server: the one confirmation before a removal, the key-only one, and the empty list's lines.
+const REMOVE_LINE = (name: string) => `Remove ${name}? Its models leave everyone's list, and a room using one stops answering until someone there picks another model. Conversations are kept.`;
+const REMOVE_KEY_ONLY_LINE = (name: string) => `Remove ${name}? No models from this key are approved, so no room is affected.`;
+const DESKTOP_REMOVE_LINE = (name: string) => `Remove ${name}? This signs out and deletes its models.`;
+const NO_PROVIDERS = { admin: "No models yet. Add an API key or a gateway with Add provider.", member: "No models yet. Ask your admin to add one." };
+const STILL_LOADING = "Profile status is still loading.";
+// Both gateway forms on a shared server, and the question before a saved gateway's new address.
+const GATEWAY_LINE = "Changes here reach every room that uses this gateway, from its next answer.";
+const NEW_ADDRESS_LINE = "Use the new address? Every room on this gateway sends its next answer there.";
+// Where a provider's models run, as everyone reads it beside its models, and the admin's field for it.
+const RUNS_IN_LABEL = {
+	eu: { short: "EU", line: "Your admin says this model runs in the EU." },
+	"outside-eu": { short: "Outside EU", line: "Your admin says this model runs outside the EU." },
+	unknown: { short: "Location unknown", line: "Your admin hasn't said where this model runs." },
+} as const;
+// Above a member's model list, for the eye: whose statement the labels are.
+const RUNS_IN_LIST_LINE = "Your admin states where each model runs.";
+const RUNS_IN_HEADING = "Where its models run";
+const RUNS_IN_HELP = "Shown to everyone beside these models, as your statement.";
+const RUNS_IN_SET_BY_INSTALL = "Your organisation's install sets this.";
+// A shared server's sign-in status: no provider, to anyone.
+const SHARED_AUTH_STATUS = { anyConfigured: false, authDir: "", providers: [] };
+// A note on a skill's files the Skills page no longer shows, here or on a shared server.
+const SKILL_FILES_NOTE = "A skill's files run only in rooms where you allow them, and only as they were when you did.";
+const DESKTOP_INSTRUCTIONS_HEAD = "Standing guidance for every room that has not switched them off: how to answer, what to prefer, what to avoid. Changes apply from the next message.";
+const COMPANY_INSTRUCTIONS_HEAD = "Standing guidance for every room in your company that has not switched them off: how to answer, what to prefer, what to avoid. Changes apply from the next message.";
 const PILL_SHARED = "This room lost its connection. It keeps trying by itself.";
 const PILL_DESKTOP_FAILED = "This room lost its connection. Use Reconnect to try again, or restart the app if it keeps happening.";
 const RECONNECT_SHARED = "Try again now. If it keeps failing, reload the page or tell your admin.";
@@ -129,9 +174,70 @@ const MEMBER: Person = { id: "11111111-1111-4111-8111-111111111111", name: "<i>S
 const ADMIN: Person = { id: "22222222-2222-4222-8222-222222222222", name: "Sample Admin", admin: true };
 const OTHER: Person = { id: "33333333-3333-4333-8333-333333333333", name: "Sample Other", admin: false };
 const ORDER_NOT_LOADED = "The saved order could not be loaded";
-const WALLET_HELD_BACK = "The Wallet isn't available on this server yet.";
 const walletLine = async (page: Page) => (await page.locator(".dashboard-page .landing-hero p").innerText()).trim();
 const USAGE_READ = "GET /api/usage";
+// Stand-ins for a shared server's two usage answers (the server's own are its hosted smoke's). A room of the
+// person's with no name (gone, or its record unreadable) must never show its id.
+const GONE_ROOM_ID = "gone-room-1a2b3c4d";
+const OWN_USAGE = {
+	range: "all",
+	model: "all",
+	models: [{ id: "model one", label: "Model One", turns: 3, rawIds: 1 }],
+	agent: "all",
+	agentNames: { "alpha-room": "Alpha Room" },
+	totals: { input: 1000, output: 200, cacheRead: 3000, cacheWrite: 0, turns: 3, activeDays: 2 },
+	previous: null,
+	byAgent: [
+		{ agent: "alpha-room", retired: false, turns: 2, tokens: 3000, kinds: {} },
+		{ agent: GONE_ROOM_ID, retired: true, turns: 1, tokens: 1200, kinds: { upkeep: { turns: 1 } } },
+	],
+	byModel: [{ id: "model one", label: "Model One", rawIds: 1, turns: 3, tokens: 4200 }],
+	series: { kind: "daily", buckets: [{ label: "Nov 18", ts: 0, turns: 1, tokens: 1200 }, { label: "Nov 19", ts: 1, turns: 2, tokens: 3000 }] },
+	weekHour: Array.from({ length: 7 }, (_, day) => Array.from({ length: 24 }, (_, hour) => (day === 2 && hour === 10 ? 3 : 0))),
+	recent: {
+		rows: [
+			{ ts: Date.now() - 60_000, agent: "alpha-room", model: "model-one", modelName: "Model One", kind: "chat", input: 500, output: 100, cacheRead: 1500, cacheWrite: 0 },
+			{ ts: Date.now() - 120_000, agent: GONE_ROOM_ID, model: "model-one", modelName: "Model One", kind: "upkeep", input: 500, output: 100, cacheRead: 1500, cacheWrite: 0 },
+		],
+		total: 3,
+	},
+};
+const COMPANY_USAGE = {
+	range: "all",
+	model: "all",
+	models: [{ id: "model one", label: "Model One", turns: 7, rawIds: 1 }],
+	totals: { input: 4000, output: 900, cacheRead: 6000, cacheWrite: 0, turns: 7, activeDays: 2 },
+	byModel: [{ id: "model one", label: "Model One", rawIds: 1, turns: 7, tokens: 10900 }],
+	series: { kind: "daily", buckets: [{ label: "Nov 17", ts: 0, turns: 3, tokens: 4000 }, { label: "Nov 18", ts: 1, turns: 4, tokens: 6900 }] },
+};
+/** An organisation with no finished day of usage yet. */
+const COMPANY_USAGE_NONE = {
+	...COMPANY_USAGE,
+	models: [],
+	totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0, activeDays: 0 },
+	byModel: [],
+	series: { kind: "daily", buckets: [] },
+};
+/** An organisation whose only rows name no model: they count in the turns, never in the models. */
+const COMPANY_USAGE_NO_MODEL = { ...COMPANY_USAGE_NONE, totals: { ...COMPANY_USAGE_NONE.totals, input: 300, output: 200, turns: 5, activeDays: 1 } };
+/** How the stand-in usage reads answer, and how often each was asked. */
+/** The company read answers each range with its own body, or one body for every range. */
+type UsageStandIn = { mine: number; company: number; mineStatus: number; companyStatus: number; companyAnswer: object | ((range: string) => object) };
+async function standInUsage(context: BrowserContext, usage: UsageStandIn): Promise<void> {
+	await context.route((url) => url.pathname === "/api/usage/mine", (route) => {
+		usage.mine += 1;
+		return route.fulfill({ status: usage.mineStatus, contentType: "application/json", body: JSON.stringify(usage.mineStatus === 200 ? OWN_USAGE : { code: "usage_unreadable" }) });
+	});
+	await context.route((url) => url.pathname === "/api/usage", (route) => {
+		usage.company += 1;
+		const range = new URL(route.request().url()).searchParams.get("range") ?? "all";
+		const body = usage.companyStatus === 200 ? (typeof usage.companyAnswer === "function" ? usage.companyAnswer(range) : usage.companyAnswer) : usage.companyStatus === 403 ? { code: "hosted_route_admin", error: "Only your organisation's admin can do this." } : { code: "usage_unreadable" };
+		return route.fulfill({ status: usage.companyStatus, contentType: "application/json", body: JSON.stringify(body) });
+	});
+}
+const newUsageStandIn = (): UsageStandIn => ({ mine: 0, company: 0, mineStatus: 200, companyStatus: 200, companyAnswer: COMPANY_USAGE });
+/** How often a stand-in was asked, read at this moment: the counts change under the page. */
+const timesAsked = (usage: UsageStandIn, which: "mine" | "company"): number => usage[which];
 const BOUNDARY_LINE = "Something went wrong on this page. Reloading usually fixes it.";
 const REFUSAL = { error: "Refused by the shared server smoke.", code: "smoke_refused" };
 // Stand-ins for the server's answers that end the page: a request whose page names a person no longer signed in, and
@@ -181,17 +287,20 @@ const NEVER_CHANGED: readonly RegExp[] = [
 	/^\/api\/artifacts\/[^/]+\/export$/,
 ];
 // Never counted: the probe itself, which the smoke answers.
-const ALWAYS_ASKED: readonly string[] = ["/api/remote/client-context"];
+const ALWAYS_ASKED: readonly string[] = ["/api/remote/client-context", "/api/usage/mine"];
 
-// What the organisation's admin may do on top of everyone: the AI setup's writes.
-// Provider sign-in and sign-out (login, logout) are refused for the admin too.
-const ADMIN_MAY_ASK: readonly string[] = ["/api/auth/api-key"];
-const ADMIN_MAY_CHANGE: readonly RegExp[] = [/^\/api\/ai\/defaults$/, /^\/api\/persistent-agent-ai-profile(s\/|$)/];
+// What the organisation's admin may do on top of everyone: the AI setup's writes, the
+// skills library's, the organisation's instructions and the company's usage. Provider sign-in and sign-out
+// (login, logout), the featured skills and a repository import are refused for the admin too.
+const ADMIN_MAY_ASK: readonly string[] = ["/api/auth/api-key", "/api/usage", "/api/usage/export.csv"];
+// ...and one key's removal, under the save's path.
+const ADMIN_MAY_ASK_UNDER: readonly string[] = ["/api/auth/api-key/"];
+const ADMIN_MAY_CHANGE: readonly RegExp[] = [/^\/api\/ai\/defaults$/, /^\/api\/persistent-agent-ai-profile(s\/|$)/, /^\/api\/settings\/instructions$/, /^\/api\/skills(\/|$)/];
 
 /** Whether a shared server refuses this request (method and path, no query) for this person. */
 function refusedOnSharedServer(method: string, pathname: string, admin: boolean): boolean {
 	if (ALWAYS_ASKED.includes(pathname)) return false;
-	if (admin && ADMIN_MAY_ASK.includes(pathname)) return false;
+	if (admin && (ADMIN_MAY_ASK.includes(pathname) || ADMIN_MAY_ASK_UNDER.some((prefix) => pathname.startsWith(prefix)))) return false;
 	if (NEVER_ASKED.some((prefix) => pathname === prefix.replace(/\/$/, "") || pathname.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`))) return true;
 	if (NEVER_READ.some((pattern) => pattern.test(pathname))) return true;
 	if (admin && ADMIN_MAY_CHANGE.some((pattern) => pattern.test(pathname))) return false;
@@ -199,6 +308,7 @@ function refusedOnSharedServer(method: string, pathname: string, admin: boolean)
 }
 
 const ROOMS = ["Beta Room", "Alpha Room", "Bash Room"];
+const MEMBER_SEES_SKILL = "Member Sees";
 const A_TO_Z = ["Alpha Room", "Bash Room", "Beta Room"];
 const Z_TO_A = ["Beta Room", "Bash Room", "Alpha Room"];
 const SHELF_FILE = "notes.txt";
@@ -684,6 +794,36 @@ try {
 			await closeContext(context);
 		}
 
+		// --- sharedServer: true, a conversation whose own model was taken away while the room's pick is another ---
+		// The room's refusal names the conversation's model; the notice names that one, never the room's pick
+		// (control: a refusal that names no model, as a server before the name was sent answers, names the room's pick).
+		for (const named of [true, false]) {
+			const what = named ? "model gone" : "model gone control";
+			const GONE = "Gone Model On Removed Key";
+			const opened = await openApp(browser, true, async (ctx) => {
+				await ctx.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+					if (!ws.url().includes("persistentAgentId=")) return void ws.connectToServer();
+					ws.send(JSON.stringify({ type: "error", code: "room_model_unavailable", message: "This room's model is no longer offered.", provider: "removed-key", ...(named ? { model: GONE } : {}) }));
+					void ws.close();
+				});
+			}, { person: MEMBER });
+			const { context, page } = opened;
+			// The room never says ready: its connection is refused at once.
+			await page.goto(`${baseUrl}/`);
+			await page.waitForLoadState("networkidle");
+			await page.locator(".persistent-agent-card").filter({ hasText: "Beta Room" }).locator(".persistent-agent-primary-actions .landing-action").first().click();
+			const notice = page.locator(".room-model-notice");
+			await notice.waitFor({ timeout: 15000 });
+			const line = (await notice.locator(".room-workspace-nudge-text").innerText()).trim();
+			if (named) assert(line === `${GONE} is no longer offered.`, `${what}: the notice reads ${JSON.stringify(line)}`);
+			// Beta Room's pick is the sign-in's model, as the Model picker names it.
+			else assert(line === "GPT-6.1 Sol is no longer offered.", `${what}: the notice reads ${JSON.stringify(line)}`);
+			pass(named
+				? "shared: a conversation whose own model went away, the room's pick another, is told that model is no longer offered, never the room's pick"
+				: "shared: a refusal naming no model keeps the notice's words, naming the room's pick");
+			await closeContext(context);
+		}
+
 		// --- sharedServer: true, a read held across the second person's sign-in: a refresh does not take its old answer ---
 		{
 			const live: WebSocketRoute[] = [];
@@ -784,7 +924,522 @@ try {
 			await closeContext(context);
 		}
 
+		// --- sharedServer: true, the admin's AI setup: each removal asks first, in the shared server's words ---
+		{
+			const keyOnly = { id: "groq", name: "Groq" };
+			const withModels = "mistral";
+			await api("POST", "/api/auth/api-key", { provider: keyOnly.id, key: "smoke-key-only" });
+			await api("POST", "/api/auth/api-key", { provider: withModels, key: "smoke-with-models" });
+			const catalog = await api("GET", `/api/persistent-agent-ai-profiles/model-catalog?provider=${withModels}`);
+			await api("PUT", "/api/persistent-agent-ai-profiles/custom", { providerId: withModels, roomModels: [catalog.suggested], learnModel: catalog.suggested });
+			const profileId = `custom-${withModels}`;
+			const profileLabel = String((await api("GET", "/api/persistent-agent-ai-profile")).profiles.find((profile: { id: string }) => profile.id === profileId)?.label ?? "");
+			assert(profileLabel, "shared removals: the mistral profile was not saved");
+			const stillSaved = async () => (await api("GET", "/api/persistent-agent-ai-profile")).profiles.some((profile: { id: string }) => profile.id === profileId);
+			const keyRow = (page: Page) => page.locator(".settings-overlay .add-provider-row-group").filter({ has: page.locator(".settings-row-label", { hasText: new RegExp(`^${keyOnly.name}$`) }) });
+
+			// A member's row on a shared server: its sign-in status lists no provider, and the row still reads as a key, collapsed and open.
+			{
+				const { context, page } = await openApp(browser, true, (ctx) => ctx.route("**/api/auth/status", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(SHARED_AUTH_STATUS) })), { person: MEMBER, signOut: SIGN_OUT_LINK });
+				await openSettings(page);
+				await openTab(page, "AI setup");
+				const row = page.locator(`.settings-overlay .ai-profile-row-group[data-provider-id="${withModels}"]`);
+				await row.waitFor({ timeout: 10000 });
+				assert((await row.locator(".ai-profile-sub").innerText()).trim() === "Key saved", `shared member row: the collapsed row reads ${JSON.stringify(await row.locator(".ai-profile-sub").innerText())}`);
+				await row.locator(".ai-profile-models-toggle").click();
+				const opened = row.locator(".ai-profile-models");
+				await opened.waitFor({ timeout: 5000 });
+				assert((await row.locator(".ai-profile-sub").innerText()).trim() === "Key saved", `shared member row: the opened row reads ${JSON.stringify(await row.locator(".ai-profile-sub").innerText())}`);
+				const words = await opened.innerText();
+				assert(words.trim() !== "" && !/connection|key saved|signed in|not connected/i.test(words), `shared member row: the opened row holds just its models, got ${JSON.stringify(words)}`);
+				pass("shared: with no provider in the sign-in status, a member's key row reads key saved, collapsed and open, and opens just its models");
+				await closeContext(context);
+			}
+
+			// No provider yet: a settled list says so, by who reads it, and never that it is still loading.
+			for (const [who, person] of [["admin", ADMIN], ["member", MEMBER]] as const) {
+				const { context, page } = await openApp(browser, true, (ctx) => ctx.route("**/api/persistent-agent-ai-profile", async (route) => {
+					if (route.request().method() !== "GET") return route.continue();
+					const answer = await (await route.fetch()).json();
+					return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...answer, profiles: [], activeProfileId: null, activeProfile: null }) });
+				}), { person, signOut: SIGN_OUT_LINK });
+				await openSettings(page);
+				await openTab(page, "AI setup");
+				await until(async () => (await countText(page, ".settings-overlay .ai-profile-card-empty", NO_PROVIDERS[who])) === 1, `shared empty list: the ${who} is not told ${JSON.stringify(NO_PROVIDERS[who])}`);
+				assert((await countText(page, ".settings-overlay", STILL_LOADING)) === 0, `shared empty list: the ${who}'s settled list says it is still loading`);
+				pass(`shared: a settled AI setup with no provider tells the ${who} ${JSON.stringify(NO_PROVIDERS[who])}, never that it is still loading`);
+				await closeContext(context);
+			}
+
+			for (const sharedServer of [true, false]) {
+				const what = sharedServer ? "shared removals" : "desktop removals";
+				const { context, page, asked } = await openApp(browser, sharedServer, undefined, sharedServer ? { person: ADMIN, signOut: SIGN_OUT_LINK } : {});
+				await openSettings(page);
+				await openTab(page, "AI setup");
+				const row = page.locator(`.settings-overlay .ai-profile-row-group[data-provider-id="${withModels}"]`);
+				await row.waitFor({ timeout: 10000 });
+				if (sharedServer) {
+					// A double click on Remove provider…, with the menu opening below the row and then above it (a window too short below): the first click asks, the second removes nothing.
+					const fullSize = page.viewportSize();
+					for (const direction of ["below", "above"] as const) {
+						if (direction === "above" && fullSize) {
+							const box = await row.boundingBox();
+							if (box) await page.setViewportSize({ width: fullSize.width, height: Math.ceil(box.y + box.height + 40) });
+							await row.scrollIntoViewIfNeeded();
+						}
+						const opener = row.locator(".ai-profile-menu-btn");
+						await opener.click();
+						const remove = page.locator(".ai-profile-menu-item").filter({ hasText: "Remove provider…" });
+						await remove.waitFor({ timeout: 10000 });
+						const [menuBox, openerBox] = [await page.locator(".ai-profile-menu-item").first().boundingBox(), await opener.boundingBox()];
+						const opened = menuBox && openerBox && menuBox.y >= openerBox.y + openerBox.height ? "below" : "above";
+						assert(opened === direction, `${what}: the row menu opened ${opened} the row, where this case needs ${direction}`);
+						await remove.dblclick();
+						await page.waitForLoadState("networkidle");
+						assert(await stillSaved(), `${what}: a double click on Remove provider… with the menu ${direction} the row removed the profile`);
+						await page.keyboard.press("Escape");
+						await until(async () => (await page.locator(".ai-profile-menu-item").count()) === 0, `${what}: the row menu stayed open after Escape`);
+					}
+					if (fullSize) await page.setViewportSize(fullSize);
+				}
+				// The row menu's Remove provider…
+				await row.locator(".ai-profile-menu-btn").click();
+				await page.locator(".ai-profile-menu-item").filter({ hasText: "Remove provider…" }).click();
+				const menuLine = sharedServer ? REMOVE_LINE(profileLabel) : DESKTOP_REMOVE_LINE(profileLabel);
+				await until(async () => (await countText(page, "body", menuLine)) === 1, `${what}: the row menu's confirmation does not read ${JSON.stringify(menuLine)}`);
+				await page.locator(".ai-profile-menu-item").filter({ hasText: "Keep it" }).click();
+				assert(await stillSaved(), `${what}: Keep it removed the profile`);
+				if (sharedServer) {
+					// Approve models' Remove profile asks the same, and removes nothing until it is answered. Keep it left the menu open.
+					await page.locator(".ai-profile-menu-item").filter({ hasText: "Approve models" }).click();
+					await page.locator(".configure-profile-remove").click();
+					await until(async () => (await countText(page, ".configure-profile-remove-confirm", REMOVE_LINE(profileLabel))) === 1, `${what}: Approve models' Remove profile does not ask first`);
+					assert(await stillSaved(), `${what}: Remove profile removed the profile before it was confirmed`);
+					await page.locator(".configure-profile-remove-confirm button").filter({ hasText: "Keep it" }).click();
+					assert((await page.locator(".configure-profile-remove-confirm").count()) === 0, `${what}: Keep it left the confirmation open`);
+					await page.locator(".configure-profile-modal button").filter({ hasText: /^Cancel$/ }).click();
+				} else {
+					await page.locator(".ai-profile-menu-backdrop").click();
+				}
+				// The add menu's saved key with no approved models: Remove key.
+				await page.locator(".settings-overlay .add-provider-toggle").click();
+				await keyRow(page).waitFor({ timeout: 10000 });
+				assert((await keyRow(page).locator(".settings-row-sub").innerText()).trim() === "API key · saved", `${what}: the key-only row does not read saved`);
+				if (sharedServer) {
+					// On a phone the saved key's buttons stay on the screen, and the pane never scrolls sideways.
+					const wide = page.viewportSize();
+					await page.setViewportSize({ width: 390, height: 800 });
+					await until(async () => (await keyRow(page).locator("button").evaluateAll((buttons) => buttons.every((button) => { const box = button.getBoundingClientRect(); return box.left >= 0 && box.right <= 390; }))), `${what}: on a phone the saved key's buttons run past the screen`);
+					assert(await page.locator(".settings-dialog-pane").first().evaluate((pane) => pane.scrollWidth <= pane.clientWidth), `${what}: on a phone the saved key's row makes the settings pane scroll sideways`);
+					const cut = await keyRow(page).locator("button").evaluateAll((buttons) => buttons.filter((button) => button.scrollWidth > button.clientWidth).map((button) => button.textContent?.trim()));
+					assert(cut.length === 0, `${what}: on a phone the saved key's buttons cut their words: ${JSON.stringify(cut)}`);
+					if (wide) await page.setViewportSize(wide);
+				}
+				// A shared server's asks first, so its name ends in "…".
+				await keyRow(page).locator("button").filter({ hasText: sharedServer ? /^Remove key…$/ : /^Remove key$/ }).click();
+				if (sharedServer) {
+					await until(async () => (await countText(page, ".add-provider-remove-confirm", REMOVE_KEY_ONLY_LINE(keyOnly.name))) === 1, `${what}: Remove key does not ask first`);
+					// The button that opened it stays in its place, switched off, so the row's buttons do not move; the focus goes to the safe choice.
+					const focused = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+					assert(focused === "Keep it", `${what}: with Remove key's confirmation open the focus is on ${JSON.stringify(focused)}`);
+					const removeKeyShown = keyRow(page).locator("button").filter({ hasText: /^Remove key…$/ });
+					assert((await removeKeyShown.count()) === 1 && (await removeKeyShown.isDisabled()), `${what}: Remove key left its row, or stayed on, while its question is asked`);
+					assert((await api("GET", "/api/auth/providers")).providers.find((provider: { id: string }) => provider.id === keyOnly.id)?.configured === true, `${what}: the key went before the removal was confirmed`);
+					await page.locator(".add-provider-remove-confirm button").filter({ hasText: /^Remove$/ }).click();
+				} else {
+					assert((await page.locator(".add-provider-remove-confirm").count()) === 0, `${what}: this computer's Remove key asks first`);
+				}
+				await until(async () => (await keyRow(page).locator(".settings-row-sub").innerText()).trim() === "API key", `${what}: the key-only row still reads saved after Remove key`);
+				assert((await api("GET", "/api/auth/providers")).providers.find((provider: { id: string }) => provider.id === keyOnly.id)?.configured === false, `${what}: the key is still saved`);
+				if (sharedServer) assert(asked.length === 0, `${what}: the page asked for what a shared server refuses: ${asked.join(", ")}`);
+				pass(sharedServer
+					? "shared: the admin's row menu Remove provider…, Approve models' Remove profile and the add menu's Remove key each ask first in the shared server's words, remove nothing until answered, and Remove key then removes the key with no refused request; a double click on Remove provider… keeps the profile, with the menu below the row and above it"
+					: "this computer: the row menu keeps its own words and Remove key removes at once, with no question");
+				await closeContext(context);
+				if (sharedServer) await api("POST", "/api/auth/api-key", { provider: keyOnly.id, key: "smoke-key-only" });
+			}
+
+			// Back as the rows after this one found the server: the key-only key went in the desktop pass.
+			const removed = await authedFetch(`${baseUrl}/api/persistent-agent-ai-profiles/custom/${profileId}`, { method: "DELETE" });
+			assert(removed.ok, `shared removals: removing the mistral profile afterwards: ${removed.status} ${await removed.text()}`);
+		}
+
+		// --- the admin's gateway forms: the standing line and the new address's question on a shared server only, and there a form
+		// that leaves the name and address alone never puts back what another window saved since it opened; this computer's
+		// forms send their name and address as they always did ---
+		{
+			// Closed loopback ports: the forms' model loads fail at once and fall back to the approved list.
+			const addresses = ["http://127.0.0.1:9/v1", "http://127.0.0.1:9/v2", "http://127.0.0.1:9/v3", "http://127.0.0.1:9/v4"];
+			// Another server than the addresses above: its own host, so the saved key does not go with it.
+			const OTHER_SERVER_ADDRESS = "http://127.0.0.2:9/v1";
+			const OTHER_SERVER_ADDRESS_LATER = "http://127.0.0.2:9/v2";
+			// The server's own answer to a move to another server with no key (gateways.ts).
+			const KEY_FOR_NEW_ADDRESS = "Enter the gateway API key to save a new address.";
+			const created = await api("POST", "/api/persistent-agent-ai-profiles/gateways", { label: "Smoke gateway", baseUrl: addresses[0], key: "smoke-gateway-key", roomModels: [{ modelId: "gw-one" }] });
+			const gateway = { id: String(created.gateway.id), providerId: String(created.gateway.providerId) };
+			const storedGateway = async () => api("GET", `/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gateway.id)}`);
+			// Another window's save: the address only, as Edit gateway sends it.
+			const otherWindowMoves = async (baseUrl: string) => api("PUT", `/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gateway.id)}`, { baseUrl, roomModels: (await storedGateway()).roomModels.map((model: { modelId: string }) => ({ modelId: model.modelId })) });
+			const openMenuItem = async (page: Page, item: string) => {
+				const row = page.locator(`.settings-overlay .ai-profile-row-group[data-provider-id="${gateway.providerId}"]`);
+				await row.waitFor({ timeout: 10000 });
+				await row.locator(".ai-profile-menu-btn").click();
+				await page.locator(".ai-profile-menu-item").filter({ hasText: new RegExp(`^${item}$`) }).click();
+			};
+			for (const sharedServer of [true, false]) {
+				const what = sharedServer ? "shared gateway forms" : "desktop gateway forms";
+				const { context, page, asked } = await openApp(browser, sharedServer, undefined, sharedServer ? { person: ADMIN, signOut: SIGN_OUT_LINK } : {});
+				await openSettings(page);
+				await openTab(page, "AI setup");
+
+				// Approve models, then another window moves the address, then this one saves its models.
+				const openedWith = await storedGateway();
+				await openMenuItem(page, "Approve models");
+				const approve = page.locator(".gateway-config-modal");
+				const saveModels = approve.locator("button").filter({ hasText: /^Save models$/ });
+				await until(() => saveModels.isEnabled(), `${what}: Approve models never let its models be saved`);
+				assert((await countText(page, ".gateway-config-modal", GATEWAY_LINE)) === (sharedServer ? 1 : 0), `${what}: Approve models ${sharedServer ? "lacks" : "shows"} the gateway line`);
+				await otherWindowMoves(addresses[1]);
+				const gatewayPut = () => page.waitForRequest((request) => new URL(request.url()).pathname === `/api/persistent-agent-ai-profiles/gateways/${gateway.id}` && request.method() === "PUT", { timeout: 10000 }).then((request) => request.postDataJSON() as Record<string, unknown>);
+				let sent = gatewayPut();
+				await saveModels.click();
+				await until(async () => (await approve.count()) === 0, `${what}: Approve models did not close after Save models`);
+				const approveBody = await sent;
+				// This computer sends the name and the address it opened with, as before; a shared server neither.
+				const afterApprove = sharedServer ? addresses[1] : openedWith.baseUrl;
+				assert(sharedServer ? !("label" in approveBody) && !("baseUrl" in approveBody) : approveBody.label === openedWith.label && approveBody.baseUrl === openedWith.baseUrl, `${what}: Approve models sent ${JSON.stringify({ label: approveBody.label, baseUrl: approveBody.baseUrl })}`);
+				assert((await storedGateway()).baseUrl === afterApprove, `${what}: after Approve models the address is ${(await storedGateway()).baseUrl}`);
+
+				// Edit gateway with a new name only, after another window moved the address: no question, the name goes, the address stays.
+				await openMenuItem(page, "Edit gateway");
+				const edit = page.locator(".gateway-config-modal");
+				const name = edit.locator('input[placeholder="Company gateway"]');
+				const address = edit.locator('input[placeholder="https://litellm.example.com/v1"]');
+				await until(async () => (await address.inputValue()) === afterApprove, `${what}: Edit gateway did not load the address`);
+				assert((await countText(page, ".gateway-config-modal", GATEWAY_LINE)) === (sharedServer ? 1 : 0), `${what}: Edit gateway ${sharedServer ? "lacks" : "shows"} the gateway line`);
+				await otherWindowMoves(addresses[2]);
+				const renamed = sharedServer ? "Shared smoke gateway" : "Desktop smoke gateway";
+				await name.fill(renamed);
+				const saveGateway = edit.locator("button").filter({ hasText: /^Save gateway$/ });
+				sent = gatewayPut();
+				await saveGateway.click();
+				await until(async () => (await edit.count()) === 0, `${what}: a new name alone asked before it saved`);
+				const renameBody = await sent;
+				assert(sharedServer ? renameBody.label === renamed && !("baseUrl" in renameBody) : renameBody.label === renamed && renameBody.baseUrl === afterApprove, `${what}: a new name alone sent ${JSON.stringify({ label: renameBody.label, baseUrl: renameBody.baseUrl })}`);
+				const movedTo = sharedServer ? addresses[2] : afterApprove;
+				const afterRename = await storedGateway();
+				assert(afterRename.label === renamed && afterRename.baseUrl === movedTo, `${what}: a new name alone saved ${JSON.stringify({ label: afterRename.label, baseUrl: afterRename.baseUrl })}`);
+
+				// Edit gateway with a new address: a shared server asks first, Keep editing saves nothing, a double click on Save only asks, Use new address saves it.
+				await openMenuItem(page, "Edit gateway");
+				await until(async () => (await address.inputValue()) === movedTo, `${what}: Edit gateway did not load the moved address`);
+				await address.fill(addresses[3]);
+				await saveGateway.click();
+				if (sharedServer) {
+					await until(async () => (await countText(page, ".gateway-address-confirm", NEW_ADDRESS_LINE)) === 1, `${what}: a new address does not ask first`);
+					assert((await storedGateway()).baseUrl === addresses[2], `${what}: the new address was saved before it was confirmed`);
+					await page.locator(".gateway-address-confirm button").filter({ hasText: /^Keep editing$/ }).click();
+					assert((await page.locator(".gateway-address-confirm").count()) === 0 && (await saveGateway.count()) === 1, `${what}: Keep editing did not go back to the form`);
+					assert((await storedGateway()).baseUrl === addresses[2], `${what}: Keep editing saved the new address`);
+					// "Use new address" takes Save's place: the second click of a double click on Save never answers it.
+					await saveGateway.dblclick();
+					await until(async () => (await countText(page, ".gateway-address-confirm", NEW_ADDRESS_LINE)) === 1, `${what}: a double click on Save does not ask first`);
+					await page.waitForLoadState("networkidle");
+					assert((await page.locator(".gateway-address-confirm").count()) === 1 && (await storedGateway()).baseUrl === addresses[2], `${what}: a double click on Save answered "use the new address?"`);
+					await page.locator(".gateway-address-confirm button").filter({ hasText: /^Use new address$/ }).click();
+				} else {
+					assert((await page.locator(".gateway-address-confirm").count()) === 0, `${what}: this computer asks before a new address`);
+				}
+				await until(async () => (await edit.count()) === 0, `${what}: Edit gateway did not close after the new address`);
+				assert((await storedGateway()).baseUrl === addresses[3], `${what}: the new address was not saved: ${(await storedGateway()).baseUrl}`);
+				if (sharedServer) {
+					// A move to another server with the key left blank: no question whose yes the server would refuse, the key field asks for that server's key, and nothing is saved; with a key typed, the question comes.
+					await openMenuItem(page, "Edit gateway");
+					await until(async () => (await address.inputValue()) === addresses[3], `${what}: Edit gateway did not load the address before a move to another server`);
+					await address.fill(OTHER_SERVER_ADDRESS);
+					await saveGateway.click();
+					await until(async () => (await countText(page, ".gateway-config-modal", KEY_FOR_NEW_ADDRESS)) === 1, `${what}: a move to another server with no key does not ask for the key`);
+					// The key field takes the focus, so a long form brings its sentence into view.
+					await until(async () => (await page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.getAttribute("placeholder"))) === "leave blank to keep the saved key", `${what}: the key field does not take the focus when the key is asked for`);
+					assert((await page.locator(".gateway-address-confirm").count()) === 0, `${what}: a move to another server with no key asks "use the new address?"`);
+					assert((await storedGateway()).baseUrl === addresses[3], `${what}: a move to another server with no key saved the address`);
+					const keyField = edit.locator('input[placeholder="leave blank to keep the saved key"]');
+					await keyField.fill("smoke-other-server-key");
+					await saveGateway.click();
+					await until(async () => (await countText(page, ".gateway-address-confirm", NEW_ADDRESS_LINE)) === 1, `${what}: a move to another server with its key does not ask first`);
+					// Clearing the key with the question open takes the question away.
+					await keyField.fill("");
+					assert((await page.locator(".gateway-address-confirm").count()) === 0, `${what}: the question stayed after the key was cleared`);
+					// Another window moves the gateway to that server meanwhile: this form, loaded before, still asks for the key and saves nothing.
+					const moved = await api("PUT", `/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gateway.id)}`, { baseUrl: OTHER_SERVER_ADDRESS, key: "smoke-other-window-key", roomModels: (await storedGateway()).roomModels.map((model: { modelId: string }) => ({ modelId: model.modelId })) });
+					assert(moved?.gateway?.baseUrl === OTHER_SERVER_ADDRESS || (await storedGateway()).baseUrl === OTHER_SERVER_ADDRESS, `${what}: the other window's move to another server was not saved`);
+					await address.fill(OTHER_SERVER_ADDRESS_LATER);
+					await saveGateway.click();
+					await until(async () => (await countText(page, ".gateway-config-modal", KEY_FOR_NEW_ADDRESS)) === 1, `${what}: a form loaded before another window's move does not ask for the key`);
+					assert((await page.locator(".gateway-address-confirm").count()) === 0, `${what}: a form loaded before another window's move asks "use the new address?"`);
+					assert((await storedGateway()).baseUrl === OTHER_SERVER_ADDRESS, `${what}: a form loaded before another window's move saved ${(await storedGateway()).baseUrl} unasked`);
+					await edit.locator("button").filter({ hasText: /^Cancel$/ }).click();
+					await api("PUT", `/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gateway.id)}`, { baseUrl: addresses[3], key: "smoke-gateway-key", roomModels: (await storedGateway()).roomModels.map((model: { modelId: string }) => ({ modelId: model.modelId })) });
+				} else {
+					// This computer: the server's answer to a move with no key shows at the key field, and the focus stays where it was.
+					await openMenuItem(page, "Edit gateway");
+					await until(async () => (await address.inputValue()) === addresses[3], `${what}: Edit gateway did not load the address before a move to another server`);
+					await address.fill(OTHER_SERVER_ADDRESS);
+					await saveGateway.click();
+					await until(async () => (await countText(page, ".gateway-config-modal", KEY_FOR_NEW_ADDRESS)) === 1, `${what}: a move to another server with no key does not show the server's answer`);
+					assert((await page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.getAttribute("placeholder"))) !== "leave blank to keep the saved key", `${what}: the key field takes the focus on this computer`);
+					assert((await storedGateway()).baseUrl === addresses[3], `${what}: a move to another server with no key saved the address`);
+					await edit.locator("button").filter({ hasText: /^Cancel$/ }).click();
+				}
+				if (sharedServer) assert(asked.length === 0, `${what}: the page asked for what a shared server refuses: ${asked.join(", ")}`);
+				pass(sharedServer
+					? "shared: both gateway forms carry the gateway line, a new address asks first and Keep editing saves nothing, a move to another server with no key asks for the key and not the question, and a form that left the name and address alone never puts back an address another window saved"
+					: "this computer: no gateway line and no question before a new address, and both forms send their name and address as before");
+				await closeContext(context);
+				await otherWindowMoves(addresses[0]);
+			}
+			const removed = await authedFetch(`${baseUrl}/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gateway.id)}`, { method: "DELETE" });
+			assert(removed.ok, `shared gateway forms: removing the smoke gateway afterwards: ${removed.status} ${await removed.text()}`);
+		}
+
+		// --- where a provider's models run: a member reads each provider's label beside its models in both model menus and
+		// in AI setup, and the admin states it in a gateway's form and a key's Approve models; this computer shows neither ---
+		{
+			// The server here is this computer's, which never answers a location: a shared server's answers are stood in for.
+			const places = ["eu", "outside-eu", "unknown"] as const;
+			const assigned = new Map<string, (typeof places)[number]>();
+			const placeOf = (id: string) => {
+				if (!assigned.has(id)) assigned.set(id, places[assigned.size % places.length]);
+				return assigned.get(id)!;
+			};
+			const asShared = async (ctx: BrowserContext, extra: Record<string, Record<string, unknown>> = {}) => {
+				await ctx.route("**/api/persistent-agent-room/model-status", async (route) => {
+					const status = await (await route.fetch()).json();
+					return route.fulfill({ json: { ...status, providers: (status.providers ?? []).map((provider: { id: string }) => ({ ...provider, runsIn: placeOf(provider.id) })) } });
+				});
+				await ctx.route("**/api/persistent-agent-ai-profile", async (route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					const status = await (await route.fetch()).json();
+					return route.fulfill({ json: { ...status, profiles: status.profiles.map((profile: { id: string; provider: { id: string } }) => ({ ...profile, runsIn: placeOf(profile.provider.id), setByInstall: false, ...(extra[profile.id] ?? {}) })) } });
+				});
+				await ctx.route("**/api/persistent-agent-ai-profiles/gateways/*", async (route) => {
+					if (route.request().method() !== "GET") return route.fallback();
+					const gateway = await (await route.fetch()).json();
+					return route.fulfill({ json: { ...gateway, runsIn: placeOf(gateway.providerId), setByInstall: false, ...(extra[gateway.id] ?? {}) } });
+				});
+			};
+			// Each label on the page: the words for the eye and the sentence for a screen reader, in the scope's order.
+			const labels = async (page: Page, scope: string) => page.locator(`${scope} .models-run-in`).evaluateAll((spans) => spans.map((span) => `${span.querySelector("[aria-hidden=true]")?.textContent ?? ""}|${span.querySelector(".sr-only")?.textContent ?? ""}`));
+			const want = (id: string) => `${RUNS_IN_LABEL[placeOf(id)].short}|${RUNS_IN_LABEL[placeOf(id)].line}`;
+			// The line above a list's models: shown, above its first model and starting where the group headings' words do, on a
+			// shared server; none on this computer.
+			const listLine = async (page: Page, list: string, what: string) => {
+				// Where an element's words start: its edge plus its own inset.
+				const line = page.locator(`${list} .models-run-in-note`);
+				const shown = await line.evaluateAll((lines) => lines.map((element) => ({ text: (element as HTMLElement).innerText.trim(), seen: (element as HTMLElement).checkVisibility(), top: element.getBoundingClientRect().top, left: element.getBoundingClientRect().left + parseFloat(getComputedStyle(element).paddingLeft) })));
+				const firstModel = await page.locator(`${list} [role=option]`).first().evaluate((row) => row.getBoundingClientRect().top);
+				const heading = await page.locator(`${list} .room-model-menu-kicker:not(.models-run-in-note)`).first().evaluate((element) => element.getBoundingClientRect().left + parseFloat(getComputedStyle(element).paddingLeft));
+				return { shown, firstModel, heading, what };
+			};
+			const assertListLine = ({ shown, firstModel, heading, what }: Awaited<ReturnType<typeof listLine>>, sharedServer: boolean) => {
+				if (!sharedServer) return assert(shown.length === 0, `${what}: a line above the models on this computer: ${JSON.stringify(shown)}`);
+				assert(shown.length === 1 && shown[0].text === RUNS_IN_LIST_LINE && shown[0].seen && shown[0].top < firstModel, `${what}: the line above the models reads ${JSON.stringify(shown)}, first model at ${firstModel}`);
+				assert(Math.abs(shown[0].left - heading) < 1, `${what}: the line's words start at ${shown[0].left}, the group headings' at ${heading}`);
+			};
+
+			for (const sharedServer of [true, false]) {
+				const what = sharedServer ? "shared locations" : "desktop locations";
+				const { context, page } = await openApp(browser, sharedServer, sharedServer ? (ctx) => asShared(ctx) : undefined, sharedServer ? { person: MEMBER, signOut: SIGN_OUT_LINK } : {});
+				const providers = (await api("GET", "/api/persistent-agent-room/model-status")).providers as { id: string; label: string }[];
+				// The groups a menu shows (a shared server's leave subscriptions out), each with its provider.
+				const shownGroups = async (scope: string) => (await page.locator(`${scope}[aria-label]`).evaluateAll((groups) => groups.map((group) => group.getAttribute("aria-label") ?? "")))
+					.map((label) => ({ label, id: providers.find((provider) => provider.label === label)?.id ?? "" }));
+				// Room settings, Model: every model row carries its provider's label.
+				// Not Beta Room: the pick below stays with the room's one conversation, and later rows need Beta Room to follow the
+				// admin's default model.
+				await enterRoom(page, "Alpha Room");
+				await page.locator(".topbar-actions").getByRole("button", { name: "Room settings", exact: true }).click();
+				await page.locator(".settings-dialog-nav button").filter({ hasText: "Model" }).first().click();
+				await page.locator(".room-model-pick:not(:disabled)").first().click();
+				// The menu opens before the room's models have loaded: wait for a provider's group.
+				await page.locator(".room-model-menu .room-model-menu-group[aria-label]").first().waitFor({ timeout: 10000 });
+				const inRoomSettings = await shownGroups(".room-model-menu .room-model-menu-group");
+				assertListLine(await listLine(page, ".room-model-menu", `${what}: Room settings' menu`), sharedServer);
+				assert(inRoomSettings.length > 0 && inRoomSettings.every((group) => group.id), `${what}: Room settings' menu groups ${JSON.stringify(inRoomSettings)}`);
+				for (const provider of inRoomSettings) {
+					const group = `.room-model-menu .room-model-menu-group[aria-label="${provider.label}"]`;
+					const rows = await page.locator(`${group} [role=option]`).count();
+					assert(rows > 0, `${what}: Room settings' menu has no ${provider.label} rows`);
+					const seen = await labels(page, group);
+					assert(JSON.stringify(seen) === JSON.stringify(sharedServer ? Array(rows).fill(want(provider.id)) : []), `${what}: Room settings' ${provider.label} rows carry ${JSON.stringify(seen)}`);
+				}
+				await page.keyboard.press("Escape");
+				await closeSettings(page);
+				// The message box's model menu: the same.
+				// It opens on the effort dial when the model has one; the models are a step on.
+				await page.locator(".model-pick-trigger").first().click();
+				await page.locator(".model-pick-effort-model, .model-pick-group").first().waitFor({ timeout: 10000 });
+				if ((await page.locator(".model-pick-group").count()) === 0) await page.locator(".model-pick-effort-model").click();
+				await page.locator(".model-pick-group").first().waitFor({ timeout: 10000 });
+				const inMessageBox = await shownGroups(".model-pick-group");
+				assertListLine(await listLine(page, ".model-pick-list", `${what}: the message box's menu`), sharedServer);
+				assert(inMessageBox.length > 0 && inMessageBox.every((group) => group.id), `${what}: the message box's menu groups ${JSON.stringify(inMessageBox)}`);
+				for (const provider of inMessageBox) {
+					const group = `.model-pick-group[aria-label="${provider.label}"]`;
+					const rows = await page.locator(`${group} [role=option]`).count();
+					const seen = await labels(page, group);
+					assert(rows > 0 && JSON.stringify(seen) === JSON.stringify(sharedServer ? Array(rows).fill(want(provider.id)) : []), `${what}: the message box's ${provider.label} rows (${rows}) carry ${JSON.stringify(seen)}`);
+				}
+				if (sharedServer) {
+					// On a phone the list is a sheet from the bottom, with its own inset: the line keeps the headings' there too.
+					const wide = page.viewportSize();
+					await page.keyboard.press("Escape");
+					if ((await page.locator(".model-pick-effort").count()) > 0) await page.keyboard.press("Escape");
+					await until(async () => (await page.locator(".model-pick-group, .model-pick-effort").count()) === 0, `${what}: the message box's model menu did not close`);
+					await page.setViewportSize({ width: 390, height: 844 });
+					await page.locator(".model-pick-trigger").first().click();
+					await page.locator(".model-pick-sheet .model-pick-effort-model, .model-pick-sheet .model-pick-group").first().waitFor({ timeout: 10000 });
+					if ((await page.locator(".model-pick-sheet .model-pick-group").count()) === 0) await page.locator(".model-pick-effort-model").click();
+					await page.locator(".model-pick-sheet .model-pick-group").first().waitFor({ timeout: 10000 });
+					assertListLine(await listLine(page, ".model-pick-sheet .model-pick-list", `${what}: the message box's menu on a phone`), sharedServer);
+					await page.keyboard.press("Escape");
+					if ((await page.locator(".model-pick-effort").count()) > 0) await page.keyboard.press("Escape");
+					await until(async () => (await page.locator(".model-pick-group, .model-pick-effort").count()) === 0, `${what}: the message box's model menu did not close on a phone`);
+					if (wide) await page.setViewportSize(wide);
+					await page.locator(".model-pick-trigger").first().click();
+					await page.locator(".model-pick-effort-model, .model-pick-group").first().waitFor({ timeout: 10000 });
+					if ((await page.locator(".model-pick-group").count()) === 0) await page.locator(".model-pick-effort-model").click();
+					await page.locator(".model-pick-group").first().waitFor({ timeout: 10000 });
+					// The list can open over the button that opened it: the second click of a double click picks nothing.
+					const other = page.locator(".model-pick-group [role=option]:not(.is-current)").first();
+					await other.dispatchEvent("click", { detail: 2 });
+					await page.waitForLoadState("networkidle");
+					assert((await page.locator(".model-pick-group").count()) > 0 && (await other.getAttribute("aria-selected")) !== "true", `${what}: a double click's second click picked a model in the message box's menu`);
+					// A first click still picks: the model in use, picked again, closes the list or steps on to its effort.
+					await page.locator(".model-pick-group [role=option].is-current").first().dispatchEvent("click", { detail: 1 });
+					await until(async () => (await page.locator(".model-pick-group").count()) === 0, `${what}: a first click on a model in the message box's menu did nothing`);
+				}
+				await page.keyboard.press("Escape");
+				if ((await page.locator(".model-pick-effort").count()) > 0) await page.keyboard.press("Escape");
+				await until(async () => (await page.locator(".model-pick-group, .model-pick-effort").count()) === 0, `${what}: the message box's model menu did not close`);
+				// AI setup, from Home: beside each provider's name.
+				await page.goto(`${baseUrl}/`);
+				await page.waitForLoadState("networkidle");
+				await openSettings(page);
+				await openTab(page, "AI setup");
+				const rowGroups = page.locator(".settings-overlay .ai-profile-row-group");
+				await rowGroups.first().waitFor({ timeout: 10000 });
+				for (const id of await rowGroups.evaluateAll((groups) => groups.map((group) => group.getAttribute("data-provider-id") ?? ""))) {
+					const seen = await labels(page, `.settings-overlay .ai-profile-row-group[data-provider-id="${id}"] .ai-profile-name`);
+					assert(JSON.stringify(seen) === JSON.stringify(sharedServer ? [want(id)] : []), `${what}: AI setup's ${id} row carries ${JSON.stringify(seen)}`);
+				}
+				pass(sharedServer
+					? "shared: a member reads each provider's location beside every one of its models in Room settings and the message box, and beside it in AI setup, the short words for the eye and the admin's sentence for a screen reader, with one line above each model list saying the admin states it"
+					: "this computer: no location beside any model or provider");
+				await closeContext(context);
+			}
+
+			// The admin's field: a gateway's form and a key's Approve models, sent only when changed; read-only for the install's gateway.
+			const created = await api("POST", "/api/persistent-agent-ai-profiles/gateways", { label: "Located gateway", baseUrl: "http://127.0.0.1:9/v1", key: "smoke-located-key", roomModels: [{ modelId: "located-one" }] });
+			const gateway = { id: String(created.gateway.id), providerId: String(created.gateway.providerId) };
+			const keyProvider = "mistral";
+			await api("POST", "/api/auth/api-key", { provider: keyProvider, key: "smoke-located-key" });
+			const catalog = await api("GET", `/api/persistent-agent-ai-profiles/model-catalog?provider=${keyProvider}`);
+			await api("PUT", "/api/persistent-agent-ai-profiles/custom", { providerId: keyProvider, roomModels: [catalog.suggested], learnModel: catalog.suggested });
+			const menuItem = async (page: Page, providerId: string, item: string) => {
+				const row = page.locator(`.settings-overlay .ai-profile-row-group[data-provider-id="${providerId}"]`);
+				await row.waitFor({ timeout: 10000 });
+				await row.locator(".ai-profile-menu-btn").click();
+				await page.locator(".ai-profile-menu-item").filter({ hasText: new RegExp(`^${item}$`) }).click();
+			};
+			const field = (page: Page) => page.locator(".models-run-in-field");
+			const sentBody = (page: Page, pathname: string) => page.waitForRequest((request) => new URL(request.url()).pathname === pathname && request.method() === "PUT", { timeout: 10000 }).then((request) => request.postDataJSON() as Record<string, unknown>);
+			for (const sharedServer of [true, false]) {
+				const what = sharedServer ? "shared location field" : "desktop location field";
+				// Both start at Unknown before the page reads AI setup's list, where a key's Approve models takes its location from.
+				assigned.clear();
+				assigned.set(gateway.providerId, "unknown");
+				assigned.set(keyProvider, "unknown");
+				const { context, page } = await openApp(browser, sharedServer, sharedServer ? (ctx) => asShared(ctx) : undefined, sharedServer ? { person: ADMIN, signOut: SIGN_OUT_LINK } : {});
+				await openSettings(page);
+				await openTab(page, "AI setup");
+				const gatewayUrl = `/api/persistent-agent-ai-profiles/gateways/${gateway.id}`;
+				// Edit gateway: the field with the gateway's location; a change is sent, an untouched one is not.
+				await menuItem(page, gateway.providerId, "Edit gateway");
+				const edit = page.locator(".gateway-config-modal");
+				const saveGateway = edit.locator("button").filter({ hasText: /^Save gateway$/ });
+				await until(() => saveGateway.isEnabled(), `${what}: Edit gateway never let it be saved`);
+				if (sharedServer) {
+					assert((await field(page).locator("h3").innerText()).trim() === RUNS_IN_HEADING && (await field(page).locator(".cli-note").innerText()).trim() === RUNS_IN_HELP, `${what}: the gateway's field reads ${JSON.stringify(await field(page).innerText())}`);
+					let startsAt = "";
+					await until(async () => (startsAt = await field(page).locator("select").inputValue()) === "unknown", `${what}: the gateway's field does not start at Unknown`).catch((error) => { throw new Error(`${error.message}: ${startsAt}`); });
+					await field(page).locator("select").selectOption({ label: "In the EU" });
+				} else {
+					assert((await field(page).count()) === 0, `${what}: Edit gateway shows the location field`);
+				}
+				let body = sentBody(page, gatewayUrl);
+				await saveGateway.click();
+				assert((await body).runsIn === (sharedServer ? "eu" : undefined), `${what}: Edit gateway sent runsIn ${JSON.stringify((await body).runsIn)}`);
+				await until(async () => (await edit.count()) === 0, `${what}: Edit gateway did not close after saving`);
+				if (sharedServer) {
+					assigned.set(gateway.providerId, "eu");
+					await menuItem(page, gateway.providerId, "Edit gateway");
+					await until(async () => (await field(page).locator("select").inputValue()) === "eu", `${what}: the gateway's field does not show its saved location`);
+					await edit.locator('input[placeholder="Company gateway"]').fill("Located gateway again");
+					body = sentBody(page, gatewayUrl);
+					await saveGateway.click();
+					assert(!("runsIn" in (await body)), `${what}: an untouched location was sent: ${JSON.stringify(await body)}`);
+					await until(async () => (await edit.count()) === 0, `${what}: Edit gateway did not close after the second save`);
+				}
+				// A key's Approve models: the same field.
+				await menuItem(page, keyProvider, "Approve models");
+				const approve = page.locator(".configure-profile-modal");
+				const saveProfile = approve.locator("button").filter({ hasText: /^Save profile$/ });
+				await until(() => saveProfile.isEnabled(), `${what}: the key's Approve models never let it be saved`);
+				if (sharedServer) {
+					let keyShows = "";
+					await until(async () => (keyShows = await field(page).locator("select").inputValue()) === "unknown", `${what}: the key's field does not show its location`).catch((error) => { throw new Error(`${error.message}: ${keyShows}`); });
+					await field(page).locator("select").selectOption({ label: "Outside the EU" });
+				} else {
+					assert((await field(page).count()) === 0, `${what}: the key's Approve models shows the location field`);
+				}
+				body = sentBody(page, "/api/persistent-agent-ai-profiles/custom");
+				await saveProfile.click();
+				assert((await body).runsIn === (sharedServer ? "outside-eu" : undefined), `${what}: the key's save sent runsIn ${JSON.stringify((await body).runsIn)}`);
+				await until(async () => (await approve.count()) === 0, `${what}: the key's Approve models did not close after saving`);
+				pass(sharedServer
+					? "shared: the admin's gateway form and a key's Approve models show where its models run, Unknown first, send a changed location and leave an untouched one out"
+					: "this computer: neither form shows a location or sends one");
+				await closeContext(context);
+			}
+			// The install's gateway: the field read-only with its line, and no Remove gateway… in its row's menu.
+			{
+				assigned.clear();
+				assigned.set(gateway.providerId, "eu");
+				const { context, page } = await openApp(browser, true, (ctx) => asShared(ctx, { [gateway.id]: { setByInstall: true } }), { person: ADMIN, signOut: SIGN_OUT_LINK });
+				await openSettings(page);
+				await openTab(page, "AI setup");
+				const row = page.locator(`.settings-overlay .ai-profile-row-group[data-provider-id="${gateway.providerId}"]`);
+				await row.waitFor({ timeout: 10000 });
+				await row.locator(".ai-profile-menu-btn").click();
+				await page.locator(".ai-profile-menu-item").first().waitFor({ timeout: 10000 });
+				const items = (await page.locator(".ai-profile-menu-item").allInnerTexts()).map((text) => text.trim());
+				assert(items.includes("Edit gateway") && !items.includes("Remove gateway…"), `shared install gateway: its row's menu offers ${items.join("|")}`);
+				await page.locator(".ai-profile-menu-item").filter({ hasText: /^Edit gateway$/ }).click();
+				await until(async () => (await field(page).locator("select").inputValue()) === "eu", "shared install gateway: the field does not show the install's location");
+				assert(await field(page).locator("select").isDisabled(), "shared install gateway: the location can be changed");
+				assert((await field(page).locator(".cli-note").innerText()).trim() === RUNS_IN_SET_BY_INSTALL, `shared install gateway: the field's line reads ${JSON.stringify(await field(page).locator(".cli-note").innerText())}`);
+				pass("shared: the install's gateway shows its location read-only with the install's line, and its row offers no Remove gateway… (the other rows' Remove is in shared removals)");
+				await closeContext(context);
+			}
+			const removed = await authedFetch(`${baseUrl}/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gateway.id)}`, { method: "DELETE" });
+			assert(removed.ok, `shared location field: removing the gateway afterwards: ${removed.status}`);
+			const removedProfile = await authedFetch(`${baseUrl}/api/persistent-agent-ai-profiles/custom/custom-${keyProvider}`, { method: "DELETE" });
+			assert(removedProfile.ok, `shared location field: removing the key's profile afterwards: ${removedProfile.status}`);
+		}
+
 		// --- sharedServer: true, a member ---
+		await api("POST", "/api/skills", { id: "member-sees", displayName: MEMBER_SEES_SKILL, description: "A skill a member opens.", instructions: "Answer briefly." });
 		{
 			const { context, page, asked } = await openApp(browser, true, undefined, { person: MEMBER, signOut: SIGN_OUT_LINK });
 			const footer = page.locator(".product-sidebar-footer .signed-in-as");
@@ -820,6 +1475,16 @@ try {
 
 			await openTab(page, "Instructions");
 			assert((await countText(page, ".settings-overlay", SHARED_LINE)) === 1, "shared Instructions: no shared-server line");
+			assert((await countText(page, ".settings-overlay", ADMIN_HINT)) === 0, "shared Instructions: a member gets the new admin's hint");
+			assert((await countText(page, ".settings-overlay", DESKTOP_INSTRUCTIONS_HEAD)) === 1, "shared Instructions: a member's head line is not this computer's");
+			// Under the box, one row: the line from its left edge and the counter at its right end.
+			const lineBox = await page.locator(".settings-overlay").getByText(SHARED_LINE, { exact: false }).boundingBox();
+			const countBox = await page.locator(".settings-overlay #global-instructions-count").boundingBox();
+			const textBox = await page.locator(".settings-overlay .room-instructions-textarea").boundingBox();
+			assert(countBox && lineBox && textBox
+				&& Math.abs(lineBox.y - (textBox.y + textBox.height) - 12) < 1 && Math.abs(countBox.x + countBox.width - (textBox.x + textBox.width)) < 3
+				&& Math.abs(countBox.y + countBox.height / 2 - (lineBox.y + lineBox.height / 2)) <= 1 && lineBox.x + lineBox.width <= countBox.x && Math.abs(lineBox.x - textBox.x) < 3,
+				`shared Instructions: the line and the counter are not one row under the box, at its two ends: box ${JSON.stringify(textBox)}, counter ${JSON.stringify(countBox)}, line ${JSON.stringify(lineBox)}`);
 			assert((await page.locator(".settings-overlay .room-instructions-textarea[readonly]").count()) === 1, "shared Instructions: the text can be edited");
 			assert((await page.locator(".settings-overlay .room-instructions-section button").filter({ hasText: /^Save$/ }).count()) === 0, "shared Instructions: Save is offered");
 
@@ -831,7 +1496,15 @@ try {
 
 			await openTab(page, "Skills");
 			assert((await countText(page, ".settings-overlay", SHARED_LINE)) === 1, "shared Skills: no shared-server line");
-			assert((await page.locator(".settings-overlay .pane-head-actions button").count()) === 0, "shared Skills: Browse featured or Add skill is offered");
+			assert((await countText(page, ".settings-overlay", ADMIN_HINT)) === 0, "shared Skills: a member gets the new admin's hint");
+			await page.locator(".settings-overlay .skill-row").filter({ hasText: MEMBER_SEES_SKILL }).waitFor({ timeout: 10000 });
+			assert((await countText(page, ".settings-overlay", SKILL_FILES_NOTE)) === 0, "shared Skills: a member's library says a skill's files run");
+			assert((await page.locator(".settings-overlay .pane-head-actions button").count()) === 0, "shared Skills: Add skill is offered");
+			assert((await page.locator(".settings-overlay .skill-row").filter({ hasText: MEMBER_SEES_SKILL }).locator(".skill-table-cell:not(.skill-table-from)").count()) === 1, "shared Skills: a member's library doesn't say how many rooms use a skill");
+			await page.locator(".settings-overlay .skill-row").filter({ hasText: MEMBER_SEES_SKILL }).click();
+			await page.locator(".settings-overlay .skill-detail").waitFor({ timeout: 10000 });
+			assert((await page.locator(".settings-overlay .skill-detail button").filter({ hasText: /^Delete$/ }).count()) === 0, "shared Skills: a skill's page offers Delete to a member");
+			assert((await countText(page, ".settings-overlay .skill-detail", "Used in")) === 1, "shared Skills: a member's skill page has no Used in");
 			await closeSettings(page);
 			pass("shared: Settings has no Remote access or Profiles; AI setup, its default models, web search, instructions, connectors and skills are read-only with the line");
 			assert(asked.length === 0, `shared start, Home and Settings: the page asked for what a shared server refuses: ${asked.join(", ")}`);
@@ -904,6 +1577,117 @@ try {
 			await closeSettings(page);
 			assert(asked.length === 0, `admin: the page asked for what a shared server refuses even for its admin: ${asked.join(", ")}`);
 			pass("shared admin: Admin tag, the AI setup open (a default model saved), no sign-in or sign-out or key removal anywhere, and the page asked for nothing refused");
+			await closeContext(context);
+		}
+
+		// --- sharedServer: true, the organisation's admin sets up skills and the instructions ---
+		{
+			const { context, page, asked, probe } = await openApp(browser, true, undefined, { person: ADMIN, signOut: SIGN_OUT_LINK });
+			const overlay = page.locator(".settings-overlay");
+			const skillNames = async () => ((await api("GET", "/api/skills")) as Array<{ name: string }>).map((skill) => skill.name);
+			const addSkill = overlay.locator(".pane-head-actions button").filter({ hasText: /^Add skill$/ });
+			const menuItem = (name: string) => page.locator(".skill-add-menu [role=menuitem]").filter({ hasText: new RegExp(`^${name}$`) });
+			// The admin's library starts empty.
+			await api("DELETE", "/api/skills/member-sees", {});
+			await openSettings(page);
+			await openTab(page, "Skills");
+			assert((await countText(page, ".settings-overlay", SHARED_LINE)) === 0 && (await countText(page, ".settings-overlay", ADMIN_HINT)) === 0, "admin Skills: the read-only line is shown");
+			await until(async () => (await countText(page, ".settings-overlay", "No skills yet. Use Add skill to write or upload one.")) === 1, "admin Skills: the empty library does not say to write or upload one");
+			assert((await countText(page, ".settings-overlay", BROWSE_FEATURED_LINK)) === 0, "admin Skills: Browse featured is offered on the empty page, which the server refuses");
+			await addSkill.click();
+			assert((await menuItem(ADD_SKILL_WAYS.write).count()) === 1 && (await menuItem(ADD_SKILL_WAYS.upload).count()) === 1, "admin Skills: writing or uploading a skill is missing");
+			assert((await menuItem(ADD_SKILL_WAYS.repository).count()) === 0, "admin Skills: adding from a repository is offered, which the server refuses");
+			assert((await menuItem(ADD_SKILL_WAYS.featured).count()) === 0, "admin Skills: Browse featured is offered, which the server refuses");
+
+			// Write one.
+			await menuItem(ADD_SKILL_WAYS.write).click();
+			const form = overlay.locator(".skill-write-block");
+			await form.locator("input").nth(0).fill("Admin Written");
+			await form.locator("input").nth(1).fill("Written by the admin.");
+			await form.locator("textarea").fill("Answer in full sentences.");
+			const written = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/skills" && res.request().method() === "POST", { timeout: 10000 });
+			await form.getByRole("button", { name: "Save skill" }).click();
+			assert((await written).status() === 201, "admin Skills: writing a skill was refused");
+			await overlay.locator(".skill-row").filter({ hasText: "Admin Written" }).waitFor({ timeout: 10000 });
+			assert((await skillNames()).includes("admin-written"), "admin Skills: the written skill is not on the server");
+			assert((await countText(page, ".settings-overlay", "Added “Admin Written” to your company's library.")) === 1, "admin Skills: no company's library notice after writing a skill");
+			assert((await countText(page, ".settings-overlay", SKILL_FILES_NOTE)) === 0, "admin Skills: the library says a skill's files run");
+			// The rooms a skill is used in would be the admin's own only, so the admin's library counts none.
+			assert((await overlay.locator(".skill-row").filter({ hasText: "Admin Written" }).locator(".skill-table-cell:not(.skill-table-from)").count()) === 0, "admin Skills: the library says how many rooms use a skill");
+			assert(!/used in/i.test((await overlay.locator(".skill-row").filter({ hasText: "Admin Written" }).getAttribute("aria-label")) ?? ""), "admin Skills: a library row names its rooms");
+
+			// Upload one with a script beside it, review it, add it. Its rooms run no skill's files, and the review says so.
+			await addSkill.click();
+			await menuItem(ADD_SKILL_WAYS.upload).click();
+			const uploaded = new JSZip();
+			uploaded.file("admin-uploaded/SKILL.md", "---\nname: admin-uploaded\ndescription: Uploaded by the admin.\n---\nCheck the dates twice.\n");
+			uploaded.file("admin-uploaded/scripts/check.sh", "echo checked\n");
+			await page.locator(".skill-upload-input").setInputFiles({ name: "admin-uploaded.zip", mimeType: "application/zip", buffer: await uploaded.generateAsync({ type: "nodebuffer" }) });
+			// The review's one message about its scripts: how many, then where they run.
+			const scriptsLine = overlay.locator(".skill-review-scripts-text");
+			await scriptsLine.waitFor({ timeout: 10000 });
+			assert(JSON.stringify(await scriptsLine.allTextContents()) === JSON.stringify([`${skillScriptsCount(1)} ${SKILL_FILES_LINES.sharedServer.one}`]), `admin Skills: the review of a skill with a script does not say it never runs here, got ${JSON.stringify(await scriptsLine.allTextContents())}`);
+			const accepted = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/skills/accept", { timeout: 10000 });
+			await overlay.getByRole("button", { name: ADD_TO_LIBRARY }).click();
+			assert((await accepted).status() === 201, "admin Skills: adding an uploaded skill was refused");
+			await overlay.locator(".skill-row").filter({ hasText: "admin-uploaded" }).waitFor({ timeout: 10000 });
+			assert((await skillNames()).includes("admin-uploaded"), "admin Skills: the uploaded skill is not on the server");
+			assert((await countText(page, ".settings-overlay", "Added “admin-uploaded” to your company's library.")) === 1, "admin Skills: no company's library notice after uploading a skill");
+
+			// Remove the written one from its page.
+			await overlay.locator(".skill-row").filter({ hasText: "Admin Written" }).click();
+			await overlay.locator(".skill-detail").waitFor({ timeout: 10000 });
+			assert((await countText(page, ".settings-overlay .skill-detail", "Used in")) === 0, "admin Skills: a skill's page has Used in");
+			assert((await countText(page, ".settings-overlay .skill-detail", "Delete skill")) === 1, "admin Skills: the delete row is not Delete skill");
+			assert((await countText(page, ".settings-overlay .skill-detail", "Removes it from your company's library. Rooms that use it stop using it.")) === 1, "admin Skills: the delete row does not say it leaves the company's library");
+			await overlay.locator(".skill-detail button").filter({ hasText: /^Delete$/ }).click();
+			const question = page.locator(".confirm-dialog-backdrop");
+			assert((await question.locator("h2").innerText()).trim() === "Remove “Admin Written” for everyone?", "admin Skills: the delete question does not ask to remove it for everyone");
+			assert((await question.locator("p").innerText()).trim() === "Every room in your company that uses it stops using it.", "admin Skills: the delete question does not say every room in the company stops using it");
+			const removed = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/skills/admin-written" && res.request().method() === "DELETE", { timeout: 10000 });
+			assert((await question.locator("button").filter({ hasText: /^Delete$/ }).count()) === 0, "admin Skills: the delete question's button reads Delete");
+			await question.locator("button").filter({ hasText: /^Remove$/ }).click();
+			assert((await removed).status() === 200, "admin Skills: removing a skill was refused");
+			await overlay.locator(".skill-row").filter({ hasText: "Admin Written" }).waitFor({ state: "detached", timeout: 10000 });
+			assert(!(await skillNames()).includes("admin-written"), "admin Skills: the removed skill is still on the server");
+			assert((await countText(page, ".settings-overlay", "Removed “Admin Written” from your company's library.")) === 1, "admin Skills: no company's library notice after removing a skill");
+			pass("shared admin Skills: write, upload and remove from the page, each read back from the server, with the company's library's words, no Used in, no Browse featured and no adding from a repository");
+
+			// The organisation's instructions.
+			await openTab(page, "Instructions");
+			const box = overlay.locator(".room-instructions-textarea");
+			assert((await overlay.locator(".room-instructions-textarea[readonly]").count()) === 0, "admin Instructions: the text is read-only");
+			assert((await countText(page, ".settings-overlay", SHARED_LINE)) === 0 && (await countText(page, ".settings-overlay", ADMIN_HINT)) === 0, "admin Instructions: the read-only line is shown");
+			assert((await countText(page, ".settings-overlay", COMPANY_INSTRUCTIONS_HEAD)) === 1, "admin Instructions: the head line does not name the company");
+			await box.fill("Answer in plain words.");
+			const instructionsSaved = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/settings/instructions" && res.request().method() === "PUT", { timeout: 10000 });
+			await overlay.locator(".room-instructions-section button").filter({ hasText: /^Save$/ }).click();
+			assert((await instructionsSaved).status() === 200, "admin Instructions: saving was refused");
+			assert((await api("GET", "/api/settings/instructions")).instructions.text === "Answer in plain words.", "admin Instructions: the text is not on the server");
+			pass("shared admin Instructions: changed from the page and read back from the server");
+
+			// A read that takes the role away: the draft goes back to what is saved, the box locks, and Write skill closes.
+			await box.fill("A draft the member cannot save.");
+			probe.person = { ...ADMIN, admin: false };
+			await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+			await until(async () => (await overlay.locator(".room-instructions-textarea[readonly]").count()) === 1, "admin Instructions: the box stayed open after the admin's role was taken away");
+			assert((await box.inputValue()) === "Answer in plain words.", "admin Instructions: the draft stayed after the admin's role was taken away");
+			// Once text is saved, the line carries when it was saved after it.
+			const footLine = (await overlay.locator(".room-instructions-foot .cli-note").first().innerText()).trim();
+			assert(footLine.startsWith(SHARED_LINE) && (await countText(page, ".settings-overlay", ADMIN_HINT)) === 0, `admin Instructions: no read-only line after the admin's role was taken away, got ${JSON.stringify(footLine)}`);
+			probe.person = ADMIN;
+			await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+			await openTab(page, "Skills");
+			await addSkill.click();
+			await menuItem(ADD_SKILL_WAYS.write).click();
+			await overlay.locator(".skill-write-block").waitFor({ timeout: 10000 });
+			probe.person = { ...ADMIN, admin: false };
+			await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+			await until(async () => (await overlay.locator(".skill-write-block").count()) === 0, "admin Skills: Write skill stayed open after the admin's role was taken away");
+			assert((await overlay.locator(".pane-head-actions button").count()) === 0, "admin Skills: Add skill stayed after the admin's role was taken away");
+			await closeSettings(page);
+			assert(asked.length === 0, `admin Skills and Instructions: the page asked for what a shared server refuses even for its admin: ${asked.join(", ")}`);
+			pass("shared admin: a read that takes the role away locks the instructions with the saved text and closes Write skill, and the page asked for nothing refused");
 			await closeContext(context);
 		}
 
@@ -2050,51 +2834,185 @@ try {
 			await closeContext(context);
 		}
 
-		// --- sharedServer: true, the Wallet's address: the sentence, and no usage read, the first load included ---
+		// --- sharedServer: true, the usage address: nothing read before the answer, then the person's own part, and the company's for the admin only ---
 		for (const [who, person] of [["a member", MEMBER], ["the admin", ADMIN]] as const) {
-			const opened = await openApp(browser, true, undefined, { person, signOut: SIGN_OUT_LINK });
+			const usage = newUsageStandIn();
+			const opened = await openApp(browser, true, (context) => standInUsage(context, usage), { person, signOut: SIGN_OUT_LINK });
 			const { context, page, probe, asked } = opened;
+			const nav = page.locator(".product-nav button").filter({ hasText: SHARED_USAGE_NAV });
+			assert((await nav.count()) === 1 && (await nav.getAttribute("title")) === SHARED_USAGE_NAV_HOVER, `shared usage, ${who}: the sidebar has no ${SHARED_USAGE_NAV} button with its hover text`);
+			assert((await page.locator(".product-nav button").filter({ hasText: "Wallet" }).count()) === 0, `shared usage, ${who}: the Wallet button is on the page`);
 			await firstLoadOfWalletHeld(opened);
-			assert(!asked.includes(USAGE_READ), `shared Wallet, ${who}: usage was read before the page knew the server was shared`);
-			assert((await page.locator(".dashboard").innerText()).trim() === "Loading…", `shared Wallet, ${who}: the page before the answer reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
+			assert(timesAsked(usage, "mine") === 0 && timesAsked(usage, "company") === 0 && !asked.includes(USAGE_READ), `shared usage, ${who}: usage was read before the page knew the server was shared`);
+			assert((await page.locator(".dashboard").innerText()).trim() === "Loading…", `shared usage, ${who}: the page before the answer reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
 			probe.release();
-			await page.getByText(WALLET_HELD_BACK, { exact: true }).waitFor({ timeout: 10000 });
+			await page.locator(".dashboard .kpi").first().waitFor({ timeout: 10000 });
 			await settled(opened);
-			assert((await page.locator(".dashboard").innerText()).trim() === WALLET_HELD_BACK, `shared Wallet, ${who}: the page reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
-			assert(!asked.includes(USAGE_READ), `shared Wallet, ${who}: the page read usage`);
-			assert((await walletLine(page)) === "What your exxperts cost.", `shared Wallet, ${who}: the line reads ${JSON.stringify(await walletLine(page))}`);
-			// Mounted again with the answer already known: the sentence at once, still no read.
+			assert((await page.locator(".dashboard-page .landing-hero h1").innerText()).trim() === SHARED_USAGE_HEADING, `shared usage, ${who}: the heading reads ${JSON.stringify(await page.locator(".dashboard-page .landing-hero h1").innerText())}`);
+			assert((await walletLine(page)) === SHARED_USAGE_LINE, `shared usage, ${who}: the line reads ${JSON.stringify(await walletLine(page))}`);
+			// What the admin sees is said to members; the admin has the part itself.
+			if (person.admin) assert((await page.locator(".dash-footer").count()) === 0, `shared usage, ${who}: the admin is told what the admin sees`);
+			else {
+				assert((await page.locator(".dash-footer").innerText()).trim() === SHARED_USAGE_FOOTER, `shared usage, ${who}: the footer reads ${JSON.stringify(await page.locator(".dash-footer").innerText())}`);
+				// Who else sees a member's usage reads as plainly as the cards' hints.
+				const [footerColour, hintColour] = await Promise.all([".dash-footer", ".kpi .hint"].map((sel) => page.locator(sel).first().evaluate((el) => getComputedStyle(el).color)));
+				assert(footerColour === hintColour, `shared usage, ${who}: the footer is ${footerColour}, fainter than the hints' ${hintColour}`);
+			}
+			// Every room and turn in sight: the earlier rooms' fold and the turn list open.
+			await page.locator(".bar-row-fold").click();
+			await page.locator(".recent-summary").click();
+			await page.locator(".recent-body tbody tr").first().waitFor({ timeout: 10000 });
+			const text = await page.locator(".dashboard").innerText();
+			assert(!text.includes("$") && !/value|billed|spend/i.test(text), `shared usage, ${who}: the page shows money: ${JSON.stringify(text)}`);
+			assert(text.includes(SHARED_USAGE_UNAVAILABLE_ROOM) && !text.includes(GONE_ROOM_ID), `shared usage, ${who}: a room with no name is not shown as ${SHARED_USAGE_UNAVAILABLE_ROOM}, or its id shows`);
+			// The own part's choices scope only the own part: the organisation part has its own.
+			const hints = (await page.locator(".bar-list-sub").allInnerTexts()).map((line) => line.trim());
+			assert(JSON.stringify(hints) === JSON.stringify([SHARED_USAGE_ROOMS_HINT, SHARED_USAGE_MODELS_HINT]), `shared usage, ${who}: the Rooms and Models hints read ${JSON.stringify(hints)}`);
+			assert(usage.mine === 1, `shared usage, ${who}: the person's own usage was read ${usage.mine} times`);
+			const company = page.locator(".company-usage");
+			if (person.admin) {
+				await company.locator(".kpi").first().waitFor({ timeout: 10000 });
+				assert((await company.locator("h2.company-usage-title").innerText()).trim() === COMPANY_USAGE_TITLE, `shared usage, ${who}: the company part's title reads ${JSON.stringify(await company.locator("h2.company-usage-title").innerText())}`);
+				assert((await company.getByText(COMPANY_USAGE_LINE, { exact: true }).count()) === 1, `shared usage, ${who}: the company part's line is missing`);
+				// The part's title sits under the page's own title and over the part's chart titles.
+				const size = (loc: Locator): Promise<number> => loc.first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+				const sizes = [await size(page.locator(".dashboard-page .landing-hero h1")), await size(company.locator("h2.company-usage-title")), await size(company.locator(".chart-block h2"))];
+				assert(sizes[0]! > sizes[1]! && sizes[1]! > sizes[2]!, `shared usage, ${who}: the page, part and chart titles are ${JSON.stringify(sizes)} px`);
+				assert((await company.locator(".range-toggle").count()) === 1, `shared usage, ${who}: the company part has no range switch`);
+				const csv = company.locator(".export-btn");
+				assert((await csv.getAttribute("href")) === "/api/usage/export.csv" && (await csv.getAttribute("title")) === COMPANY_USAGE_CSV_HOVER, `shared usage, ${who}: the company CSV link is wrong`);
+				assert(usage.company === 1, `shared usage, ${who}: the company's usage was read ${usage.company} times`);
+			} else {
+				assert((await company.count()) === 0 && usage.company === 0 && !asked.includes(USAGE_READ), `shared usage, ${who}: a member was shown or asked the company's usage`);
+			}
+			// Never on a timer: the desktop's Wallet asks again within 5 s; this page waits for the next showing.
+			assert(!(await appears(() => usage.mine > 1 || usage.company > (person.admin ? 1 : 0), 6000)), `shared usage, ${who}: usage was read again on a timer`);
+			// Coming back to the address asks again, once.
 			await page.goto(`${baseUrl}/#/`);
 			await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
 			await page.goto(`${baseUrl}/#/dashboard`);
-			await page.getByText(WALLET_HELD_BACK, { exact: true }).waitFor({ timeout: 10000 });
+			await until(() => usage.mine === 2, `shared usage, ${who}: coming back to the address did not read the person's usage again`);
+			await page.locator(".dashboard .kpi").first().waitFor({ timeout: 10000 });
 			await settled(opened);
-			assert(!asked.includes(USAGE_READ), `shared Wallet, ${who}: the page read usage on coming back to the address`);
-			pass(`shared: the Wallet's address, for ${who}, shows the one sentence and never reads usage, before the answer, after it and on coming back`);
+			pass(`shared: the usage address, for ${who}, reads nothing before the answer, shows the person's own usage with no money, its own hints, and a room with no name by no id${person.admin ? ", and the company's part with its CSV" : ", never the company's"}, and asks again only when shown again`);
+			await closeContext(context);
+		}
+
+		// --- sharedServer: true, the usage address: a failed read says so; a refused company read takes that part away ---
+		{
+			const usage = newUsageStandIn();
+			usage.mineStatus = 500;
+			usage.companyStatus = 403;
+			const opened = await openApp(browser, true, (context) => standInUsage(context, usage), { person: ADMIN, signOut: SIGN_OUT_LINK });
+			const { context, page } = opened;
+			await page.goto(`${baseUrl}/#/dashboard`);
+			await page.getByText(SHARED_USAGE_UNREADABLE, { exact: true }).waitFor({ timeout: 10000 });
+			await until(() => usage.company === 1, "shared usage, refusals: the admin's page did not ask the company's usage");
+			await settled(opened);
+			assert((await page.locator(".dashboard .kpi").count()) === 0, "shared usage, refusals: numbers show beside the failed read");
+			assert((await page.locator(".company-usage").count()) === 0, "shared usage, refusals: the company part stays after a refusal");
+			// Try again asks once more, and an answered read shows the numbers in place of the line.
+			usage.mineStatus = 200;
+			await page.locator(".usage-unreadable").getByRole("button", { name: "Try again" }).click();
+			await page.locator(".dashboard .kpi").first().waitFor({ timeout: 10000 });
+			assert(usage.mine === 2 && (await page.getByText(SHARED_USAGE_UNREADABLE, { exact: true }).count()) === 0, `shared usage, refusals: Try again did not read the person's usage once more (${usage.mine} reads)`);
+			// The control: the same page with the company's read answered shows that part.
+			usage.companyStatus = 200;
+			await page.goto(`${baseUrl}/#/`);
+			await page.locator(".persistent-agent-card").first().waitFor({ timeout: 15000 });
+			await page.goto(`${baseUrl}/#/dashboard`);
+			await page.locator(".company-usage .kpi").first().waitFor({ timeout: 10000 });
+			assert((await page.getByText(SHARED_USAGE_UNREADABLE, { exact: true }).count()) === 0, "shared usage, refusals: the failure line stays once the reads are answered");
+			pass("shared: a failed usage read shows its one line and no numbers with Try again, which reads once more, a refused company read takes the company part away, and answered reads show both");
+			await closeContext(context);
+		}
+
+		// --- sharedServer: true, the usage address: an organisation with no usage offers nothing to narrow or download ---
+		{
+			const usage = newUsageStandIn();
+			usage.companyAnswer = COMPANY_USAGE_NONE;
+			const opened = await openApp(browser, true, (context) => standInUsage(context, usage), { person: ADMIN, signOut: SIGN_OUT_LINK });
+			const { context, page } = opened;
+			await page.goto(`${baseUrl}/#/dashboard`);
+			const company = page.locator(".company-usage");
+			await company.getByText(COMPANY_USAGE_EMPTY, { exact: true }).waitFor({ timeout: 10000 });
+			await settled(opened);
+			const controls = await company.locator(".export-btn, .range-toggle, .model-select").count();
+			assert(controls === 0, `shared usage, no company usage: ${controls} controls show beside "${COMPANY_USAGE_EMPTY}"`);
+			await closeContext(context);
+			// Rows with no model, narrowed to a range that holds none of them: not "no usage", and the range switch stays to widen it again.
+			const narrowed = newUsageStandIn();
+			narrowed.companyAnswer = (range) => (range === "all" ? COMPANY_USAGE_NO_MODEL : { ...COMPANY_USAGE_NONE, range });
+			const again = await openApp(browser, true, (context) => standInUsage(context, narrowed), { person: ADMIN, signOut: SIGN_OUT_LINK });
+			await again.page.goto(`${baseUrl}/#/dashboard`);
+			const part = again.page.locator(".company-usage");
+			await part.locator(".kpi").first().waitFor({ timeout: 10000 });
+			const asked = narrowed.company;
+			await part.locator(".range-toggle").getByRole("button", { name: "7d", exact: true }).click();
+			await until(() => narrowed.company === asked + 1, "shared usage, rows with no model: the 7d range was not asked");
+			await settled(again);
+			assert((await part.getByText(COMPANY_USAGE_EMPTY, { exact: true }).count()) === 0, `shared usage, rows with no model: a narrowed range says "${COMPANY_USAGE_EMPTY}"`);
+			assert((await part.locator(".range-toggle").count()) === 1, "shared usage, rows with no model: the range switch is gone on a narrowed range");
+			pass("shared: an organisation with no usage says so and shows no range, model or CSV control; one with usage shows its range switch and CSV (the admin's row above); a narrowed range with no turns keeps its switch and never says there is no usage");
+			await closeContext(again.context);
+		}
+
+		// --- sharedServer: true, a phone: the turn cards label tokens in and out on the six columns ---
+		{
+			const usage = newUsageStandIn();
+			const opened = await openApp(browser, true, (context) => standInUsage(context, usage), { person: MEMBER, signOut: SIGN_OUT_LINK });
+			const { context, page } = opened;
+			await page.setViewportSize({ width: 390, height: 800 });
+			await page.goto(`${baseUrl}/#/dashboard`);
+			await page.locator(".recent-summary").click();
+			const cells = page.locator(".recent-body.recent-tokens tbody tr").first().locator("td");
+			await cells.first().waitFor({ timeout: 10000 });
+			const marks = await cells.evaluateAll((tds) => tds.map((td) => getComputedStyle(td, "::before").content));
+			assert(JSON.stringify(marks.slice(4)) === JSON.stringify(['"↑ "', '"↓ "']), `shared usage, phone: the in and out cells are marked ${JSON.stringify(marks)}`);
+			assert(marks.slice(0, 4).every((mark) => mark === "none" || mark === "normal"), `shared usage, phone: a cell before the counts is marked ${JSON.stringify(marks)}`);
+			assert((await page.evaluate(() => document.documentElement.scrollWidth)) <= 390, "shared usage, phone: the page scrolls sideways");
+			const rangeHeights = await page.locator(".range-toggle button").evaluateAll((buttons) => buttons.map((b) => b.getBoundingClientRect().height));
+			assert(rangeHeights.length > 0 && rangeHeights.every((h) => h >= 36), `shared usage, phone: a range button is too small to tap: ${JSON.stringify(rangeHeights)}`);
+			pass("shared phone: each turn card marks tokens in and out on their own cells, the range buttons take a finger, and the page does not scroll sideways");
+			await closeContext(context);
+		}
+
+		// --- sharedServer: true, a phone, the person named and no sign-out link: the name takes a row of its own, so every tab shows ---
+		{
+			const { context, page } = await openApp(browser, true, undefined, { person: MEMBER });
+			await page.setViewportSize({ width: 390, height: 800 });
+			await page.locator(".product-sidebar-footer .signed-in-as-name").waitFor({ timeout: 10000 });
+			const usageTab = page.locator(".product-nav button").filter({ hasText: SHARED_USAGE_NAV });
+			assert(await page.locator(".product-sidebar .product-nav").evaluate((node) => node.scrollWidth <= node.clientWidth), "shared phone, no sign-out: the top bar's tabs are cut (the nav has to scroll)");
+			const box = await usageTab.boundingBox();
+			assert(box !== null && box.x >= 0 && box.x + box.width <= 390, `shared phone, no sign-out: the ${SHARED_USAGE_NAV} tab is off the screen`);
+			pass("shared phone: with the person named and no sign-out link, the name takes its own row and every tab shows");
 			await closeContext(context);
 		}
 
 		// --- sharedServer: true, the first read fails: not knowing is not this computer, so still no usage read ---
 		{
-			const opened = await openApp(browser, true, undefined, { person: MEMBER, signOut: SIGN_OUT_LINK });
+			const usage = newUsageStandIn();
+			const opened = await openApp(browser, true, (context) => standInUsage(context, usage), { person: MEMBER, signOut: SIGN_OUT_LINK });
 			const { context, page, probe, asked, reads } = opened;
 			await page.goto("about:blank");
 			probe.fail = true;
 			asked.length = 0;
+			usage.mine = 0;
 			const before = reads();
 			await page.goto(`${baseUrl}/#/dashboard`);
 			await page.locator(".dashboard").waitFor({ timeout: 10000 });
 			await settled(opened);
-			assert(!asked.includes(USAGE_READ), "shared Wallet, a failed first read: the page read usage");
-			await until(() => reads() >= before + 2, "shared Wallet, a failed first read: the page did not ask client-context again");
+			assert(timesAsked(usage, "mine") === 0 && !asked.includes(USAGE_READ), "shared usage, a failed first read: the page read usage");
+			await until(() => reads() >= before + 2, "shared usage, a failed first read: the page did not ask client-context again");
 			await settled(opened);
-			assert(!asked.includes(USAGE_READ), "shared Wallet, a failed first read: the page read usage while it asked again");
-			assert((await page.locator(".dashboard").innerText()).trim() === "Loading…", `shared Wallet, a failed first read: the page reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
+			assert(timesAsked(usage, "mine") === 0 && !asked.includes(USAGE_READ), "shared usage, a failed first read: the page read usage while it asked again");
+			assert((await page.locator(".dashboard").innerText()).trim() === "Loading…", `shared usage, a failed first read: the page reads ${JSON.stringify(await page.locator(".dashboard").innerText())}`);
 			probe.fail = false;
-			await page.getByText(WALLET_HELD_BACK, { exact: true }).waitFor({ timeout: 20000 });
+			await page.locator(".dashboard .kpi").first().waitFor({ timeout: 20000 });
 			await settled(opened);
-			assert(!asked.includes(USAGE_READ), "shared Wallet, a failed first read: the page read usage once the answer came");
-			pass("shared: after a failed first read the Wallet's address reads no usage, asks again, and shows the sentence once the answer comes");
+			assert(usage.mine === 1 && !asked.includes(USAGE_READ), "shared usage, a failed first read: once the answer came the page read the Wallet's usage, or its own not once");
+			pass("shared: after a failed first read the usage address reads no usage, asks again, and shows the person's own usage once the answer comes");
 			await closeContext(context);
 		}
 
@@ -2107,7 +3025,8 @@ try {
 			probe.release();
 			await page.locator(".dashboard .export-btn").waitFor({ timeout: 10000 });
 			assert(asked.includes(USAGE_READ), "this computer's Wallet: the Wallet shows, but its read was not counted: the shared rows prove nothing");
-			assert((await page.getByText(WALLET_HELD_BACK, { exact: true }).count()) === 0, "this computer's Wallet: the shared server's sentence is shown");
+			assert((await page.getByText(SHARED_USAGE_FOOTER, { exact: true }).count()) === 0, "this computer's Wallet: the shared server's footer is shown");
+			for (const hint of [SHARED_USAGE_ROOMS_HINT, SHARED_USAGE_MODELS_HINT]) assert((await page.getByText(hint, { exact: true }).count()) === 0, `this computer's Wallet: the shared server's hint "${hint}" is shown`);
 			assert((await walletLine(page)) === "What your exxperts cost, locally measured.", `this computer's Wallet: the line reads ${JSON.stringify(await walletLine(page))}`);
 			await closeContext(context);
 			// A failed read holds the Wallet back here too, and the next answer opens it.
@@ -2143,6 +3062,7 @@ try {
 			assert((await page.locator('.settings-overlay input[type="checkbox"]').count()) > 0, "this computer: web search cannot be changed");
 			await openTab(page, "Instructions");
 			assert((await page.locator(".settings-overlay .room-instructions-textarea[readonly]").count()) === 0, "this computer: the instructions are read-only");
+			assert((await countText(page, ".settings-overlay", DESKTOP_INSTRUCTIONS_HEAD)) === 1, "this computer: the instructions' head line changed");
 			// Save and Discard appear once the text changes; Discard puts the box back.
 			const instructionsBox = page.locator(".settings-overlay .room-instructions-textarea");
 			await instructionsBox.fill(`${await instructionsBox.inputValue()} Edited.`);
@@ -2154,7 +3074,12 @@ try {
 			await openTab(page, "Connectors");
 			assert((await page.locator(".settings-overlay .connector-dir-search").count()) === 1, "this computer: the connector directory is missing");
 			await openTab(page, "Skills");
-			assert((await page.locator(".settings-overlay .pane-head-actions button").filter({ hasText: "Browse featured" }).count()) === 1, "this computer: Browse featured is missing");
+			await page.locator(".settings-overlay .skill-row").first().waitFor({ timeout: 10000 });
+			assert((await countText(page, ".settings-overlay", SKILL_FILES_NOTE)) === 0, "this computer: the library still says a skill's files run only where you allow them");
+			await page.locator(".settings-overlay .pane-head-actions button").filter({ hasText: /^Add skill$/ }).click();
+			assert((await page.locator(".skill-add-menu [role=menuitem]").filter({ hasText: ADD_SKILL_WAYS.repository }).count()) === 1, "this computer: adding from a repository is missing");
+			assert((await page.locator(".skill-add-menu [role=menuitem]").filter({ hasText: ADD_SKILL_WAYS.featured }).count()) === 1, "this computer: Browse featured is missing");
+			await page.keyboard.press("Escape");
 			assert((await page.locator(".settings-overlay").getByText(SHARED_LINE, { exact: true }).count()) === 0, "this computer: the shared-server line is shown");
 			await closeSettings(page);
 			pass("this computer: the sort control, Wallet, Remote access, Profiles and every setting control are there, with no shared-server line");

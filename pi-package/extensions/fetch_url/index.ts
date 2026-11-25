@@ -6,6 +6,8 @@ import { Type } from "typebox";
 import { Readability } from "@mozilla/readability";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
+import { serverHooks } from "../../../apps/web-server/src/server-hooks.js";
+import { resolveWebSearchSettings } from "../web-search/index.js";
 import { classifyAddress } from "./address-class.js";
 
 // Curated, JS-native single-purpose "fetch a URL" tool. Sibling to `web_search`
@@ -68,6 +70,20 @@ let activeRenders = 0;
 
 function isDisabled(): boolean {
 	return String(process.env.EXXETA_FETCH_URL_DISABLED ?? "").trim() === "1";
+}
+
+export const FETCH_DISABLED = "URL fetching is disabled in this environment.";
+
+/** What the model reads where the web search setting has web pages off: on a shared server, until its admin turns them on. */
+export const WEB_PAGES_OFF = "Reading web pages is off on this server. Your admin can turn it on under Web search.";
+/** The same, where the admin's page shows no switch: the server can't reach public pages, or its setup doesn't say. */
+export const WEB_PAGES_OFF_NO_SWITCH = "Reading web pages is off on this server.";
+
+/** Why no page opens at all, read at each call: fetching switched off for the process, or web pages off in the setting. */
+function switchedOff(): string | null {
+	if (isDisabled()) return FETCH_DISABLED;
+	if (!resolveWebSearchSettings().webPages) return serverHooks().publicPages?.() === "reachable" ? WEB_PAGES_OFF : WEB_PAGES_OFF_NO_SWITCH;
+	return null;
 }
 
 // Browser fallback is on by default when Chromium is available; set to "off" to
@@ -134,17 +150,16 @@ function guardedLookup(
 
 const guardedDispatcher = new Agent({ connect: { lookup: guardedLookup as any } });
 
-export const FETCH_DISABLED = "URL fetching is disabled in this environment.";
-
 /**
  * What no yes could open, judged from the address alone with no name lookup:
- * fetching switched off, another scheme, an internal name, a private or
+ * fetching switched off, web pages off in the web search setting, another scheme, an internal name, a private or
  * reserved IP literal, a host the operator's list refuses. Null when the
  * address may go on to be judged; the room's web reader runs this before it
  * decides whether to ask, so a card never offers what can't be opened.
  */
 export function refusedWithoutLookup(raw: string): string | null {
-	if (isDisabled()) return FETCH_DISABLED;
+	const off = switchedOff();
+	if (off) return off;
 	let parsed: URL;
 	try {
 		parsed = new URL(raw);
@@ -195,7 +210,8 @@ async function guardUrl(raw: string): Promise<string | null> {
 	if (!allowPrivate && addrs.some((a) => ipIsBlocked(a))) {
 		return `Refusing to fetch "${hostname}" — it resolves to a private/reserved address.`;
 	}
-	return null;
+	// The switch may have gone off while the name was looked up; the request starts right after this, with nothing awaited between.
+	return switchedOff();
 }
 
 async function readCapped(res: Response): Promise<{ text: string; truncatedBytes: boolean }> {
@@ -645,9 +661,10 @@ export default function (pi: ExtensionAPI) {
 		async execute(_id, params, signal): Promise<any> {
 			const { url, max_chars } = params;
 			const followsOtherHosts = (params as Record<symbol, unknown>)[FOLLOWS_OTHER_HOSTS] === true;
-			if (isDisabled()) {
+			const off = switchedOff();
+			if (off) {
 				return {
-					content: [{ type: "text", text: FETCH_DISABLED }],
+					content: [{ type: "text", text: off }],
 					details: { disabled: true },
 					isError: true,
 				};

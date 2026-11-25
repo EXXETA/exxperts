@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomic } from "@exxeta/exxperts-runtime";
 import { productAppStatePath } from "../../product-state-paths.js";
 
 export type PersistentRoomScheduleType = "once" | "interval" | "cron";
@@ -150,23 +151,7 @@ function readJsonFile(file: string): unknown {
 
 function atomicWriteJson(file: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-	const tempFile = path.join(path.dirname(file), `.schedules.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`);
-	try {
-		fs.writeFileSync(tempFile, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-		fs.renameSync(tempFile, file);
-		try {
-			fs.chmodSync(file, 0o600);
-		} catch {
-			// Best effort; the temp file was created with 0600.
-		}
-	} catch (error) {
-		try {
-			fs.rmSync(tempFile, { force: true });
-		} catch {
-			// Ignore cleanup failure and surface the original write error.
-		}
-		throw error;
-	}
+	writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`, { hiddenTemp: true });
 }
 
 function normalizeStoredJob(value: unknown): PersistentRoomScheduleJob {

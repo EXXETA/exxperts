@@ -5,6 +5,7 @@ import { modelDisplayName, modelTooltipName } from "../model-names";
 import { confirmDialog } from "./confirm-dialog";
 import { RsInfo } from "./rs-info";
 import { PaneHeader } from "./pane-header";
+import { useSettingsLookNext } from "../settings-look";
 
 /** The one question before a conversation is forgotten, from the room's bin or from this pane. */
 export function confirmForgetConversation(answerRunning: boolean): Promise<boolean> {
@@ -47,6 +48,8 @@ export function RoomSessionSection({ status, answering, onRefresh, onMementoAppl
 	const activeThread = status.activeThread;
 	const modelLabel = sessionModelLabel(status);
 	const busy = Boolean(activeThread?.inFlight || activeThread?.working || status.activeLock);
+	// The new look marks Forget as the destructive action it is, in soft red.
+	const forgetClass = useSettingsLookNext() ? "rs-btn rs-btn-danger rs-btn-danger-soft" : "rs-btn";
 
 	async function forgetConversation(): Promise<void> {
 		if (!activeThread) return;
@@ -101,7 +104,7 @@ export function RoomSessionSection({ status, answering, onRefresh, onMementoAppl
 							<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
 						</span>
 					</div>
-					<button className="rs-btn" disabled={submitting} onClick={() => void forgetConversation()}>{submitting ? "Forgetting…" : "Forget"}</button>
+					<button className={forgetClass} disabled={submitting} onClick={() => void forgetConversation()}>{submitting ? "Forgetting…" : "Forget"}</button>
 				</div>
 			</div>
 			{message && <div className="workspaces-success">{message}</div>}

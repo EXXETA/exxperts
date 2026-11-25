@@ -288,7 +288,7 @@ test("a win-x64 trim keeps a listed package that a kept package also needs", () 
 test("a win-x64 trim fails when it would leave out a package the list does not name", () => {
 	const library = pkg("@anthropic-ai/sandbox-runtime", { dependencies: { "node-forge": "1.0.0", "only-for-the-box": "1.0.0" } });
 	const dir = stagedApp(boxLibrary({ [`${BOX}/package.json`]: library, "node_modules/only-for-the-box/package.json": pkg("only-for-the-box") }));
-	assert.throws(() => pruneDesktopPayload(dir, { target: WINDOWS, log: () => {} }), /win-x64 desktop payload would leave out only-for-the-box, which DESKTOP_TARGET_DROP does not list/);
+	assert.throws(() => pruneDesktopPayload(dir, { target: WINDOWS, log: () => {} }), /win-x64 desktop payload would leave out only-for-the-box, which neither DESKTOP_TARGET_DROP nor ARCHIVE_TARGET_DROP lists for it; list each with the reason, or keep what it serves$/);
 	assert.ok(fs.existsSync(path.join(dir, ...BOX.split("/"), "package.json")), "a refused trim removed files");
 });
 
@@ -306,17 +306,18 @@ test("a win-x64 trim still fails when any other file the server needs is missing
 	pruneDesktopPayload(stagedApp(boxLibrary()), { target: WINDOWS, log: () => {} });
 });
 
-// Microsoft's sandbox kit as the release tree carries it, after the archive's
-// own trim: its JavaScript, its licence, every platform's binaries, its own
-// koffi with the sources it builds from, koffi's platform package (the
-// target's, as npm installs only that one), semver at the top, which nothing
-// else the Mac keeps needs, and node-pty, which only its terminal path loads.
+// Microsoft's sandbox kit as the win-x64 release tree carries it, after the
+// archive's own trim: its JavaScript, its licence, every platform's binaries,
+// its own koffi with the sources it builds from, koffi's Windows package (npm
+// installs only the target's), semver at the top, and node-pty, which only
+// its terminal path loads. The other archives leave it out
+// (ARCHIVE_TARGET_DROP in scripts/bundle-release-prune.mjs).
 const KIT = "node_modules/@microsoft/mxc-sdk";
 const KOFFI = `${KIT}/node_modules/koffi`;
 const KOFFI_KEEP = DESKTOP_DROP_FILES.find((entry) => entry.folder === KOFFI).keep;
 const KIT_BIN_LEFT_OUT = ["x64/wxc-exec.exe", "x64/libmxc_ffi.so", "x64/lxc-exec", "x64/plm.exe", "x64/wxc-test-proxy.exe", "x64/_manifest/spdx_2.2/manifest.spdx.json", "x64/dotnet/NativeMethods.g.cs", "arm64/mxc_ffi.dll", "arm64/wxc-exec.exe"];
 const KOFFI_LEFT_OUT = ["cnoke.cjs", "lib/native/base/base.cc", "src/koffi/CMakeLists.txt", "src/koffi/src/call.cc", "src/koffi/src/abi/x64win_asm.asm", "vendor/node-api-headers/include/node_api.h", "vendor/node-addon-api/LICENSE.md"];
-const sandboxKit = (platformPackage, overrides = {}) => ({
+const sandboxKit = (overrides = {}) => ({
 	[`${KIT}/package.json`]: pkg("@microsoft/mxc-sdk", { dependencies: { koffi: "^3.2.1", "node-pty": "^1.1.0", semver: "^7.7.4" } }),
 	[`${KIT}/LICENSE.md`]: "MIT\n",
 	[`${KIT}/dist/native-library.js`]: "x",
@@ -326,8 +327,8 @@ const sandboxKit = (platformPackage, overrides = {}) => ({
 	...Object.fromEntries(KOFFI_KEEP.filter((rel) => rel !== "package.json").map((rel) => [`${KOFFI}/${rel}`, "x"])),
 	...Object.fromEntries(KOFFI_LEFT_OUT.map((rel) => [`${KOFFI}/${rel}`, "x"])),
 	[`${KOFFI}/package.json`]: pkg("koffi", { optionalDependencies: { "@koromix/koffi-win32-x64": "3.3.7", "@koromix/koffi-darwin-arm64": "3.3.7" } }),
-	[`node_modules/@koromix/${platformPackage}/package.json`]: pkg(`@koromix/${platformPackage}`),
-	[`node_modules/@koromix/${platformPackage}/koffi.node`]: "node",
+	"node_modules/@koromix/koffi-win32-x64/package.json": pkg("@koromix/koffi-win32-x64"),
+	"node_modules/@koromix/koffi-win32-x64/koffi.node": "node",
 	"node_modules/node-pty/package.json": pkg("node-pty", { dependencies: { "node-addon-api": "^7.1.0" } }),
 	"node_modules/node-pty/lib/index.js": "x",
 	"node_modules/node-addon-api/package.json": pkg("node-addon-api"),
@@ -338,7 +339,7 @@ const sandboxKit = (platformPackage, overrides = {}) => ({
 const filesUnder = (files, folder) => files.filter((file) => file.startsWith(`${folder}/`)).map((file) => file.slice(folder.length + 1));
 
 test("a win-x64 trim keeps the sandbox kit's JavaScript, licence and x64 library, and koffi's run-time files and Windows package", () => {
-	const dir = stagedApp(sandboxKit("koffi-win32-x64"));
+	const dir = stagedApp(sandboxKit());
 	const lines = [];
 	pruneDesktopPayload(dir, { target: WINDOWS, log: (line) => lines.push(line) });
 	const files = listFiles(dir);
@@ -353,15 +354,30 @@ test("a win-x64 trim keeps the sandbox kit's JavaScript, licence and x64 library
 	}
 });
 
-test("a darwin-arm64 trim leaves out the sandbox kit whole, each package with its reason, and its count stays as without the kit", () => {
-	const withKit = trimmed(MAC, sandboxKit("koffi-darwin-arm64"));
-	const without = trimmed(MAC);
-	assert.deepEqual(withKit.files, without.files.filter((file) => file !== `${KIT}/package.json`));
-	const leftOut = withKit.lines.filter((line) => line.includes("left out of the darwin-arm64 payload"));
-	assert.equal(leftOut.length, 5, leftOut.join("\n"));
-	for (const entry of DESKTOP_TARGET_DROP.filter((drop) => drop.target === MAC)) {
-		assert.ok(leftOut.some((line) => line.includes(`: ${entry.name} (${entry.reason})`)), `${entry.name} is not logged with its reason`);
-	}
+test("a darwin-arm64 trim of an archive that already lacks the sandbox kit passes, leaves nothing more out and keeps the same files", () => {
+	// The darwin-arm64 archive leaves the kit out and keeps semver, which its
+	// CLI's fastify needs; the bundled server needs neither.
+	const lacking = trimmed(MAC, { [`${KIT}/package.json`]: null, "node_modules/semver/package.json": pkg("semver") });
+	const withKit = trimmed(MAC);
+	assert.deepEqual(lacking.files, withKit.files);
+	assert.ok(!lacking.files.some((file) => file.startsWith(`${KIT}/`) || file.startsWith("node_modules/semver/")), lacking.files.join("\n"));
+	assert.deepEqual(lacking.lines.filter((line) => line.includes("left out")), []);
+	assert.match(lacking.lines.at(-1), /trimmed for darwin-arm64: app\/ \d+ -> \d+ files/);
+});
+
+test("a darwin-arm64 trim refuses, removing nothing, an archive built before its target's drop, and says to rebuild it", () => {
+	const dir = stagedApp(
+		boxLibrary(
+			sandboxKit({
+				"node_modules/@koromix/koffi-win32-x64/package.json": null,
+				"node_modules/@koromix/koffi-win32-x64/koffi.node": null,
+				"node_modules/@koromix/koffi-darwin-arm64/package.json": pkg("@koromix/koffi-darwin-arm64"),
+			}),
+		),
+	);
+	const before = listFiles(dir);
+	assert.throws(() => pruneDesktopPayload(dir, { target: MAC, log: () => {} }), /darwin-arm64 desktop payload would leave out semver, .*the archive still holds @microsoft\/mxc-sdk, .*leaves out \(ARCHIVE_TARGET_DROP\).*rebuild it/);
+	assert.deepEqual(listFiles(dir), before);
 });
 
 test("a win-x64 trim fails when the sandbox kit's library or a koffi run-time file is missing", () => {
@@ -369,10 +385,8 @@ test("a win-x64 trim fails when the sandbox kit's library or a koffi run-time fi
 		[`${KIT}/bin/x64/mxc_ffi.dll`, /node_modules\/@microsoft\/mxc-sdk\/bin\/x64\/mxc_ffi\.dll is missing/],
 		[`${KOFFI}/src/koffi/src/static.js`, /koffi\/src\/koffi\/src\/static\.js is missing/],
 	]) {
-		assert.throws(() => pruneDesktopPayload(stagedApp(sandboxKit("koffi-win32-x64", { [missing]: null })), { target: WINDOWS, log: () => {} }), message, missing);
+		assert.throws(() => pruneDesktopPayload(stagedApp(sandboxKit({ [missing]: null })), { target: WINDOWS, log: () => {} }), message, missing);
 	}
-	// The Mac leaves the kit out, so its missing library is no fault there.
-	pruneDesktopPayload(stagedApp(sandboxKit("koffi-darwin-arm64", { [`${KIT}/bin/x64/mxc_ffi.dll`]: null })), { target: MAC, log: () => {} });
 });
 
 // The launch test. On this computer it builds a win-x64 payload from the

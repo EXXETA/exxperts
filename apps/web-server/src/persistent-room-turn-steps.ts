@@ -11,7 +11,7 @@
  * search the way its frames name them, so a landing writes the turn as it
  * was shown live, under the ids the page holds.
  */
-import { answerPartId, ECHO_WINDOW_MS, evenedText, searchStepId, stepId } from "./thread-items-by-id.js";
+import { answerPartId, ECHO_WINDOW_MS, evenedText, type MessageAuthor, searchStepId, stepId } from "./thread-items-by-id.js";
 
 export interface TurnStepItem {
 	kind: "tool";
@@ -36,8 +36,8 @@ function resultText(content: unknown): string {
 	return content.filter((part: any) => part?.type === "text" && typeof part.text === "string").map((part: any) => part.text).join("\n");
 }
 
-/** `steered`: the room took it while it answered, so it is part of that answer's turn. */
-export interface TurnSteerItem { kind: "user"; id: string; text: string; ts: number; steered: true }
+/** `steered`: the room took it while it answered, so it is part of that answer's turn. `author`: who sent it, on a shared server. */
+export interface TurnSteerItem { kind: "user"; id: string; text: string; ts: number; steered: true; author?: MessageAuthor }
 
 /** A tool the provider ran itself (its own web search): it sits after the block written before it. `ok` stays unset until it ends. */
 type ProviderTool = { id: string; name: string; query?: string; ok?: boolean; after: number };
@@ -77,7 +77,7 @@ export function withFrameIds(projected: any, ids: FrameIds, echoOf: string | und
 }
 
 export function createTurnStepLog(key?: string) {
-	const entries: Array<{ call: { id: string; name: string; args: unknown } } | { steer: { id: string; text: string; ts: number } } | { providerTool: ProviderTool } | { part: AnswerPart } | { hiddenFailure: string }> = [];
+	const entries: Array<{ call: { id: string; name: string; args: unknown } } | { steer: { id: string; text: string; ts: number; author?: MessageAuthor } } | { providerTool: ProviderTool } | { part: AnswerPart } | { hiddenFailure: string }> = [];
 	const results = new Map<string, { text: string; isError: boolean; details?: unknown }>();
 	// The message being written: its own searches, and the newest block it has started.
 	let providerTools: ProviderTool[] = [];
@@ -214,8 +214,8 @@ export function createTurnStepLog(key?: string) {
 			return ids;
 		},
 		/** A message of the person's the turn took between its steps; `id` is its bubble's, so a landing replaces the bubble the page saved instead of adding a second. */
-		tookMessage(id: string, text: string): void {
-			if (text.trim()) entries.push({ steer: { id, text: text.trim(), ts: Date.now() } });
+		tookMessage(id: string, text: string, author?: MessageAuthor): void {
+			if (text.trim()) entries.push({ steer: { id, text: text.trim(), ts: Date.now(), ...(author ? { author } : {}) } });
 		},
 		/**
 		 * Takes every message the turn ends; only tool calls, their results and

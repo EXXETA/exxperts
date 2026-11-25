@@ -7,8 +7,10 @@ import {
 	OPENAI_COMPATIBLE_AI_PROFILE_ID,
 	OPENAI_COMPATIBLE_PROVIDER_ID,
 	readOpenAiCompatibleGateways,
+	type ModelsRunIn,
 	type OpenAiCompatibleGateway,
 } from "./openai-compatible-gateways.js";
+import { isSharedServer } from "./server-hooks.js";
 
 export type BuiltInPersistentAgentAiProfileId = "chatgpt-codex" | "anthropic";
 // Widened to string: besides the built-in profiles, users can save any number of
@@ -36,6 +38,8 @@ export type PersistentAgentAiProfile = {
 		absorb: PersistentAgentModelLock;
 		structuralReview: PersistentAgentModelLock;
 	};
+	/** A gateway's or a key's: where its models run, as stated on a shared server; absent is Unknown. */
+	runsIn?: ModelsRunIn;
 };
 
 // Internal fallback policy table only: used when no profile has been selected yet.
@@ -136,6 +140,7 @@ export function persistentAgentAiProfileFromGateway(gateway: OpenAiCompatibleGat
 			absorb: maintenanceLock,
 			structuralReview: maintenanceLock,
 		},
+		...(gateway.runsIn ? { runsIn: gateway.runsIn } : {}),
 	};
 }
 
@@ -145,6 +150,12 @@ function gatewayAiProfiles(): PersistentAgentAiProfile[] {
 
 export function isBuiltInPersistentAgentAiProfileId(value: string): value is BuiltInPersistentAgentAiProfileId {
 	return Object.prototype.hasOwnProperty.call(PERSISTENT_AGENT_AI_PROFILES, value);
+}
+
+// A shared server offers no built-in Claude row, for anyone: Claude comes in as
+// its key provider, "Claude API key", once the admin adds that key.
+function builtInOffered(profileId: BuiltInPersistentAgentAiProfileId): boolean {
+	return !(profileId === "anthropic" && isSharedServer());
 }
 
 // A built-in profile's room list is always the curated one, so every curated
@@ -169,14 +180,14 @@ export function getAvailablePersistentAgentAiProfiles(): PersistentAgentAiProfil
 	// Order matters: auto-follow picks the first signed-in profile, so built-ins
 	// keep priority over saved gateways and user-created custom profiles.
 	const preferences = readBuiltInAiProfilePreferences().profiles;
-	const profiles: PersistentAgentAiProfile[] = Object.values(PERSISTENT_AGENT_AI_PROFILES).map((profile) => withBuiltInPreference(profile, preferences[profile.id]));
+	const profiles: PersistentAgentAiProfile[] = Object.values(PERSISTENT_AGENT_AI_PROFILES).filter((profile) => builtInOffered(profile.id)).map((profile) => withBuiltInPreference(profile, preferences[profile.id]));
 	profiles.push(...gatewayAiProfiles());
 	profiles.push(...readCustomAiProfiles().profiles);
 	return profiles;
 }
 
 export function isPersistentAgentAiProfileId(value: string): value is PersistentAgentAiProfileId {
-	if (isBuiltInPersistentAgentAiProfileId(value)) return true;
+	if (isBuiltInPersistentAgentAiProfileId(value)) return builtInOffered(value);
 	if (isCustomAiProfileId(value)) return readCustomAiProfiles().profiles.some((profile) => profile.id === value);
 	return gatewayAiProfiles().some((profile) => profile.id === value);
 }

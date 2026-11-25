@@ -10,7 +10,7 @@ import { persistentAgentRootPath, resolvePersistentRoomCapabilityPolicy } from "
 import { ROOM_FOLDER_REFUSED, roomFence, under } from "../room-files.js";
 import { addAlsoAllowedSite, AnswerSites, coversSite, readAlsoAllowed, sameSite, saveAlsoAllowedFolders } from "./also-allowed.js";
 import { realPathOf } from "./box-closed.js";
-import { ASK_AGAIN_FROM_COMPUTER, boxRefusedLine, FREE_PRIVATE_REFUSAL } from "./card-text.js";
+import { ASK_AGAIN_FROM_COMPUTER, boxRefusedLine, FREE_PRIVATE_REFUSAL, LIBREOFFICE_REFUSED_LINE } from "./card-text.js";
 import { runBoxProbe } from "./box-probe.js";
 import { BoxFault, BoxProcess, type DialRefusal, FolderMoved, type SiteAnswer, type SiteAsk } from "./box-process.js";
 import { FILE_PROGRAM_ENV, type FileProgramCall, noteBoxedCommand, ProgramEnded, type ProgramRun } from "./box-files.js";
@@ -58,6 +58,15 @@ const LISTED_BY_FREE = "a listed address";
 const SITE_DECLINED = "the person declined this site";
 // What the box prints for a refusal, and what most programs print for one, read in lower case: Node and Go print it so. A refusal may print nothing at all.
 const NOT_PERMITTED = "operation not permitted";
+// LibreOffice's program, whose start box-rules.ts refuses, as a path's last part or alone: not `soffice.py`, nor a folder of that name.
+const LIBREOFFICE = String.raw`(?<![\w.-])soffice(?![\w-]|\.\w|/)`;
+const NAMES_LIBREOFFICE = new RegExp(LIBREOFFICE, "i");
+// Its refused start, in the words of the program that tried it: the shell, `env` and most others name it before the refusal's words, Python and zsh after them.
+const LIBREOFFICE_REFUSED = new RegExp(`${LIBREOFFICE}[^\\w\\s/:.-]{0,3}: (?:cannot execute: )?${NOT_PERMITTED}|${NOT_PERMITTED}: [^\\w\\s/]{0,3}(?:[^'":]{0,1024}/)?${LIBREOFFICE}`, "gi");
+// The shell's code for a program that is there and was not allowed to start.
+const START_REFUSED = 126;
+// A line of output longer than this is read in pieces, so a program that prints no newline can't fill the memory.
+const LINE_PIECE = 64 * 1024;
 // What the operator's line keeps of a file program's error output: room for a loader's or a runtime's own words.
 const ERROR_OUTPUT_KEPT_BYTES = 2_000;
 // The distinct lines one server process writes for file programs that gave no answer: one per cause, not one per call.
@@ -93,6 +102,53 @@ type Run = {
 	spills: Set<string>;
 	ended: boolean;
 };
+
+/** How a command ended: its exit code, stopped by the person, or failed without a code, as at its time limit. */
+export type CommandEnd = number | "stopped" | "failed";
+/** What a command's output holds: anything at all, LibreOffice's refused start, and the refusal's words for anything else. */
+export type CommandOutput = { printed: boolean; libreOffice: boolean; place: boolean };
+
+/** Reads a command's output as it comes, a line at a time across chunks. */
+export function readCommandOutput(): { read(chunk: Buffer): void; end(): CommandOutput } {
+	const seen: CommandOutput = { printed: false, libreOffice: false, place: false };
+	let line = "";
+	const judge = (text: string) => {
+		const rest = text.replace(LIBREOFFICE_REFUSED, " ");
+		seen.libreOffice ||= rest !== text;
+		seen.place ||= rest.toLowerCase().includes(NOT_PERMITTED);
+	};
+	return {
+		read(chunk) {
+			seen.printed ||= chunk.length > 0;
+			const lines = (line + chunk.toString("utf8")).split(/[\r\n]/);
+			line = lines.pop() ?? "";
+			lines.forEach(judge);
+			if (line.length <= LINE_PIECE) return;
+			judge(line);
+			// Short of the words' own length, so a piece never loses them and never counts them twice.
+			line = line.slice(1 - NOT_PERMITTED.length);
+		},
+		end() {
+			judge(line);
+			line = "";
+			return seen;
+		},
+	};
+}
+
+/**
+ * What the model reads about a refusal once a command ended: LibreOffice's refused
+ * start, a place the box may have refused, both, or nothing. A place is the
+ * refusal's words, or a failure with nothing to say, which looks like one; a
+ * failure that says why in its own words was not refused. LibreOffice's start is
+ * never told as a place.
+ */
+export function refusedLines(command: string, output: CommandOutput, end: CommandEnd, asks: boolean): string[] {
+	const silentFailure = end !== "stopped" && end !== 0 && !output.printed;
+	const libreOffice = silentFailure ? end === START_REFUSED && NAMES_LIBREOFFICE.test(command) : output.libreOffice && end !== "stopped";
+	const place = output.place || (silentFailure && !libreOffice);
+	return [...(libreOffice ? [LIBREOFFICE_REFUSED_LINE] : []), ...(place ? [boxRefusedLine(asks)] : [])];
+}
 
 /** A room's folder no room may use: the command never runs, as for a folder that moved. */
 class FolderRefused extends FolderMoved {
@@ -178,6 +234,8 @@ function keepOpen(run: Run): void {
 export class RoomBox {
 	private run: Run | null = null;
 	private starting: Promise<Run> | null = null;
+	/** The running turn: each end moves it on. */
+	private turn = 0;
 	private ending: Promise<void> = Promise.resolve();
 	private filesHere = false;
 
@@ -201,8 +259,10 @@ export class RoomBox {
 		return real;
 	}
 
-	private async startRun(): Promise<Run> {
+	private async startRun(turn: number): Promise<Run> {
 		await this.ending;
+		// A start that outlived its turn makes no folder: the room may be gone.
+		if (this.turn !== turn) throw new BoxFault(TURN_ENDED);
 		const places = this.preparePlaces();
 		const run: Run = {
 			process: null as unknown as BoxProcess,
@@ -222,7 +282,9 @@ export class RoomBox {
 		};
 		try {
 			run.process = await BoxProcess.start(places.temp, run.free ? FREE_DENIED_RANGES : [], (ask) => this.answerSite(run, ask), (refusal) => this.dialRefused(run, refusal));
+			if (this.turn !== turn) throw new Error(TURN_ENDED);
 			await runBoxProbe(run.process, places);
+			if (this.turn !== turn) throw new Error(TURN_ENDED);
 			// The probe's refused site is no command's to report.
 			run.siteRefusals.clear();
 			void this.sweepOldTemps(run);
@@ -237,13 +299,16 @@ export class RoomBox {
 	/** This turn's run, started on its first command. A box that won't start throws BoxFault and the command never runs. */
 	ensureRun(): Promise<Run> {
 		if (this.run?.process.alive) return Promise.resolve(this.run);
-		this.starting ??= this.startRun().then((run) => {
-			this.run = run;
-			keepOpen(run);
-			return run;
-		}).finally(() => {
-			this.starting = null;
-		});
+		if (!this.starting) {
+			const starting = this.startRun(this.turn).then((run) => {
+				this.run = run;
+				keepOpen(run);
+				return run;
+			}).finally(() => {
+				if (this.starting === starting) this.starting = null;
+			});
+			this.starting = starting;
+		}
 		return this.starting;
 	}
 
@@ -380,21 +445,14 @@ export class RoomBox {
 				// Before it starts: from here a job of this command may outlive it, so file tools never fall back to the server's own reads until the computer restarts.
 				noteBoxedCommand();
 				const env = boxEnvironment(options.env ?? process.env, run.places);
-				// Whether the command printed anything, and the refusal's words, read across chunks: the end of the last one is kept, long enough to hold them.
-				let printed = false;
-				let notPermitted = false;
-				let tail = "";
+				const output = readCommandOutput();
 				const onData = (chunk: Buffer) => {
-					printed ||= chunk.length > 0;
-					const text = tail + chunk.toString("utf8");
-					notPermitted ||= text.toLowerCase().includes(NOT_PERMITTED);
-					tail = text.slice(-NOT_PERMITTED.length);
+					output.read(chunk);
 					options.onData(chunk);
 				};
-				// The refusal's words, or a failure or timeout with nothing to say: a refused place looks like either. One that says why in its own words was not refused.
-				const finish = (failed: boolean) => {
+				const finish = (end: CommandEnd) => {
 					const asks = this.options.folderAsk?.offered() === true && this.options.questions.watcher() !== "none";
-					const notes = [...run.siteRefusals, ...(notPermitted || (failed && !printed) ? [boxRefusedLine(asks)] : [])];
+					const notes = [...run.siteRefusals, ...refusedLines(command, output.end(), end, asks)];
 					run.siteRefusals.clear();
 					if (notes.length > 0) options.onData(Buffer.from(`\n${notes.join("\n")}\n`));
 				};
@@ -404,24 +462,24 @@ export class RoomBox {
 				const noted = `${KEEPER} </dev/null >/dev/null 2>&1 & printf '%s %d %d\\n' '${commandId}' "$$" "$!" >> '${groups}' && ${wrapped}`;
 				// Stop ends what this command leaves running at once, whatever else the answer still waits on.
 				options.signal?.addEventListener("abort", () => stopGroups(run), { once: true });
-				let failed = true;
+				let end: CommandEnd = "failed";
 				// A no lasts while commands run: one that starts after every other had ended asks again.
 				if (run.running === 0) run.declined = [];
 				run.running += 1;
 				try {
 					const result = await local.exec(noted, cwd, { ...options, onData, env });
-					failed = result.exitCode !== 0;
+					end = result.exitCode ?? "failed";
 					return result;
 				} catch (error) {
 					// Stop is the person's, not a refusal.
-					if (options.signal?.aborted) failed = false;
+					if (options.signal?.aborted) end = "stopped";
 					throw error;
 				} finally {
 					run.running -= 1;
 					if (run.running === 0) run.declined = [];
 					// The library's refusals at the dial reach this command's result.
 					await run.process.request("settle", {}).catch(() => {});
-					finish(failed);
+					finish(end);
 					await this.dropKeeper(run, commandId);
 				}
 			},
@@ -454,6 +512,11 @@ export class RoomBox {
 	/** Long output moved into this run's private temp: the file tools may read it, by this exact path, until the turn ends. */
 	noteSpill(file: string): void {
 		this.run?.spills.add(file);
+	}
+
+	/** The running answer's temp for its commands, by its real path, while a run is open: the file tools say what it is when they refuse it. */
+	ownTemp(): string | undefined {
+		return this.run?.places.temp;
 	}
 
 	/** This run's long outputs, by exact path. */
@@ -581,6 +644,9 @@ export class RoomBox {
 
 	/** Ends the turn's box: its port closes, so a job left behind has no network and raises no site card. */
 	endTurn(): Promise<void> {
+		// A start still under way outlives its turn: it stops itself, and the next turn's is its own.
+		this.turn += 1;
+		this.starting = null;
 		const run = this.run;
 		this.run = null;
 		if (!run) return this.ending;

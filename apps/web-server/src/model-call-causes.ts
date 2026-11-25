@@ -26,6 +26,7 @@ import { isSignInFailure } from "../../web-ui/src/sign-in-failure.js";
 import { GATEWAY_REFUSED_CAUSE, gatewayNotFoundLine, gatewayRefusedWayOn, namedContextLimit, quotaCause, quotaWayOn, REGION_OR_PLAN_CAUSE, unreachedCause, unreachedWayOn, type GatewayFind, type QuotaWay, type RetryFailure, type TurnFailure, type Unreached } from "../../web-ui/src/turn-failure-line.js";
 import { readOpenAiCompatibleGateways } from "./openai-compatible-gateways.js";
 import { gatewayModelFind } from "./gateway-model-find.js";
+import { tooBigRefusal } from "@exxeta/exxperts-ai";
 import { statusAskedAgainByProvider } from "@exxeta/exxperts-runtime";
 import { isSharedServer } from "./server-hooks.js";
 import { anthropicKeyNeedsWorkspace, credentialGoneOf, credentialGoneWhy, credentialGoneWords, modelNotOffered, signInFailed, type CredentialKey } from "./model-not-offered.js";
@@ -184,21 +185,23 @@ export function failureWords(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** A failed call's HTTP status and the provider's error type, as the runtime keeps them beside the words of a failed message, and the API it was made through. */
+/** A failed call's HTTP status and the provider's error type, as the runtime keeps them beside the words of a failed message, the API it was made through, and whether the runtime found it refused for its bytes. */
 export interface FailureCodes {
 	errorStatus?: number;
 	errorType?: string;
 	api?: string;
+	refusedForSize?: true;
 }
 
 /** The codes a failed message or a failure carries; a saved message from before they were kept has none. */
 export function failureCodesOf(failed: unknown): FailureCodes {
 	if (!failed || typeof failed !== "object") return {};
-	const { errorStatus, errorType, api } = failed as { errorStatus?: unknown; errorType?: unknown; api?: unknown };
+	const { errorStatus, errorType, api, refusedForSize } = failed as { errorStatus?: unknown; errorType?: unknown; api?: unknown; refusedForSize?: unknown };
 	return {
 		...(typeof errorStatus === "number" && Number.isInteger(errorStatus) && errorStatus >= 400 && errorStatus <= 599 ? { errorStatus } : {}),
 		...(typeof errorType === "string" && /^[A-Za-z][\w.-]{0,63}$/.test(errorType) ? { errorType } : {}),
 		...(typeof api === "string" && /^[A-Za-z][\w.-]{0,63}$/.test(api) ? { api } : {}),
+		...(refusedForSize === true ? { refusedForSize } : {}),
 	};
 }
 
@@ -394,6 +397,8 @@ export function answerStarted(content: unknown): boolean {
  * failed message's status, error type and API, read where the words name nothing.
  */
 export function turnFailureOf(words: string, retried: boolean, provider: string, answerStarted = false, codes: FailureCodes = {}): TurnFailure {
+	// Found refused for its bytes once a shortening did not help: its words may still speak of the context.
+	if (codes.refusedForSize && !answerStarted) return "request-size";
 	// More than the model reads at once (the providers' phrases, or a limit they name) is a size problem whatever else the words say, so it is read first.
 	if (/context(?:[ _-]?window| length)|too many tokens|maximum context|prompt is too long|exceeds? (?:the )?(?:model'?s? )?(?:context|token|input)/i.test(words.trim().slice(0, 300)) || namedContextLimit(words) !== undefined) return "overflow";
 	const failure = classifyModelFailure(failedMessageError(words, codes), { provider });
@@ -412,6 +417,8 @@ export function turnFailureOf(words: string, retried: boolean, provider: string,
 	if (askedAgain && failure.cause === "busy" && BUSY_MODEL.has(failure.detail)) return "still-busy";
 	// The page reads a sign-in and a model no longer offered from the words; one only the status said is named for it.
 	if (failure.cause === "unreachable" && (failure.detail === "signed-out" || failure.detail === "not-offered") && codes.errorStatus !== undefined && classifyModelFailure(new Error(words), { provider }).cause === "other") return failure.detail;
+	// Refused for its bytes, read as the runtime reads it: the same request is refused again, whatever is tried.
+	if (tooBigRefusal({ stopReason: "error", errorMessage: words, ...codes }) === "size") return "request-size";
 	return "other";
 }
 
@@ -524,7 +531,7 @@ export function keyRefusedSetupSentence(refusal: KeyRefusal): string {
  */
 export function modelUnreachableSentence(detail: UnreachableDetail, model: ModelNoticeModel, key?: CredentialKey, unreached?: Unreached, quotaWay?: QuotaWay, gatewayFind?: GatewayFind): string {
 	const name = rememberSentenceModelName(model);
-	if (detail === "not-answering" && unreached) return `${name} ${unreachedCause(unreached)}. Nothing was lost. ${unreachedWayOn(unreached, isSharedServer())}`;
+	if (detail === "not-answering" && unreached) return `${name} ${unreachedCause(unreached, isSharedServer())}. Nothing was lost. ${unreachedWayOn(unreached, isSharedServer())}`;
 	switch (detail) {
 		// On a shared server only the admin can bring the key back, and nobody signs in there.
 		case "signed-out": return `${name} ${credentialGoneWhy(credentialGoneOf(key), isSharedServer())}. Nothing was lost.${isSharedServer() ? " Tell your admin." : ""}`;

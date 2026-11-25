@@ -61,16 +61,24 @@ export function detectMentionQuery(text: string, caretIndex: number): MentionQue
 	return { start: 0, caret, query: match[1] };
 }
 
+// Whether a room's name, or its id, starts with the word. An id counts by its
+// start only where ids are made from names (idsByStart), as on the desktop: a
+// shared server's ids are random, so a word that starts one says nothing.
+function startsWithWord(room: MentionCandidateRoom, needle: string, idsByStart: boolean): boolean {
+	return room.displayName.toLowerCase().startsWith(needle) || (idsByStart && room.id.toLowerCase().startsWith(needle));
+}
+
 // The one room a word names: the room whose name or id is the word, ignoring
-// case; with none, the room whose name or id starts with it. Two that fit
-// either way name none: the page never picks between them.
-export function fitRoom(word: string, candidates: MentionCandidateRoom[], currentRoomId: string): MentionCandidateRoom | null {
+// case; with none, the room whose name starts with it, or whose id does where
+// ids count by their start. Two that fit either way name none: the page never
+// picks between them.
+export function fitRoom(word: string, candidates: MentionCandidateRoom[], currentRoomId: string, idsByStart = true): MentionCandidateRoom | null {
 	const needle = word.toLowerCase();
 	if (!needle) return null;
 	const eligible = candidates.filter((room) => !isExcluded(room, currentRoomId));
 	const exact = eligible.filter((room) => room.id.toLowerCase() === needle || room.displayName.toLowerCase() === needle);
 	if (exact.length > 0) return exact.length === 1 ? exact[0] : null;
-	const starts = eligible.filter((room) => room.id.toLowerCase().startsWith(needle) || room.displayName.toLowerCase().startsWith(needle));
+	const starts = eligible.filter((room) => startsWithWord(room, needle, idsByStart));
 	return starts.length === 1 ? starts[0] : null;
 }
 
@@ -84,17 +92,17 @@ export function draftAfterPick(text: string): string {
 // or pasted with the rest): the draft keeps only what follows. Null while that
 // space was already there before this edit, so a room is never picked again
 // from text the person has gone on writing.
-export function labelAtFirstSpace(previous: string, next: string, candidates: MentionCandidateRoom[], currentRoomId: string): { room: MentionCandidateRoom; rest: string } | null {
+export function labelAtFirstSpace(previous: string, next: string, candidates: MentionCandidateRoom[], currentRoomId: string, idsByStart = true): { room: MentionCandidateRoom; rest: string } | null {
 	const match = LEADING_WORD.exec(next);
 	if (!match || LEADING_WORD.test(previous)) return null;
-	const room = fitRoom(match[1], candidates, currentRoomId);
+	const room = fitRoom(match[1], candidates, currentRoomId, idsByStart);
 	return room ? { room, rest: next.slice(match[0].length) } : null;
 }
 
 // The first room a later '@' word names, for the line that says how to ask it.
-export function laterMentionRoom(text: string, candidates: MentionCandidateRoom[], currentRoomId: string): MentionCandidateRoom | null {
+export function laterMentionRoom(text: string, candidates: MentionCandidateRoom[], currentRoomId: string, idsByStart = true): MentionCandidateRoom | null {
 	for (const match of text.matchAll(LATER_WORD)) {
-		const room = fitRoom(match[1].replace(/\.+$/, ""), candidates, currentRoomId);
+		const room = fitRoom(match[1].replace(/\.+$/, ""), candidates, currentRoomId, idsByStart);
 		if (room) return room;
 	}
 	return null;
@@ -114,20 +122,23 @@ function checkpointOrder(room: MentionCandidateRoom): number {
 
 // Filter + order the candidates for a given query. Excludes the current room and
 // archived rooms; needs_absorb rooms are included (the warning surfaces later on
-// the MR-4 card). Prefix match is case-insensitive against id OR displayName.
+// the MR-4 card). Prefix match is case-insensitive against displayName, and
+// against the id where ids count by their start (startsWithWord), and a whole
+// id always lists its room.
 // Order: freshest memory first (you usually want the most up-to-date room),
 // then alphabetical by displayName as a stable tiebreak.
 export function filterMentionCandidates(
 	candidates: MentionCandidateRoom[],
 	query: string,
 	currentRoomId: string,
+	idsByStart = true,
 ): MentionCandidateRoom[] {
 	const needle = query.toLowerCase();
 	return candidates
 		.filter((room) => !isExcluded(room, currentRoomId))
 		.filter((room) => {
 			if (!needle) return true;
-			return room.id.toLowerCase().startsWith(needle) || room.displayName.toLowerCase().startsWith(needle);
+			return room.id.toLowerCase() === needle || startsWithWord(room, needle, idsByStart);
 		})
 		.sort((a, b) => {
 			const fa = checkpointOrder(a);

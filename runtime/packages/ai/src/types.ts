@@ -347,6 +347,8 @@ export interface AssistantMessage {
 	errorStatus?: number;
 	/** The provider's own type or code for a failed call ("rate_limit_error", "insufficient_quota"), when it sent one. */
 	errorType?: string;
+	/** Set by the session on a refusal whose own words leave size or tokens open: a shortening did not cure it, so it was for the request's bytes. */
+	refusedForSize?: true;
 	/**
 	 * The assistant content exactly as the provider's wire produced it, kept
 	 * only when the parsed `content` above could not hold every block —
@@ -473,7 +475,7 @@ export interface OpenAICompletionsCompat {
 	supportsStrictMode?: boolean;
 	/** Whether this model can search the web through its provider, requested with `web_search_options: {}` on the request. Per model, not per provider: a gateway routes some models that can and some that cannot. Default: false. */
 	supportsWebSearch?: boolean;
-	/** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
+	/** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, the last tool definition, and the newest user or tool message (or assistant message, where the request ends on one). */
 	cacheControlFormat?: "anthropic";
 	/** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
 	sendSessionAffinityHeaders?: boolean;

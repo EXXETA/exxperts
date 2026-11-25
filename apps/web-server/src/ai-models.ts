@@ -1,4 +1,4 @@
-import { ANTHROPIC_API_KEY_PROVIDER, ModelRegistry, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, AuthStorage } from "@exxeta/exxperts-runtime";
+import { ANTHROPIC_API_KEY_PROVIDER, ModelRegistry, clampThinkingLevel, getLastAssistantUsage, getThinkingLevelLadder, resolveThinkingLevelRung, AuthStorage } from "@exxeta/exxperts-runtime";
 import { createPersistentAgentInstance, isPersistentAgentArchived, listPersistentAgents, type RoomViewer } from "./persistent-agents.js";
 import { listPersistentAgentIds } from "./persistent-agent-status.js";
 import { readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
@@ -11,6 +11,7 @@ import { type PersistentAgentAiProfileId, getPersistentRoomModelLocks, OPENAI_CO
 import { GATEWAY_PROVIDER_ID_PREFIX } from "./openai-compatible-gateways.js";
 import type { PersistentAgentAiProfileStateSource } from "./persistent-agent-ai-profile-state.js";
 import type { KeyRefusal } from "./model-call-causes.js";
+import { estimateTokens } from "./token-estimate.js";
 import { app } from "./server-app.js";
 
 function modelLocksToCuratedModels(modelLocks: Array<{ provider: string; model: string }>): Record<string, string[]> {
@@ -202,7 +203,9 @@ type MemoryModelTooSmallPayload = { provider: string; model: string; room?: stri
 
 /** A provider's name as AI setup shows it; the curated table when the catalog does not know it. */
 function roomModelProviderLabel(providerId: string, catalog?: RoomModelCatalog): string {
-	return catalog?.providers.find((provider) => provider.providerId === providerId)?.label ?? webChatProviderLabel(providerId);
+	const label = catalog?.providers.find((provider) => provider.providerId === providerId)?.label ?? webChatProviderLabel(providerId);
+	// On a shared server a gateway no longer saved has no name left, only its id: the sentences then name the model alone.
+	return isSharedServer() && isGatewayProviderId(providerId) && label === providerId ? "" : label;
 }
 
 function roomModelLockPayload(lock: PersistentAgentModelLock | null, registry: ModelRegistry, catalog?: RoomModelCatalog): RoomModelLockPayload | null {
@@ -433,10 +436,24 @@ function contextHealthFromUsage(usage: { tokens: number | null; contextWindow?: 
 	};
 }
 
+/**
+ * The instructions and the tools the model is sent, where the runtime's reading
+ * lacks them: a finished answer's count holds them, but without one the runtime
+ * adds up the messages alone. Asked of the messages the runtime reads, not of
+ * the session file, which keeps failed and empty answers the runtime let go.
+ */
+function uncountedPromptTokens(session: any): number {
+	const messages: any[] = session.messages ?? [];
+	if (messages.length === 0 || getLastAssistantUsage(messages.map((message) => ({ type: "message", message }) as any))) return 0;
+	const tools = session.state.tools.map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+	return estimateTokens(session.systemPrompt) + estimateTokens(JSON.stringify(tools));
+}
+
 function contextHealthForSession(session: any): ContextHealthStatus {
 	const contextUsage = typeof session?.getContextUsage === "function" ? session.getContextUsage() : undefined;
-	if (contextUsage) return contextHealthFromUsage(contextUsage, "runtime-context-usage");
-	return contextHealthFromUsage({ tokens: null, contextWindow: modelContextWindow(session?.model) ?? null }, "unknown");
+	if (!contextUsage) return contextHealthFromUsage({ tokens: null, contextWindow: modelContextWindow(session?.model) ?? null }, "unknown");
+	const tokens = contextUsage.tokens == null ? null : contextUsage.tokens + uncountedPromptTokens(session);
+	return contextHealthFromUsage({ ...contextUsage, tokens }, "runtime-context-usage");
 }
 
 /**

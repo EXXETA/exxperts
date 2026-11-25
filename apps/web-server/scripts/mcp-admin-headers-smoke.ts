@@ -1,4 +1,4 @@
-// Smoke: custom headers on a remote connector, as the Custom connector form
+// Smoke: custom headers on a remote connector, as the By web address form
 // sends them. Some servers expect their key in a header of its own (X-Api-Key)
 // instead of a bearer token or a login. The headers are checked before they
 // reach the config file, a key in its own header switches off OAuth

@@ -11,9 +11,11 @@ import { keptWindowsAnswer, personalFolders } from "./windows/windows-places.js"
 
 /**
  * The judge of a folder the room suggests on its folder question. The panel
- * names a suggestion only by what this gives: the disk's own spelling of a
+ * offers a suggestion only as what this gives: the disk's own spelling of a
  * folder strictly inside the person's home, reached with no link, on the
- * home's disk, that the room's rules would let a pick have. The text is judged
+ * home's disk, that the room's rules would let a pick have, with the room's
+ * name for a file it named there; anything else it shows only as the room's
+ * own words, which no press gives. The text is judged
  * first with no call at all. Then, off the server's own thread and within a
  * limit, only `lstat` and `realpath` touch the path, so no folder is listed,
  * no file opened and no program started for a guess before the person acts.
@@ -24,14 +26,14 @@ import { keptWindowsAnswer, personalFolders } from "./windows/windows-places.js"
 export const SUGGESTION_JUDGE_MS = 300;
 /** How long the recheck at a press may take before that press gives nothing. */
 export const CLICK_CHECK_LIMIT_MS = 2_000;
-/** Whether the judge runs before the card and the panel names the folder; false keeps the plain card and judges at the press only. */
+/** Whether the judge runs before the card and the panel names the folder it holds; false shows only the room's words for it and judges at the press only. */
 export const SHOW_SUGGESTION_BEFORE_CLICK = true;
 
 const TEXT_LIMIT = 400;
 const PARTS_BELOW_HOME = 8;
 
-/** A folder the panel shows before it is given. Held on the server only, never taken back from the page. `from`: the room's suggestion, or the person's pick in the window. `once`: whether Allow this time is offered. `dev` and `ino` as last seen, as decimal strings. */
-export type HeldFolder = { real: string; name: string; shown: string; from: "room" | "window"; once: boolean; dev: string; ino: string };
+/** A folder the panel shows before it is given. Held on the server only, never taken back from the page. `from`: the room's suggestion, or the person's pick in the window. `once`: whether Allow this time is offered. `dev` and `ino` as last seen, as decimal strings. `file`: the name of the file the room named in it, shown only: a press gives the whole folder. */
+export type HeldFolder = { real: string; name: string; shown: string; from: "room" | "window"; once: boolean; dev: string; ino: string; file?: string };
 
 export type JudgeMoment = "before-click" | "click";
 
@@ -200,8 +202,10 @@ function oneClick(real: string, once: readonly string[], oneDrives: readonly str
 }
 
 const isPlainFolder = (seen: BigIntStats, dev: bigint): boolean => seen.isDirectory() && !seen.isSymbolicLink() && seen.dev === dev;
+const isPlainFile = (seen: BigIntStats, dev: bigint): boolean => seen.isFile() && !seen.isSymbolicLink() && seen.dev === dev;
 
-async function judged(text: unknown, view: SuggestionView, at: JudgeMoment): Promise<HeldFolder | null> {
+/** `fileOk`: the room's own text, whose last part may be a file; the folder that holds it is then judged whole, by these same rules, and never a file in turn. */
+async function judged(text: unknown, view: SuggestionView, at: JudgeMoment, fileOk = true): Promise<HeldFolder | null> {
 	const rules = view.rules ?? (process.platform === "win32" ? path.win32 : path.posix);
 	const files = view.files ?? fsPromises;
 	const home = view.home ?? loginHome(rules);
@@ -218,10 +222,16 @@ async function judged(text: unknown, view: SuggestionView, at: JudgeMoment): Pro
 	// Down from the home a part at a time: a folder, not a link, on the home's disk, or no suggestion.
 	let place = facts.real;
 	let seen: BigIntStats | null = null;
-	for (const part of below) {
+	for (const [index, part] of below.entries()) {
 		place = rules.join(place, part);
 		seen = await files.lstat(place, { bigint: true });
-		if (!isPlainFolder(seen, facts.dev)) return null;
+		if (isPlainFolder(seen, facts.dev)) continue;
+		// A file the room named: the card names it, and a press gives the folder that holds it, judged whole as if the room had named that folder.
+		if (fileOk && index === below.length - 1 && isPlainFile(seen, facts.dev)) {
+			const folder = await judged(rules.dirname(place), view, at, false);
+			return folder && { ...folder, file: part };
+		}
+		return null;
 	}
 	if (seen === null) return null;
 	const real = await files.realpath(place);

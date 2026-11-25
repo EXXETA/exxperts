@@ -13,6 +13,7 @@
 //     change. A file's content or an edit's text never travels here;
 //   - a tool the provider runs itself (its own web search): its id, name and
 //     query when it starts, and whether it worked when it ends;
+//   - a connector call's naming update: its id and the names it is shown by;
 //   - type-only heartbeats for the rest (a "model is busy" signal).
 // message_end stays the authoritative full-message reconciliation for the
 // client. No frame carries what the page never reads and the provider keeps
@@ -46,6 +47,12 @@ function previewOf(name: string, args: unknown, argumentChars: number): ToolCall
 	}
 	if (SIZED_TOOLS.has(name)) preview.sizeSoFar = argumentChars;
 	return preview;
+}
+
+/** A connector call's names, from its update's details: the connector as the person knows it, its key, and what the call uses. Null for any other update. */
+export function connectorPlaced(details: unknown): { connector: string; connectorId: string; use: string } | null {
+	const { connector, connectorId, use } = (details ?? {}) as Record<string, unknown>;
+	return typeof connector === "string" && typeof connectorId === "string" && typeof use === "string" ? { connector, connectorId, use } : null;
 }
 
 const heartbeat = (type: string, contentIndex: unknown) => ({ type: "message_update", assistantMessageEvent: { type, contentIndex } });
@@ -112,6 +119,9 @@ export function createWebClientEventProjector(now: () => number = Date.now, thin
 		// the step's time from here.
 		if (event?.type === "tool_execution_start") return { ...event, startedAt: now() };
 		if (event?.type === "tool_execution_end") return { ...event, endedAt: now() };
+		// A connector call's naming update names what it uses as the person knows it (mcp/room-scope.ts): only those, never its arguments again.
+		const placed = event?.type === "tool_execution_update" ? connectorPlaced(event.partialResult?.details) : null;
+		if (placed) return { type: "tool_execution_update", toolCallId: event.toolCallId, details: placed };
 		if (event?.type === "message_start") {
 			toolCalls.clear();
 			thinking.clear();

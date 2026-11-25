@@ -47,13 +47,13 @@ const ROWS = [
 	"Change folder saves at once and keeps Can change files off and Commands on; the cross's Cancel sends nothing; Stop using keeps Commands and protection for the next folder, and Location then shows its one line, the removal heard and not shown",
 	"with no folder (stand-in reads): Location with its one line, no other switches; the Protection switch only where the person turned it off; no start-on line in any state, on the computer or a phone",
 	"a new room where protection runs gets commands on in Run without asking at its first folder picked in the pane",
-	"the Commands line for each state (stand-in reads): protected, the same one sentence with Can change files on or off, and on Auto its own; this computer, this computer with Can change files off (shown off and greyed), off by the person or for the folder, also with a read that says Auto; a failed read of the mode shows no Commands line",
+	"the Commands line for each state (stand-in reads): protected, the same one sentence on Ask and Semi with Can change files on or off, and on Auto its own; this computer, this computer with Can change files off (shown off and greyed), off by the person or for the folder, each on Ask and on Auto, where it says the room runs commands without asking; a failed read of the mode shows no Commands line",
 	"with Can change files off a write is refused and no command or commands ask is offered, and with it on the same write lands and the ask is offered (on a computer with no protection)",
 	"Can change files' line for each state and position (stand-in reads): on, the room and its commands change files in every state; off, its commands only read too where protection is on, still change files where the person turned it off, for the folder or a cause not known, and go unnamed where this computer holds them off",
-	"the Protection switch for each state (stand-in reads): on and movable where On, off and movable where the person turned it off, both saying what protection is; off and held with only the cause, on one line, for this computer, this folder and not known, with no button on the row; no Unprotected mark anywhere on the page; also for a folder that is gone and with commands off",
+	"the Protection switch for each state (stand-in reads): on and movable where On, off and movable where the person turned it off, saying what turning it on does; off and held with only the cause, on one line, for this computer, this folder and not known, with no button on the row; no Unprotected mark anywhere on the page; also for a folder that is gone and with commands off",
 	"turning the switch off asks first, in words for the room's Commands on and off: Cancel, Escape and the backdrop send nothing and leave it on, Turn off sends one {state:\"off\"}; turning it on saves at once, and the Commands line then says the mode read with it, Auto's included, or nothing when that read fails; Home's list is read again (stand-in route)",
 	"a refused protection change (stand-in route): a cause that stands says its line, a refusal with no cause standing says the whole sentence, a wait greys, any other failure puts the switch back with the failure line, and a failed read offers Try again",
-	"Location and Also allowed's folders show their names, with the path only on the name for the pointer and a listed folder's access under its name; Also allowed says its one sentence in every protection state and nothing about commands (stand-in reads)",
+	"Location and Also allowed's folders show their names, with the path on the name for the pointer (Location's also once for a screen reader) and a listed folder's access under its name; Also allowed says its one sentence in every protection state and nothing about commands (stand-in reads)",
 	"on a phone: every switch greyed under one Changeable at the computer only, Protection's included, no line under any switch, names and no paths, no buttons, the state without its cause",
 	"a paired device's writes are refused: the folder, Stop using, the protection and the list",
 	"an older Bounded room reads Commands off and offers no command; once turned on in the pane, its next command goes to the box (asked for, and refused as a box that won't start)",
@@ -279,8 +279,8 @@ async function standInRead(page: Page, roomId: string, edit: (body: any) => any)
 	await page.route(pattern, handler);
 	return () => page.unroute(pattern, handler);
 }
-/** The room's mode as the pane reads it, stood in for: `free` in the answer, or a failed read. */
-async function standInMode(page: Page, roomId: string, mode: { free: boolean } | "fails"): Promise<() => Promise<void>> {
+/** The room's mode as the pane reads it, stood in for: the answer's settings as the server words them in the stand-in's protection, or a failed read. */
+async function standInMode(page: Page, roomId: string, mode: StoredMode | "fails"): Promise<() => Promise<void>> {
 	const pattern = `**${roomPath(roomId, "/bash-settings")}`;
 	const handler = async (route: Route) => {
 		if (route.request().method() !== "GET") return route.continue();
@@ -288,7 +288,7 @@ async function standInMode(page: Page, roomId: string, mode: { free: boolean } |
 		const response = await route.fetch();
 		const body = await response.json();
 		const { free: _free, ...settings } = body.settings ?? {};
-		await route.fulfill({ response, json: { ...body, settings: { ...settings, autoApprove: true, ...(mode.free ? { free: true } : {}) } } });
+		await route.fulfill({ response, json: { ...body, settings: { ...settings, ...mode } } });
 	};
 	await page.route(pattern, handler);
 	return () => page.unroute(pattern, handler);
@@ -310,6 +310,15 @@ async function savedHeardNotShown(page: Page): Promise<void> {
 	const shown = await paneOf(page).locator(".settings-rows").getByText(cards.SAVED, { exact: true }).count();
 	assert(shown === 0, `no row shows Saved, got ${shown}`);
 }
+/**
+ * A room's mode as the settings route words it (card-text.ts's `commandModeOf`):
+ * `autoApprove` for any mode but Ask, `free` for Auto in a protected room.
+ */
+type StoredMode = { autoApprove: boolean; free?: true };
+const ON_ASK: StoredMode = { autoApprove: false };
+const ON_SEMI: StoredMode = { autoApprove: true };
+const ON_AUTO_PROTECTED: StoredMode = { autoApprove: true, free: true };
+const ON_AUTO_UNPROTECTED: StoredMode = { autoApprove: true };
 const PROTECTIONS = {
 	on: { state: "on" },
 	person: { state: "off" },
@@ -492,29 +501,33 @@ try {
 	const linesReadDesk = await newRoom("Lines Read Desk", { tools: READ_TOOLS, commands: true });
 
 	await row(ROWS[4], async () => {
-		const expected: Array<[ProtectionKey, string, boolean, string, boolean?]> = [
-			["on", "Lines Desk", true, cards.COMMANDS_PROTECTED_REACH],
-			["on", "Lines Read Desk", false, cards.COMMANDS_PROTECTED_REACH],
-			["on", "Lines Desk", true, cards.COMMANDS_FREE_REACH, true],
-			["on", "Lines Read Desk", false, cards.COMMANDS_FREE_REACH, true],
-			["computer", "Lines Desk", true, cards.COMMANDS_NO_PROTECTION_REACH],
-			["computer", "Lines Read Desk", false, cards.COMMANDS_NEED_CHANGES_LINE],
-			["person", "Lines Desk", true, cards.COMMANDS_UNPROTECTED_REACH],
-			["person", "Lines Read Desk", false, cards.COMMANDS_UNPROTECTED_REACH],
-			["person", "Lines Desk", true, cards.COMMANDS_UNPROTECTED_REACH, true],
-			["folder", "Lines Desk", true, cards.COMMANDS_UNPROTECTED_REACH],
-			["computer", "Lines Desk", true, cards.COMMANDS_NO_PROTECTION_REACH, true],
+		const expected: Array<[ProtectionKey, string, boolean, string, StoredMode]> = [
+			["on", "Lines Desk", true, cards.COMMANDS_PROTECTED_REACH, ON_ASK],
+			["on", "Lines Desk", true, cards.COMMANDS_PROTECTED_REACH, ON_SEMI],
+			["on", "Lines Read Desk", false, cards.COMMANDS_PROTECTED_REACH, ON_SEMI],
+			["on", "Lines Desk", true, cards.COMMANDS_FREE_REACH, ON_AUTO_PROTECTED],
+			["on", "Lines Read Desk", false, cards.COMMANDS_FREE_REACH, ON_AUTO_PROTECTED],
+			["computer", "Lines Desk", true, cards.COMMANDS_NO_PROTECTION_REACH, ON_ASK],
+			["computer", "Lines Read Desk", false, cards.COMMANDS_NEED_CHANGES_LINE, ON_ASK],
+			["computer", "Lines Desk", true, cards.COMMANDS_NO_PROTECTION_AUTO_REACH, ON_AUTO_UNPROTECTED],
+			["computer", "Lines Read Desk", false, cards.COMMANDS_NEED_CHANGES_LINE, ON_AUTO_UNPROTECTED],
+			["person", "Lines Desk", true, cards.COMMANDS_UNPROTECTED_REACH, ON_ASK],
+			["person", "Lines Read Desk", false, cards.COMMANDS_UNPROTECTED_REACH, ON_ASK],
+			["person", "Lines Desk", true, cards.COMMANDS_UNPROTECTED_AUTO_REACH, ON_AUTO_UNPROTECTED],
+			["person", "Lines Read Desk", false, cards.COMMANDS_UNPROTECTED_AUTO_REACH, ON_AUTO_UNPROTECTED],
+			["folder", "Lines Desk", true, cards.COMMANDS_UNPROTECTED_REACH, ON_ASK],
+			["folder", "Lines Desk", true, cards.COMMANDS_UNPROTECTED_AUTO_REACH, ON_AUTO_UNPROTECTED],
 		];
-		for (const [key, name, canChange, line, free = false] of expected) {
+		for (const [key, name, canChange, line, mode] of expected) {
 			const roomId = name === "Lines Desk" ? linesDesk : linesReadDesk;
 			// Commands read on, so a switch shown off says the pane held it.
 			const unroute = await standInRead(page, roomId, (body) => ({ ...body, protection: PROTECTIONS[key], policy: { ...body.policy, bashEnabled: true } }));
-			const unrouteMode = await standInMode(page, roomId, { free });
+			const unrouteMode = await standInMode(page, roomId, mode);
 			try {
 				await openPane(page, name);
 				const commands = switchRow(page, cards.COMMANDS);
 				const shown = await commands.locator(".settings-row-sub").first().textContent();
-				assert(shown === line, `stand-in ${key}${free ? " read as Auto" : ""}, Can change files ${canChange ? "on" : "off"}: the Commands line, got ${shown}`);
+				assert(shown === line, `stand-in ${key} read as ${JSON.stringify(mode)}, Can change files ${canChange ? "on" : "off"}: the Commands line, got ${shown}`);
 				const held = key === "computer" && !canChange;
 				assert(await switchOf(page, cards.COMMANDS).isChecked() === !held && await switchOf(page, cards.COMMANDS).isDisabled() === held, `stand-in ${key}, Can change files ${canChange ? "on" : "off"}: the switch ${held ? "shows off and greyed" : "shows on and works"}`);
 				await closeSettings(page);
@@ -591,7 +604,7 @@ try {
 		// Each state: whether the switch shows on, whether it is held, the cause's line, and the button beside it.
 		const states: Array<[ProtectionKey, boolean, boolean, string | null, string | null]> = [
 			["on", true, false, cards.PROTECTION_LINE, null],
-			["person", false, false, cards.PROTECTION_LINE, null],
+			["person", false, false, cards.PROTECTION_OFF_LINE, null],
 			["computer", false, true, cards.PROTECTION_ROW_UNAVAILABLE_COMPUTER, null],
 			["folder", false, true, cards.PROTECTION_ROW_UNAVAILABLE_FOLDER, null],
 			["unknown", false, true, cards.PROTECTION_ROW_UNAVAILABLE, null],
@@ -690,7 +703,7 @@ try {
 			assert(await page.getByRole("alertdialog").count() === 0 && JSON.stringify(sent) === JSON.stringify([{ state: "off" }, { state: "on" }]), `turning it on saves at once, with no question, got ${JSON.stringify(sent)}`);
 			await waitUntil(() => listReads > readsBeforeOn, "Home's list is read again after Turn on");
 			// Back on, the Commands line says the mode read with it: Auto's line, and no line at all when that read fails.
-			for (const mode of [{ free: true }, "fails"] as const) {
+			for (const mode of [ON_AUTO_PROTECTED, "fails"] as const) {
 				await ask();
 				await question.getByRole("button", { name: cards.TURN_OFF, exact: true }).click();
 				await waitUntil(async () => !(await protectionSwitch().isChecked()) && !(await protectionSwitch().isDisabled()), "the switch shows off again");
@@ -795,14 +808,22 @@ try {
 				const head = await list.locator(".group-head-line").allTextContents();
 				assert(same(head, [cards.ALSO_ALLOWED_LINE]), `stand-in ${key}: Also allowed's heading says its one sentence, got ${JSON.stringify(head)}`);
 				const location = pane.locator(".folder-pane-location .workspace-folder-name");
-				assert(await location.textContent() === "Sales Review" && await location.getAttribute("title") === listedRoot && !(await pane.locator(".folder-pane-location").innerText()).includes(folders), `stand-in ${key}: Location shows the folder's name, its path on the name, got ${await pane.locator(".folder-pane-location").innerText()}`);
+				// The path is on the name for the pointer and once for a screen reader, never as text.
+				const shownPath = await pane.locator(".folder-pane-location").evaluate((row) => {
+					const rest = row.cloneNode(true) as HTMLElement;
+					const spoken = [...rest.querySelectorAll(".sr-only")].filter((line) => line.getAttribute("role") !== "status");
+					const paths = spoken.map((line) => line.textContent);
+					for (const line of spoken) line.remove();
+					return { paths, rest: rest.textContent ?? "" };
+				});
+				assert(await location.textContent() === "Sales Review" && await location.getAttribute("title") === listedRoot && same(shownPath.paths, [listedRoot]) && !shownPath.rest.includes(folders), `stand-in ${key}: Location shows the folder's name, its path on the name and once for a screen reader, never as text, got ${JSON.stringify(shownPath)}`);
 				const folderRow = list.locator(".also-allowed-row").filter({ hasText: "Price Lists" });
 				const [name, under] = [folderRow.locator(".also-allowed-name"), await folderRow.locator(".settings-row-sub").allTextContents()];
 				assert(await name.textContent() === "Price Lists" && await name.getAttribute("title") === priceLists && same(under, [cards.CAN_READ]) && !(await list.innerText()).includes(folders), `stand-in ${key}: the listed folder shows its name with Can read under it and no path, got ${await list.innerText()}`);
-				// The room's own folder name reads as a name, in the darker colour of a listed folder's access, not the grey of the lines under a row.
+				// The room's own folder name reads as a name, in the colour of a listed folder's name, not the grey of the lines under a row.
 				const colourOf = (at: Locator) => at.evaluate((el) => getComputedStyle(el).color);
-				const [locationColour, accessColour] = [await colourOf(location), await colourOf(folderRow.locator(".also-allowed-access"))];
-				assert(locationColour === accessColour, `stand-in ${key}: Location's name in ${locationColour}, a listed folder's access in ${accessColour}`);
+				const [locationColour, listedColour, underColour] = [await colourOf(location), await colourOf(name), await colourOf(folderRow.locator(".also-allowed-access"))];
+				assert(locationColour === listedColour && locationColour !== underColour, `stand-in ${key}: Location's name in ${locationColour}, a listed folder's name in ${listedColour}, its access under it in ${underColour}`);
 				await closeSettings(page);
 			} finally {
 				await unroute();

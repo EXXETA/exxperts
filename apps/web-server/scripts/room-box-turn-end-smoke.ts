@@ -7,13 +7,15 @@
 //
 // On any other computer each row says it was skipped, by name, and the rows that
 // hold the other computers' behaviour still run.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
 import { BoxProcess } from "../src/room-box/box-process.js";
 import { RoomBox, type BoxWatcher } from "../src/room-box/box-session.js";
-import { boxRefusedLine } from "../src/room-box/card-text.js";
+import { boxRefusedLine, LIBREOFFICE_REFUSED_LINE } from "../src/room-box/card-text.js";
 import { AnswerFolders } from "../src/room-box/folder-question.js";
 import { createPersistentRoomDefaultCapabilityPolicy, persistentAgentRootPath, writePersistentRoomDefaultCapabilityPolicy } from "../src/persistent-room-workspace-policy.js";
 import { createRoomCommandTools, type RoomCommandTools } from "../src/room-command-tool.js";
@@ -159,6 +161,9 @@ async function main(): Promise<void> {
 
 	// What may be a refusal: the refusal's own words, or a failure with nothing to say. Each of these gets the line, and only these.
 	const refusedLine = (asks: boolean) => boxRefusedLine(asks);
+	// Where the room may ask, the line keeps its advice for an ordinary folder and says never to ask for a skill's folder, which no room can change; from a phone it says neither.
+	const NEVER_A_SKILL = "call ask_for_folder with access read or change so the person can pick it, but never for a skill's folder, which no room can change.";
+	assert(refusedLine(true).endsWith(NEVER_A_SKILL) && !refusedLine(false).includes("skill"), `the refused line: ${refusedLine(true)} | ${refusedLine(false)}`);
 	const triggers: [string, Record<string, unknown>][] = [
 		["is refused a write outside the room's folder", { command: `echo x > ${quoted(path.join(plainWork, "refused.txt"))}` }],
 		["exits non-zero with no output", { command: "exit 3" }],
@@ -170,7 +175,7 @@ async function main(): Promise<void> {
 		await macRow(`the fixed line: a command that ${label} tells the model to ask for the folder, where the room may ask`, async () => {
 			await nextTurn();
 			const result = await call(tools, "bash", input);
-			assert(result.text.includes(refusedLine(true)) && !result.text.includes(refusedLine(false)), `the line: ${result.text}`);
+			assert(result.text.includes(refusedLine(true)) && result.text.includes(NEVER_A_SKILL) && !result.text.includes(refusedLine(false)), `the line: ${result.text}`);
 		});
 	}
 
@@ -212,6 +217,85 @@ async function main(): Promise<void> {
 			person.watcher = "computer";
 		}
 		assert(!fs.existsSync(path.join(persistentAgentRootPath(ROOM_ID), "runtime", "box-requests.json")), "a request was saved");
+	});
+
+	// LibreOffice's start. The stand-in app's program is a real compiled one that prints its version, under LibreOffice's name; the real app is never started.
+	// Looked up by a Mac's rows alone: other computers keep it at another name.
+	const standIn = () => createRequire(import.meta.url).resolve(`@esbuild/${process.platform}-${process.arch}/bin/esbuild`);
+	const versionOf = () => execFileSync(standIn(), ["--version"], { encoding: "utf8" }).trim();
+	const makeApp = (place: string) => {
+		const programs = path.join(folder, place, "Contents", "MacOS");
+		fs.mkdirSync(programs, { recursive: true });
+		for (const name of ["soffice", "gengal"]) fs.copyFileSync(standIn(), path.join(programs, name), fs.constants.COPYFILE_FICLONE);
+		return { soffice: path.join(programs, "soffice"), neighbour: path.join(programs, "gengal") };
+	};
+	let office: ReturnType<typeof makeApp>;
+	let officeVersion: string;
+	const officeReady = async () => {
+		await nextTurn();
+		office ??= makeApp("Office.app");
+		officeVersion ??= versionOf();
+	};
+	const starts: [string, () => string][] = [
+		["started directly", () => `${quoted(office.soffice)} --version`],
+		["through a symbolic link", () => {
+			const link = path.join(folder, "link-bin", "soffice");
+			fs.mkdirSync(path.dirname(link), { recursive: true });
+			fs.rmSync(link, { force: true });
+			fs.symlinkSync(office.soffice, link);
+			return `${quoted(link)} --version`;
+		}],
+		["through a shell script that starts it, as Homebrew's", () => {
+			const script = path.join(folder, "brew-bin", "soffice");
+			fs.mkdirSync(path.dirname(script), { recursive: true });
+			fs.writeFileSync(script, `#!/bin/sh\nexec ${quoted(office.soffice)} "$@"\n`, { mode: 0o755 }); // portability-ok: a row that runs on a Mac only
+			return `PATH=${quoted(path.dirname(script))}:$PATH; soffice --version`;
+		}],
+		["from Python's subprocess", () => `python3 -c ${quoted(`import subprocess, sys\nsubprocess.run([${JSON.stringify(office.soffice)}, "--version"], check=True)`)}`],
+		["from a second copy of the app under another name and folder", () => `${quoted(makeApp("Other Apps/Office Copy.app").soffice)} --version`],
+	];
+	for (const [label, command] of starts) {
+		await macRow(`LibreOffice ${label} is refused at once, and the model reads that line and not the folder's`, async () => {
+			await officeReady();
+			const result = await call(tools, "bash", { command: command(), timeout: 20 });
+			assert(result.failed && !result.text.includes(officeVersion) && !result.text.includes("timed out") && /operation not permitted/i.test(result.text), `the start: ${result.text}`);
+			assert(result.text.includes(LIBREOFFICE_REFUSED_LINE) && !result.text.includes(refusedLine(true)) && !result.text.includes(refusedLine(false)), `the line: ${result.text}`);
+		});
+	}
+
+	await macRow("a neighbour program in LibreOffice's own app folder still starts, and the model reads nothing beside its output", async () => {
+		await officeReady();
+		const result = await bash(`${quoted(office.neighbour)} --version`);
+		assert(!result.failed && result.text.trim() === officeVersion, `the neighbour: ${result.text}`);
+	});
+
+	await macRow("LibreOffice's refused start printing nothing, or at the head of a pipe that ends well, gives its line alone; a failure that prints nothing and started nothing keeps the folder line", async () => {
+		await officeReady();
+		for (const command of [`${quoted(office.soffice)} --version >/dev/null 2>&1`, `${quoted(office.soffice)} --version 2>&1 | tail -3`]) {
+			const result = await call(tools, "bash", { command, timeout: 20 });
+			assert(!result.text.includes(officeVersion) && result.text.includes(LIBREOFFICE_REFUSED_LINE) && !result.text.includes(refusedLine(true)), `${command}: ${result.text}`);
+		}
+		const looked = await bash(`[ -x ${quoted(path.join(folder, "nowhere", "soffice"))} ]`);
+		assert(looked.failed && looked.text.includes(refusedLine(true)) && !looked.text.includes(LIBREOFFICE_REFUSED_LINE), `a lookup: ${looked.text}`);
+	});
+
+	await macRow("a place refused beside LibreOffice's start gets its own line too, letter for letter; a command that only mentions LibreOffice and says why it failed gets neither", async () => {
+		await officeReady();
+		const both = await call(tools, "bash", { command: `${quoted(office.soffice)} --version; echo x > ${quoted(path.join(plainWork, "beside.txt"))}`, timeout: 20 });
+		assert(both.text.includes(LIBREOFFICE_REFUSED_LINE) && both.text.includes(refusedLine(true)), `both: ${both.text}`);
+		const mention = await bash("echo 'deck.pptx is not there, so soffice has nothing to convert' >&2; exit 1");
+		assert(mention.failed && !mention.text.includes("protection"), `the mention: ${mention.text}`);
+	});
+
+	await macRow("a command the person stopped after LibreOffice's refused start reads neither line", async () => {
+		await officeReady();
+		const stop = new AbortController();
+		const marker = path.join(folder, "refused-then-waiting");
+		const running = call(tools, "bash", { command: `${quoted(office.soffice)} --version; touch ${quoted(marker)}; /bin/sleep 30` }, stop.signal);
+		await waitFor(() => fs.existsSync(marker), "the command to go on past the refused start");
+		stop.abort();
+		const result = await running;
+		assert(result.failed && /operation not permitted/i.test(result.text) && !result.text.includes("protection"), `stopped: ${result.text}`);
 	});
 
 	await macRow("turn's end: the network closes before the private temp is emptied, and the temp is still emptied", async () => {

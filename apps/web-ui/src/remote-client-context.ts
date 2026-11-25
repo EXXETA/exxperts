@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { apiFetch } from "./api";
+import type { ModelsRunIn } from "./types";
 
 // Is this page being viewed from a remote device (over the tunnel), and with
 // what capability? Used only to HIDE affordances that cannot work remotely
@@ -15,12 +16,15 @@ import { apiFetch } from "./api";
 // person: who is signed in on a shared server; null anywhere else.
 // signOut: the server's own link that ends the sign-in there; null when the
 // server gave none.
+// publicPages: whether a shared server can reach public web pages at all, as
+// its network rules decide; null when the server said neither word.
 export interface RemoteClientContext {
 	remote: boolean;
 	capability: "full" | "read-only";
 	sharedServer: boolean;
 	person: ClientPerson | null;
 	signOut: string | null;
+	publicPages: "reachable" | "unreachable" | null;
 }
 
 export interface ClientPerson {
@@ -30,7 +34,7 @@ export interface ClientPerson {
 	admin: boolean;
 }
 
-const LOCAL_CONTEXT: RemoteClientContext = { remote: false, capability: "full", sharedServer: false, person: null, signOut: null };
+const LOCAL_CONTEXT: RemoteClientContext = { remote: false, capability: "full", sharedServer: false, person: null, signOut: null, publicPages: null };
 
 let cached: Promise<RemoteClientContext> | null = null;
 // The probe's answer once it has come, so a component mounted later starts
@@ -56,6 +60,7 @@ function readContext(body: unknown): RemoteClientContext {
 			? { id: person.id, name: typeof person.name === "string" ? person.name : "", admin: person.admin === true }
 			: null,
 		signOut: typeof signOut === "string" && signOut.startsWith("/oauth2/sign_out?rd=") ? signOut : null,
+		publicPages: value.publicPages === "reachable" || value.publicPages === "unreachable" ? value.publicPages : null,
 	};
 }
 
@@ -232,6 +237,50 @@ export function showsComputerOnlyControls(context: RemoteClientContext): boolean
 
 /** The one line a read-only setting shows on a shared server. */
 export const SHARED_SERVER_ADMIN_LINE = "On a shared server, your admin sets this up.";
+
+/**
+ * A shared server's one confirmation before a key, a provider or a gateway is
+ * removed: the same words whether or not any room uses it, so it tells nobody
+ * about anyone's rooms.
+ */
+export function sharedServerRemoveLine(name: string): string {
+	return `Remove ${name}? Its models leave everyone's list, and a room using one stops answering until someone there picks another model. Conversations are kept.`;
+}
+
+/** The same for a key with no approved models, which no room can use. */
+export function sharedServerRemoveKeyOnlyLine(name: string): string {
+	return `Remove ${name}? No models from this key are approved, so no room is affected.`;
+}
+
+/** A shared server's standing line in both gateway forms: one gateway serves everyone's rooms. */
+export const SHARED_SERVER_GATEWAY_LINE = "Changes here reach every room that uses this gateway, from its next answer.";
+
+/** Asked once before an existing gateway's new address is saved on a shared server. */
+export const SHARED_SERVER_NEW_ADDRESS_LINE = "Use the new address? Every room on this gateway sends its next answer there.";
+
+/** The admin's choice, in a gateway's form and a key's Approve models, of where its models run. */
+export const MODELS_RUN_IN_FIELD = {
+	heading: "Where its models run",
+	help: "Shown to everyone beside these models, as your statement.",
+	setByInstall: "Your organisation's install sets this.",
+	choices: [["eu", "In the EU"], ["outside-eu", "Outside the EU"], ["unknown", "Unknown"]] as const satisfies readonly (readonly [ModelsRunIn, string])[],
+} as const;
+
+/** Everyone's label beside each model: short on the screen, the sentence for its tooltip and a screen reader. */
+export const MODELS_RUN_IN_LABEL: Record<ModelsRunIn, { short: string; line: string }> = {
+	eu: { short: "EU", line: "Your admin says this model runs in the EU." },
+	"outside-eu": { short: "Outside EU", line: "Your admin says this model runs outside the EU." },
+	unknown: { short: "Location unknown", line: "Your admin hasn't said where this model runs." },
+};
+
+/** Above a member's model list with those labels, for the eye too: whose statement they are. */
+export const MODELS_RUN_IN_LIST_LINE = "Your admin states where each model runs.";
+
+/** AI setup on a shared server with no provider yet, by who reads it. */
+export const SHARED_SERVER_NO_PROVIDERS = {
+	admin: "No models yet. Add an API key or a gateway with Add provider.",
+	member: "No models yet. Ask your admin to add one.",
+} as const;
 
 /** Beside that line for a person who is not an admin yet: roles come with the sign-in. */
 export const NEW_ADMIN_HINT = "Just made an admin? Sign out and in again to get the admin's controls.";

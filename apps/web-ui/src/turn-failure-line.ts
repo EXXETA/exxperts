@@ -13,11 +13,11 @@ import { STOP_CUT_ANSWER_SENTENCE, type TurnEndedBy } from "../../web-server/src
 export type Unreached = "connection" | "local-connection";
 
 /**
- * A failed turn's cause: a spent usage limit or credit, still busy once the runtime's own retries gave up, a dropped connection, a refusal, an answer cut off part way, a request larger than the account takes at once, more than the model reads at once, an empty answer, or anything else.
+ * A failed turn's cause: a spent usage limit or credit, still busy once the runtime's own retries gave up, a dropped connection, a refusal, an answer cut off part way, a request larger than the account takes at once, one refused for its bytes, more than the model reads at once, an empty answer, or anything else.
  * A refused sign-in and a model no longer offered are named only when the status said so: the page reads them from the words otherwise.
  * A gateway's bare "not found" is its own cause: there it almost always means a wrong address or model name.
  */
-export type TurnFailure = "quota" | "region-or-plan" | "gateway-refused" | "gateway-not-found" | "still-busy" | Unreached | "refused" | "cut-off" | "too-large" | "overflow" | "empty-answer" | "signed-out" | "not-offered" | "other";
+export type TurnFailure = "quota" | "region-or-plan" | "gateway-refused" | "gateway-not-found" | "still-busy" | Unreached | "refused" | "cut-off" | "too-large" | "request-size" | "overflow" | "empty-answer" | "signed-out" | "not-offered" | "other";
 
 /** Why the runtime is asking again: the model is busy, the connection dropped, or its provider had an error. */
 export type RetryFailure = "busy" | "connection" | "provider-error";
@@ -135,14 +135,17 @@ export function isGatewayFind(value: unknown): value is GatewayFind {
 	return value === "model-gone" || value === "address" || value === "model-listed" || value === "unread";
 }
 
-/** The cause, after the model's name. */
-export function unreachedCause(where: Unreached): string {
-	return where === "local-connection" ? "could not be reached on this computer" : "could not be reached";
+/** The cause, after the model's name. On a shared server a local address is the server's, not this computer's. */
+export function unreachedCause(where: Unreached, shared = false): string {
+	return where === "local-connection" && !shared ? "could not be reached on this computer" : "could not be reached";
 }
+
+/** On a shared server, a way on for what only the admin can look into: a model at the server's own address, or a cause behind Details. */
+export const TELL_ADMIN_IF_IT_KEEPS_FAILING = "Try again, and tell your admin if it keeps failing.";
 
 /** What a person can do about it. On a shared server the connection is not theirs to check: their admin is the way on. */
 export function unreachedWayOn(where: Unreached, shared = false): string {
-	if (where === "local-connection") return "Check that the app running it is open, then try again.";
+	if (where === "local-connection") return shared ? TELL_ADMIN_IF_IT_KEEPS_FAILING : "Check that the app running it is open, then try again.";
 	return shared ? "Try again in a moment; if it repeats, tell your admin." : "Check your internet connection, then try again.";
 }
 
@@ -197,13 +200,24 @@ export function turnFailureLine(modelName: string, failure: TurnFailure | undefi
 	if (failure === "region-or-plan") return { cause: `${modelName} ${REGION_OR_PLAN_CAUSE}.`, wayOn: CHOOSE_MODEL };
 	if (failure === "gateway-refused") return { cause: `${modelName} ${GATEWAY_REFUSED_CAUSE}.`, wayOn: `${gatewayRefusedWayOn(shared)}, or choose another model in Room settings, Model.` };
 	if (failure === "gateway-not-found") return gatewayNotFoundLine(gateway || provider || "The gateway", modelName, gatewayFind, shared);
-	if (failure === "still-busy") return { cause: `${modelName} is still busy after several tries.`, wayOn: "Try again in a minute." };
+	if (failure === "still-busy") return { cause: `${modelName} is still busy after several tries.`, wayOn: "Try again later." };
 	if (failure === "empty-answer") return { cause: `${modelName} sent back an empty answer.`, wayOn: "Try again; if it repeats, choose another model in Room settings, Model." };
-	if (failure === "connection" || failure === "local-connection") return { cause: `${modelName} ${unreachedCause(failure)}.`, wayOn: unreachedWayOn(failure, shared) };
+	if (failure === "connection" || failure === "local-connection") return { cause: `${modelName} ${unreachedCause(failure, shared)}.`, wayOn: unreachedWayOn(failure, shared) };
 	if (failure === "refused") return { cause: `${modelName} declined to answer this message.`, wayOn: "You can reword it, or choose another model in Room settings, Model." };
 	if (failure === "too-large") return { cause: `${modelName} can't take this much at once on your account.`, wayOn: "Remember, then continue, or choose another model in Room settings, Model." };
+	if (failure === "request-size") return { cause: `${modelName} can't take this much at once.`, wayOn: "Ask for fewer pictures or files at a time." };
 	if (failure === "cut-off") return { cause: `${modelName} stopped in the middle of its answer.`, wayOn: "Try again." };
 	return { cause: `${modelName} could not answer this message.`, wayOn: "Try again; if it repeats, choose another model in Room settings, Model." };
+}
+
+/**
+ * A failure line as a member of a shared server reads it: they don't see the provider's own words (Details), so the plain cause, the one
+ * those words explained, sends them to the admin instead of guessing at another model. Only the words change: its buttons, Choose another
+ * model included, stay. Every other cause keeps its own way on, and so does a line Try again could not send again whole (NOT_SENT_AGAIN).
+ */
+export function failureLineForMember<T extends SavedFailureLine>(line: T): T {
+	if (line.failure !== "other" || !line.parts || line.parts.wayOn === NOT_SENT_AGAIN) return line;
+	return { ...line, ...failureLine({ ...line.parts, wayOn: TELL_ADMIN_IF_IT_KEEPS_FAILING }, line.messageAbove ? "above" : line.messageBack ? "back" : "lost") };
 }
 
 /** A line the room's model row says too, in its words with its way out: where the message is goes before that way out. */
@@ -470,21 +484,11 @@ export function returnedFailureLine(modelName: string, returned: ReturnedPromptF
 	return returned.stopped ? { cause: STOPPED_LINE } : turnFailureLine(modelName, returned.failure as TurnFailure | undefined, returned.model?.provider, returned.quotaWay, shared, gateway, returned.gatewayFind);
 }
 
-/** A message sent while the last answer was still running, put back in the box. A passing note: it goes once the turn is over and is never saved. */
-export const TURN_RUNNING_LINE = "The last answer is still finishing; send your message in a moment.";
-
-/** The note in older words: builds from before the note was kept out of saves wrote it into threads, and it goes on the way in too. */
-const OLDER_TURN_RUNNING_LINE = "The last answer is still finishing. Your message is back in the box; send it in a moment.";
-
 /** The line under an edit the server refused because the conversation moved on; the edit is in the box. */
 export const EDIT_REFUSED_LINE = "The conversation moved on, so this message can't be edited.";
 
 /** The refused edit's line as older builds saved it. */
 const OLDER_EDIT_REFUSED_LINE = "The conversation moved on, so this message can't be edited. Your text is in the message box.";
-
-export function isTurnRunningNote(item: { kind: string; text?: unknown }): boolean {
-	return item.kind === "system" && (item.text === TURN_RUNNING_LINE || item.text === OLDER_TURN_RUNNING_LINE);
-}
 
 export function retryNoteLine(modelName: string, failure: RetryFailure | undefined): string {
 	if (failure === "busy") return `${modelName} is busy. Trying again…`;

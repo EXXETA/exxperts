@@ -1,19 +1,21 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ADDRESS, ALLOW_FOR_ROOM_PICK, ALLOW_THIS_TIME_PICK, ASK_PANEL_NAME, CARD_DECLINE, CHOOSE_ANOTHER_FOLDER, CHOOSE_FOLDER, CHOOSING, COMMANDS_ASK_LINES, folderAskLine, FOLDER_PANE_TITLE, FOLDER_PANEL_PRESSES, type FolderPanelPress, moreQuestionsLine, NOT_NOW, OUTSIDE_CARD_LINE, OUTSIDE_REASON_LABEL, OUTSIDE_RUN_DELAY_MS, OUTSIDE_RUN_ONCE, pageCardLines, ROOM_ASK_KINDS, ROOM_SAYS_LABEL, roomNeedsAnswer, RUNNING_NOW, RUNS_IN, SITE_ALLOW_ONCE, SITE_ALLOW_ROOM, SITE_CARD_RISK_LINE, TURN_ON_ANYWAY, TURN_ON_COMMANDS, WAITING_AT_COMPUTER } from "../../../web-server/src/room-box/card-text";
+import { ADDRESS, ALLOW_FOR_ROOM_PICK, ALLOW_THIS_TIME_PICK, ASK_PANEL_NAME, CARD_DECLINE, CHOOSE_ANOTHER_FOLDER, CHOOSE_FOLDER, CHOOSING, COMMANDS_ASK_LINES, FILE_LABEL, folderAskLine, FOLDER_PANE_TITLE, FOLDER_PANEL_PRESSES, type FolderPanelPress, moreQuestionsLine, NOT_NOW, OUTSIDE_CARD_LINE, OUTSIDE_REASON_LABEL, OUTSIDE_RUN_DELAY_MS, OUTSIDE_RUN_ONCE, pageCardLines, ROOM_ASK_KINDS, ROOM_SAYS_LABEL, roomNeedsAnswer, RUNNING_NOW, RUNS_IN, SITE_ALLOW_ONCE, SITE_ALLOW_ROOM, SITE_CARD_RISK_LINE, TURN_ON_ANYWAY, TURN_ON_COMMANDS, WAITING_AT_COMPUTER } from "../../../web-server/src/room-box/card-text";
 import { chordHeld, isMacPlatform, isTouchScreen } from "../platform";
 import { useComposerEmpty } from "../question-keys";
 import { useRemoteClientContext } from "../remote-client-context";
 import type { ChatItem } from "../types";
 import { composerTextarea } from "./Approval";
-import { connectorAllowRoomLine, connectorApprovalSubject, connectorCutLine, connectorRiskLine, connectorSentLabel } from "../../../web-server/src/room-approval-titles";
+import { connectorAlwaysAllowLine, connectorApprovalTool, connectorChangeLine, connectorCutLine, connectorRiskLine, connectorSentLabel, CONNECTOR_CHOICE_WORDS } from "../../../web-server/src/room-approval-titles";
 import { answerer, refuseEnter, RoomAsksContext, type RoomAsks } from "./box-ask-rows";
+import { connectorFormFrom, connectorFormGoesTo, FORM_SEND } from "../../../web-server/src/connector-form-ask";
+import { ConnectorFormFields, formSent, useFormDraft } from "./connector-form-card";
 import { WorkIcon, type WorkIconName } from "./ThinkingRow";
 
 type ApprovalItem = Extract<ChatItem, { kind: "approval" }>;
 type Resolve = (requestId: string, value: unknown, label: string) => void;
 
-/** The questions the panel above the message box shows: the room's folder and commands asks, a site a command or a page wants, a connector's tool, a command to run on Ask, and a command to run outside the room. Every other question stays in the steps. */
-const PANEL_ASK_KINDS: ReadonlySet<string> = new Set(["folder", "commands", "site", "connector", "run", "outside"]);
+/** The questions the panel above the message box shows: the room's folder and commands asks, a site a command or a page wants, a connector's tool and its form, a command to run on Ask, and a command to run outside the room. Every other question stays in the steps. */
+const PANEL_ASK_KINDS: ReadonlySet<string> = new Set(["folder", "commands", "site", "connector", "form", "run", "outside"]);
 export const inAskPanel = (ask: ApprovalItem): boolean => PANEL_ASK_KINDS.has(ask.uiKind);
 /** A question only the computer answers: a phone shows it waiting there, with no answers. The server counts a phone's yes to running outside as a no. */
 export const answeredAtComputer = (ask: ApprovalItem): boolean => ROOM_ASK_KINDS.has(ask.uiKind) || ask.uiKind === "outside";
@@ -66,6 +68,10 @@ interface PanelQuestion {
 	warning?: string;
 	/** The line that says what the yes gives where it reaches all of a person's files: never the quietest on the panel. */
 	risk?: string;
+	/** What the person fills in before the answers: a connector's form's fields. */
+	body?: ReactNode;
+	/** false: Escape is not this question's no, and does nothing here: a form's Not now would lose what was typed. */
+	escapes?: false;
 	no: Answer | null;
 	lasting: Answer | null;
 	main: (Answer & { chord: boolean }) | null;
@@ -84,7 +90,7 @@ function roomSays(reason: string | undefined): PanelQuestion["facts"] {
  * waits for the server's reply, which says what was taken. The run and
  * run-outside questions get no reply, so their Run once folds at once too.
  */
-function panelQuestion(ask: ApprovalItem, at: { remote: boolean; sharedServer: boolean; roomAsks: RoomAsks | null; runningCommand: string | null; runReady: boolean; onResolve: Resolve }): PanelQuestion {
+function panelQuestion(ask: ApprovalItem, at: { remote: boolean; sharedServer: boolean; roomAsks: RoomAsks | null; runningCommand: string | null; runReady: boolean; onResolve: Resolve; form?: ReturnType<typeof useFormDraft> }): PanelQuestion {
 	const resolve = answerer(ask, at.onResolve);
 	const { roomAsks } = at;
 	const pressed = roomAsks?.pressed(ask.requestId);
@@ -99,20 +105,24 @@ function panelQuestion(ask: ApprovalItem, at: { remote: boolean; sharedServer: b
 		if (at.remote) return atComputer("folder");
 		// With no folder window on this computer no folder can be chosen: Not now is left, and Allow this time where one click is offered.
 		const picker = ask.canChoose !== false ? roomAsks : null;
-		// The folder the server shows, by its real name and path; one click only where the server offers it.
-		const folder = ask.suggested;
+		// The folder the server shows, by its real name and path, or only the room's words for a place; one click only where the server offers it.
+		const suggested = ask.suggested;
+		const folder = suggested && "path" in suggested ? suggested : undefined;
 		const once = folder?.once === true;
 		// A press the server is working on, or one this page sent and waits on: one that may open the window reads Choosing.
 		const working = ask.choosing ?? pressed;
 		const pressOf = (value: FolderPanelPress, label: string): Answer => ({ label: working === value && value !== FOLDER_PANEL_PRESSES.thisTime ? CHOOSING : label, run: yes(value, label), off });
 		// Allow this time needs no window: it stays with one click where the folder window can't open.
 		const thisTime = once && roomAsks ? pressOf(FOLDER_PANEL_PRESSES.thisTime, ALLOW_THIS_TIME_PICK) : null;
-		const shown = folder ? [{ label: FOLDER_PANE_TITLE, value: <><bdi className="ask-name">{folder.name}</bdi><wbr /><bdi className="ask-path">{breaksAfterSeparators(folder.path)}</bdi></>, ...(picker && once ? { action: pressOf(FOLDER_PANEL_PRESSES.choose, CHOOSE_ANOTHER_FOLDER) } : {}) }] : [];
+		const file = folder?.file ? [{ label: FILE_LABEL, value: <bdi className="ask-name">{folder.file}</bdi> }] : [];
+		const shown = folder
+			? [...file, { label: FOLDER_PANE_TITLE, value: <><bdi className="ask-name">{folder.name}</bdi><wbr /><bdi className="ask-path">{breaksAfterSeparators(folder.path)}</bdi></>, ...(picker && once ? { action: pressOf(FOLDER_PANEL_PRESSES.choose, CHOOSE_ANOTHER_FOLDER) } : {}) }]
+			: suggested && "named" in suggested ? [{ label: FOLDER_PANE_TITLE, value: <bdi className="ask-path ask-named">{breaksAfterSeparators(suggested.named)}</bdi> }] : [];
 		return {
 			icon: "folder",
 			facts: [...shown, ...roomSays(ask.reason)],
-			// What a yes gives stays wherever one is offered: where Allow this time gives the folder named here, the line says this folder.
-			lines: picker || thisTime ? [folderAskLine(ask.access === "write" ? "write" : "read", thisTime ? "named" : "chosen")] : [],
+			// What a yes gives stays wherever one is offered: where Allow this time gives the folder named here, the line says this folder, and the whole of it where the room named one file.
+			lines: picker || thisTime ? [folderAskLine(ask.access === "write" ? "write" : "read", thisTime ? (folder?.file ? { file: folder.file } : "named") : "chosen")] : [],
 			warning: ask.line,
 			no: { label: NOT_NOW, run: () => resolve(false, NOT_NOW) },
 			// No press is an answer: the question stays until the server says a folder was given, and a folder picked in the window is shown here first.
@@ -166,23 +176,42 @@ function panelQuestion(ask: ApprovalItem, at: { remote: boolean; sharedServer: b
 			main: { label: OUTSIDE_RUN_ONCE, run: () => resolve(true, OUTSIDE_RUN_ONCE), off: !at.runReady, chord: false },
 		};
 	}
-	if (ask.uiKind === "connector") {
-		const cut = ask.cut ?? 0;
-		const use = connectorApprovalSubject(ask.title);
+	if (ask.uiKind === "form") {
+		const connector = ask.connector ?? "";
+		const form = at.form;
 		return {
 			icon: "plug",
-			lead: connectorRiskLine(ask.connector ?? ""),
+			facts: ask.message ? [{ label: connectorFormFrom(connector), value: ask.message, stacked: true }] : [],
+			lines: [connectorFormGoesTo(connector)],
+			// A card waiting for another person shows what is asked, not the fields.
+			body: form ? <ConnectorFormFields ask={ask} values={form.values} onChange={form.change} /> : undefined,
+			escapes: false,
+			// Saved as Decline, which the steps read as a no, as on the connector's question.
+			no: { label: NOT_NOW, run: () => resolve("decline", CARD_DECLINE) },
+			lasting: null,
+			// The values go once; the server's reply closes the card or puts a line under each field that doesn't fit.
+			main: form ? { label: FORM_SEND, run: yes({ values: formSent(ask.fields ?? [], form.values) }, FORM_SEND), off, chord: false } : null,
+		};
+	}
+	if (ask.uiKind === "connector") {
+		const cut = ask.cut ?? 0;
+		const tool = connectorApprovalTool(ask.title, ask.connector ?? "");
+		const always = CONNECTOR_CHOICE_WORDS.allow;
+		return {
+			icon: "plug",
+			// By the connector's own marks: none for a tool it marks read-only, the softer line for one it marks as not destructive.
+			lead: ask.readOnly ? undefined : ask.destructive === false ? connectorChangeLine(ask.connector ?? "") : connectorRiskLine(ask.connector ?? ""),
 			facts: [{ label: connectorSentLabel(cut), value: <code>{ask.sent ?? ""}</code>, stacked: true }],
-			// What Allow for this room gives, wherever it is offered: never on a phone, whose yes is for this time.
-			lines: [...(cut > 0 ? [connectorCutLine(cut)] : []), ...(ask.lasting && use ? [connectorAllowRoomLine(SITE_ALLOW_ROOM, use)] : [])],
+			// How far Always allow reaches, wherever it is offered: never on a phone, whose yes is for this time.
+			lines: [...(cut > 0 ? [connectorCutLine(cut)] : []), ...(ask.lasting && tool ? [connectorAlwaysAllowLine(tool, ask.connector ?? "")] : [])],
 			warning: ask.failure,
 			// Saved as Decline, which the step's row reads as a no, as on the site question.
 			no: { label: NOT_NOW, run: () => resolve("decline", CARD_DECLINE) },
-			lasting: ask.lasting ? { label: SITE_ALLOW_ROOM, run: yes("room", SITE_ALLOW_ROOM), off } : null,
+			lasting: ask.lasting ? { label: always, run: yes("room", always), off } : null,
 			main: { label: SITE_ALLOW_ONCE, run: yes("once", SITE_ALLOW_ONCE), off, chord: true },
 		};
-	}
-	const page = ask.address !== undefined;
+		}
+		const page = ask.address !== undefined;
 	const lines = page ? pageCardLines(ask.lasting === true, at.sharedServer) : [SITE_CARD_RISK_LINE];
 	const facts = page ? [{ label: ADDRESS, value: <code>{ask.address}</code> }] : at.runningCommand ? [{ label: RUNNING_NOW, value: <code>{at.runningCommand}</code> }] : [];
 	return {
@@ -195,6 +224,64 @@ function panelQuestion(ask: ApprovalItem, at: { remote: boolean; sharedServer: b
 		lasting: ask.lasting ? { label: SITE_ALLOW_ROOM, run: yes("room", SITE_ALLOW_ROOM), off } : null,
 		main: { label: SITE_ALLOW_ONCE, run: yes("once", SITE_ALLOW_ONCE), off, chord: true },
 	};
+}
+
+/**
+ * A question's words as the panel draws them: its title, then what it shows of
+ * it. `factAnswer` draws a fact's own answer; without it the fact shows none.
+ */
+function QuestionWords({ ask, question, factAnswer }: { ask: ApprovalItem; question: PanelQuestion; factAnswer?: (answer: Answer) => ReactNode }) {
+	return (
+		<>
+			<p className="ask-title"><WorkIcon name={question.icon} /><span>{ask.title}</span></p>
+			{(question.lead || question.command !== undefined || question.facts.length > 0 || question.lines.length > 0 || question.risk || question.warning || question.body) && (
+				// Only the facts scroll, between the question and its answers; a fade at each end that hides words says more are there.
+				<div className="ask-panel-in">
+					<span className="ask-fade" data-end="top" aria-hidden="true" />
+					<div className="ask-words">
+						{question.lead && <p className="ask-line">{question.lead}</p>}
+						{/* Text, never Markdown, with every hidden character already written out by the server; a keyboard reaches it to scroll it. */}
+						{question.command !== undefined && <pre key={ask.requestId} className="ask-command" tabIndex={0} aria-label="The full command">{question.command}</pre>}
+						{/* What the yes gives sits right under the command, before the model's reason, so no reason pushes it out of view. */}
+						{question.command !== undefined && question.risk && <p className="ask-line ask-risk">{question.risk}</p>}
+						{question.facts.length > 0 && (
+							<dl className="ask-facts">
+								{question.facts.map((fact) => (
+									<div key={fact.label} className={fact.action && factAnswer ? "ask-fact ask-fact-with-answer" : fact.stacked ? "ask-fact ask-fact-stacked" : "ask-fact"}>
+										<dt>{fact.label}</dt>
+										<dd>{fact.value}</dd>
+										{fact.action && factAnswer?.(fact.action)}
+									</div>
+								))}
+							</dl>
+						)}
+						{question.lines.map((line) => <p key={line} className="ask-line">{line}</p>)}
+						{question.command === undefined && question.risk && <p className="ask-line ask-risk">{question.risk}</p>}
+						{question.warning && <p className="ask-line ask-warning" role="status">{question.warning}</p>}
+						{question.body}
+					</div>
+					<span className="ask-fade" data-end="bottom" aria-hidden="true" />
+				</div>
+			)}
+		</>
+	);
+}
+
+/**
+ * A question in another person's answer, on a page that can't answer it: the
+ * panel's own card for its kind, greyed, with whom it waits for (`line`) where
+ * its answers would be. What it shows is what the computer that answers it is
+ * shown; none of its answers is drawn.
+ */
+export function WaitingAskCard({ ask, line }: { ask: ApprovalItem; line: string }) {
+	const { sharedServer } = useRemoteClientContext();
+	const question = panelQuestion(ask, { remote: false, sharedServer, roomAsks: null, runningCommand: null, runReady: false, onResolve: () => undefined });
+	return (
+		<div className="ask-waiting">
+			<QuestionWords ask={ask} question={question} />
+			<p className="ask-waiting-line" role="status">{line}</p>
+		</div>
+	);
 }
 
 /**
@@ -285,7 +372,8 @@ export function AskPanel({ asks, roomName, queued, runningCommand, onResolve }: 
 	shownId.current = shown?.requestId ?? null;
 	const mainRef = useRef<HTMLButtonElement>(null);
 	const runReady = useRunReady(shown?.uiKind === "outside" && !remote ? shown.requestId : null, mainRef);
-	const question = shown ? panelQuestion(shown, { remote, sharedServer, roomAsks, runningCommand, runReady, onResolve }) : null;
+	const form = useFormDraft(shown);
+	const question = shown ? panelQuestion(shown, { remote, sharedServer, roomAsks, runningCommand, runReady, onResolve, form }) : null;
 	// For a yes, every frame the server sends for the card starts the pause again: the card came back, or changed under the pointer.
 	const { awake, awakeNow } = usePause(shown ? `${shown.requestId}\n${shown.shownAt ?? shown.openedAt ?? ""}` : null, true);
 	// Not now and Escape wait only when a question newly shows here, the first one or the next in an answered one's place: a no gives nothing away.
@@ -307,7 +395,7 @@ export function AskPanel({ asks, roomName, queued, runningCommand, onResolve }: 
 
 	// A screen reader hears each new question once, in the notification's words, and a folder the panel comes to show as a new question with that folder.
 	const [heard, setHeard] = useState("");
-	const heardFolder = shown?.suggested?.name;
+	const heardFolder = shown?.suggested && ("named" in shown.suggested ? shown.suggested.named : shown.suggested.name);
 	useEffect(() => {
 		setHeard(shown ? `${roomNeedsAnswer(roomName)}: ${shown.title}${heardFolder ? ` ${FOLDER_PANE_TITLE}: ${heardFolder}` : ""}` : "");
 	}, [shown?.requestId, heardFolder]);
@@ -323,6 +411,8 @@ export function AskPanel({ asks, roomName, queued, runningCommand, onResolve }: 
 			},
 			escape: (repeat: boolean) => {
 				if (!question?.no) return false;
+				// Taken, so it stops nothing either.
+				if (question.escapes === false) return true;
 				if (noAwakeNow() && !repeat) question.no.run();
 				return true;
 			},
@@ -337,7 +427,7 @@ export function AskPanel({ asks, roomName, queued, runningCommand, onResolve }: 
 		if (event.key === "Escape" && question?.no) {
 			event.preventDefault();
 			event.stopPropagation();
-			if (noAwakeNow() && !event.repeat) question.no.run();
+			if (question.escapes !== false && noAwakeNow() && !event.repeat) question.no.run();
 			return;
 		}
 		// The chord never presses the focused button: it answers Allow this time or Run once, or it is the box's Send now.
@@ -360,39 +450,11 @@ export function AskPanel({ asks, roomName, queued, runningCommand, onResolve }: 
 			<p className="sr-only" aria-live="polite">{heard}</p>
 			{shown && question && (
 				<section ref={panelRef} className="ask-panel" aria-label={ASK_PANEL_NAME} data-box-empty={boxEmpty ? "1" : "0"} onKeyDown={onKeyDown}>
-					<p className="ask-title"><WorkIcon name={question.icon} /><span>{shown.title}</span></p>
-					{(question.lead || question.command !== undefined || question.facts.length > 0 || question.lines.length > 0 || question.risk || question.warning) && (
-						// Only the facts scroll, between the question and its answers; a fade at each end that hides words says more are there.
-						<div className="ask-panel-in">
-							<span className="ask-fade" data-end="top" aria-hidden="true" />
-							<div className="ask-words">
-								{question.lead && <p className="ask-line">{question.lead}</p>}
-								{/* Text, never Markdown, with every hidden character already written out by the server; a keyboard reaches it to scroll it. */}
-								{question.command !== undefined && <pre key={shown.requestId} className="ask-command" tabIndex={0} aria-label="The full command">{question.command}</pre>}
-								{/* What the yes gives sits right under the command, before the model's reason, so no reason pushes it out of view. */}
-								{question.command !== undefined && question.risk && <p className="ask-line ask-risk">{question.risk}</p>}
-								{question.facts.length > 0 && (
-									<dl className="ask-facts">
-										{question.facts.map((fact) => (
-											<div key={fact.label} className={fact.action ? "ask-fact ask-fact-with-answer" : fact.stacked ? "ask-fact ask-fact-stacked" : "ask-fact"}>
-												<dt>{fact.label}</dt>
-												<dd>{fact.value}</dd>
-												{fact.action && <button type="button" className="rs-btn rs-btn-quiet rs-btn-sm" aria-disabled={!awake || !!fact.action.off} disabled={!!fact.action.off} onKeyDown={refuseEnter} onClick={press(fact.action)}>{fact.action.label}</button>}
-											</div>
-										))}
-									</dl>
-								)}
-								{question.lines.map((line) => <p key={line} className="ask-line">{line}</p>)}
-								{question.command === undefined && question.risk && <p className="ask-line ask-risk">{question.risk}</p>}
-								{question.warning && <p className="ask-line ask-warning" role="status">{question.warning}</p>}
-							</div>
-							<span className="ask-fade" data-end="bottom" aria-hidden="true" />
-						</div>
-					)}
+					<QuestionWords ask={shown} question={question} factAnswer={(answer) => <button type="button" className="rs-btn rs-btn-quiet rs-btn-sm" aria-disabled={!awake || !!answer.off} disabled={!!answer.off} onKeyDown={refuseEnter} onClick={press(answer)}>{answer.label}</button>} />
 					{question.no && (
 						<div className="ask-actions">
 							<button type="button" className="rs-btn rs-btn-sm" aria-disabled={!noAwake} onClick={press(question.no, noAwakeNow)}>
-								{!touch ? (
+								{!touch && question.escapes !== false ? (
 									<span className="ask-key-slot ask-esc-slot">
 										<span className="ask-key-with">{question.no.label}<kbd className="ask-esc">Esc</kbd></span>
 										<span className="ask-key-alone">{question.no.label}</span>

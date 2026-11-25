@@ -22,6 +22,10 @@ keep the list honest without cluttering it: **Removed gateways** holds the
 spend of gateways you have since removed, and **Retired rooms** holds
 archived and deleted rooms. Open either fold to see the rows inside.
 
+When the usage ledger can't be read, the page shows only "The Wallet can't
+show your usage right now.", never empty totals, and the CSV download fails
+instead of giving an empty file.
+
 ## Where gateway prices come from
 
 A gateway turn is real money, and the Wallet books it at the rate the

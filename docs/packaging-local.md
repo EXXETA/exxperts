@@ -105,7 +105,7 @@ npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts --help
 npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts --no-open --port 8790
 ```
 
-`--port` and `--no-open` are test/debug flags for scripted web checks, port conflicts, and asset validation. For normal launches, use `exxperts`.
+`exxperts --help` lists the options. `--port` picks another port, for a port conflict; `--no-open` starts without opening a browser, for scripted web checks and asset validation. Every start prints a sign-in link to the terminal; open it once to sign a browser in. For normal launches, use `exxperts`.
 
 While the web server is running, check assets. Asset routes require the client auth token (see `SECURITY.md`), so send it as a header; without it every check returns HTTP 401 by design:
 

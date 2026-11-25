@@ -14,6 +14,10 @@
  *
  *   { type: "ui_request_closed", id, reason: "chosen", lasts }
  *     (a folder card ended by the folder the person chose in the computer's window)
+ *   { type: "ui_request_closed", id, reason: "answered", value }
+ *     (on a shared server, a confirm, select, input, run or outside card's
+ *     answer was taken: `value` is the answer every page shows)
+ *
  *   { type: "ui_request_closed", id, reason: "answered", taken }
  *     (a site, connector, commands or folder card's answer was taken, and
  *     `taken` is what the server applied: "once", "room" or "decline" for a
@@ -23,11 +27,28 @@
  *   { type: "ui_request_update", id, ...state }
  *     (a room's card stays open in a new state: a folder card's line, canChoose,
  *     choosing and the folder it shows (`suggested`); a site, connector or
- *     commands card's failure, when its yes couldn't be saved)
+ *     commands card's failure, when its yes couldn't be saved; a connector
+ *     form's `fieldLines`, the line under each field whose value doesn't fit)
+ *
+ *   { type: "ui_request", id, kind: "form", title, connector, message, fields }
+ *     (a connector's form, answered through `ui_response` with
+ *     `{ values }` for Send or "decline" for Not now; its closing frame says
+ *     `taken`: "sent" or "decline", never a value, and `reason: "withdrawn"`
+ *     when the connector stopped waiting for it)
  *
  *   { type: "ui_request", id, ..., again: true }
  *     (a card sent again, as first sent: an answer too soon, or one that can't
  *     count, or a device that came back; the page notifies nobody for it)
+ *
+ *   { type: "ui_request", id, ..., askedBy: { name }, waitingFor: { name } }
+ *     (a card on a room's one session on a shared server, in an answer a page's
+ *     message started: `askedBy` on every page, the person whose answer asked
+ *     it, by name or null; `waitingFor` too on a page that can't answer it,
+ *     which shows it waiting for them)
+ *
+ *   { type: "ui_request_refused", id, waitingFor: { name } }
+ *     (to that page alone: its answer was someone else's to give, and changed
+ *     nothing)
  *
  * The run-outside and run questions get no closing frame for an answer: the
  * page folds them itself.
@@ -36,7 +57,8 @@
  *   { type: "ui_response", id, value }
  *
  * Every answer to a site, connector, commands or folder card gets exactly one of these
- * frames back, with its id, and a yes waits for it on the page.
+ * frames back, with its id, and a yes waits for it on the page; an answer that
+ * was someone else's to give gets `ui_request_refused` instead.
  *
  * For `notify` / `setStatus` etc. (fire-and-forget), the server emits a
  * `ui_request` with no expectation of a response.
@@ -49,6 +71,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ExtensionUIContext } from "@exxeta/exxperts-runtime";
 
+import { checkConnectorForm, connectorFormFields, connectorFormTitle, readConnectorFormValues, type ConnectorFormCheck, type ConnectorFormContent, type ConnectorFormParams } from "./connector-form-ask.js";
 import { ANSWER_FLOOR_MS, CHANGE_SAVE_FAILED, type CommandsAskLine, commandAsShown, COMMANDS_ASK_TITLE, type FolderAskAccess, folderAskTitle, type FolderLasts, FOLDER_PANEL_PRESSES, pageCardQuestion, reasonAsShown, ROOM_ASK_KINDS, siteCardQuestion, type SuggestedFolder } from "./room-box/card-text.js";
 import type { HeldFolder } from "./room-box/folder-suggestion.js";
 import { PERSISTENT_ROOM_COMMAND_APPROVAL_TITLE } from "./room-approval-titles.js";
@@ -64,7 +87,7 @@ type SiteChoice = "once" | "room" | "decline";
 export type SiteApply = (choice: "once" | "room", answeredBy: QuestionAuthority) => "once" | "room" | null;
 /** The same for the commands card's yes: true once commands are on, or null when the turn had already ended. */
 export type CommandsApply = () => true | null;
-/** The same for a connector card's yes: "room" once that tool's yes is stored for the room, else "once". */
+/** The same for a connector card's yes: "room" (Always allow) once that tool's choice is stored, else "once". */
 export type ConnectorApply = (choice: "once" | "room", answeredBy: QuestionAuthority) => "once" | "room";
 
 /** A connector tool's question as the gate asks it (mcp/room-scope.ts), its words already made safe to show. */
@@ -75,15 +98,41 @@ export interface ConnectorCard {
 	/** What the room would send, as one line of JSON, cut at its end by `cut` characters. */
 	sent: string;
 	cut: number;
-	/** Whether Allow for this room may be offered: the computer sees it, a phone never. */
+	/** Whether Always allow may be offered: the computer sees it, a phone never. */
 	lasting: boolean;
+	/** The connector marks the tool read-only: the question shows no risk line. */
+	readOnly?: true;
+	/** The connector marks the tool as not destructive (and not read-only): the question shows the softer line. Left out for a tool it doesn't mark. */
+	destructive?: false;
+	/** The call that asks, so the page puts the question on that call's step. */
+	toolCallId?: string;
+}
+
+/** The request a connector question sends the page: the card's fields only, each as the gate made it. */
+export function connectorAskFrame({ title, connector, sent, cut, lasting, readOnly, destructive, toolCallId }: ConnectorCard) {
+	return { kind: "connector" as const, title, connector, sent, cut, lasting, ...(readOnly ? { readOnly } : {}), ...(destructive === false ? { destructive } : {}), ...(toolCallId ? { toolCallId } : {}) };
+}
+
+/** A connector's form as the room asks it (mcp/room-scope.ts): the connector's name already made safe to show, the form as the connector sent it, and the adapter's own check of an answer. */
+export interface ConnectorFormCard {
+	connector: string;
+	params: ConnectorFormParams;
+	check: ConnectorFormCheck;
+}
+
+/** How a form was answered: what goes to the connector, or Not now. */
+export type ConnectorFormAnswer = { action: "accept"; content: ConnectorFormContent } | { action: "decline" };
+
+/** The request a connector's form sends the page: the fields as the card draws them, with every hidden character written out. */
+export function connectorFormFrame({ connector, params }: Omit<ConnectorFormCard, "check">) {
+	return { kind: "form" as const, title: connectorFormTitle(connector), connector, message: commandAsShown(params.message), fields: connectorFormFields(params, commandAsShown) };
 }
 
 /** A dialog that was answered for the user because nobody was on the other end. */
 export interface WebUiAutoDeclinedQuestion {
-	kind: "confirm" | "select" | "input" | "site" | "outside" | "run" | "folder" | "commands" | "connector";
+	kind: "confirm" | "select" | "input" | "site" | "outside" | "run" | "folder" | "commands" | "connector" | "form";
 	title: string;
-	/** A connector question: whether it offered Allow for this room, so the note can name that way on. */
+	/** A connector question: whether it offered Always allow, so the note can name that way on. */
 	lasting?: boolean;
 }
 
@@ -124,17 +173,27 @@ export interface WebUiContext extends ExtensionUIContext {
 	askSite(card: { host: string; port: number; lasting: boolean; address?: string }, apply: SiteApply, signal?: AbortSignal): Promise<{ choice: SiteChoice; answeredBy: QuestionWatcher }>;
 	/** A connector tool's question, a kind of its own, answered from any device: a yes is applied by `apply` before the card is told it was answered. */
 	askConnector(card: ConnectorCard, apply: ConnectorApply): Promise<SiteChoice>;
+	/**
+	 * A connector's form, a kind of its own, answered from any device. A Send
+	 * reaches the connector only once its values fit the form by the adapter's
+	 * own check; until then the card stays with a line under each field that
+	 * doesn't. Not now, and a message sent instead, are the person's no.
+	 * Aborting `closed` (the connector stopped waiting) closes this card alone,
+	 * as withdrawn, and rejects.
+	 */
+	askForm(card: ConnectorFormCard, closed?: AbortSignal): Promise<ConnectorFormAnswer>;
 	/** The outside card, a kind of its own, answered only from the computer. */
 	askOutside(card: { command: string; reason: string }): Promise<boolean>;
 	/** The command question in a room on Ask, a kind of its own: the command whole and the folder it runs in, answered from any device. */
 	askRun(card: { command: string; folder: string | null }): Promise<boolean>;
 	/**
-	 * The room asks for a folder, showing `held` where the server holds one.
+	 * The room asks for a folder, showing `held` where the server holds one,
+	 * and otherwise `named`, the room's own words for the place, as drawn, until a pick.
 	 * Its presses aren't answers: each runs `act` with the folder held then and
 	 * a signal that closes the window when the card ends, and the card stays
 	 * until it gives an answer. A press the card doesn't offer counts for nothing.
 	 */
-	askFolder(card: { access: FolderAskAccess; reason: string; roomHasFolder: boolean; held: HeldFolder | null; act: (press: FolderPress, held: HeldFolder | null, signal: AbortSignal) => Promise<ChooseOutcome> }): Promise<FolderAnswer>;
+	askFolder(card: { access: FolderAskAccess; reason: string; roomHasFolder: boolean; held: HeldFolder | null; named?: string | null; act: (press: FolderPress, held: HeldFolder | null, signal: AbortSignal) => Promise<ChooseOutcome> }): Promise<FolderAnswer>;
 	/** The room asks to turn on commands; true is the computer's yes, applied by `apply` before the card is told it was answered. */
 	askCommands(card: { reason: string; line: CommandsAskLine; anyway: boolean }, apply: CommandsApply): Promise<boolean>;
 	/**
@@ -157,6 +216,12 @@ export interface WebUiContext extends ExtensionUIContext {
 	 */
 	attach(authority?: QuestionAuthority): void;
 	/**
+	 * A page joining the room's one session mid-answer (shared server): to that
+	 * page alone, in attach's order, the last cards answered or chosen, then
+	 * every dialog still waiting, sent again so nobody is notified twice.
+	 */
+	catchUp(sendTo: (frame: unknown) => void): void;
+	/**
 	 * The person pressed Stop: every open question is answered with
 	 * `sentence` for the model, its card is told it closed, and a question
 	 * asked while the stop is under way gets the same answer at once. Not an
@@ -174,6 +239,13 @@ export interface WebUiContext extends ExtensionUIContext {
 	closeSiteCards(sentence: string): void;
 	/** Whether a question waits for the person's answer now. */
 	hasOpenQuestions(): boolean;
+	/**
+	 * A scheduled answer runs: each question, open or asked later, waits `ms`
+	 * for a page's answer, then is declined as a scheduled run declines it
+	 * (`message` for the model, noted for the landing, its card closed as
+	 * declined). null ends it, and the questions still open wait as usual.
+	 */
+	declineUnansweredAfter(ms: number | null, message: string): void;
 	reopen(): void;
 }
 
@@ -197,14 +269,15 @@ const KEPT_CLOSING_FRAMES = 8;
 // Why a card closed by its caller's signal rejects: nobody waits for its answer any more.
 const CARD_CLOSED = "nobody waits for this question's answer any more";
 // What a room's card may change while it stays open, by its kind: the update frame carries all of it, so a field left out clears.
-const CHANGEABLE: Readonly<Record<string, readonly string[]>> = { folder: ["line", "canChoose", "choosing", "suggested"], site: ["failure"], connector: ["failure"], commands: ["failure"] };
+const CHANGEABLE: Readonly<Record<string, readonly string[]>> = { folder: ["line", "canChoose", "choosing", "suggested"], site: ["failure"], connector: ["failure"], commands: ["failure"], form: ["fieldLines"] };
 
 // A Map, so "toString" and every other prototype key is no press.
 const FOLDER_PRESSES = new Map<string, FolderPress>([[FOLDER_PANEL_PRESSES.thisTime, "this-time"], [FOLDER_PANEL_PRESSES.room, "room"], [FOLDER_PANEL_PRESSES.choose, "choose"]]);
 const folderPressOf = (value: unknown): FolderPress | undefined => (typeof value === "string" ? FOLDER_PRESSES.get(value) : undefined);
 
-/** The folder a card shows, as the page draws it: its real name and path, never the room's words for it. */
-const suggestedOf = (held: HeldFolder | null): SuggestedFolder | null => (held ? { name: held.name, path: held.shown, once: held.once } : null);
+/** The folder a card shows, as the page draws it: a folder held by its real name and path, never the room's words for it; with none held, the room's words, which no press gives. */
+const suggestedOf = (held: HeldFolder | null, named: string | null): SuggestedFolder | null =>
+	held ? { name: held.name, path: held.shown, once: held.once, ...(held.file ? { file: held.file } : {}) } : named ? { named, once: false } : null;
 
 /** Whether the folder panel offers a press with this folder held: Allow this time only for one click, Allow for this room not beside Choose folder. */
 function pressOffered(press: FolderPress, held: HeldFolder | null): boolean {
@@ -217,10 +290,13 @@ function pressOffered(press: FolderPress, held: HeldFolder | null): boolean {
 function floored(kind: string, value: unknown): boolean {
 	if (kind === "site" || kind === "connector") return value === "once" || value === "room";
 	if (kind === "commands" || kind === "run") return value === true;
+	if (kind === "form") return value !== "decline";
 	return kind === "folder" && folderPressOf(value) !== undefined;
 }
 
-export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebUiAutoDeclinedQuestion) => void, connectedFrom: QuestionAuthority = "computer", clock: { now?: () => number } = {}): WebUiContext {
+// `closesAnsweredCards`: a confirm, select, input, run or outside card closes with the answer taken, as a room's own
+// cards do, for a room every page of which shows its cards (a shared server's).
+export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebUiAutoDeclinedQuestion) => void, connectedFrom: QuestionAuthority = "computer", options: { now?: () => number; closesAnsweredCards?: boolean } = {}): WebUiContext {
 	type Pending = {
 		kind: WebUiAutoDeclinedQuestion["kind"];
 		title: string;
@@ -233,13 +309,16 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 		take?: (id: string, open: Pending, value: unknown, answeredBy: QuestionAuthority) => boolean;
 		/** Run synchronously wherever the card ends, so nothing it started can land after. */
 		end?: () => void;
+		/** The scheduled answer's limit on this card, while one runs. */
+		limit?: ReturnType<typeof setTimeout>;
 	};
 	// A clock that only moves forward: the time of day can jump, and the floor never leaves the server.
-	const now = clock.now ?? (() => performance.now());
+	const now = options.now ?? (() => performance.now());
 	const pending = new Map<string, Pending>();
 	let detachedMessage: string | null = null;
 	let watcher: QuestionAuthority = connectedFrom;
 	let stoppedMessage: string | null = null;
+	let unansweredLimit: { ms: number; message: string } | null = null;
 	// When a room's card last took an answer or ended: a yes right after it is too soon, as it is right after a card shows.
 	let lastAnswerAt = Number.NEGATIVE_INFINITY;
 	const kept: Record<string, unknown>[] = [];
@@ -265,6 +344,7 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 	};
 	const drop = (id: string, open: Pending) => {
 		pending.delete(id);
+		clearTimeout(open.limit);
 		// A room's card leaving, however it ends, changes what the next press lands on: the floor counts from it.
 		if (open.take) lastAnswerAt = now();
 		open.end?.();
@@ -282,6 +362,17 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 	const sendRequest = (id: string, open: Pending, again: boolean) => {
 		open.shownAt = now();
 		send({ type: "ui_request", id, ...shownTo(watcher, open.payload), ...(again ? { again: true } : {}) });
+	};
+	const startLimit = (id: string, open: Pending) => {
+		if (!unansweredLimit || open.limit) return;
+		const { ms, message } = unansweredLimit;
+		open.limit = setTimeout(() => {
+			if (pending.get(id) !== open) return;
+			drop(id, open);
+			send({ type: "ui_request_closed", id, reason: "declined" });
+			noteAutoDecline(open.kind, open.title, open.payload);
+			open.reject(new Error(message));
+		}, ms);
 	};
 	/** The card again, as first sent: the answer counted for nothing, and the question stays open. */
 	const askAgain = (id: string, open: Pending) => {
@@ -329,8 +420,8 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 		open.resolve(value, answeredBy);
 		return true;
 	};
-	/** `own.closed`: aborting it closes this card alone, as not answered. */
-	const ask = <T>(payload: Record<string, unknown>, answerOf: (value: any, answeredBy: QuestionAuthority) => T = (value) => value, own?: Pick<Pending, "take" | "end"> & { closed?: AbortSignal }): Promise<T> =>
+	/** `own.closed`: aborting it closes this card alone, as not answered, or as `own.closedAs` says. */
+	const ask = <T>(payload: Record<string, unknown>, answerOf: (value: any, answeredBy: QuestionAuthority) => T = (value) => value, own?: Pick<Pending, "take" | "end"> & { closed?: AbortSignal; closedAs?: "withdrawn" }): Promise<T> =>
 		new Promise<T>((resolve, reject) => {
 			const kind = payload.kind as WebUiAutoDeclinedQuestion["kind"];
 			const title = String(payload.title ?? "");
@@ -351,7 +442,7 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 			const id = newId();
 			const closeThis = () => {
 				if (pending.get(id) !== open) return;
-				close(id, open, { reason: "unanswered" });
+				close(id, open, { reason: own?.closedAs ?? "unanswered" });
 				reject(new Error(CARD_CLOSED));
 			};
 			const open: Pending = { kind, title, payload, shownAt: now(), resolve: (value, answeredBy) => resolve(answerOf(value, answeredBy)), reject, take: own?.take, end: () => {
@@ -361,6 +452,7 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 			pending.set(id, open);
 			closed?.addEventListener("abort", closeThis, { once: true });
 			sendRequest(id, open, false);
+			startLimit(id, open);
 		});
 
 	const ctx = {
@@ -399,8 +491,43 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 				answeredBy,
 			}), { take: lastingYesTake(apply), closed: signal });
 		},
-		askConnector({ title, connector, sent, cut, lasting }: ConnectorCard, apply: ConnectorApply) {
-			return ask<SiteChoice>({ kind: "connector", title, connector, sent, cut, lasting }, (value) => (value === "once" || value === "room" ? value : "decline"), { take: lastingYesTake(apply) });
+		/** `closed`: ends the question, as when its connector is removed: the card closes and the call doesn't run. */
+		askConnector(card: ConnectorCard, apply: ConnectorApply, closed?: AbortSignal) {
+			return ask<SiteChoice>(connectorAskFrame(card), (value) => (value === "once" || value === "room" ? value : "decline"), { take: lastingYesTake(apply), closed });
+		},
+		askForm({ connector, params, check }: ConnectorFormCard, closed?: AbortSignal) {
+			return ask<ConnectorFormAnswer>(connectorFormFrame({ connector, params }), (value) => value, {
+				closed,
+				closedAs: "withdrawn",
+				take: (id, open, value, answeredBy) => {
+					if (value === "decline") {
+						close(id, open, { reason: "answered", taken: "decline" });
+						open.resolve({ action: "decline" }, answeredBy);
+						return true;
+					}
+					const values = readConnectorFormValues(params, value);
+					// A Send the card can't give, or one the whole form's check refuses though each field fits: nothing goes, and the card stays.
+					let checked: ReturnType<typeof checkConnectorForm> | null = null;
+					try {
+						checked = values ? checkConnectorForm(params, values, check) : null;
+					} catch {}
+					if (!checked) {
+						askAgain(id, open);
+						return false;
+					}
+					if ("lines" in checked) {
+						showUpdate(id, open, { fieldLines: checked.lines });
+						return false;
+					}
+					close(id, open, { reason: "answered", taken: "sent" });
+					open.resolve({ action: "accept", content: checked.content }, answeredBy);
+					return true;
+				},
+			}).catch((error: unknown): ConnectorFormAnswer => {
+				// A message sent instead of an answer is the person's no, as on every other question.
+				if (error instanceof QuestionDeclined) return { action: "decline" };
+				throw error;
+			});
 		},
 		askOutside({ command, reason }: { command: string; reason: string }) {
 			return ask<boolean>({ kind: "outside", title: "Run outside this room?", command: commandAsShown(command), reason: commandAsShown(reason) }, (value, answeredBy) => value === true && answeredBy === "computer");
@@ -415,12 +542,14 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 				},
 			});
 		},
-		askFolder({ access, reason, roomHasFolder, held: first, act }: Parameters<WebUiContext["askFolder"]>[0]) {
+		askFolder({ access, reason, roomHasFolder, held: first, named: firstNamed = null, act }: Parameters<WebUiContext["askFolder"]>[0]) {
 			// Aborted the moment the card ends, wherever it ends: the window closes, and a pick still being looked at gives nothing.
 			const closeWindow = new AbortController();
 			// The folder the card shows, held here only: a press names none, and a device that comes back gets it unjudged.
 			let held = first;
-			const shownFolder = suggestedOf(held);
+			// The room's words go once anything else shows: a pick, or a folder that failed its recheck.
+			let named = firstNamed;
+			const shownFolder = suggestedOf(held, named);
 			return ask<FolderAnswer>({ kind: "folder", title: folderAskTitle(roomHasFolder), access, reason: reasonAsShown(reason), roomHasFolder, canChoose: true, choosing: null, ...(shownFolder ? { suggested: shownFolder } : {}) }, (value) => (value === false ? { state: "declined" } : value as FolderAnswer), {
 				end: () => closeWindow.abort(),
 				take: (id, open, value) => {
@@ -453,7 +582,8 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 							open.resolve(outcome.done, "computer");
 						} else if ("show" in outcome) {
 							held = outcome.show.held;
-							showUpdate(id, open, { line: outcome.show.line ?? null, canChoose: outcome.show.canChoose, choosing: null, suggested: suggestedOf(held) });
+							named = null;
+							showUpdate(id, open, { line: outcome.show.line ?? null, canChoose: outcome.show.canChoose, choosing: null, suggested: suggestedOf(held, named) });
 						} else {
 							showUpdate(id, open, "line" in outcome ? { line: outcome.line, canChoose: outcome.canChoose, choosing: null } : { choosing: null });
 						}
@@ -506,7 +636,8 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 			const r = pending.get(id);
 			if (!r) return;
 			if (!r.take) {
-				pending.delete(id);
+				if (options.closesAnsweredCards) close(id, r, { reason: "answered", value });
+				else pending.delete(id);
 				r.resolve(value, answeredBy);
 				return;
 			}
@@ -549,6 +680,15 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 		hasOpenQuestions() {
 			return pending.size > 0;
 		},
+		declineUnansweredAfter(ms: number | null, message: string) {
+			unansweredLimit = ms === null ? null : { ms, message };
+			for (const [id, r] of pending) {
+				if (ms === null) {
+					clearTimeout(r.limit);
+					r.limit = undefined;
+				} else startLimit(id, r);
+			}
+		},
 		reopen() {
 			stoppedMessage = null;
 			// A new answer: the last one's closing frames are nobody's to catch up on, since only a running turn is taken over.
@@ -564,6 +704,11 @@ export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebU
 				noteAutoDecline(r.kind, r.title, r.payload);
 				r.reject(new Error(message));
 			}
+		},
+
+		catchUp(sendTo: (frame: unknown) => void) {
+			for (const frame of kept) sendTo(frame);
+			for (const [id, r] of pending) sendTo({ type: "ui_request", id, ...shownTo(watcher, r.payload), again: true });
 		},
 
 		// Internal: called when a returning connection takes the turn over.

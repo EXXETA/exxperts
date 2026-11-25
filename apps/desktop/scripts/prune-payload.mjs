@@ -4,11 +4,13 @@
 // path, the TypeScript sources and every package those load. The desktop app
 // never runs the CLI and starts the bundled server directly, so all of that
 // goes; every file costs install and update time on Windows, where the virus
-// scanner checks each new file. Only the desktop payload is trimmed; the CLI
-// archive ships as built. Tested by scripts/prune-payload.test.mjs.
+// scanner checks each new file. The archive has already left out what nothing
+// on its target loads (ARCHIVE_TARGET_DROP in scripts/bundle-release-prune.mjs).
+// Tested by scripts/prune-payload.test.mjs.
 import fs from "node:fs";
 import path from "node:path";
 
+import { ARCHIVE_TARGET_DROP } from "../../../scripts/bundle-release-prune.mjs";
 import { checkServerFiles, shippedPackageDirs } from "../../../scripts/bundle-server.mjs";
 
 // Paths under app/ the desktop payload keeps, each with the reason; the rest
@@ -51,8 +53,10 @@ export const DESKTOP_TARGETS = ["darwin-arm64", "win-x64"];
 // Packages the bundled server ships that one target's payload leaves out,
 // each with the reason; what only they need goes with them, and a package a
 // kept package needs stays. Any other package the trim would leave out fails
-// it, so each one is named here. An entry with `from` leaves out a dependency
-// of that kept package which the code the desktop runs never loads.
+// it, so each one is named here or in the archive's own list for the target
+// (ARCHIVE_TARGET_DROP), which the payload starts without. An entry with
+// `from` leaves out a dependency of that kept package which the code the
+// desktop runs never loads.
 export const DESKTOP_TARGET_DROP = [
 	{ target: "win-x64", name: "@anthropic-ai/sandbox-runtime", reason: "the room box's library: only box-worker.mjs loads it, and the server builds the Mac's box on a Mac alone (roomBoxComputer in apps/web-server/src/room-box/box-available.ts), and Windows' box forks box-worker-windows.mjs instead; its own commander, inside its folder, goes with it" },
 	{ target: "win-x64", name: "@pondwader/socks5-server", reason: "only the room box's library needs it" },
@@ -60,11 +64,6 @@ export const DESKTOP_TARGET_DROP = [
 	{ target: "win-x64", name: "zod", reason: "only the room box's library loads it as files; the bundled server carries its own copy" },
 	{ target: "win-x64", name: "node-pty", from: "@microsoft/mxc-sdk", reason: "the sandbox kit loads it only for a terminal in the box (dist/bindings/process-container-pty.js), by an import the Windows box never reaches" },
 	{ target: "win-x64", name: "node-addon-api", reason: "only node-pty needs it, to build from source" },
-	{ target: "darwin-arm64", name: "@microsoft/mxc-sdk", reason: "Microsoft's sandbox kit for the Windows box: only box-worker-windows.mjs loads it, and its library is Windows only; its own koffi, inside its folder, goes with it" },
-	{ target: "darwin-arm64", name: "@koromix/koffi-darwin-arm64", reason: "only the sandbox kit's koffi needs it" },
-	{ target: "darwin-arm64", name: "node-pty", reason: "only the sandbox kit needs it" },
-	{ target: "darwin-arm64", name: "node-addon-api", reason: "only node-pty needs it, to build from source" },
-	{ target: "darwin-arm64", name: "semver", reason: "only the sandbox kit needs it" },
 ];
 
 // Files left out of a kept package, each with the reason: every file but the
@@ -143,11 +142,14 @@ function missingKeptFiles(appDir) {
 	);
 }
 
-// The package folders the target's list leaves out of the full closure, each
+// The packages the target's payload leaves out: its own and its archive's.
+const targetEntries = (target) => [...DESKTOP_TARGET_DROP, ...ARCHIVE_TARGET_DROP].filter((entry) => entry.target === target);
+
+// The package folders the target's lists leave out of the full closure, each
 // with its entry; throws when one is not listed. A package inside a left-out
 // package's folder goes with it.
 function targetDrops(appDir, target, exclude, kept) {
-	const listed = DESKTOP_TARGET_DROP.filter((entry) => entry.target === target);
+	const listed = targetEntries(target);
 	const left = [...shippedPackageDirs(appDir, { exclude }).dirs].filter((dir) => !kept.has(dir));
 	const drops = left
 		.filter((dir) => !left.some((outer) => dir.startsWith(`${outer}${path.sep}`)))
@@ -157,7 +159,10 @@ function targetDrops(appDir, target, exclude, kept) {
 		});
 	const unlisted = drops.filter((drop) => !drop.entry).map((drop) => drop.name);
 	if (unlisted.length > 0) {
-		throw new Error(`the ${target} desktop payload would leave out ${unlisted.join(", ")}, which DESKTOP_TARGET_DROP does not list for it; list each with the reason, or keep what it serves`);
+		// A listed package of the archive's still in the tree: the archive was built before that drop.
+		const stale = drops.filter((drop) => ARCHIVE_TARGET_DROP.includes(drop.entry)).map((drop) => drop.name);
+		const rebuild = stale.length > 0 ? `; the archive still holds ${stale.join(", ")}, which the ${target} archive leaves out (ARCHIVE_TARGET_DROP), so it was built before that: rebuild it` : "";
+		throw new Error(`the ${target} desktop payload would leave out ${unlisted.join(", ")}, which neither DESKTOP_TARGET_DROP nor ARCHIVE_TARGET_DROP lists for it; list each with the reason, or keep what it serves${rebuild}`);
 	}
 	return drops.map((drop) => drop.entry);
 }
@@ -172,7 +177,7 @@ export function pruneDesktopPayload(appDir, { target, log = console.log, maxFile
 	// The closure is resolved before anything is removed, so a package the
 	// release tree lacks shows up in the check below rather than as a crash.
 	const exclude = DESKTOP_DROP.map((entry) => entry.name);
-	const drops = DESKTOP_TARGET_DROP.filter((entry) => entry.target === target);
+	const drops = targetEntries(target);
 	const leaveOut = drops.filter((entry) => !entry.from).map((entry) => entry.name);
 	const cut = drops.filter((entry) => entry.from);
 	const { dirs } = shippedPackageDirs(appDir, { exclude, leaveOut, cut });

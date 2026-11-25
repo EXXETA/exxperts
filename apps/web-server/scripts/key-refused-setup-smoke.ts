@@ -5,7 +5,7 @@
 // no real key exists), with the Claude API key saved and its models approved:
 //
 // - after a turn the service refused for its key (a 401), AI setup's row for
-//   the key says "not accepted at the last try" and offers Replace key; the
+//   the key says "Not accepted at the last try" and offers Replace key; the
 //   profile's message and issue give the full sentence; the room's Model pane
 //   shows the amber line under its row (no Replace key while the page gives
 //   the pane no way to AI setup), and both pickers, the pane's and AI setup's
@@ -81,8 +81,9 @@ const SIGN_IN_SENTENCE = "Signed out at the last try. Sign in again to continue.
 const SIGN_IN_CALLBACK = "http://127.0.0.1:53692/callback";
 const SENTENCE = "Not accepted at the last try. Replace the key to continue.";
 const WORKSPACE_SENTENCE = "Not accepted at the last try: this key isn't tied to a workspace. Replace the key to continue.";
-const ROW_LINE = "not accepted at the last try";
-const WORKSPACE_ROW_LINE = "not accepted at the last try: key isn't tied to a workspace";
+// The row's line starts with a capital, as the settings look's status lines do.
+const ROW_LINE = "Not accepted at the last try";
+const WORKSPACE_ROW_LINE = "Not accepted at the last try: key isn't tied to a workspace";
 // What a provider's refusal says, key fragments included: none of it may reach the profile status.
 const ANTHROPIC_REFUSAL = "invalid x-api-key";
 const OPENAI_REFUSAL = "Incorrect API key provided: sk-proj-****************************wxyz. You can find your API key at https://platform.openai.com/account/api-keys.";
@@ -462,7 +463,7 @@ try {
 	assert(clearRow(await signInRow()), `a sign-in no call has used reads signed in, got ${said(await signInRow())}`);
 	if (page) {
 		const drawn = await rowInPage(page, SIGN_IN_PROVIDER);
-		assert(drawn.line === "signed in" && !drawn.signInOffered, `an untouched sign-in's row reads "signed in" with no Sign in, got "${drawn.line}" (Sign in offered: ${drawn.signInOffered})`);
+		assert(drawn.line === "Signed in" && !drawn.signInOffered, `an untouched sign-in's row reads "Signed in" with no Sign in, got "${drawn.line}" (Sign in offered: ${drawn.signInOffered})`);
 	}
 	pass("an untouched sign-in still reads signed in");
 
@@ -471,7 +472,7 @@ try {
 	assert(signedOutRow(afterGone), `after a turn found the sign-in gone, its row says signed out, got ${said(afterGone)}`);
 	if (page) {
 		const drawn = await rowInPage(page, SIGN_IN_PROVIDER);
-		assert(drawn.line === "signed out" && drawn.signInOffered && !drawn.replaceOpensForm, `the row reads "signed out" beside Sign in, got "${drawn.line}" (Sign in offered: ${drawn.signInOffered})`);
+		assert(drawn.line === "Signed out" && drawn.signInOffered && !drawn.replaceOpensForm, `the row reads "Signed out" beside Sign in, got "${drawn.line}" (Sign in offered: ${drawn.signInOffered})`);
 	}
 	pass("a turn whose sign-in's refresh is refused: AI setup's row reads signed out and offers Sign in");
 
@@ -518,7 +519,7 @@ try {
 		server = undefined;
 		await startServer();
 		assert(clearRow(await keyRow()), `the restart ended the record, got ${said(await keyRow())}`);
-		await waitUntil(async () => (await line()) === "key saved", "the open AI setup reads the profile again once the page reconnects", 45_000).catch(async (error) => {
+		await waitUntil(async () => (await line()) === "Key saved", "the open AI setup reads the profile again once the page reconnects", 45_000).catch(async (error) => {
 			throw new Error(`${(error as Error).message}; the row reads "${await line()}"`);
 		});
 		pass("AI setup open through a restart reads the profile again on the reconnect: the row no longer says the key was refused");

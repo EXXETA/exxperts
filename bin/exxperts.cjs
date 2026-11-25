@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // The one command: `exxperts` starts the local server and opens the app in
-// the browser. Everything else a person does is in the app. Kept working but
-// named in no help text: --version (installers and CI check an install with
-// it), `web` (start-up scripts written for it keep working), --port and
-// --no-open (web-launcher.cjs), `setup chromium` (the only repair for a
-// missing headless Chromium), and `doctor` (the health check for an install
-// without the desktop app, whose Health Check runs the same script).
+// the browser. Everything else a person does is in the app. The help
+// (web-launcher.cjs) lists --version (installers and CI check an install with
+// it), --port and --no-open, --container (for a person running it inside a
+// Linux container), `setup chromium` (the only repair for a missing headless
+// Chromium) and `doctor` (the health check for an install without the
+// desktop app, whose Health Check runs the same script). `web` keeps working
+// unlisted, for start-up scripts written for it.
 const argv = process.argv.slice(2);
 if (argv[0] === "--version" || argv[0] === "-v" || argv[0] === "-V") {
   // The product version (from the packed root package.json), so "which

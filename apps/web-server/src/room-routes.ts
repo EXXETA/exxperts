@@ -74,7 +74,7 @@ app.post("/api/persistent-agents", async (req, reply) => {
 	try {
 		// On Windows, whether a new room starts with commands on waits for the check at start.
 		await roomBoxSettled();
-		const result = createPersistentAgentFromScaffoldInput((req.body ?? {}) as any, { idTail: serverHooks().roomIdTail, untilAnswered: !isSharedServer(), viewer: await viewerOf(req) });
+		const result = createPersistentAgentFromScaffoldInput((req.body ?? {}) as any, { newId: serverHooks().newRoomId, untilAnswered: !isSharedServer(), viewer: await viewerOf(req) });
 		reply.raw.once("finish", () => markPersistentAgentCreateAnswered(result.agent.id));
 		await serverHooks().roomCreated?.(req, { roomId: result.agent.id, createdAt: Number(createPersistentAgentInstance(result.agent.id).readAgentJson()?.createdAt) });
 		// The status carries the model rows the way GET .../status does, so
