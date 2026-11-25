@@ -6,6 +6,7 @@
 // While the file SMOKE_PARSER_HELD_FILE names exists, a document's parser has
 // answered and nobody has heard it yet.
 import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 
@@ -15,14 +16,19 @@ globalThis.fetch = (input, init) => (typeof init?.body === "string" && /DEAF_(ST
 const killsOff = process.env.SMOKE_KILLS_OFF_FILE;
 const KILLS_OFF_MS = 3_500;
 let firstIgnoredAt = 0;
-const realKill = process.kill.bind(process);
-process.kill = (pid, signal) => {
-	if (pid < 0 && signal !== 0 && killsOff && fs.existsSync(killsOff) && (!firstIgnoredAt || Date.now() - firstIgnoredAt < KILLS_OFF_MS)) {
-		firstIgnoredAt ||= Date.now();
-		return true;
-	}
-	return realKill(pid, signal);
+const killHeld = () => {
+	if (!killsOff || !fs.existsSync(killsOff) || (firstIgnoredAt && Date.now() - firstIgnoredAt >= KILLS_OFF_MS)) return false;
+	firstIgnoredAt ||= Date.now();
+	return true;
 };
+const realKill = process.kill.bind(process);
+process.kill = (pid, signal) => (pid < 0 && signal !== 0 && killHeld() ? true : realKill(pid, signal));
+// On Windows a Stop ends a command's tree with taskkill, not a process-group kill.
+if (killsOff) {
+	const realSpawn = childProcess.spawn;
+	childProcess.spawn = (command, ...rest) => (command === "taskkill" && killHeld() ? new EventEmitter() : realSpawn(command, ...rest));
+	syncBuiltinESMExports();
+}
 
 const parserHeld = process.env.SMOKE_PARSER_HELD_FILE;
 if (parserHeld) {

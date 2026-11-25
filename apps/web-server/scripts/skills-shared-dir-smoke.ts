@@ -16,7 +16,10 @@ import { fileURLToPath } from "node:url";
 
 // Isolated HOME: shared dir resolves to <HOME>/.agents/skills, the canonical
 // user store to <HOME>/.exxperts/agent/skills.
-const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skills-shared-"));
+// On Windows the temp folder can come by its 8.3 short name, which no link resolves, while the app names a folder by its long
+// name: there the home takes its long name. Elsewhere it stays as made, so a link above it (/var on a Mac) is still followed.
+const madeHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skills-shared-"));
+const tempHome = process.platform === "win32" ? fs.realpathSync.native(madeHome) : madeHome;
 process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
 // The rooms' data inside ~/.agents, so a skill whose real folder lies in it or holds it is judged.
@@ -269,7 +272,7 @@ try {
 	check(openAnswer.status === 200 && openAnswer.body?.files?.some((file: any) => file.path === "scripts/run.sh") && openAnswer.body?.instructionsOnly === undefined, `an open shared-folder skill's answer lists its files, got ${JSON.stringify(openAnswer.body)}`);
 	check(openAnswer.body?.filesAt === undefined, `a skill whose files are inside ~/.agents says nothing of where they are, got ${JSON.stringify(openAnswer.body?.filesAt)}`);
 	const outsideAnswer = await requestJson("/api/skills/shared-outside");
-	check(outsideAnswer.status === 200 && outsideAnswer.body?.files?.some((file: any) => file.path === "scripts/run.sh") && outsideAnswer.body?.instructionsOnly === undefined && outsideAnswer.body?.filesAt === "~/elsewhere/shared-outside", `a shared-folder skill linked outside ~/.agents lists its files and says where they are, got ${JSON.stringify(outsideAnswer.body)}`);
+	check(outsideAnswer.status === 200 && outsideAnswer.body?.files?.some((file: any) => file.path === "scripts/run.sh") && outsideAnswer.body?.instructionsOnly === undefined && outsideAnswer.body?.filesAt === path.join("~", "elsewhere", "shared-outside"), `a shared-folder skill linked outside ~/.agents lists its files and says where they are, got ${JSON.stringify(outsideAnswer.body)}`);
 	const keptAnswer = await requestJson("/api/skills/shared-kept");
 	check(keptAnswer.status === 200 && keptAnswer.body?.files?.length === 0 && keptAnswer.body?.instructionsOnly === "cant-open" && keptAnswer.body?.filesAt === undefined, `a shared-folder skill in the rooms' data lists no files and says "cant-open", got ${JSON.stringify(keptAnswer.body)}`);
 
@@ -341,7 +344,7 @@ async function roomFolderRows(): Promise<void> {
 	const away = linked("away-tool", path.join(tempHome, "projects", "away-tool"));
 	const awayOpened = opened("away-tool");
 	check(awayOpened?.skillDir === real(away) && awayOpened.files.join(",") === "scripts/run.sh", `a link outside ~/.agents gives its real folder and files, got ${JSON.stringify(awayOpened)}`);
-	check(reason("away-tool") === undefined && filesAt("away-tool") === "~/projects/away-tool", `a link outside ~/.agents: no reason, its files' place with the home as ~, got ${JSON.stringify([reason("away-tool"), filesAt("away-tool")])}`);
+	check(reason("away-tool") === undefined && filesAt("away-tool") === path.join("~", "projects", "away-tool"), `a link outside ~/.agents: no reason, its files' place with the home as ~, got ${JSON.stringify([reason("away-tool"), filesAt("away-tool")])}`);
 	const awayAlone = linked("away-alone", path.join(tempHome, "projects", "away-alone"), true);
 	check(opened("away-alone")?.skillDir === real(awayAlone) && reason("away-alone") === undefined && filesAt("away-alone") === undefined, `a link outside ~/.agents to SKILL.md alone opens with nothing to say, got ${JSON.stringify([opened("away-alone"), filesAt("away-alone")])}`);
 	const awayView = roomSkillFilesView(room, "away-tool", "run", true);
@@ -349,7 +352,7 @@ async function roomFolderRows(): Promise<void> {
 
 	// A link into another tool's own folder opens by the same rule.
 	const claude = linked("claude-tool", path.join(tempHome, ".claude", "skills", "claude-tool"));
-	check(opened("claude-tool")?.skillDir === real(claude) && filesAt("claude-tool") === "~/.claude/skills/claude-tool", `a link into another tool's folder opens, got ${JSON.stringify([opened("claude-tool"), filesAt("claude-tool")])}`);
+	check(opened("claude-tool")?.skillDir === real(claude) && filesAt("claude-tool") === path.join("~", ".claude", "skills", "claude-tool"), `a link into another tool's folder opens, got ${JSON.stringify([opened("claude-tool"), filesAt("claude-tool")])}`);
 
 	// A link to the home folder: instructions only, with "home".
 	linked("home-tool", tempHome);
@@ -362,7 +365,7 @@ async function roomFolderRows(): Promise<void> {
 	const turnB = seedWithFiles(path.join(tempHome, "projects", "turn-b"), "turn-tool");
 	fs.rmSync(path.join(sharedDir, "turn-tool"));
 	fs.symlinkSync(turnB, path.join(sharedDir, "turn-tool"), LINK_KIND);
-	check(opened("turn-tool")?.skillDir === real(turnB) && filesAt("turn-tool") === "~/projects/turn-b", `after the change, the new real folder, got ${JSON.stringify(opened("turn-tool"))}`);
+	check(opened("turn-tool")?.skillDir === real(turnB) && filesAt("turn-tool") === path.join("~", "projects", "turn-b"), `after the change, the new real folder, got ${JSON.stringify(opened("turn-tool"))}`);
 	const turnC = seedWithFiles(path.join(roomsData, "planted", "turn-c"), "turn-tool");
 	fs.rmSync(path.join(sharedDir, "turn-tool"));
 	fs.symlinkSync(turnC, path.join(sharedDir, "turn-tool"), LINK_KIND);
@@ -480,7 +483,7 @@ async function roomFolderRows(): Promise<void> {
 		process.env.HOME = homeOut;
 		process.env.USERPROFILE = homeOut;
 		on("moved-tool");
-		check(opened("moved-tool")?.skillDir === real(path.join(homeOut, "other-skills", "moved-tool")) && filesAt("moved-tool") === "~/other-skills/moved-tool", `~/.agents/skills a link to a folder outside ~/.agents: its skills open there, got ${JSON.stringify([opened("moved-tool"), filesAt("moved-tool")])}`);
+		check(opened("moved-tool")?.skillDir === real(path.join(homeOut, "other-skills", "moved-tool")) && filesAt("moved-tool") === path.join("~", "other-skills", "moved-tool"), `~/.agents/skills a link to a folder outside ~/.agents: its skills open there, got ${JSON.stringify([opened("moved-tool"), filesAt("moved-tool")])}`);
 		process.env.HOME = homeLinked;
 		process.env.USERPROFILE = homeLinked;
 		on("far-tool");

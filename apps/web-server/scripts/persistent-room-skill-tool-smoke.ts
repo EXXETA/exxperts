@@ -272,7 +272,7 @@ writeShared(sharedOpen, "shared-open");
 const sharedTool = createReadSkillTool({ agentId, lookupSkill: readLibrarySkill, resolveSkillFiles: (name) => roomSkillFilesView(agentId, name, "run", true) }) as unknown as typeof tool;
 check(enablePersistentRoomSkill(agentId, "shared-open", readLibrarySkill, options).ok, "enable shared-open");
 const sharedOpenText = ((await sharedTool.execute("s1", { name: "shared-open" })).content[0].text as string) ?? "";
-const sharedReal = fs.realpathSync(sharedOpen);
+const sharedReal = fs.realpathSync.native(sharedOpen);
 check(sharedOpenText.includes(filled(sharedReal)) && sharedOpenText.includes(`This skill's bundled files live at:\n${sharedReal}\n`), `a shared-folder skill the room may open: its real folder, got ${sharedOpenText}`);
 // Windows refuses a line feed and ":" in a folder's name, so the hand-built view above stands for this row there.
 if (process.platform !== "win32") {

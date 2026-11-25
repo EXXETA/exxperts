@@ -598,7 +598,7 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 // the room's skill folders, each judged by `windowsSkillFolder`, then `machineRules` and the request.
 // The home is mapped to the profile's drive-letter path, as the box names a place.
 {
-	const tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-windows-shared-skill-")));
+	const tempHome = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-windows-shared-skill-")));
 	const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, EXXETA_PERSISTENT_AGENTS_ROOT: process.env.EXXETA_PERSISTENT_AGENTS_ROOT };
 	process.env.HOME = tempHome;
 	process.env.USERPROFILE = tempHome;
@@ -642,7 +642,7 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 		console.log("ok: a shared-folder skill whose folder holds a link puts nothing into the request");
 
 		// The shared skill's real folder, after its link, is read and run, never written.
-		const realAt = requestPath(fs.realpathSync(real));
+		const realAt = requestPath(fs.realpathSync.native(real));
 		assert(has(request.filesystem.readonlyPaths, realAt), `the shared skill's real folder ${realAt} is not read: ${show(request.filesystem.readonlyPaths)}`);
 		assert(!request.filesystem.readwritePaths.some((grant) => inside(grant, realAt) || inside(realAt, grant)), `the shared skill's folder takes a write: ${show(request.filesystem.readwritePaths)}`);
 		assert(!has(grants, requestPath(path.join(tempHome, ".agents", "skills", "report-shared"))), "the request names the link, not the real folder");
@@ -663,7 +663,7 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 		fs.mkdirSync(path.dirname(placedSettings), { recursive: true });
 		fs.writeFileSync(placedSettings, `${JSON.stringify({ schemaVersion: 1, enabledSkills: [{ name: "report-in" }, { name: "report-hold" }, { name: "report-away" }], updatedAt: "2026-11-21T10:00:00.000Z" }, null, 2)}\n`);
 		const placed = roomSkillFolders(placedRoom);
-		const [inAt, holdsAt, awayAt] = [inRoom, holdsRoom, away].map((real) => requestPath(fs.realpathSync(real)));
+		const [inAt, holdsAt, awayAt] = [inRoom, holdsRoom, away].map((real) => requestPath(fs.realpathSync.native(real)));
 		assert(placed.length === 3, `the room offers all three skills at their real folders: ${show(placed)}`);
 		// One request per skill: a read-only grant around the room's folder would hold the one inside it.
 		const placedRequest = (canChangeFiles: boolean, name: string) => {
@@ -696,7 +696,7 @@ const withoutEnvironment = ({ environment: _environment, ...rest }: WindowsBoxRe
 		const throughFolders = throughRoom.flatMap((entry) => windowsSkillFolder(entry.skillDir, requestPath) ?? []);
 		const throughRules = machineRules({ machine, requestPath }, { folder: room, canChangeFiles: true }, [], { temp: path.join(room, "temp"), caches: path.join(room, ".npm-cache") }, throughFolders);
 		const throughRequest = built(commandRequest(throughRules, call()), "a room with a skill reached through a link in its folder").filesystem;
-		const swappedAt = requestPath(fs.realpathSync(swappedTo));
+		const swappedAt = requestPath(fs.realpathSync.native(swappedTo));
 		assert(![...throughRequest.readwritePaths, ...throughRequest.readonlyPaths].some((grant) => inside(swappedAt, grant)), `the folder a link in the room's folder leads to is in the request: ${show(throughRequest)}`);
 		assert(throughRoom.length === 0 && throughFolders.length === 0, `with the room's folder stored, a skill whose way enters it is handed nothing, the real folder in the room included: ${show(throughRoom)}`);
 		console.log("ok: a shared-folder skill whose way enters the room's own folder puts nothing into the request, where a link there leads included");
