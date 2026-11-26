@@ -17,7 +17,7 @@ import { chromium, type Page, type Route } from "playwright";
 import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 import { waitEvery } from "./smoke-wait.js";
 import { createHash } from "node:crypto";
-import { CHOOSE_FOLDER, DISMISS, FOLDER_CHOOSE_FAILED, FOLDER_PICK_REFUSED, NO_FOLDER_LINE, ROOM_FOLDER_REFUSED_LINE, SAVED } from "../src/room-box/card-text.js";
+import { CHOOSE_FOLDER, DISMISS, FOLDER_CHOOSE_FAILED, FOLDER_PICK_REFUSED, folderRefusedLine, NO_FOLDER_LINE, ROOM_FOLDER_REFUSED_LINE, SAVED } from "../src/room-box/card-text.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -133,8 +133,9 @@ try {
 		const kept = await api(`/api/persistent-agents/${encodeURIComponent(refusedDesk)}/workspace-default`);
 		assert(fs.realpathSync(String(kept.body?.policy?.roots?.[0]?.path ?? "")) === fs.realpathSync(toolsFolder) && kept.body?.folderRefused === false, `the room keeps its folder after ${folder} is refused, got ${JSON.stringify(kept.body?.policy?.roots)}`);
 	}
+	// The same reason on Windows: its own places name no ~/.local/bin, unlike ~/.cursor below.
 	const homeOnly = (await api(`/api/persistent-agents/${encodeURIComponent(refusedDesk)}/workspace-default`, { method: "PUT", body: JSON.stringify({ root: path.join(tempHome, ".local", "bin"), workspaceAccessMode: "localFiles" }) })).body;
-	assert(homeOnly?.code === "folder_refused" && homeOnly?.error === FOLDER_PICK_REFUSED, `a program folder is refused with the pick's line, got ${JSON.stringify(homeOnly)}`);
+	assert(homeOnly?.code === "folder_refused" && homeOnly?.error === folderRefusedLine({ reason: "programs" }, "", ""), `a program folder is refused with its reason, got ${JSON.stringify(homeOnly)}`);
 	console.log("  ok  the pick refuses home, ~/Library, ~/.local/bin, ~/.cursor and ~/.config, and the room keeps its folder");
 	// A stored room on one, as an older room's folder was saved before the rule: the file names ~/.local/bin, its hash matching.
 	const storedFile = path.join(agentsRoot, refusedDesk, "runtime", "workspace-default.json");
@@ -268,8 +269,10 @@ try {
 		await page.route("**/api/system/choose-folder", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ supported: true, cancelled: false, path: path.join(tempHome, ".cursor") }) }));
 		await hint.getByRole("button", { name: CHOOSE_FOLDER }).click();
 		await hint.getByRole("alert").waitFor({ timeout: 10_000 });
-		assert(await hint.getByRole("alert").textContent() === FOLDER_PICK_REFUSED, `a refused pick on the no-folder line says so, got ${await hint.getByRole("alert").textContent()}`);
-		assert(await hintText.textContent() === FOLDER_PICK_REFUSED, `the refusal stands in place of the no-folder sentence, got ${await hintText.textContent()}`);
+		// Windows refuses an editor's folder as one of its own places first, with the plain line.
+		const why = process.platform === "win32" ? FOLDER_PICK_REFUSED : folderRefusedLine({ reason: "programs" }, "", "");
+		assert(await hint.getByRole("alert").textContent() === why, `a refused pick on the no-folder line says why, got ${await hint.getByRole("alert").textContent()}`);
+		assert(await hintText.textContent() === why, `the refusal stands in place of the no-folder sentence, got ${await hintText.textContent()}`);
 		assert((await api(`/api/persistent-agents/${encodeURIComponent(noFolderDesk)}/workspace-default`)).body?.policy === null, "a refused pick sets nothing");
 		await page.unroute("**/api/system/choose-folder");
 		console.log("  ok  a refused pick on the no-folder line says so and sets nothing");

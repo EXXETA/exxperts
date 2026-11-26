@@ -2,6 +2,12 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.16.2 (2026-11-26)
+
+- Folders: On a Mac, a room can now use a folder in OneDrive, Google Drive or Dropbox, which some Macs
+  refused with no reason. Choose it in Room settings, Folder, or when a room asks for a folder.
+- Folders: On a Mac, most folders a room can't use now say why and what to choose instead.
+
 ## 0.16.1 (2026-11-25)
 
 - Look: Settings, Room settings and light mode have a new look. Home is now called Rooms, and every

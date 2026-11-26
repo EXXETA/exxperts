@@ -29,8 +29,8 @@ import { parseRoomModelPatch, roomModelsPayload } from "./ai-models.js";
 import { memoryBudgetRaiseRefusal, refuseMemoryBudgetRaise, refuseMemoryModelTooSmall } from "./ai-profile-models.js";
 import { resolveLibrarySkillManifest, skillLibraryFingerprint, withSkillDisplayNames } from "./skills-library.js";
 import { addAlsoAllowedFolder, type AlsoAllowedEntry, readAlsoAllowed, removeAlsoAllowedEntry, removedAlsoAllowedEntry, restoreAlsoAllowedEntry } from "./room-box/also-allowed.js";
-import { CHANGE_SAVE_FAILED, FOLDER_ALREADY_USED, FOLDER_PICK_REFUSED, NO_FOLDER_WINDOW, PROTECTION_UNAVAILABLE, PROTECTION_UNAVAILABLE_COMPUTER, PROTECTION_UNAVAILABLE_FOLDER } from "./room-box/card-text.js";
-import { folderGrantable, roomFolderGrantable, soundFolders, writeEntries } from "./room-box/folder-offer.js";
+import { CHANGE_SAVE_FAILED, FOLDER_ALREADY_USED, FOLDER_PICK_REFUSED, folderRefusedLine, NO_FOLDER_WINDOW, pathHoldsHidden, PROTECTION_UNAVAILABLE, PROTECTION_UNAVAILABLE_COMPUTER, PROTECTION_UNAVAILABLE_FOLDER } from "./room-box/card-text.js";
+import { folderGrantable, roomFolderRefusal, soundFolders, writeEntries } from "./room-box/folder-offer.js";
 import { chooseFolderForRoom, undoAllowChanges } from "./room-box/folder-question.js";
 import { isInside } from "./room-box/box-closed.js";
 import { chooseLocalFolder, folderPickerPrompt, type LocalFolderPickerResult } from "./local-folder-picker.js";
@@ -601,7 +601,11 @@ app.post("/api/persistent-agents/:id/also-allowed/restore", async (req, reply) =
 /** A room's own folder is judged as a folder on its list is: one no room may use is refused before it is saved. */
 function refuseUnusableRoomFolder(policy: PersistentRoomCapabilityPolicy): void {
 	const root = policy.roots[0];
-	if (root && !roomFolderGrantable(root.realpath)) throw Object.assign(new Error(FOLDER_PICK_REFUSED), { statusCode: 400, code: "folder_refused" });
+	const refusal = root ? roomFolderRefusal(root.realpath) : null;
+	if (!root || !refusal) return;
+	// A name with a hidden character isn't drawn: the plain line names none.
+	const line = pathHoldsHidden(root.realpath) ? FOLDER_PICK_REFUSED : folderRefusedLine(refusal, path.basename(root.realpath) || root.realpath, FOLDER_PICK_REFUSED);
+	throw Object.assign(new Error(line), { statusCode: 400, code: "folder_refused" });
 }
 
 function entryView(entry: AlsoAllowedEntry) {

@@ -13,8 +13,8 @@ import { realPlace } from "../path-shapes.js";
 import type { ChooseOutcome, CommandsApply, FolderAnswer, FolderPress, QuestionWatcher } from "../web-ui-context.js";
 import { addAlsoAllowedFolder, type AlsoAllowedFolder, readAlsoAllowed, saveAlsoAllowedFolders } from "./also-allowed.js";
 import { isInside, realPathOf } from "./box-closed.js";
-import { ASK_FOLDER, ASK_FOR_COMMANDS_TOOL_NAME, CHANGE_SAVE_FAILED, ASK_FOR_FOLDER_TOOL_NAME, ASK_OUTCOME, type AskFolder, type AskOutcome, type CommandsAskLine, FOLDER_PICK_REFUSED, FOLDER_PICK_REFUSED_IN_PANEL, FOLDER_CARD_WINDOW_CLOSED, FOLDER_WINDOW_CLOSED, type FolderAskAccess, folderHoldsRoomLine, type FolderLasts, folderUsableThisTimeLine, namedPathAsShown, NO_FOLDER_WINDOW, pathAsShown } from "./card-text.js";
-import { folderGrantable, pickedThroughWritableLink, soundFolders, writeEntries } from "./folder-offer.js";
+import { ASK_FOLDER, ASK_FOR_COMMANDS_TOOL_NAME, CHANGE_SAVE_FAILED, ASK_FOR_FOLDER_TOOL_NAME, ASK_OUTCOME, type AskFolder, type AskOutcome, type CommandsAskLine, FOLDER_PICK_REFUSED, FOLDER_PICK_REFUSED_IN_PANEL, FOLDER_CARD_WINDOW_CLOSED, FOLDER_WINDOW_CLOSED, type FolderAskAccess, folderHoldsRoomLine, type FolderLasts, folderRefusedLine, folderUsableThisTimeLine, namedPathAsShown, NO_FOLDER_WINDOW, pathAsShown } from "./card-text.js";
+import { folderRefusal, pickedThroughWritableLink, soundFolders, writeEntries } from "./folder-offer.js";
 import { type HeldFolder, judgeSuggestion, SHOW_SUGGESTION_BEFORE_CLICK, SUGGESTION_JUDGE_MS, suggestionBeforeCard, type SuggestionView } from "./folder-suggestion.js";
 import { isSharedServer } from "../server-hooks.js";
 
@@ -400,7 +400,8 @@ export type PickJudged = { line: string } | { already: FolderAnswer } | { folder
  * the very folder named, reached with no link, never one a link leads to.
  * `beforeClick`: nobody has pressed anything yet, so the list is read by its
  * text and no saved entry is touched, and no program starts. `refused`: the
- * line for a folder no room may use, as the place that shows it says it.
+ * line for a folder no room may use with no reason to give, as the place that
+ * shows it says it.
  */
 export function judgePick(picked: string, { roomId, room, access, answer, lasts, exact = false, beforeClick = false, refused = FOLDER_PICK_REFUSED }: { roomId: string; room: RoomAskView; access: FolderAskAccess; answer?: AnswerFolders; lasts: FolderLasts; exact?: boolean; beforeClick?: boolean; refused?: string }): PickJudged {
 	const saved = readAlsoAllowed(roomId).folders;
@@ -422,11 +423,12 @@ export function judgePick(picked: string, { roomId, room, access, answer, lasts,
 	const covering = coveringRoot(folder, access, places);
 	if (covering) return { already: { state: "already", folder, name, access: covering.access } };
 	// A room with no folder is judged against its own data, which every closed place already holds.
-	const grantableOver = (folders: readonly AlsoAllowedFolder[]) => folderGrantable(folder, access, [...roomFolder, ...writeEntries(folders)], room.folder ?? persistentAgentRootPath(roomId), { ...(exact ? { links: "refuse" as const } : {}), beforeClick });
-	if (!grantableOver(reachable)) {
+	const refusalOver = (folders: readonly AlsoAllowedFolder[]) => folderRefusal(folder, access, [...roomFolder, ...writeEntries(folders)], room.folder ?? persistentAgentRootPath(roomId), { ...(exact ? { links: "refuse" as const } : {}), beforeClick });
+	const refusal = refusalOver(reachable);
+	if (refusal) {
 		// Refused for the room only because a folder this answer was given to change holds it: the room has it until the answer ends.
-		if (lasts === "room" && grantableOver(listed)) return { line: folderUsableThisTimeLine(name) };
-		return { line: refused };
+		if (lasts === "room" && refusalOver(listed) === null) return { line: folderUsableThisTimeLine(name) };
+		return { line: folderRefusedLine(refusal, name, refused) };
 	}
 	const seen = folderIdentity(folder);
 	return seen ? { folder, name, ...seen } : { line: refused };

@@ -506,12 +506,12 @@ async function main(): Promise<void> {
 		assert(onIt.length > 0 && onIt.every((call) => META.has(call.fn)), `calls on the path: ${JSON.stringify(onIt.filter((call) => !META.has(call.fn)))}`);
 		for (const entry of [cloud, linked, share, outside]) assert(onPlace(seen, entry).length === 0, `a call on the saved entry ${entry}: ${JSON.stringify(onPlace(seen, entry))}`);
 		assert(programs(seen).length === 0, `programs started: ${JSON.stringify(programs(seen))}`);
-		// A folder in Library starts no xattr to learn whether it is a cloud drive: it waits for the window. Without the flag, the same check starts it.
+		// A folder in Library, a cloud drive's too, waits for the window; at the click a cloud drive is told by its path, so no program starts then either.
 		const plans = made("Library", "CloudStorage", "OneDrive-Org", "Plans");
 		const library = await recorded(() => folderGrantable(plans, "read", [roomFolder], roomFolder, { links: "refuse", beforeClick: true }));
 		assert(library.value === false && programs(library.calls).length === 0, `Library before the click: ${JSON.stringify(library.value)} ${JSON.stringify(programs(library.calls))}`);
 		const atClick = await recorded(() => folderGrantable(plans, "read", [roomFolder], roomFolder, { links: "refuse" }));
-		assert(programs(atClick.calls).length > 0 || process.platform !== "darwin", "at the click the cloud drive's mark is read: the row would not see the flag go");
+		assert(atClick.value === true && programs(atClick.calls).length === 0, `the cloud drive at the click: ${JSON.stringify(atClick.value)} ${JSON.stringify(programs(atClick.calls))}`);
 	}, "posix");
 
 	await row("guard 15: on Windows rules with no kept answer, no PowerShell starts and nothing is suggested", async () => {

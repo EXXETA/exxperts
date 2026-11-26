@@ -209,6 +209,24 @@ export const folderAlreadyLine = (access: FolderAskAccess, name: string): string
 export const FOLDER_PICK_REFUSED_IN_PANEL = "This room can't use that folder.";
 /** Where nothing beside the line offers another folder, as in Room settings' Add a folder. */
 export const FOLDER_PICK_REFUSED = `${FOLDER_PICK_REFUSED_IN_PANEL} Choose another one.`;
+/**
+ * Why no room may use a folder, as the one judgement of it finds (`room-box/folder-offer.ts`).
+ * `inner`: the folder in the way inside it, from it. `other`: a link or a change on the way,
+ * a place below one this room can change, or Windows' own place, which keep the plain line.
+ */
+export type FolderRefusal = { reason: "programs" | "library" | "private" | "shared" | "holds-closed" | "other" } | { reason: "holds-programs"; inner: string };
+/** A refused folder's line, in the panel and in Room settings alike; `plain` where the refusal has no reason to give. */
+export function folderRefusedLine(refusal: FolderRefusal, name: string, plain: string): string {
+	switch (refusal.reason) {
+		case "programs": return "No room can use that folder, because apps run programs or read their settings from it. Choose a folder with your own files.";
+		case "holds-programs": return `No room can use ${name}, because this computer looks for programs in ${refusal.inner}, inside it. Choose a folder that doesn't hold ${refusal.inner}.`;
+		case "library": return "No room can use that folder, because apps keep their own files in Library. Choose a folder such as Documents, or one in a cloud drive.";
+		case "private": return "No room can use that folder, because your keys, settings or this app's own files are kept there. Choose a folder with your own files.";
+		case "shared": return "No room can use that folder, because apps keep their temporary files there. Choose a folder such as Documents.";
+		case "holds-closed": return `No room can use all of ${name}, because it holds places no room may open. Choose a folder inside it.`;
+		case "other": return plain;
+	}
+}
 /** Allow for this room… on a folder inside one this answer was given to change: the room has it now, and only the list can't take it while that lasts. */
 export const folderUsableThisTimeLine = (name: string): string => `This room can already use ${name} while it answers this message. You can allow it for this room in Room settings after that.`;
 /** A pick in Room settings the list already covers, with whatever access. */

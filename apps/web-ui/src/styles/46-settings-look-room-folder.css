@@ -13,6 +13,11 @@
 	display: block;
 	color: var(--fg);
 }
+/* Location's buttons stay in the row's middle when a long line under it
+   makes the row tall, as they sit with one line or a chosen folder. */
+.settings-dialog.settings-look-next .settings-row.folder-pane-location[data-tall] {
+	align-items: center;
+}
 /* Also allowed: rows of 64, a 32 px tile, the access words muted, and the
    cross's middle on the switches' middle above it (half of 36). */
 .settings-dialog.settings-look-next .also-allowed-row {

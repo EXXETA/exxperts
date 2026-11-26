@@ -597,11 +597,11 @@ await row("Choose a folder… keeps the card through a pick it can't use, and a 
 	await press(1);
 	assert(updates()[0] === cards.folderHoldsRoomLine(path.basename(parent)), `a folder holding the room's: ${updates()[0]}`);
 	await press(2);
-	// The panel's own button offers another folder, so its line doesn't; Room settings' Add a folder keeps the whole sentence (room-also-allowed-smoke.ts).
-	assert(updates()[1] === "This room can't use that folder.", `the app's own files: ${updates()[1]}`);
+	// A refusal with a reason says it, in the panel as in Room settings.
+	assert(updates()[1] === cards.folderRefusedLine({ reason: "private" }, "", cards.FOLDER_PICK_REFUSED_IN_PANEL), `the app's own files: ${updates()[1]}`);
 	// A cancelled window gets its one reply too: the card as it was, its buttons back.
 	await press(3);
-	assert(updates()[2] === cards.FOLDER_PICK_REFUSED_IN_PANEL, `a cancelled window changed the card's line: ${updates()[2]}`);
+	assert(updates()[2] === updates()[1], `a cancelled window changed the card's line: ${updates()[2]}`);
 	await press(4);
 	assert(updates()[3] === cards.FOLDER_CARD_WINDOW_CLOSED, `a window that failed: ${updates()[3]}`);
 	assert(readAlsoAllowed(bench.roomId).folders.length === 0, "a pick it can't use went on the list");
@@ -1363,7 +1363,7 @@ await row("a refused pick is refused the same under either button; a pick throug
 			bench.answer(lasts === "room" ? PRESSES.room : PRESSES.choose);
 			await waitUntil(() => updates().length === lines, `${lasts}: the window's answer`);
 		}
-		assert(json2(updates()) === json2([cards.folderHoldsRoomLine(path.basename(path.dirname(roomFolder))), cards.FOLDER_PICK_REFUSED_IN_PANEL]), `${lasts}: ${json2(updates())}`);
+		assert(json2(updates()) === json2([cards.folderHoldsRoomLine(path.basename(path.dirname(roomFolder))), cards.folderRefusedLine({ reason: "private" }, "", cards.FOLDER_PICK_REFUSED_IN_PANEL)]), `${lasts}: ${json2(updates())}`);
 		assert(readAlsoAllowed(bench.roomId).folders.length === 0 && bench.answerFolders().over([]).length === 0, `${lasts}: a refused pick was given`);
 		bench.answer(false);
 		await asked;
@@ -1407,7 +1407,8 @@ await row("a yes never opens an agent folder a setting moved out of the app's da
 				bench.answer(PRESSES.choose);
 				await waitUntil(() => bench.frames.some((frame) => frame.type === "ui_request_update"), `${access} ${picked}: the window's answer`);
 				const line = bench.frames.find((frame) => frame.type === "ui_request_update")?.line;
-				assert(line === cards.FOLDER_PICK_REFUSED_IN_PANEL && readAlsoAllowed(bench.roomId).folders.length === 0 && bench.answerFolders().over([]).length === 0, `${access} ${picked}: ${json2({ line, list: readAlsoAllowed(bench.roomId).folders })}`);
+				const why = picked === path.dirname(moved) ? cards.folderRefusedLine({ reason: "holds-closed" }, path.basename(picked), "") : cards.folderRefusedLine({ reason: "private" }, "", "");
+				assert(line === why && readAlsoAllowed(bench.roomId).folders.length === 0 && bench.answerFolders().over([]).length === 0, `${access} ${picked}: ${json2({ line, list: readAlsoAllowed(bench.roomId).folders })}`);
 				bench.answer(false);
 				await asked;
 			}

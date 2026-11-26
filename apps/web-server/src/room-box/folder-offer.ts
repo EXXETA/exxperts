@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -6,7 +5,7 @@ import { realPlace, type WalkOptions } from "../path-shapes.js";
 import type { AlsoAllowedFolder } from "./also-allowed.js";
 import { appDataPlaces, closedForReading, foldedName, homeFolders, isInside, neverOpened, realPathOf } from "./box-closed.js";
 import { NEVER_WRITABLE_FILES, NEVER_WRITABLE_FOLDERS } from "./box-rules.js";
-import { pathHoldsHidden } from "./card-text.js";
+import { type FolderRefusal, pathHoldsHidden } from "./card-text.js";
 import { keptWindowsAnswer, windowsAnswer, windowsPlaces, windowsRefuses, withRealPaths, type WindowsPlaces } from "./windows/windows-places.js";
 
 type Access = AlsoAllowedFolder["access"];
@@ -15,8 +14,8 @@ type Access = AlsoAllowedFolder["access"];
  * How a folder is judged where nothing may be followed or started for it. Both
  * off by default. `links: "refuse"`: a link on the way refuses the folder, and a
  * link inside it counts as there without being followed. `beforeClick`: no
- * program starts, so a folder in a home's Library and, on Windows, any folder
- * before Windows' answer was read, are refused.
+ * program starts, so on Windows any folder before Windows' answer was read is
+ * refused; and a folder in a home's Library is only ever chosen in the window.
  */
 export interface GrantOptions extends WalkOptions {
 	beforeClick?: boolean;
@@ -79,20 +78,26 @@ function looksLikeGitDir(folder: string, options: GrantOptions = {}): boolean {
 	}
 }
 
+const PROGRAMS: FolderRefusal = { reason: "programs" };
+const OTHER: FolderRefusal = { reason: "other" };
+
 /**
  * Whether a yes here would hand a command a place whose files other programs
  * run: the search path and the app folders, a bare repository's root, a git
- * hooks folder, or a closed name (git settings, an editor's folder). This holds
- * for reading and for changing, since a yes for reading can be widened to one
- * for changing, and reading such a place is no reach a card should grant.
+ * hooks folder, or a closed name (git settings, an editor's folder), or a
+ * folder that holds one of the first two, by its name from the folder. This
+ * holds for reading and for changing, since a yes for reading can be widened
+ * to one for changing, and reading such a place is no reach a card should grant.
  */
-function runsOthersPrograms(folder: string, options: GrantOptions, against: JudgedAgainst): boolean {
-	if (namesClosedPlace(folder)) return true;
+function othersProgramsRefusal(folder: string, options: GrantOptions, against: JudgedAgainst): FolderRefusal | null {
+	if (namesClosedPlace(folder)) return PROGRAMS;
 	const real = realPathOf(folder);
-	// A program folder, a folder inside one, or a folder that holds one: a yes on the parent still lets a command plant a program in the search path.
-	if (against.programs().some((place) => isInside(real, place) || isInside(place, real))) return true;
-	if (looksLikeGitDir(real, options)) return true;
-	return foldedName(path.basename(real)) === "hooks" && looksLikeGitDir(path.dirname(real), options);
+	if (against.programs().some((place) => isInside(real, place))) return PROGRAMS;
+	if (looksLikeGitDir(real, options)) return PROGRAMS;
+	if (foldedName(path.basename(real)) === "hooks" && looksLikeGitDir(path.dirname(real), options)) return PROGRAMS;
+	// A folder that holds a program folder: a yes on it still lets a command plant a program in the search path.
+	const held = against.programs().find((place) => isInside(place, real));
+	return held ? { reason: "holds-programs", inner: path.relative(real, held) } : null;
 }
 
 // The computer this server runs on, read once: a smoke acting as Windows on another computer keeps that computer's rules.
@@ -140,37 +145,17 @@ function windowsRefusesHere(folder: string, beforeClick: boolean, against: Judge
 	return answer === undefined || windowsRefuses(folder, against.windows(answer));
 }
 
-const XATTR = "/usr/bin/xattr";
-const providerOf = new Map<string, string>();
-
-/**
- * A folder's file provider, as the computer marks it. Only a mark that was read
- * is kept: a read that failed or timed out is tried again at the next judgement,
- * so one slow read never refuses a room until the app starts again.
- */
-function fileProvider(folder: string): string | null {
-	const known = providerOf.get(folder);
-	if (known !== undefined) return known;
-	const read = spawnSync(XATTR, ["-p", "com.apple.file-provider-domain-id", folder], { encoding: "utf8", timeout: 5_000 });
-	const mark = read.status === 0 ? read.stdout.trim() : "";
-	if (mark === "") return null;
-	providerOf.set(folder, mark);
-	return mark;
-}
-
 /**
  * The cloud drives a person keeps files in under ~/Library, which work as an
  * ordinary folder in the box, files kept only online included: iCloud Drive,
- * and each account under CloudStorage whose folder the computer marks with a
- * file provider, whichever provider it is. Never CloudStorage itself, or a
- * folder there without that mark.
+ * and each account folder under CloudStorage, whichever provider keeps it, by
+ * its path alone, as the other tools take it. Never CloudStorage itself.
  */
 function inCloudDrive(folder: string, home: string): boolean {
 	if (isInside(folder, path.join(home, "Library", "Mobile Documents", "com~apple~CloudDocs"))) return true;
+	// A Mac's place: on Windows a folder of that name stays as Library's rule has it.
 	const storage = path.join(home, "Library", "CloudStorage");
-	if (!isInside(folder, storage) || foldedName(folder) === foldedName(storage)) return false;
-	const account = path.relative(storage, folder).split(path.sep)[0];
-	return fileProvider(path.join(storage, account)) !== null;
+	return !ON_WINDOWS && isInside(folder, storage) && foldedName(folder) !== foldedName(storage);
 }
 
 /** A path no card can draw honestly: a device, or a name a command chose to read as something else. */
@@ -184,15 +169,20 @@ function unshowable(target: string): boolean {
  * app folder, a bare repository or its hooks, a closed name), for reading or
  * changing. Never a parent of anything closed, which covers home and the disk's
  * root, a closed place, inside ~/Library, where everyday programs read and write
- * settings and caches nobody asked for, but for iCloud Drive and a marked cloud drive, inside the computer's shared temp or
+ * settings and caches nobody asked for, but for iCloud Drive and the cloud drives in CloudStorage, inside the computer's shared temp or
  * caches, where other apps stage their files, or inside a place a command can
  * write, where a command could swap it, or a folder above it, for a link. On
  * Windows, never one of Windows' own places either (`windows/windows-places.ts`).
  * A name that isn't the folder's real name has moved or never was it.
  */
 export function folderGrantable(folder: string, access: Access, writable: readonly string[], room: string, options: GrantOptions = {}, against?: JudgedAgainst): boolean {
-	if (realPlace(folder, options) === null || unshowable(folder)) return false;
-	return placeGrantable(folder, writable, room, options, against);
+	return folderRefusal(folder, access, writable, room, options, against) === null;
+}
+
+/** Why `folderGrantable` refuses a folder, or null where it doesn't. */
+export function folderRefusal(folder: string, access: Access, writable: readonly string[], room: string, options: GrantOptions = {}, against?: JudgedAgainst): FolderRefusal | null {
+	if (realPlace(folder, options) === null || unshowable(folder)) return OTHER;
+	return placeRefusal(folder, writable, room, options, against);
 }
 
 /**
@@ -202,23 +192,33 @@ export function folderGrantable(folder: string, access: Access, writable: readon
  * it, and no card draws it, so a name a card can't show, as an emoji's, is fine.
  */
 export function roomFolderGrantable(folder: string, against?: JudgedAgainst): boolean {
-	return placeGrantable(folder, [], "", {}, against);
+	return roomFolderRefusal(folder, against) === null;
 }
 
-function placeGrantable(folder: string, writable: readonly string[], room: string, options: GrantOptions, against: JudgedAgainst = judgedAgainst()): boolean {
-	if (realPathOf(folder) !== folder) return false;
-	if (isInside(room, folder)) return false;
-	if (ON_WINDOWS && windowsRefusesHere(folder, options.beforeClick === true, against)) return false;
-	if (runsOthersPrograms(folder, options, against)) return false;
-	// Before a click, telling a cloud drive needs xattr: a folder in Library waits for the window.
-	if (against.homes().some((home) => isInside(folder, path.join(home, "Library")) && (options.beforeClick === true || !inCloudDrive(folder, home)))) return false;
+/** Why `roomFolderGrantable` refuses a folder, or null where it doesn't. */
+export function roomFolderRefusal(folder: string, against?: JudgedAgainst): FolderRefusal | null {
+	return placeRefusal(folder, [], "", {}, against);
+}
+
+/** Every check refuses the folder alike: their order only picks which reason a person reads, the closer one first. */
+function placeRefusal(folder: string, writable: readonly string[], room: string, options: GrantOptions, against: JudgedAgainst = judgedAgainst()): FolderRefusal | null {
+	if (realPathOf(folder) !== folder) return OTHER;
+	if (isInside(room, folder)) return OTHER;
+	if (ON_WINDOWS && windowsRefusesHere(folder, options.beforeClick === true, against)) return OTHER;
+	const programs = othersProgramsRefusal(folder, options, against);
+	// Before a click a folder in Library, a cloud drive's too, is only ever chosen in the window.
+	if (against.homes().some((home) => isInside(folder, path.join(home, "Library")) && (options.beforeClick === true || !inCloudDrive(folder, home)))) return { reason: "library" };
 	const { never, broad, shared } = against.closed();
-	if ([...never, ...broad].some((place) => isInside(place, folder))) return false;
-	if (never.some((place) => isInside(folder, place))) return false;
+	// Before a program folder: the app's own data has a name apps read settings from, and what is kept there is the reason.
+	if (never.some((place) => isInside(folder, place))) return { reason: "private" };
+	if (programs?.reason === "programs") return programs;
 	// A home that sits in a shared folder is still the person's.
-	if (shared.some((place) => isInside(folder, place)) && !against.homes().some((home) => isInside(folder, home))) return false;
-	if (writable.some((place) => place !== folder && isInside(folder, place))) return false;
-	return true;
+	if (shared.some((place) => isInside(folder, place)) && !against.homes().some((home) => isInside(folder, home))) return { reason: "shared" };
+	// Before a program folder inside it: a home holds both, and is refused as a whole.
+	if ([...never, ...broad].some((place) => isInside(place, folder))) return { reason: "holds-closed" };
+	if (programs) return programs;
+	if (writable.some((place) => place !== folder && isInside(folder, place))) return OTHER;
+	return null;
 }
 
 /**

@@ -3,7 +3,7 @@
 // can reach after each change. Add a folder opens the computer's own window
 // (here a stand-in for the program it runs) and reads no path from the page; a
 // refused pick says why and leaves the list as it was; iCloud Drive and each
-// cloud drive its provider marks open to a pick and nothing else in ~/Library does; while the room answers, only
+// cloud drive in a Mac's CloudStorage open to a pick and nothing else in ~/Library does; while the room answers, only
 // what narrows works; the cross keeps the entry for Undo; a pick replaces what it
 // covers; an entry unsound for one conversation's folder stays on the list; a
 // room with no folder shows the sites its web reader's yes added, alone, and
@@ -171,7 +171,6 @@ const pick = (folder: string) => {
 const add = (roomId: string, body: unknown = {}) => api("POST", roomId, "/folders", body);
 const listOf = (roomId: string) => readAlsoAllowed(roomId);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const XATTR = "/usr/bin/xattr";
 
 /** A turn in flight in the room, as a message being answered makes one; `end` finishes it. */
 function answering(roomId: string): { end: () => void } {
@@ -318,7 +317,7 @@ async function main(): Promise<void> {
 		assert(holds.body.state === "refused" && holds.body.line === "This room can't use Documents, because this room's folder is inside it. Choose a folder inside Documents.", `holds the room: ${JSON.stringify(holds.body)}`);
 		pick(made("Library", "Preferences"));
 		const other = await add(room);
-		assert(other.body.state === "refused" && other.body.line === "This room can't use that folder. Choose another one.", `~/Library/Preferences: ${JSON.stringify(other.body)}`);
+		assert(other.body.state === "refused" && other.body.line === cards.folderRefusedLine({ reason: "library" }, "", cards.FOLDER_PICK_REFUSED), `~/Library/Preferences: ${JSON.stringify(other.body)}`);
 		assert(same(listOf(room), before), "a refused pick changed the list");
 		// The allowed neighbour: a folder inside Documents, beside the room's.
 		pick(made("Documents", "Contracts"));
@@ -368,7 +367,7 @@ async function main(): Promise<void> {
 		saveAlsoAllowedFolders(room, before.folders);
 	});
 
-	await row("iCloud Drive and each marked cloud drive open to a pick, account roots included; Mobile Documents, CloudStorage and a folder there without a provider's mark stay closed", async () => {
+	await row("iCloud Drive and, but on Windows, each cloud drive in CloudStorage open to a pick, account roots included, by their path alone; Mobile Documents and CloudStorage itself stay closed", async () => {
 		const before = listOf(room);
 		const tryPick = async (folder: string) => {
 			pick(folder);
@@ -381,35 +380,18 @@ async function main(): Promise<void> {
 		assert(await tryPick(icloud) === "added", "iCloud Drive's root");
 		assert(await tryPick(made("Library", "Mobile Documents")) === "refused", "Mobile Documents itself");
 		assert(await tryPick(made("Library", "Mobile Documents", "com~apple~Pages", "Documents")) === "refused", "another app's iCloud folder");
-		// A provider's mark is read with the Mac's own program: elsewhere the CloudStorage half has nothing to read.
-		if (!fs.existsSync(XATTR)) {
-			console.log("room also-allowed smoke skipped the CloudStorage half (needs a Mac's xattr)");
-			assert(same(listOf(room), before), "the list changed");
-			return;
-		}
-		const mark = (folder: string, provider: string) => childProcess.execFileSync(XATTR, ["-w", "com.apple.file-provider-domain-id", provider, folder]);
+		// CloudStorage is where a Mac keeps its cloud drives: on Windows a folder of that name is Library's, and refused as the rest of it is.
+		const inStorage = process.platform === "win32" ? "refused" : "added";
 		const storage = made("Library", "CloudStorage");
 		const contoso = made("Library", "CloudStorage", "OneDrive-Contoso");
-		mark(contoso, "com.microsoft.OneDrive-mac.FileProvider/contoso");
-		assert(await tryPick(made("Library", "CloudStorage", "OneDrive-Contoso", "Q3")) === "added", "a folder in OneDrive");
-		assert(await tryPick(made("Library", "CloudStorage", "OneDrive-Contoso", "Shared Library - Sales")) === "added", "a SharePoint library under OneDrive");
-		assert(await tryPick(contoso) === "added", "OneDrive's account root");
+		assert(await tryPick(made("Library", "CloudStorage", "OneDrive-Contoso", "Q3")) === inStorage, "a folder in OneDrive");
+		assert(await tryPick(made("Library", "CloudStorage", "OneDrive-Contoso", "Shared Library - Sales")) === inStorage, "a SharePoint library under OneDrive");
+		assert(await tryPick(contoso) === inStorage, "OneDrive's account root");
 		assert(await tryPick(storage) === "refused", "CloudStorage itself");
-		// A work account sorted after a personal one opens as the first does.
-		const personal = made("Library", "CloudStorage", "OneDrive-Personal");
-		mark(personal, "com.microsoft.OneDrive-mac.FileProvider/personal");
-		const work = made("Library", "CloudStorage", "OneDrive-Zeta", "Plans");
-		mark(path.dirname(work), "com.microsoft.OneDrive-mac.FileProvider/zeta");
-		assert(await tryPick(work) === "added", "a folder in a second OneDrive account");
 		const dropbox = made("Library", "CloudStorage", "Dropbox", "Clients");
-		mark(path.dirname(dropbox), "com.getdropbox.dropbox.fileprovider/ana");
-		assert(await tryPick(path.dirname(dropbox)) === "added", "another provider's account root");
-		assert(await tryPick(dropbox) === "added", "a folder in another provider's account");
-		// No mark, then a mark: the refusal isn't kept, so the next pick reads it again.
-		const google = made("Library", "CloudStorage", "GoogleDrive-ana", "My Drive");
-		assert(await tryPick(google) === "refused", "a CloudStorage folder without a provider's mark");
-		mark(path.dirname(google), "com.google.drivefs.fpext/ana");
-		assert(await tryPick(google) === "added", "the same folder once its mark reads");
+		assert(await tryPick(path.dirname(dropbox)) === inStorage, "another provider's account root");
+		assert(await tryPick(dropbox) === inStorage, "a folder in another provider's account");
+		assert(await tryPick(made("Library", "CloudStorage", "GoogleDrive-ana", "My Drive")) === inStorage, "a third provider's folder");
 		assert(same(listOf(room), before), "the list changed");
 	});
 
