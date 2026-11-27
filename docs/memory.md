@@ -145,7 +145,8 @@ Nothing enters or leaves memory without you:
    explicitly asked the room to remember is carried through word for word
    (a summary that left one out gets it back as you said it) and becomes
    a pinned note when it is memorized. The summary says only what the
-   conversation held, never how it was read or put together. The default
+   conversation held, never how it was read or put together. It is
+   written in the language you used in the conversation. The default
    Remember button shows you the proposal before saving; a room set to
    remember without the preview saves it straight away. The arrow beside
    Remember, "Choose what to keep", always opens the full preview. Remember
