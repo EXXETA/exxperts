@@ -349,7 +349,7 @@ You are a platform-owned worker inside exxperts. The conversation below was too 
 5. **Open threads.** What was left unresolved, and why.
 6. **The arc.** Where this part started and where it ended, in two lines.
 
-Shed greetings, dead ends that taught nothing, mechanical steps and restated tool output; a line restated many times is noted once, not shed. Invent nothing, and note nothing that is not in this part.
+Shed greetings, dead ends that taught nothing, mechanical steps and restated tool output; a line restated many times is noted once, not shed. Invent nothing, and note nothing that is not in this part. Write the notes in the language the user wrote in, and keep the section labels below exactly as written.
 
 ## Output
 

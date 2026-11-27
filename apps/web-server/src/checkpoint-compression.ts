@@ -243,6 +243,7 @@ Deferred threads with enough resume context to pick up later. If nothing is defe
 ## Output Rules
 
 - Output only TITLE, SESSION_ARC, BODY, and PARKED.
+- Write the content of every field in the language the user wrote the conversation in, because the user reads this proposal before approving it and a summary in another language is harder to check. When the user wrote in more than one language, use the one they used most. Keep the four field labels exactly as written above, in English, since the system finds the fields by them; write PARKED's "None" as shown. Quote a must-keep request in the words the user used.
 - Do not add a markdown heading.
 - Do not invent RC numbers, checkpoint ids, session ids, timestamps, or persistence status.
 - Do not say memory was saved.
